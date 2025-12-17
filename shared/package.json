@@ -3,6 +3,11 @@
   "version": "1.0.0",
   "type": "module",
   "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./config/cognito": "./config/cognito.js",
+    "./middleware/cognitoAuth": "./middleware/cognitoAuth.js"
+  },
   "scripts": {
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
@@ -10,7 +15,8 @@
     "db:studio": "prisma studio"
   },
   "dependencies": {
-    "@prisma/client": "^5.7.0"
+    "@prisma/client": "^5.7.0",
+    "aws-jwt-verify": "^4.0.0"
   },
   "devDependencies": {
     "prisma": "^5.7.0"
