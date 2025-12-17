@@ -1,0 +1,1242 @@
+// Panda CRM Database Schema
+// PostgreSQL via Prisma ORM
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// CORE OBJECTS
+// ============================================================================
+
+model Account {
+  id                    String    @id @default(cuid())
+  salesforceId          String?   @unique @map("salesforce_id")
+  name                  String
+  accountNumber         String?   @unique @map("account_number")
+
+  // Address
+  billingStreet         String?   @map("billing_street")
+  billingCity           String?   @map("billing_city")
+  billingState          String?   @map("billing_state")
+  billingPostalCode     String?   @map("billing_postal_code")
+  billingCountry        String?   @map("billing_country")
+
+  // Contact Info
+  phone                 String?
+  email                 String?
+  website               String?
+
+  // Classification
+  type                  AccountType @default(RESIDENTIAL)
+  status                AccountStatus @default(NEW)
+  industry              String?
+
+  // Financial
+  totalSalesVolume      Decimal?  @map("total_sales_volume") @db.Decimal(12, 2)
+  totalPaidAmount       Decimal?  @map("total_paid_amount") @db.Decimal(12, 2)
+  balanceDue            Decimal?  @map("balance_due") @db.Decimal(12, 2)
+
+  // Flags
+  isPandaClaims         Boolean   @default(false) @map("is_panda_claims")
+  isSureClaims          Boolean   @default(false) @map("is_sure_claims")
+
+  // Ownership
+  ownerId               String?   @map("owner_id")
+  owner                 User?     @relation("AccountOwner", fields: [ownerId], references: [id])
+
+  // Timestamps
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  contacts              Contact[]
+  opportunities         Opportunity[]
+  workOrders            WorkOrder[]
+  invoices              Invoice[]
+  cases                 Case[]
+  notes                 Note[]    @relation("AccountNotes")
+
+  @@map("accounts")
+  @@index([status])
+  @@index([ownerId])
+  @@index([billingState])
+}
+
+model Contact {
+  id                    String    @id @default(cuid())
+  salesforceId          String?   @unique @map("salesforce_id")
+
+  // Name
+  firstName             String    @map("first_name")
+  lastName              String    @map("last_name")
+  fullName              String?   @map("full_name")
+
+  // Contact Info
+  email                 String?
+  phone                 String?
+  mobilePhone           String?   @map("mobile_phone")
+  smsNumber             String?   @map("sms_number") // E.164 format for SMS
+
+  // Address
+  mailingStreet         String?   @map("mailing_street")
+  mailingCity           String?   @map("mailing_city")
+  mailingState          String?   @map("mailing_state")
+  mailingPostalCode     String?   @map("mailing_postal_code")
+
+  // Professional
+  title                 String?
+  department            String?
+
+  // Preferences
+  smsOptOut             Boolean   @default(false) @map("sms_opt_out")
+  emailOptOut           Boolean   @default(false) @map("email_opt_out")
+  doNotCall             Boolean   @default(false) @map("do_not_call")
+  preferredContactMethod String?  @map("preferred_contact_method")
+
+  // Relations
+  accountId             String?   @map("account_id")
+  account               Account?  @relation(fields: [accountId], references: [id])
+  isPrimary             Boolean   @default(false) @map("is_primary")
+
+  // Timestamps
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  opportunities         Opportunity[] @relation("OpportunityContact")
+  messages              Message[]
+  notes                 Note[]    @relation("ContactNotes")
+
+  @@map("contacts")
+  @@index([accountId])
+  @@index([email])
+  @@index([smsNumber])
+}
+
+model Lead {
+  id                    String    @id @default(cuid())
+  salesforceId          String?   @unique @map("salesforce_id")
+
+  // Name
+  firstName             String    @map("first_name")
+  lastName              String    @map("last_name")
+  company               String?
+
+  // Contact Info
+  email                 String?
+  phone                 String?
+  mobilePhone           String?   @map("mobile_phone")
+
+  // Address
+  street                String?
+  city                  String?
+  state                 String?
+  postalCode            String?   @map("postal_code")
+
+  // Lead Info
+  status                LeadStatus @default(NEW)
+  source                String?   @map("lead_source")
+  rating                LeadRating?
+  industry              String?
+
+  // Scoring
+  score                 Int       @default(0)
+
+  // Campaign
+  campaignId            String?   @map("campaign_id")
+
+  // Assignment
+  ownerId               String?   @map("owner_id")
+  owner                 User?     @relation("LeadOwner", fields: [ownerId], references: [id])
+
+  // Self-Gen
+  isSelfGen             Boolean   @default(false) @map("is_self_gen")
+  selfGenRepId          String?   @map("self_gen_rep_id")
+
+  // Conversion
+  isConverted           Boolean   @default(false) @map("is_converted")
+  convertedDate         DateTime? @map("converted_date")
+  convertedAccountId    String?   @map("converted_account_id")
+  convertedContactId    String?   @map("converted_contact_id")
+  convertedOpportunityId String?  @map("converted_opportunity_id")
+
+  // Timestamps
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  notes                 Note[]    @relation("LeadNotes")
+  tasks                 Task[]    @relation("LeadTasks")
+
+  @@map("leads")
+  @@index([status])
+  @@index([ownerId])
+  @@index([source])
+  @@index([isConverted])
+}
+
+model Opportunity {
+  id                    String    @id @default(cuid())
+  salesforceId          String?   @unique @map("salesforce_id")
+
+  // Basic Info
+  name                  String
+  description           String?
+
+  // Stage & Status
+  stage                 OpportunityStage @default(LEAD_UNASSIGNED)
+  status                String?
+  probability           Int       @default(0)
+
+  // Dates
+  closeDate             DateTime? @map("close_date")
+  appointmentDate       DateTime? @map("appointment_date")
+  soldDate              DateTime? @map("sold_date")
+
+  // Financial
+  amount                Decimal?  @db.Decimal(12, 2)
+  contractTotal         Decimal?  @map("contract_total") @db.Decimal(12, 2)
+
+  // Type
+  type                  OpportunityType @default(INSURANCE)
+  workType              String?   @map("work_type")
+
+  // Source
+  leadSource            String?   @map("lead_source")
+  isSelfGen             Boolean   @default(false) @map("is_self_gen")
+
+  // Insurance
+  isPandaClaims         Boolean   @default(false) @map("is_panda_claims")
+  isApproved            Boolean   @default(false) @map("is_approved")
+  claimNumber           String?   @map("claim_number")
+  claimFiledDate        DateTime? @map("claim_filed_date")
+  insuranceCarrier      String?   @map("insurance_carrier")
+  rcvAmount             Decimal?  @map("rcv_amount") @db.Decimal(12, 2)
+  acvAmount             Decimal?  @map("acv_amount") @db.Decimal(12, 2)
+  deductible            Decimal?  @db.Decimal(12, 2)
+  supplementsTotal      Decimal?  @map("supplements_total") @db.Decimal(12, 2)
+
+  // Relations
+  accountId             String    @map("account_id")
+  account               Account   @relation(fields: [accountId], references: [id])
+
+  contactId             String?   @map("contact_id")
+  contact               Contact?  @relation("OpportunityContact", fields: [contactId], references: [id])
+
+  ownerId               String?   @map("owner_id")
+  owner                 User?     @relation("OpportunityOwner", fields: [ownerId], references: [id])
+
+  // Timestamps
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  quotes                Quote[]
+  orders                Order[]
+  workOrders            WorkOrder[]
+  serviceContract       ServiceContract?
+  commissions           Commission[]
+  notes                 Note[]    @relation("OpportunityNotes")
+  tasks                 Task[]    @relation("OpportunityTasks")
+
+  @@map("opportunities")
+  @@index([accountId])
+  @@index([ownerId])
+  @@index([stage])
+  @@index([closeDate])
+}
+
+// ============================================================================
+// FIELD SERVICE
+// ============================================================================
+
+model WorkOrder {
+  id                    String    @id @default(cuid())
+  salesforceId          String?   @unique @map("salesforce_id")
+
+  workOrderNumber       String    @unique @map("work_order_number")
+  subject               String?
+  description           String?
+  status                WorkOrderStatus @default(NEW)
+  priority              Priority  @default(NORMAL)
+
+  // Relations
+  accountId             String    @map("account_id")
+  account               Account   @relation(fields: [accountId], references: [id])
+
+  opportunityId         String?   @map("opportunity_id")
+  opportunity           Opportunity? @relation(fields: [opportunityId], references: [id])
+
+  workTypeId            String?   @map("work_type_id")
+  workType              WorkType? @relation(fields: [workTypeId], references: [id])
+
+  territoryId           String?   @map("territory_id")
+  territory             ServiceTerritory? @relation(fields: [territoryId], references: [id])
+
+  // Timestamps
+  startDate             DateTime? @map("start_date")
+  endDate               DateTime? @map("end_date")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  serviceAppointments   ServiceAppointment[]
+
+  @@map("work_orders")
+  @@index([accountId])
+  @@index([opportunityId])
+  @@index([status])
+}
+
+model ServiceAppointment {
+  id                    String    @id @default(cuid())
+  salesforceId          String?   @unique @map("salesforce_id")
+
+  appointmentNumber     String    @unique @map("appointment_number")
+  subject               String?
+  description           String?
+  status                AppointmentStatus @default(NONE)
+
+  // Address (can differ from account)
+  street                String?
+  city                  String?
+  state                 String?
+  postalCode            String?   @map("postal_code")
+
+  // Scheduling
+  earliestStart         DateTime? @map("earliest_start")
+  dueDate               DateTime? @map("due_date")
+  scheduledStart        DateTime? @map("scheduled_start")
+  scheduledEnd          DateTime? @map("scheduled_end")
+  actualStart           DateTime? @map("actual_start")
+  actualEnd             DateTime? @map("actual_end")
+  duration              Int?      // minutes
+
+  // Relations
+  workOrderId           String    @map("work_order_id")
+  workOrder             WorkOrder @relation(fields: [workOrderId], references: [id])
+
+  // Timestamps
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  assignedResources     AssignedResource[]
+
+  @@map("service_appointments")
+  @@index([workOrderId])
+  @@index([status])
+  @@index([scheduledStart])
+}
+
+model ServiceResource {
+  id                    String    @id @default(cuid())
+  salesforceId          String?   @unique @map("salesforce_id")
+
+  name                  String
+  resourceType          ResourceType @default(TECHNICIAN)
+  isActive              Boolean   @default(true) @map("is_active")
+
+  // Contact info
+  email                 String?
+  phone                 String?
+
+  // Google Calendar
+  googleCalendarId      String?   @map("google_calendar_id")
+  googleCalendarSyncEnabled Boolean @default(false) @map("google_calendar_sync_enabled")
+
+  // User link (if internal employee)
+  userId                String?   @map("user_id")
+  user                  User?     @relation(fields: [userId], references: [id])
+
+  // Timestamps
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  assignments           AssignedResource[]
+  territoryMembers      ServiceTerritoryMember[]
+  absences              ResourceAbsence[]
+  skills                ResourceSkill[]
+
+  @@map("service_resources")
+  @@index([resourceType])
+  @@index([isActive])
+}
+
+model AssignedResource {
+  id                    String    @id @default(cuid())
+
+  serviceAppointmentId  String    @map("service_appointment_id")
+  serviceAppointment    ServiceAppointment @relation(fields: [serviceAppointmentId], references: [id])
+
+  serviceResourceId     String    @map("service_resource_id")
+  serviceResource       ServiceResource @relation(fields: [serviceResourceId], references: [id])
+
+  isPrimaryResource     Boolean   @default(false) @map("is_primary_resource")
+
+  createdAt             DateTime  @default(now()) @map("created_at")
+
+  @@unique([serviceAppointmentId, serviceResourceId])
+  @@map("assigned_resources")
+}
+
+model ServiceTerritory {
+  id                    String    @id @default(cuid())
+  salesforceId          String?   @unique @map("salesforce_id")
+
+  name                  String
+  description           String?
+  isActive              Boolean   @default(true) @map("is_active")
+
+  // Geographic
+  state                 String?
+  city                  String?
+  postalCodes           String[]  @map("postal_codes")
+
+  // Operating Hours
+  operatingHoursId      String?   @map("operating_hours_id")
+  operatingHours        OperatingHours? @relation(fields: [operatingHoursId], references: [id])
+
+  // Timestamps
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  members               ServiceTerritoryMember[]
+  workOrders            WorkOrder[]
+
+  @@map("service_territories")
+}
+
+model ServiceTerritoryMember {
+  id                    String    @id @default(cuid())
+
+  territoryId           String    @map("territory_id")
+  territory             ServiceTerritory @relation(fields: [territoryId], references: [id])
+
+  resourceId            String    @map("resource_id")
+  resource              ServiceResource @relation(fields: [resourceId], references: [id])
+
+  isPrimary             Boolean   @default(false) @map("is_primary")
+  effectiveStartDate    DateTime? @map("effective_start_date")
+  effectiveEndDate      DateTime? @map("effective_end_date")
+
+  @@unique([territoryId, resourceId])
+  @@map("service_territory_members")
+}
+
+model WorkType {
+  id                    String    @id @default(cuid())
+  salesforceId          String?   @unique @map("salesforce_id")
+
+  name                  String
+  description           String?
+  estimatedDuration     Int?      @map("estimated_duration") // minutes
+
+  // Relations
+  workOrders            WorkOrder[]
+
+  @@map("work_types")
+}
+
+model OperatingHours {
+  id                    String    @id @default(cuid())
+  name                  String
+  timeZone              String    @default("America/New_York") @map("time_zone")
+
+  // Relations
+  timeSlots             TimeSlot[]
+  territories           ServiceTerritory[]
+
+  @@map("operating_hours")
+}
+
+model TimeSlot {
+  id                    String    @id @default(cuid())
+
+  operatingHoursId      String    @map("operating_hours_id")
+  operatingHours        OperatingHours @relation(fields: [operatingHoursId], references: [id])
+
+  dayOfWeek             Int       @map("day_of_week") // 0=Sunday, 6=Saturday
+  startTime             String    @map("start_time") // "08:00"
+  endTime               String    @map("end_time")   // "18:00"
+
+  @@map("time_slots")
+}
+
+model ResourceAbsence {
+  id                    String    @id @default(cuid())
+
+  resourceId            String    @map("resource_id")
+  resource              ServiceResource @relation(fields: [resourceId], references: [id])
+
+  type                  AbsenceType @default(VACATION)
+  start                 DateTime
+  end                   DateTime
+  description           String?
+
+  @@map("resource_absences")
+}
+
+model Skill {
+  id                    String    @id @default(cuid())
+  name                  String    @unique
+  description           String?
+
+  // Relations
+  resources             ResourceSkill[]
+
+  @@map("skills")
+}
+
+model ResourceSkill {
+  id                    String    @id @default(cuid())
+
+  resourceId            String    @map("resource_id")
+  resource              ServiceResource @relation(fields: [resourceId], references: [id])
+
+  skillId               String    @map("skill_id")
+  skill                 Skill     @relation(fields: [skillId], references: [id])
+
+  level                 SkillLevel @default(INTERMEDIATE)
+
+  @@unique([resourceId, skillId])
+  @@map("resource_skills")
+}
+
+// ============================================================================
+// FINANCIAL
+// ============================================================================
+
+model Quote {
+  id                    String    @id @default(cuid())
+  salesforceId          String?   @unique @map("salesforce_id")
+
+  quoteNumber           String    @unique @map("quote_number")
+  name                  String
+  status                QuoteStatus @default(DRAFT)
+
+  // Dates
+  expirationDate        DateTime? @map("expiration_date")
+
+  // Totals
+  subtotal              Decimal   @default(0) @db.Decimal(12, 2)
+  discount              Decimal   @default(0) @db.Decimal(12, 2)
+  tax                   Decimal   @default(0) @db.Decimal(12, 2)
+  total                 Decimal   @default(0) @db.Decimal(12, 2)
+
+  // Type
+  isPmQuote             Boolean   @default(false) @map("is_pm_quote")
+
+  // Relations
+  opportunityId         String    @map("opportunity_id")
+  opportunity           Opportunity @relation(fields: [opportunityId], references: [id])
+
+  // Timestamps
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  lineItems             QuoteLineItem[]
+
+  @@map("quotes")
+  @@index([opportunityId])
+  @@index([status])
+}
+
+model QuoteLineItem {
+  id                    String    @id @default(cuid())
+
+  quoteId               String    @map("quote_id")
+  quote                 Quote     @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+
+  productId             String?   @map("product_id")
+  product               Product?  @relation(fields: [productId], references: [id])
+
+  description           String?
+  quantity              Decimal   @default(1) @db.Decimal(10, 2)
+  unitPrice             Decimal   @map("unit_price") @db.Decimal(12, 2)
+  discount              Decimal   @default(0) @db.Decimal(12, 2)
+  totalPrice            Decimal   @map("total_price") @db.Decimal(12, 2)
+
+  sortOrder             Int       @default(0) @map("sort_order")
+
+  @@map("quote_line_items")
+  @@index([quoteId])
+}
+
+model Order {
+  id                    String    @id @default(cuid())
+  salesforceId          String?   @unique @map("salesforce_id")
+
+  orderNumber           String    @unique @map("order_number")
+  status                OrderStatus @default(DRAFT)
+  type                  OrderType @default(STANDARD)
+
+  // Dates
+  effectiveDate         DateTime? @map("effective_date")
+
+  // Totals
+  subtotal              Decimal   @default(0) @db.Decimal(12, 2)
+  tax                   Decimal   @default(0) @db.Decimal(12, 2)
+  total                 Decimal   @default(0) @db.Decimal(12, 2)
+
+  // ABC Supply
+  abcConfirmationNumber String?   @map("abc_confirmation_number")
+  abcOrderNumber        String?   @map("abc_order_number")
+  abcStatus             String?   @map("abc_status")
+
+  // Relations
+  opportunityId         String?   @map("opportunity_id")
+  opportunity           Opportunity? @relation(fields: [opportunityId], references: [id])
+
+  accountId             String    @map("account_id")
+
+  // Timestamps
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  lineItems             OrderLineItem[]
+
+  @@map("orders")
+  @@index([opportunityId])
+  @@index([status])
+}
+
+model OrderLineItem {
+  id                    String    @id @default(cuid())
+
+  orderId               String    @map("order_id")
+  order                 Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  productId             String?   @map("product_id")
+  product               Product?  @relation(fields: [productId], references: [id])
+
+  description           String?
+  quantity              Decimal   @default(1) @db.Decimal(10, 2)
+  unitPrice             Decimal   @map("unit_price") @db.Decimal(12, 2)
+  totalPrice            Decimal   @map("total_price") @db.Decimal(12, 2)
+
+  @@map("order_line_items")
+  @@index([orderId])
+}
+
+model Product {
+  id                    String    @id @default(cuid())
+  salesforceId          String?   @unique @map("salesforce_id")
+
+  name                  String
+  productCode           String?   @unique @map("product_code")
+  description           String?
+  category              String?
+
+  unitPrice             Decimal?  @map("unit_price") @db.Decimal(12, 2)
+  isActive              Boolean   @default(true) @map("is_active")
+
+  // QuickBooks
+  qbProductId           String?   @map("qb_product_id")
+
+  // ABC Supply
+  abcProductId          String?   @map("abc_product_id")
+
+  // Relations
+  quoteLineItems        QuoteLineItem[]
+  orderLineItems        OrderLineItem[]
+
+  @@map("products")
+}
+
+model Invoice {
+  id                    String    @id @default(cuid())
+  salesforceId          String?   @unique @map("salesforce_id")
+
+  invoiceNumber         String    @unique @map("invoice_number")
+  status                InvoiceStatus @default(DRAFT)
+
+  // Dates
+  invoiceDate           DateTime? @map("invoice_date")
+  dueDate               DateTime? @map("due_date")
+  terms                 Int       @default(30) // days
+
+  // Amounts
+  subtotal              Decimal   @default(0) @db.Decimal(12, 2)
+  tax                   Decimal   @default(0) @db.Decimal(12, 2)
+  total                 Decimal   @default(0) @db.Decimal(12, 2)
+  amountPaid            Decimal   @default(0) @map("amount_paid") @db.Decimal(12, 2)
+  balanceDue            Decimal   @default(0) @map("balance_due") @db.Decimal(12, 2)
+
+  // QuickBooks
+  qbInvoiceId           String?   @map("qb_invoice_id")
+
+  // Relations
+  accountId             String    @map("account_id")
+  account               Account   @relation(fields: [accountId], references: [id])
+
+  // Timestamps
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  payments              Payment[]
+  lineItems             InvoiceLineItem[]
+
+  @@map("invoices")
+  @@index([accountId])
+  @@index([status])
+  @@index([dueDate])
+}
+
+model InvoiceLineItem {
+  id                    String    @id @default(cuid())
+
+  invoiceId             String    @map("invoice_id")
+  invoice               Invoice   @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  description           String
+  quantity              Decimal   @default(1) @db.Decimal(10, 2)
+  unitPrice             Decimal   @map("unit_price") @db.Decimal(12, 2)
+  totalPrice            Decimal   @map("total_price") @db.Decimal(12, 2)
+
+  @@map("invoice_line_items")
+}
+
+model Payment {
+  id                    String    @id @default(cuid())
+  salesforceId          String?   @unique @map("salesforce_id")
+
+  paymentNumber         String    @unique @map("payment_number")
+  amount                Decimal   @db.Decimal(12, 2)
+  paymentDate           DateTime  @map("payment_date")
+  paymentMethod         PaymentMethod @default(CHECK) @map("payment_method")
+  status                PaymentStatus @default(PENDING)
+
+  referenceNumber       String?   @map("reference_number")
+
+  // QuickBooks
+  qbPaymentId           String?   @map("qb_payment_id")
+
+  // Relations
+  invoiceId             String    @map("invoice_id")
+  invoice               Invoice   @relation(fields: [invoiceId], references: [id])
+
+  // Timestamps
+  createdAt             DateTime  @default(now()) @map("created_at")
+
+  @@map("payments")
+  @@index([invoiceId])
+}
+
+model ServiceContract {
+  id                    String    @id @default(cuid())
+  salesforceId          String?   @unique @map("salesforce_id")
+
+  contractNumber        String    @unique @map("contract_number")
+  name                  String
+  status                ContractStatus @default(DRAFT)
+
+  // Dates
+  startDate             DateTime? @map("start_date")
+  endDate               DateTime? @map("end_date")
+
+  // Totals
+  contractTotal         Decimal   @map("contract_total") @db.Decimal(12, 2)
+
+  // Commission Rates
+  preCommissionRate     Decimal?  @map("pre_commission_rate") @db.Decimal(5, 2)
+  companyLeadRate       Decimal?  @map("company_lead_rate") @db.Decimal(5, 2)
+  selfGenRate           Decimal?  @map("self_gen_rate") @db.Decimal(5, 2)
+
+  // PM
+  isPmContract          Boolean   @default(false) @map("is_pm_contract")
+
+  // Flags
+  backEndCommissionReady Boolean  @default(false) @map("back_end_commission_ready")
+
+  // Relations
+  opportunityId         String    @unique @map("opportunity_id")
+  opportunity           Opportunity @relation(fields: [opportunityId], references: [id])
+
+  accountId             String    @map("account_id")
+
+  // Timestamps
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  commissions           Commission[]
+
+  @@map("service_contracts")
+}
+
+model Commission {
+  id                    String    @id @default(cuid())
+  salesforceId          String?   @unique @map("salesforce_id")
+
+  type                  CommissionType @map("commission_type")
+  status                CommissionStatus @default(PENDING)
+
+  commissionValue       Decimal   @map("commission_value") @db.Decimal(12, 2)
+  commissionRate        Decimal   @map("commission_rate") @db.Decimal(5, 2)
+  commissionAmount      Decimal   @map("commission_amount") @db.Decimal(12, 2)
+
+  // Relations
+  ownerId               String    @map("owner_id")
+  owner                 User      @relation(fields: [ownerId], references: [id])
+
+  opportunityId         String?   @map("opportunity_id")
+  opportunity           Opportunity? @relation(fields: [opportunityId], references: [id])
+
+  serviceContractId     String?   @map("service_contract_id")
+  serviceContract       ServiceContract? @relation(fields: [serviceContractId], references: [id])
+
+  // Timestamps
+  createdAt             DateTime  @default(now()) @map("created_at")
+  paidDate              DateTime? @map("paid_date")
+
+  @@map("commissions")
+  @@index([ownerId])
+  @@index([status])
+}
+
+// ============================================================================
+// MESSAGING
+// ============================================================================
+
+model Message {
+  id                    String    @id @default(cuid())
+
+  direction             MessageDirection
+  channel               MessageChannel
+
+  // Content
+  body                  String
+  mediaUrls             String[]  @map("media_urls")
+
+  // Status
+  status                MessageStatus @default(QUEUED)
+  errorCode             String?   @map("error_code")
+  errorMessage          String?   @map("error_message")
+
+  // Twilio
+  twilioSid             String?   @unique @map("twilio_sid")
+
+  // Relations
+  contactId             String?   @map("contact_id")
+  contact               Contact?  @relation(fields: [contactId], references: [id])
+
+  conversationId        String    @map("conversation_id")
+  conversation          Conversation @relation(fields: [conversationId], references: [id])
+
+  // Timestamps
+  createdAt             DateTime  @default(now()) @map("created_at")
+  sentAt                DateTime? @map("sent_at")
+  deliveredAt           DateTime? @map("delivered_at")
+  readAt                DateTime? @map("read_at")
+
+  @@map("messages")
+  @@index([conversationId])
+  @@index([contactId])
+  @@index([createdAt])
+}
+
+model Conversation {
+  id                    String    @id @default(cuid())
+
+  phoneNumber           String    @unique @map("phone_number") // E.164
+
+  status                ConversationStatus @default(OPEN)
+  lastMessageAt         DateTime? @map("last_message_at")
+  unreadCount           Int       @default(0) @map("unread_count")
+
+  // Assignment
+  assignedUserId        String?   @map("assigned_user_id")
+
+  // Relations
+  messages              Message[]
+
+  // Timestamps
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  @@map("conversations")
+}
+
+// ============================================================================
+// USERS & AUTH
+// ============================================================================
+
+model User {
+  id                    String    @id @default(cuid())
+  salesforceId          String?   @unique @map("salesforce_id")
+  cognitoId             String?   @unique @map("cognito_id")
+
+  email                 String    @unique
+  firstName             String    @map("first_name")
+  lastName              String    @map("last_name")
+  fullName              String?   @map("full_name")
+
+  phone                 String?
+
+  isActive              Boolean   @default(true) @map("is_active")
+
+  // Role
+  roleId                String?   @map("role_id")
+  role                  Role?     @relation(fields: [roleId], references: [id])
+
+  // Department
+  department            String?
+  title                 String?
+
+  // Manager
+  managerId             String?   @map("manager_id")
+  manager               User?     @relation("UserManager", fields: [managerId], references: [id])
+  directReports         User[]    @relation("UserManager")
+
+  // Timestamps
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+  lastLoginAt           DateTime? @map("last_login_at")
+
+  // Relations
+  ownedAccounts         Account[] @relation("AccountOwner")
+  ownedLeads            Lead[]    @relation("LeadOwner")
+  ownedOpportunities    Opportunity[] @relation("OpportunityOwner")
+  commissions           Commission[]
+  serviceResource       ServiceResource?
+  createdNotes          Note[]    @relation("NoteCreator")
+  assignedTasks         Task[]    @relation("TaskAssignee")
+
+  @@map("users")
+}
+
+model Role {
+  id                    String    @id @default(cuid())
+  name                  String    @unique
+  description           String?
+
+  // Permissions (simple JSON for now)
+  permissions           Json      @default("{}")
+
+  // Relations
+  users                 User[]
+
+  @@map("roles")
+}
+
+// ============================================================================
+// SUPPORTING OBJECTS
+// ============================================================================
+
+model Case {
+  id                    String    @id @default(cuid())
+  salesforceId          String?   @unique @map("salesforce_id")
+
+  caseNumber            String    @unique @map("case_number")
+  subject               String
+  description           String?
+  status                CaseStatus @default(NEW)
+  priority              Priority  @default(NORMAL)
+  type                  String?
+
+  // Relations
+  accountId             String?   @map("account_id")
+  account               Account?  @relation(fields: [accountId], references: [id])
+
+  // Timestamps
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+  closedAt              DateTime? @map("closed_at")
+
+  @@map("cases")
+  @@index([accountId])
+  @@index([status])
+}
+
+model Note {
+  id                    String    @id @default(cuid())
+
+  title                 String?
+  body                  String
+
+  // Polymorphic relation
+  accountId             String?   @map("account_id")
+  account               Account?  @relation("AccountNotes", fields: [accountId], references: [id])
+
+  contactId             String?   @map("contact_id")
+  contact               Contact?  @relation("ContactNotes", fields: [contactId], references: [id])
+
+  leadId                String?   @map("lead_id")
+  lead                  Lead?     @relation("LeadNotes", fields: [leadId], references: [id])
+
+  opportunityId         String?   @map("opportunity_id")
+  opportunity           Opportunity? @relation("OpportunityNotes", fields: [opportunityId], references: [id])
+
+  // Creator
+  createdById           String    @map("created_by_id")
+  createdBy             User      @relation("NoteCreator", fields: [createdById], references: [id])
+
+  // Timestamps
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  @@map("notes")
+}
+
+model Task {
+  id                    String    @id @default(cuid())
+  salesforceId          String?   @unique @map("salesforce_id")
+
+  subject               String
+  description           String?
+  status                TaskStatus @default(NOT_STARTED)
+  priority              Priority  @default(NORMAL)
+
+  dueDate               DateTime? @map("due_date")
+  completedDate         DateTime? @map("completed_date")
+
+  // Assignment
+  assignedToId          String?   @map("assigned_to_id")
+  assignedTo            User?     @relation("TaskAssignee", fields: [assignedToId], references: [id])
+
+  // Polymorphic relation
+  leadId                String?   @map("lead_id")
+  lead                  Lead?     @relation("LeadTasks", fields: [leadId], references: [id])
+
+  opportunityId         String?   @map("opportunity_id")
+  opportunity           Opportunity? @relation("OpportunityTasks", fields: [opportunityId], references: [id])
+
+  // Timestamps
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  @@map("tasks")
+  @@index([assignedToId])
+  @@index([status])
+  @@index([dueDate])
+}
+
+// ============================================================================
+// ENUMS
+// ============================================================================
+
+enum AccountType {
+  RESIDENTIAL
+  COMMERCIAL
+  INSURANCE
+}
+
+enum AccountStatus {
+  NEW
+  ACTIVE
+  ONBOARDING
+  IN_PRODUCTION
+  COMPLETED
+  INACTIVE
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  UNQUALIFIED
+  NURTURING
+  CONVERTED
+}
+
+enum LeadRating {
+  HOT
+  WARM
+  COLD
+}
+
+enum OpportunityStage {
+  LEAD_UNASSIGNED
+  LEAD_ASSIGNED
+  SCHEDULED
+  INSPECTED
+  CLAIM_FILED
+  APPROVED
+  CONTRACT_SIGNED
+  IN_PRODUCTION
+  COMPLETED
+  CLOSED_WON
+  CLOSED_LOST
+}
+
+enum OpportunityType {
+  INSURANCE
+  RETAIL
+  COMMERCIAL
+}
+
+enum WorkOrderStatus {
+  NEW
+  IN_PROGRESS
+  ON_HOLD
+  COMPLETED
+  CANCELED
+}
+
+enum AppointmentStatus {
+  NONE
+  SCHEDULED
+  DISPATCHED
+  IN_PROGRESS
+  COMPLETED
+  CANNOT_COMPLETE
+  CANCELED
+}
+
+enum ResourceType {
+  TECHNICIAN
+  CREW
+  DISPATCHER
+  AGENT
+}
+
+enum AbsenceType {
+  VACATION
+  SICK
+  TRAINING
+  UNAVAILABLE
+}
+
+enum SkillLevel {
+  BEGINNER
+  INTERMEDIATE
+  EXPERT
+}
+
+enum QuoteStatus {
+  DRAFT
+  NEEDS_REVIEW
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  ACCEPTED
+  EXPIRED
+}
+
+enum OrderStatus {
+  DRAFT
+  ACTIVATED
+  SUBMITTED
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELED
+}
+
+enum OrderType {
+  STANDARD
+  CHANGE_ORDER
+  SUPPLEMENT
+}
+
+enum InvoiceStatus {
+  DRAFT
+  PENDING
+  SENT
+  PARTIAL
+  PAID
+  OVERDUE
+  VOID
+}
+
+enum PaymentMethod {
+  CHECK
+  CREDIT_CARD
+  ACH
+  WIRE
+  CASH
+  INSURANCE_CHECK
+  FINANCING
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  SETTLED
+  FAILED
+  REFUNDED
+}
+
+enum ContractStatus {
+  DRAFT
+  ACTIVATED
+  COMPLETED
+  TERMINATED
+}
+
+enum CommissionType {
+  PRE_COMMISSION
+  BACK_END
+  SALES_OP
+  SUPPLEMENT_OVERRIDE
+  PM_COMMISSION
+}
+
+enum CommissionStatus {
+  PENDING
+  REQUESTED
+  APPROVED
+  PAID
+  DENIED
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum MessageChannel {
+  SMS
+  EMAIL
+  CHAT
+}
+
+enum MessageStatus {
+  QUEUED
+  SENDING
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+enum ConversationStatus {
+  OPEN
+  PENDING
+  RESOLVED
+  CLOSED
+}
+
+enum CaseStatus {
+  NEW
+  WORKING
+  ESCALATED
+  CLOSED
+}
+
+enum TaskStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  WAITING
+  COMPLETED
+  DEFERRED
+}
+
+enum Priority {
+  LOW
+  NORMAL
+  HIGH
+  CRITICAL
+}
