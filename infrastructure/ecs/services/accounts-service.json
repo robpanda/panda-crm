@@ -1,0 +1,45 @@
+{
+  "serviceName": "accounts-service",
+  "cluster": "panda-crm-cluster",
+  "taskDefinition": "panda-crm-accounts",
+  "desiredCount": 2,
+  "launchType": "FARGATE",
+  "platformVersion": "LATEST",
+  "networkConfiguration": {
+    "awsvpcConfiguration": {
+      "subnets": [
+        "subnet-private-1a",
+        "subnet-private-1b"
+      ],
+      "securityGroups": [
+        "sg-ecs-services"
+      ],
+      "assignPublicIp": "DISABLED"
+    }
+  },
+  "loadBalancers": [
+    {
+      "targetGroupArn": "arn:aws:elasticloadbalancing:us-east-2:679128292059:targetgroup/accounts-tg/PLACEHOLDER",
+      "containerName": "accounts-service",
+      "containerPort": 3001
+    }
+  ],
+  "healthCheckGracePeriodSeconds": 60,
+  "deploymentConfiguration": {
+    "deploymentCircuitBreaker": {
+      "enable": true,
+      "rollback": true
+    },
+    "maximumPercent": 200,
+    "minimumHealthyPercent": 100
+  },
+  "enableECSManagedTags": true,
+  "propagateTags": "TASK_DEFINITION",
+  "schedulingStrategy": "REPLICA",
+  "tags": [
+    {
+      "key": "Service",
+      "value": "accounts"
+    }
+  ]
+}

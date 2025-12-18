@@ -1,0 +1,828 @@
+openapi: "3.0.1"
+info:
+  title: "Panda CRM API"
+  description: "API Gateway for Panda CRM microservices"
+  version: "1.0.0"
+
+servers:
+  - url: "https://api.pandacrm.com"
+    description: "Production"
+  - url: "https://api-staging.pandacrm.com"
+    description: "Staging"
+
+x-amazon-apigateway-cors:
+  allowOrigins:
+    - "*"
+  allowMethods:
+    - GET
+    - POST
+    - PUT
+    - DELETE
+    - OPTIONS
+  allowHeaders:
+    - Content-Type
+    - Authorization
+    - X-Amz-Date
+    - X-Api-Key
+    - X-Amz-Security-Token
+  maxAge: 300
+
+paths:
+  # Accounts Service
+  /api/accounts:
+    get:
+      summary: List accounts
+      tags: [Accounts]
+      security:
+        - CognitoAuthorizer: []
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/accounts"
+        type: http_proxy
+        httpMethod: GET
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+    post:
+      summary: Create account
+      tags: [Accounts]
+      security:
+        - CognitoAuthorizer: []
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/accounts"
+        type: http_proxy
+        httpMethod: POST
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+
+  /api/accounts/{id}:
+    get:
+      summary: Get account by ID
+      tags: [Accounts]
+      security:
+        - CognitoAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/accounts/{id}"
+        type: http_proxy
+        httpMethod: GET
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+        requestParameters:
+          integration.request.path.id: method.request.path.id
+    put:
+      summary: Update account
+      tags: [Accounts]
+      security:
+        - CognitoAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/accounts/{id}"
+        type: http_proxy
+        httpMethod: PUT
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+        requestParameters:
+          integration.request.path.id: method.request.path.id
+    delete:
+      summary: Delete account
+      tags: [Accounts]
+      security:
+        - CognitoAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/accounts/{id}"
+        type: http_proxy
+        httpMethod: DELETE
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+        requestParameters:
+          integration.request.path.id: method.request.path.id
+
+  # Contacts Service
+  /api/contacts:
+    get:
+      summary: List contacts
+      tags: [Contacts]
+      security:
+        - CognitoAuthorizer: []
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/contacts"
+        type: http_proxy
+        httpMethod: GET
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+    post:
+      summary: Create contact
+      tags: [Contacts]
+      security:
+        - CognitoAuthorizer: []
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/contacts"
+        type: http_proxy
+        httpMethod: POST
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+
+  /api/contacts/{id}:
+    get:
+      summary: Get contact by ID
+      tags: [Contacts]
+      security:
+        - CognitoAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/contacts/{id}"
+        type: http_proxy
+        httpMethod: GET
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+        requestParameters:
+          integration.request.path.id: method.request.path.id
+    put:
+      summary: Update contact
+      tags: [Contacts]
+      security:
+        - CognitoAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/contacts/{id}"
+        type: http_proxy
+        httpMethod: PUT
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+        requestParameters:
+          integration.request.path.id: method.request.path.id
+    delete:
+      summary: Delete contact
+      tags: [Contacts]
+      security:
+        - CognitoAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/contacts/{id}"
+        type: http_proxy
+        httpMethod: DELETE
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+        requestParameters:
+          integration.request.path.id: method.request.path.id
+
+  # Leads Service
+  /api/leads:
+    get:
+      summary: List leads
+      tags: [Leads]
+      security:
+        - CognitoAuthorizer: []
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/leads"
+        type: http_proxy
+        httpMethod: GET
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+    post:
+      summary: Create lead
+      tags: [Leads]
+      security:
+        - CognitoAuthorizer: []
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/leads"
+        type: http_proxy
+        httpMethod: POST
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+
+  /api/leads/{id}:
+    get:
+      summary: Get lead by ID
+      tags: [Leads]
+      security:
+        - CognitoAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/leads/{id}"
+        type: http_proxy
+        httpMethod: GET
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+        requestParameters:
+          integration.request.path.id: method.request.path.id
+    put:
+      summary: Update lead
+      tags: [Leads]
+      security:
+        - CognitoAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/leads/{id}"
+        type: http_proxy
+        httpMethod: PUT
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+        requestParameters:
+          integration.request.path.id: method.request.path.id
+
+  /api/leads/{id}/convert:
+    post:
+      summary: Convert lead to opportunity
+      tags: [Leads]
+      security:
+        - CognitoAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/leads/{id}/convert"
+        type: http_proxy
+        httpMethod: POST
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+        requestParameters:
+          integration.request.path.id: method.request.path.id
+
+  # Opportunities Service
+  /api/opportunities:
+    get:
+      summary: List opportunities
+      tags: [Opportunities]
+      security:
+        - CognitoAuthorizer: []
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/opportunities"
+        type: http_proxy
+        httpMethod: GET
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+    post:
+      summary: Create opportunity
+      tags: [Opportunities]
+      security:
+        - CognitoAuthorizer: []
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/opportunities"
+        type: http_proxy
+        httpMethod: POST
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+
+  /api/opportunities/{id}:
+    get:
+      summary: Get opportunity by ID
+      tags: [Opportunities]
+      security:
+        - CognitoAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/opportunities/{id}"
+        type: http_proxy
+        httpMethod: GET
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+        requestParameters:
+          integration.request.path.id: method.request.path.id
+    put:
+      summary: Update opportunity
+      tags: [Opportunities]
+      security:
+        - CognitoAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/opportunities/{id}"
+        type: http_proxy
+        httpMethod: PUT
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+        requestParameters:
+          integration.request.path.id: method.request.path.id
+
+  # Work Orders Service
+  /api/work-orders:
+    get:
+      summary: List work orders
+      tags: [Work Orders]
+      security:
+        - CognitoAuthorizer: []
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/work-orders"
+        type: http_proxy
+        httpMethod: GET
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+    post:
+      summary: Create work order
+      tags: [Work Orders]
+      security:
+        - CognitoAuthorizer: []
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/work-orders"
+        type: http_proxy
+        httpMethod: POST
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+
+  /api/work-orders/{id}:
+    get:
+      summary: Get work order by ID
+      tags: [Work Orders]
+      security:
+        - CognitoAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/work-orders/{id}"
+        type: http_proxy
+        httpMethod: GET
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+        requestParameters:
+          integration.request.path.id: method.request.path.id
+    put:
+      summary: Update work order
+      tags: [Work Orders]
+      security:
+        - CognitoAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/work-orders/{id}"
+        type: http_proxy
+        httpMethod: PUT
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+        requestParameters:
+          integration.request.path.id: method.request.path.id
+
+  # Service Appointments
+  /api/service-appointments:
+    get:
+      summary: List service appointments
+      tags: [Service Appointments]
+      security:
+        - CognitoAuthorizer: []
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/service-appointments"
+        type: http_proxy
+        httpMethod: GET
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+    post:
+      summary: Create service appointment
+      tags: [Service Appointments]
+      security:
+        - CognitoAuthorizer: []
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/service-appointments"
+        type: http_proxy
+        httpMethod: POST
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+
+  /api/service-appointments/{id}:
+    get:
+      summary: Get service appointment by ID
+      tags: [Service Appointments]
+      security:
+        - CognitoAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/service-appointments/{id}"
+        type: http_proxy
+        httpMethod: GET
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+        requestParameters:
+          integration.request.path.id: method.request.path.id
+    put:
+      summary: Update service appointment
+      tags: [Service Appointments]
+      security:
+        - CognitoAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/service-appointments/{id}"
+        type: http_proxy
+        httpMethod: PUT
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+        requestParameters:
+          integration.request.path.id: method.request.path.id
+
+  # Scheduling
+  /api/scheduling/dispatch-board:
+    get:
+      summary: Get dispatch board
+      tags: [Scheduling]
+      security:
+        - CognitoAuthorizer: []
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/scheduling/dispatch-board"
+        type: http_proxy
+        httpMethod: GET
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+
+  /api/scheduling/auto-schedule:
+    post:
+      summary: Auto-schedule appointments
+      tags: [Scheduling]
+      security:
+        - CognitoAuthorizer: []
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/scheduling/auto-schedule"
+        type: http_proxy
+        httpMethod: POST
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+
+  /api/scheduling/available-slots:
+    get:
+      summary: Get available time slots
+      tags: [Scheduling]
+      security:
+        - CognitoAuthorizer: []
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/scheduling/available-slots"
+        type: http_proxy
+        httpMethod: GET
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+
+  # Quotes Service
+  /api/quotes:
+    get:
+      summary: List quotes
+      tags: [Quotes]
+      security:
+        - CognitoAuthorizer: []
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/quotes"
+        type: http_proxy
+        httpMethod: GET
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+    post:
+      summary: Create quote
+      tags: [Quotes]
+      security:
+        - CognitoAuthorizer: []
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/quotes"
+        type: http_proxy
+        httpMethod: POST
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+
+  /api/quotes/{id}:
+    get:
+      summary: Get quote by ID
+      tags: [Quotes]
+      security:
+        - CognitoAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/quotes/{id}"
+        type: http_proxy
+        httpMethod: GET
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+        requestParameters:
+          integration.request.path.id: method.request.path.id
+    put:
+      summary: Update quote
+      tags: [Quotes]
+      security:
+        - CognitoAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/quotes/{id}"
+        type: http_proxy
+        httpMethod: PUT
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+        requestParameters:
+          integration.request.path.id: method.request.path.id
+
+  /api/quotes/{id}/accept:
+    post:
+      summary: Accept quote (create service contract)
+      tags: [Quotes]
+      security:
+        - CognitoAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/quotes/{id}/accept"
+        type: http_proxy
+        httpMethod: POST
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+        requestParameters:
+          integration.request.path.id: method.request.path.id
+
+  # Products
+  /api/products:
+    get:
+      summary: List products
+      tags: [Products]
+      security:
+        - CognitoAuthorizer: []
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/products"
+        type: http_proxy
+        httpMethod: GET
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+    post:
+      summary: Create product
+      tags: [Products]
+      security:
+        - CognitoAuthorizer: []
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/products"
+        type: http_proxy
+        httpMethod: POST
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+
+  # Invoices Service
+  /api/invoices:
+    get:
+      summary: List invoices
+      tags: [Invoices]
+      security:
+        - CognitoAuthorizer: []
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/invoices"
+        type: http_proxy
+        httpMethod: GET
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+    post:
+      summary: Create invoice
+      tags: [Invoices]
+      security:
+        - CognitoAuthorizer: []
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/invoices"
+        type: http_proxy
+        httpMethod: POST
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+
+  /api/invoices/{id}:
+    get:
+      summary: Get invoice by ID
+      tags: [Invoices]
+      security:
+        - CognitoAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/invoices/{id}"
+        type: http_proxy
+        httpMethod: GET
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+        requestParameters:
+          integration.request.path.id: method.request.path.id
+    put:
+      summary: Update invoice
+      tags: [Invoices]
+      security:
+        - CognitoAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/invoices/{id}"
+        type: http_proxy
+        httpMethod: PUT
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+        requestParameters:
+          integration.request.path.id: method.request.path.id
+
+  /api/invoices/{id}/send:
+    post:
+      summary: Send invoice
+      tags: [Invoices]
+      security:
+        - CognitoAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/invoices/{id}/send"
+        type: http_proxy
+        httpMethod: POST
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+        requestParameters:
+          integration.request.path.id: method.request.path.id
+
+  /api/invoices/{id}/late-fee:
+    post:
+      summary: Apply late fee
+      tags: [Invoices]
+      security:
+        - CognitoAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/invoices/{id}/late-fee"
+        type: http_proxy
+        httpMethod: POST
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+        requestParameters:
+          integration.request.path.id: method.request.path.id
+
+  # Payments
+  /api/payments:
+    get:
+      summary: List payments
+      tags: [Payments]
+      security:
+        - CognitoAuthorizer: []
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/payments"
+        type: http_proxy
+        httpMethod: GET
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+    post:
+      summary: Create payment
+      tags: [Payments]
+      security:
+        - CognitoAuthorizer: []
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/payments"
+        type: http_proxy
+        httpMethod: POST
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+
+  /api/payments/{id}:
+    get:
+      summary: Get payment by ID
+      tags: [Payments]
+      security:
+        - CognitoAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/payments/{id}"
+        type: http_proxy
+        httpMethod: GET
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+        requestParameters:
+          integration.request.path.id: method.request.path.id
+
+  /api/payments/{id}/refund:
+    post:
+      summary: Refund payment
+      tags: [Payments]
+      security:
+        - CognitoAuthorizer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/payments/{id}/refund"
+        type: http_proxy
+        httpMethod: POST
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+        requestParameters:
+          integration.request.path.id: method.request.path.id
+
+  /api/payments/batch:
+    post:
+      summary: Batch payment
+      tags: [Payments]
+      security:
+        - CognitoAuthorizer: []
+      x-amazon-apigateway-integration:
+        uri: "http://${ALB_DNS}/api/payments/batch"
+        type: http_proxy
+        httpMethod: POST
+        connectionType: VPC_LINK
+        connectionId: "${VPC_LINK_ID}"
+
+components:
+  securitySchemes:
+    CognitoAuthorizer:
+      type: apiKey
+      name: Authorization
+      in: header
+      x-amazon-apigateway-authtype: cognito_user_pools
+      x-amazon-apigateway-authorizer:
+        type: cognito_user_pools
+        providerARNs:
+          - "arn:aws:cognito-idp:us-east-2:679128292059:userpool/us-east-2_e02zbxuZ2"

@@ -318,6 +318,9 @@ model ServiceAppointment {
   actualEnd             DateTime? @map("actual_end")
   duration              Int?      // minutes
 
+  // Google Calendar Integration
+  googleCalendarEventId String?   @map("google_calendar_event_id")
+
   // Relations
   workOrderId           String    @map("work_order_id")
   workOrder             WorkOrder @relation(fields: [workOrderId], references: [id])
@@ -347,12 +350,16 @@ model ServiceResource {
   email                 String?
   phone                 String?
 
-  // Google Calendar
+  // Google Calendar Integration
   googleCalendarId      String?   @map("google_calendar_id")
   googleCalendarSyncEnabled Boolean @default(false) @map("google_calendar_sync_enabled")
+  googleCalendarConnected Boolean @default(false) @map("google_calendar_connected")
+  googleAccessToken     String?   @map("google_access_token")
+  googleRefreshToken    String?   @map("google_refresh_token")
+  googleTokenExpiry     DateTime? @map("google_token_expiry")
 
   // User link (if internal employee)
-  userId                String?   @map("user_id")
+  userId                String?   @unique @map("user_id")
   user                  User?     @relation(fields: [userId], references: [id])
 
   // Timestamps

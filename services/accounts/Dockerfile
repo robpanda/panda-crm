@@ -1,35 +1,36 @@
 # Accounts Microservice Dockerfile
-FROM node:20-alpine
+FROM node:20-slim
 
-# Set working directory
+# Install OpenSSL for Prisma
+RUN apt-get update -y && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Copy package files
-COPY package*.json ./
+# Copy shared modules
+COPY shared/prisma ./shared/prisma
+
+# Copy service files
+COPY services/accounts/package*.json ./
 
 # Install dependencies
-RUN npm ci --only=production
-
-# Copy Prisma schema from shared (will be mounted or copied in build)
-COPY ../../shared/prisma ./prisma
+RUN npm install --omit=dev
 
 # Generate Prisma client
-RUN npx prisma generate
+RUN npx prisma generate --schema=./shared/prisma/schema.prisma
 
-# Copy application code
-COPY src ./src
+# Copy source code
+COPY services/accounts/src ./src
 
-# Create non-root user
-RUN addgroup -g 1001 -S nodejs
-RUN adduser -S nodejs -u 1001
+# Create non-root user and change ownership
+RUN groupadd -g 1001 nodejs && useradd -u 1001 -g nodejs nodejs && chown -R nodejs:nodejs /app
 USER nodejs
 
 # Expose port
 EXPOSE 3001
 
-# Health check
+# Health check - use curl instead of wget on debian
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:3001/health || exit 1
+  CMD node -e "require('http').get('http://localhost:3001/health', (res) => process.exit(res.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
 
 # Start the service
 CMD ["node", "src/index.js"]

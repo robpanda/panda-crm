@@ -1,4 +1,4 @@
-# Opportunities Microservice Dockerfile
+# Leads Microservice Dockerfile
 FROM node:20-slim
 
 # Install OpenSSL for Prisma
@@ -10,7 +10,7 @@ WORKDIR /app
 COPY shared/prisma ./shared/prisma
 
 # Copy service files
-COPY services/opportunities/package*.json ./
+COPY services/leads/package*.json ./
 
 # Install dependencies
 RUN npm install --omit=dev
@@ -19,18 +19,18 @@ RUN npm install --omit=dev
 RUN npx prisma generate --schema=./shared/prisma/schema.prisma
 
 # Copy source code
-COPY services/opportunities/src ./src
+COPY services/leads/src ./src
 
 # Create non-root user and change ownership
 RUN groupadd -g 1001 nodejs && useradd -u 1001 -g nodejs nodejs && chown -R nodejs:nodejs /app
 USER nodejs
 
 # Expose port
-EXPOSE 3004
+EXPOSE 3003
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:3004/health', (res) => process.exit(res.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+  CMD node -e "require('http').get('http://localhost:3003/health', (res) => process.exit(res.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
 
 # Start the service
 CMD ["node", "src/index.js"]
