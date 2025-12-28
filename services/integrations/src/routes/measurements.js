@@ -1,0 +1,456 @@
+// EagleView, GAF QuickMeasure & Hover Integration Routes
+import { Router } from 'express';
+import { measurementService } from '../services/measurementService.js';
+import { logger } from '../middleware/logger.js';
+import { authMiddleware, requireRole } from '../middleware/auth.js';
+
+const router = Router();
+
+// ==========================================
+// EagleView Routes
+// ==========================================
+
+/**
+ * POST /measurements/eagleview/order - Order EagleView report
+ */
+router.post('/eagleview/order', authMiddleware, async (req, res, next) => {
+  try {
+    const report = await measurementService.orderEagleViewReport({
+      ...req.body,
+      userId: req.user.id,
+    });
+
+    logger.info(`EagleView order placed: ${report.id} by ${req.user.email}`);
+
+    res.status(201).json({ success: true, data: report });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /measurements/eagleview/webhook - Handle EagleView webhooks
+ */
+router.post('/eagleview/webhook', async (req, res, next) => {
+  try {
+    // Verify webhook signature
+    const signature = req.headers['x-eagleview-signature'];
+    // TODO: Implement signature verification
+
+    await measurementService.handleEagleViewWebhook(req.body);
+
+    res.sendStatus(200);
+  } catch (error) {
+    logger.error('EagleView webhook error:', error);
+    res.sendStatus(500);
+  }
+});
+
+// ==========================================
+// GAF QuickMeasure Routes
+// ==========================================
+
+/**
+ * POST /measurements/gaf/order - Order GAF QuickMeasure report
+ */
+router.post('/gaf/order', authMiddleware, async (req, res, next) => {
+  try {
+    const report = await measurementService.orderGAFReport({
+      ...req.body,
+      userId: req.user.id,
+    });
+
+    logger.info(`GAF QuickMeasure order placed: ${report.id} by ${req.user.email}`);
+
+    res.status(201).json({ success: true, data: report });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /measurements/gaf/webhook - Handle GAF webhooks
+ */
+router.post('/gaf/webhook', async (req, res, next) => {
+  try {
+    // Verify webhook signature
+    const signature = req.headers['x-gaf-signature'];
+    // TODO: Implement signature verification
+
+    await measurementService.handleGAFWebhook(req.body);
+
+    res.sendStatus(200);
+  } catch (error) {
+    logger.error('GAF webhook error:', error);
+    res.sendStatus(500);
+  }
+});
+
+// ==========================================
+// Hover Integration Routes
+// ==========================================
+// Hover provides photo-based 3D modeling, measurements, and design visualization
+// Key differentiator: Uses smartphone photos instead of satellite imagery
+
+/**
+ * GET /measurements/hover/status - Check Hover integration status
+ */
+router.get('/hover/status', authMiddleware, async (req, res, next) => {
+  try {
+    const status = await measurementService.checkHoverStatus();
+    res.json({ success: true, data: status });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /measurements/hover/auth - Get Hover OAuth authorization URL
+ * Initiates OAuth flow for Hover (Authorization Code Grant)
+ */
+router.get('/hover/auth', authMiddleware, async (req, res, next) => {
+  try {
+    const { state } = req.query;
+    const authUrl = measurementService.getHoverAuthorizationUrl(state || req.user.id);
+    res.json({ success: true, data: { authUrl } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /measurements/hover/callback - OAuth callback from Hover
+ * Exchanges authorization code for access token
+ */
+router.get('/hover/callback', async (req, res, next) => {
+  try {
+    const { code, state, error: oauthError, error_description } = req.query;
+
+    if (oauthError) {
+      logger.error('Hover OAuth error:', oauthError, error_description);
+      return res.redirect('/integrations?error=hover_auth_failed&message=' + encodeURIComponent(error_description || oauthError));
+    }
+
+    if (!code) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'MISSING_CODE', message: 'Authorization code is required' },
+      });
+    }
+
+    const tokens = await measurementService.exchangeHoverCode(code);
+
+    logger.info(`Hover OAuth successful for state: ${state}`);
+
+    // Redirect to integrations page with success message
+    res.redirect('/integrations?success=hover_connected');
+  } catch (error) {
+    logger.error('Hover OAuth callback error:', error);
+    res.redirect('/integrations?error=hover_auth_failed&message=' + encodeURIComponent(error.message));
+  }
+});
+
+/**
+ * POST /measurements/hover/capture - Create Hover capture request
+ * Initiates a job for a property to be captured via smartphone photos
+ */
+router.post('/hover/capture', authMiddleware, async (req, res, next) => {
+  try {
+    const result = await measurementService.createHoverCaptureRequest({
+      ...req.body,
+      userId: req.user.id,
+    });
+
+    logger.info(`Hover capture request created: ${result.captureRequestId} by ${req.user.email}`);
+
+    res.status(201).json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /measurements/hover/job/:jobId - Get Hover job details
+ */
+router.get('/hover/job/:jobId', authMiddleware, async (req, res, next) => {
+  try {
+    const job = await measurementService.getHoverJob(req.params.jobId);
+    res.json({ success: true, data: job });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /measurements/hover/capture/:captureRequestId/jobs - Get jobs for a capture request
+ */
+router.get('/hover/capture/:captureRequestId/jobs', authMiddleware, async (req, res, next) => {
+  try {
+    const jobs = await measurementService.getHoverJobsForCaptureRequest(req.params.captureRequestId);
+    res.json({ success: true, data: jobs });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /measurements/hover/job/:jobId/deliverables - Get Hover deliverables
+ */
+router.get('/hover/job/:jobId/deliverables', authMiddleware, async (req, res, next) => {
+  try {
+    const { type } = req.query;
+    const deliverables = await measurementService.getHoverDeliverables(req.params.jobId, type);
+    res.json({ success: true, data: deliverables });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /measurements/hover/deliverable/:deliverableId/download - Download a specific deliverable
+ */
+router.get('/hover/deliverable/:deliverableId/download', authMiddleware, async (req, res, next) => {
+  try {
+    const response = await measurementService.downloadHoverDeliverable(req.params.deliverableId);
+
+    // Forward the response headers and body
+    const contentType = response.headers.get('content-type');
+    const contentDisposition = response.headers.get('content-disposition');
+
+    if (contentType) res.setHeader('Content-Type', contentType);
+    if (contentDisposition) res.setHeader('Content-Disposition', contentDisposition);
+
+    // Pipe the response body
+    const buffer = await response.arrayBuffer();
+    res.send(Buffer.from(buffer));
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /measurements/hover/job/:jobId/3d-model - Get 3D model viewer URL
+ */
+router.get('/hover/job/:jobId/3d-model', authMiddleware, async (req, res, next) => {
+  try {
+    const viewerUrl = await measurementService.getHover3DModelUrl(req.params.jobId);
+    res.json({ success: true, data: { viewerUrl } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /measurements/hover/job/:jobId/design-options - Get design visualization options
+ */
+router.get('/hover/job/:jobId/design-options', authMiddleware, async (req, res, next) => {
+  try {
+    const options = await measurementService.getHoverDesignOptions(req.params.jobId);
+    res.json({ success: true, data: options });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /measurements/hover/job/:jobId/design - Apply design to 3D model
+ * Visualize different roofing, siding, window materials
+ */
+router.post('/hover/job/:jobId/design', authMiddleware, async (req, res, next) => {
+  try {
+    const result = await measurementService.applyHoverDesign(req.params.jobId, req.body);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /measurements/hover/webhook - Handle Hover webhooks
+ * Events: job-state-changed, model-created, capture-request-state-changed, deliverable-created
+ */
+router.post('/hover/webhook', async (req, res, next) => {
+  try {
+    // Verify webhook signature if provided
+    const signature = req.headers['x-hover-signature'];
+    // TODO: Implement signature verification using Hover's webhook secret
+
+    await measurementService.handleHoverWebhook(req.body);
+
+    res.sendStatus(200);
+  } catch (error) {
+    logger.error('Hover webhook error:', error);
+    res.sendStatus(500);
+  }
+});
+
+// ==========================================
+// Manual Reports
+// ==========================================
+
+/**
+ * POST /measurements/manual - Create manual measurement report
+ */
+router.post('/manual', authMiddleware, async (req, res, next) => {
+  try {
+    const report = await measurementService.createManualReport({
+      ...req.body,
+      userId: req.user.id,
+    });
+
+    logger.info(`Manual measurement report created: ${report.id} by ${req.user.email}`);
+
+    res.status(201).json({ success: true, data: report });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ==========================================
+// Query Routes
+// ==========================================
+
+/**
+ * GET /measurements/opportunity/:opportunityId - Get reports for opportunity
+ */
+router.get('/opportunity/:opportunityId', authMiddleware, async (req, res, next) => {
+  try {
+    const { all } = req.query;
+
+    const reports = all === 'true'
+      ? await measurementService.getReportsForOpportunity(req.params.opportunityId)
+      : await measurementService.getReportForOpportunity(req.params.opportunityId);
+
+    res.json({ success: true, data: reports });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /measurements/pending - Get pending orders
+ */
+router.get('/pending', authMiddleware, async (req, res, next) => {
+  try {
+    const { provider } = req.query;
+
+    const orders = await measurementService.getPendingOrders(provider);
+
+    res.json({ success: true, data: orders });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /measurements/stats - Get measurement statistics
+ */
+router.get('/stats', authMiddleware, async (req, res, next) => {
+  try {
+    const { startDate, endDate } = req.query;
+
+    const stats = await measurementService.getStats({
+      startDate: startDate ? new Date(startDate) : undefined,
+      endDate: endDate ? new Date(endDate) : undefined,
+    });
+
+    res.json({ success: true, data: stats });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /measurements/:id - Get single measurement report
+ */
+router.get('/:id', authMiddleware, async (req, res, next) => {
+  try {
+    const { PrismaClient } = await import('@prisma/client');
+    const prisma = new PrismaClient();
+
+    const report = await prisma.measurementReport.findUnique({
+      where: { id: req.params.id },
+      include: {
+        opportunity: { select: { id: true, name: true } },
+        account: { select: { id: true, name: true } },
+        orderedBy: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+
+    if (!report) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Measurement report not found' },
+      });
+    }
+
+    res.json({ success: true, data: report });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ==========================================
+// Report Types & Pricing
+// ==========================================
+
+/**
+ * GET /measurements/report-types - Get available report types and pricing
+ */
+router.get('/report-types', authMiddleware, async (req, res, next) => {
+  try {
+    const reportTypes = {
+      eagleView: [
+        { code: 'BASIC', name: 'Residential Basic', price: 25.00 },
+        { code: 'PREMIUM', name: 'Residential Premium', price: 45.00 },
+        { code: 'ULTRA_PREMIUM', name: 'Residential Ultra Premium', price: 65.00 },
+        { code: 'COMMERCIAL', name: 'Commercial', price: 95.00 },
+        { code: 'WALLS_ONLY', name: 'Walls Only', price: 35.00 },
+        { code: 'ROOF_AND_WALLS', name: 'Roof and Walls', price: 75.00 },
+      ],
+      gaf: [
+        { code: 'BASIC', name: 'QuickMeasure Basic', price: 20.00 },
+        { code: 'PREMIUM', name: 'QuickMeasure Premium', price: 40.00 },
+      ],
+      hover: [
+        { code: 'EXTERIOR', name: 'Exterior 3D Model', price: 25.00, description: 'Full exterior measurements with 3D model' },
+        { code: 'EXTERIOR_PLUS', name: 'Exterior + Design', price: 45.00, description: 'Includes design visualization with real materials' },
+        { code: 'FULL_PROPERTY', name: 'Full Property', price: 75.00, description: 'Exterior + interior measurements and 3D model' },
+      ],
+      // Comparison guide for choosing provider
+      comparison: {
+        eagleView: {
+          source: 'Satellite/Aerial imagery',
+          turnaround: '1-3 business days',
+          bestFor: 'Quick roof measurements without site visit',
+          limitations: 'No interior, limited siding detail',
+        },
+        gaf: {
+          source: 'Satellite/Aerial imagery',
+          turnaround: '1-2 business days',
+          bestFor: 'Roof-focused measurements with GAF material integration',
+          limitations: 'Roofing only, no siding/windows',
+        },
+        hover: {
+          source: 'Smartphone photos (site visit required)',
+          turnaround: '24-48 hours after photo capture',
+          bestFor: '3D models, design visualization, siding/windows',
+          limitations: 'Requires on-site photo capture',
+          features: [
+            'Interactive 3D model',
+            'Design visualization with real materials (GAF, JamesHardie, Alside)',
+            'Detailed window/door measurements',
+            'Siding area calculations',
+            'SketchUp export for custom designs',
+          ],
+        },
+      },
+    };
+
+    res.json({ success: true, data: reportTypes });
+  } catch (error) {
+    next(error);
+  }
+});
+
+export default router;
