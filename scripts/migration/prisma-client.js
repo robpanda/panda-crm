@@ -1,5 +1,6 @@
 // Prisma Client for Migration Scripts
-import { PrismaClient } from '@prisma/client';
+// Import from shared location where Prisma client is generated
+import { PrismaClient } from '../../shared/node_modules/@prisma/client/index.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -15,6 +16,17 @@ export function getPrismaClient() {
   return prisma;
 }
 
+// Helper to remove undefined values from an object
+function cleanObject(obj) {
+  const cleaned = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (value !== undefined) {
+      cleaned[key] = value;
+    }
+  }
+  return cleaned;
+}
+
 export async function batchUpsert(model, records, idField = 'salesforceId', batchSize = 100) {
   const prisma = getPrismaClient();
   const results = { created: 0, updated: 0, errors: [] };
@@ -24,10 +36,16 @@ export async function batchUpsert(model, records, idField = 'salesforceId', batc
 
     for (const record of batch) {
       try {
+        // Clean the record to remove undefined values
+        const cleanedRecord = cleanObject(record);
+
+        // For updates, exclude createdAt to preserve original creation date
+        const { createdAt, ...updateData } = cleanedRecord;
+
         await prisma[model].upsert({
-          where: { [idField]: record[idField] },
-          update: record,
-          create: record,
+          where: { [idField]: cleanedRecord[idField] },
+          update: updateData, // Don't overwrite createdAt on updates
+          create: cleanedRecord, // Include createdAt only for new records
         });
         // Can't easily tell if created or updated in upsert
         results.created++;

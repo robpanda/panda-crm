@@ -25,22 +25,23 @@ const ACCOUNT_FIELDS = [
   'LastModifiedDate',
   'Account_Status__c',
   'Type',
-  'isPandaClaims__c',
-  'Total_Sales_Volume__c',
+  'isSureClaims__c',
+  'Total_Job_Value__c',
   'fw1__Total_Paid_Amount__c',
 ];
 
 function mapAccountStatus(sfStatus) {
+  // Valid AccountStatus values: NEW, ACTIVE, ONBOARDING, IN_PRODUCTION, COMPLETED, INACTIVE
   const statusMap = {
-    'Prospect': 'PROSPECT',
+    'Prospect': 'NEW',
     'Active': 'ACTIVE',
     'Onboarding': 'ONBOARDING',
     'In Production': 'IN_PRODUCTION',
     'Completed': 'COMPLETED',
     'Inactive': 'INACTIVE',
-    'Closed': 'CLOSED',
+    'Closed': 'INACTIVE',
   };
-  return statusMap[sfStatus] || 'PROSPECT';
+  return statusMap[sfStatus] || 'NEW';
 }
 
 function mapAccountType(sfType) {
@@ -54,32 +55,34 @@ function mapAccountType(sfType) {
 }
 
 function transformAccount(sfAccount) {
-  return {
+  // Build account object with all Salesforce fields mapped to schema fields
+  const account = {
     salesforceId: sfAccount.Id,
-    name: sfAccount.Name,
-    phone: sfAccount.Phone,
-    billingStreet: sfAccount.BillingStreet,
-    billingCity: sfAccount.BillingCity,
-    billingState: sfAccount.BillingState,
-    billingPostalCode: sfAccount.BillingPostalCode,
-    billingCountry: sfAccount.BillingCountry || 'USA',
-    shippingStreet: sfAccount.ShippingStreet,
-    shippingCity: sfAccount.ShippingCity,
-    shippingState: sfAccount.ShippingState,
-    shippingPostalCode: sfAccount.ShippingPostalCode,
-    shippingCountry: sfAccount.ShippingCountry,
-    website: sfAccount.Website,
-    industry: sfAccount.Industry,
-    description: sfAccount.Description,
+    name: sfAccount.Name || 'Unnamed Account',
+    phone: sfAccount.Phone || undefined,
+    billingStreet: sfAccount.BillingStreet || undefined,
+    billingCity: sfAccount.BillingCity || undefined,
+    billingState: sfAccount.BillingState || undefined,
+    billingPostalCode: sfAccount.BillingPostalCode || undefined,
+    billingCountry: sfAccount.BillingCountry || undefined,
+    shippingStreet: sfAccount.ShippingStreet || undefined,
+    shippingCity: sfAccount.ShippingCity || undefined,
+    shippingState: sfAccount.ShippingState || undefined,
+    shippingPostalCode: sfAccount.ShippingPostalCode || undefined,
+    shippingCountry: sfAccount.ShippingCountry || undefined,
+    website: sfAccount.Website || undefined,
+    industry: sfAccount.Industry || undefined,
+    description: sfAccount.Description || undefined,
     status: mapAccountStatus(sfAccount.Account_Status__c),
     type: mapAccountType(sfAccount.Type),
-    isPandaClaims: sfAccount.isPandaClaims__c || false,
-    totalSalesVolume: sfAccount.Total_Sales_Volume__c || 0,
-    totalPaidAmount: sfAccount.fw1__Total_Paid_Amount__c || 0,
-    sfOwnerId: sfAccount.OwnerId,
+    isPandaClaims: sfAccount.isSureClaims__c || false,
+    totalSalesVolume: sfAccount.Total_Job_Value__c || undefined,
+    totalPaidAmount: sfAccount.fw1__Total_Paid_Amount__c || undefined,
     createdAt: new Date(sfAccount.CreatedDate),
     updatedAt: new Date(sfAccount.LastModifiedDate),
   };
+
+  return account;
 }
 
 async function migrateAccounts() {

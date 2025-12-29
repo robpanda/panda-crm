@@ -178,6 +178,59 @@ export const accountController = {
       next(error);
     }
   },
+
+  // ============================================================================
+  // SERVICE REQUEST ENDPOINTS (per Creating A Service Request SOP)
+  // ============================================================================
+
+  // POST /accounts/:id/service-request
+  async createServiceRequest(req, res, next) {
+    try {
+      const account = await accountService.createServiceRequest(req.params.id, {
+        notes: req.body.notes,
+        projectManagerId: req.body.projectManagerId,
+      });
+      res.status(201).json({
+        success: true,
+        data: account,
+        message: 'Service request created successfully',
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // POST /accounts/:id/service-request/complete
+  async completeServiceRequest(req, res, next) {
+    try {
+      const account = await accountService.completeServiceRequest(req.params.id);
+      res.json({
+        success: true,
+        data: account,
+        message: 'Service request marked as complete',
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // GET /accounts/service-requests
+  async getServiceRequests(req, res, next) {
+    try {
+      const result = await accountService.getServiceRequests({
+        page: parseInt(req.query.page) || 1,
+        limit: parseInt(req.query.limit) || 50,
+        projectManagerId: req.query.projectManagerId,
+        includeCompleted: req.query.includeCompleted === 'true',
+      });
+      res.json({
+        success: true,
+        ...result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
 };
 
 export default accountController;

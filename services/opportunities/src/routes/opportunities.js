@@ -31,8 +31,8 @@ const validateCreate = [
 ];
 
 const validatePagination = [
-  query('page').optional().isInt({ min: 1 }),
-  query('limit').optional().isInt({ min: 1, max: 100 }),
+  query('page').optional().isInt({ min: 1 }).toInt(),
+  query('limit').optional().isInt({ min: 1, max: 5000 }).toInt(), // Increased from 1000 to 5000 for dashboards
   query('stage').optional(),
   query('type').optional().isIn(['all', 'INSURANCE', 'RETAIL', 'COMMERCIAL']),
   query('ownerFilter').optional().isIn(['mine', 'all']),
@@ -110,6 +110,85 @@ router.get('/:id/contacts', async (req, res, next) => {
   }
 });
 
+// ============================================================================
+// OPPORTUNITY HUB ENDPOINTS
+// These endpoints power the Opportunity Hub view - the central project dashboard
+// ============================================================================
+
+// Get hub summary - overview of all related records with counts
+router.get('/:id/summary', async (req, res, next) => {
+  try {
+    const summary = await opportunityService.getOpportunitySummary(req.params.id);
+    res.json({ success: true, data: summary });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Get service appointments (via WorkOrders)
+router.get('/:id/appointments', async (req, res, next) => {
+  try {
+    const appointments = await opportunityService.getOpportunityAppointments(req.params.id);
+    res.json({ success: true, data: appointments });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Get service contract
+router.get('/:id/contract', async (req, res, next) => {
+  try {
+    const contract = await opportunityService.getOpportunityContract(req.params.id);
+    res.json({ success: true, data: contract });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Get invoices and payments
+router.get('/:id/invoices', async (req, res, next) => {
+  try {
+    const invoices = await opportunityService.getOpportunityInvoices(req.params.id);
+    res.json({ success: true, data: invoices });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Get commissions
+router.get('/:id/commissions', async (req, res, next) => {
+  try {
+    const commissions = await opportunityService.getOpportunityCommissions(req.params.id);
+    res.json({ success: true, data: commissions });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Get unified activity timeline (notes, tasks, events)
+router.get('/:id/activity', async (req, res, next) => {
+  try {
+    const activity = await opportunityService.getOpportunityActivity(req.params.id, {
+      page: parseInt(req.query.page) || 1,
+      limit: parseInt(req.query.limit) || 50,
+      type: req.query.type, // 'note', 'task', or undefined for all
+    });
+    res.json({ success: true, data: activity });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Get documents/agreements
+router.get('/:id/documents', async (req, res, next) => {
+  try {
+    const documents = await opportunityService.getOpportunityDocuments(req.params.id);
+    res.json({ success: true, data: documents });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Create opportunity
 router.post('/', validateCreate, handleValidation, async (req, res, next) => {
   try {
@@ -146,6 +225,114 @@ router.patch('/:id', async (req, res, next) => {
 router.delete('/:id', async (req, res, next) => {
   try {
     const result = await opportunityService.deleteOpportunity(req.params.id);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ============================================================================
+// CALL CENTER ENDPOINTS
+// ============================================================================
+
+/**
+ * GET /call-center/unscheduled
+ * Returns opportunities that have been converted from leads but don't have
+ * a scheduled service appointment yet (need to book appointment)
+ */
+router.get('/call-center/unscheduled', async (req, res, next) => {
+  try {
+    const { startDate, endDate, sortBy = 'tentativeAppointmentDate', sortOrder = 'asc' } = req.query;
+
+    const result = await opportunityService.getUnscheduledAppointments({
+      startDate,
+      endDate,
+      sortBy,
+      sortOrder,
+    });
+
+    res.json({
+      success: true,
+      data: result.opportunities,
+      pagination: {
+        total: result.total,
+        page: 1,
+        limit: result.total,
+        totalPages: 1,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /:id/appointments/book
+ * Book a service appointment for an opportunity
+ */
+router.post('/:id/appointments/book', async (req, res, next) => {
+  try {
+    const { scheduledStart, scheduledEnd, workTypeId, notes } = req.body;
+    const result = await opportunityService.bookAppointment(req.params.id, {
+      scheduledStart,
+      scheduledEnd,
+      workTypeId,
+      notes,
+      bookedBy: req.user?.id,
+    });
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * PUT /:id/appointments/:appointmentId/reschedule
+ * Reschedule an existing appointment
+ */
+router.put('/:id/appointments/:appointmentId/reschedule', async (req, res, next) => {
+  try {
+    const { scheduledStart, scheduledEnd, notes } = req.body;
+    const result = await opportunityService.rescheduleAppointment(
+      req.params.id,
+      req.params.appointmentId,
+      { scheduledStart, scheduledEnd, notes, rescheduledBy: req.user?.id }
+    );
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /:id/appointments/:appointmentId/cancel
+ * Cancel an existing appointment
+ */
+router.post('/:id/appointments/:appointmentId/cancel', async (req, res, next) => {
+  try {
+    const { reason } = req.body;
+    const result = await opportunityService.cancelAppointment(
+      req.params.id,
+      req.params.appointmentId,
+      { reason, cancelledBy: req.user?.id }
+    );
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /:id/messages
+ * Add a job message/note to an opportunity
+ */
+router.post('/:id/messages', async (req, res, next) => {
+  try {
+    const { message } = req.body;
+    const result = await opportunityService.addJobMessage(req.params.id, {
+      message,
+      createdBy: req.user?.id,
+    });
     res.json({ success: true, data: result });
   } catch (error) {
     next(error);

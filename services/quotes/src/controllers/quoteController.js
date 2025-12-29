@@ -2,6 +2,9 @@ import { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import Decimal from 'decimal.js';
 import { addDays } from 'date-fns';
+// Import workflow triggers for commission and invoice automation
+import { commissionTriggers } from '../../../workflows/src/triggers/commissionTriggers.js';
+import { invoiceTriggers } from '../../../workflows/src/triggers/invoiceTriggers.js';
 
 const prisma = new PrismaClient();
 
@@ -416,14 +419,22 @@ export async function removeLineItem(req, res, next) {
 }
 
 // Accept quote (creates Service Contract)
+// Equivalent to: Salesforce "Quote Accepted" trigger + Service Contract creation flows
 export async function acceptQuote(req, res, next) {
   try {
     const { id } = req.params;
+    const userId = req.user?.id; // For audit trail
 
     const quote = await prisma.quote.findUnique({
       where: { id },
       include: {
-        opportunity: true,
+        opportunity: {
+          include: {
+            account: {
+              select: { isPandaClaims: true, isSureClaims: true },
+            },
+          },
+        },
         lineItems: true,
       },
     });
@@ -440,16 +451,24 @@ export async function acceptQuote(req, res, next) {
     const contractCount = await prisma.serviceContract.count();
     const contractNumber = `SC-${String(contractCount + 1).padStart(6, '0')}`;
 
+    // Get opportunity owner for commission assignment
+    const opportunity = await prisma.opportunity.findUnique({
+      where: { id: quote.opportunityId },
+      select: { ownerId: true, workType: true },
+    });
+
     // Create service contract
     const serviceContract = await prisma.serviceContract.create({
       data: {
         contractNumber,
         name: `Service Contract - ${quote.opportunity.name}`,
-        status: 'DRAFT',
+        status: 'Active', // Set to Active to trigger invoice creation
         opportunityId: quote.opportunityId,
         accountId: quote.opportunity.accountId,
         contractTotal: quote.total,
+        salesTotalPrice: quote.total, // Sales price for commission calculation
         isPmContract: quote.isPmQuote,
+        ownerId: opportunity?.ownerId,
       },
     });
 
@@ -469,9 +488,50 @@ export async function acceptQuote(req, res, next) {
       data: { stage: 'CONTRACT_SIGNED' },
     });
 
+    // ========================================================================
+    // WORKFLOW AUTOMATIONS (Replaces Salesforce Flows)
+    // ========================================================================
+
+    // 1. Trigger Commission Creation (Salesforce: Service Contract - Commissions Updates)
+    try {
+      await commissionTriggers.onContractCreated(serviceContract, userId);
+
+      // If PandaClaims account, also create Sales Op and Sales Flip commissions
+      const isPandaClaims = quote.opportunity.account?.isPandaClaims ||
+                            quote.opportunity.account?.isSureClaims;
+      if (isPandaClaims && !quote.isPmQuote) {
+        await commissionTriggers.onPandaClaimsOnboarded(serviceContract, userId);
+      }
+
+      // If PM Quote, create PM-specific commissions
+      if (quote.isPmQuote) {
+        const pmUserId = opportunity?.ownerId; // PM who sold the add-on
+        if (pmUserId) {
+          await commissionTriggers.onPMContractCreated(serviceContract, pmUserId, userId);
+        }
+      }
+    } catch (commError) {
+      console.error('Commission trigger error:', commError);
+      // Don't fail the request - commissions can be created manually
+    }
+
+    // 2. Trigger Invoice Creation (Salesforce: Kulturra_Invoice_Creation_From_Service_Contract)
+    let invoice = null;
+    try {
+      if (quote.isPmQuote) {
+        invoice = await invoiceTriggers.onPMContractCreated(serviceContract.id, userId);
+      } else {
+        invoice = await invoiceTriggers.onContractActivated(serviceContract.id, userId);
+      }
+    } catch (invoiceError) {
+      console.error('Invoice trigger error:', invoiceError);
+      // Don't fail the request - invoice can be created manually
+    }
+
     res.json({
       quote: updatedQuote,
       serviceContract,
+      invoice,
       message: 'Quote accepted and service contract created',
     });
   } catch (error) {

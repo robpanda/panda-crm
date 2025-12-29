@@ -1,61 +1,124 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { accountsApi } from '../services/api';
+import { useAuth, ROLE_TYPES } from '../context/AuthContext';
 import {
   Building2,
-  Search,
-  Filter,
-  Plus,
   ChevronRight,
   MapPin,
   Phone,
-  Mail,
+  Users,
 } from 'lucide-react';
+import SubNav from '../components/SubNav';
 
 export default function Accounts() {
+  const { user } = useAuth();
   const [search, setSearch] = useState('');
+  const [activeTab, setActiveTab] = useState('all');
   const [page, setPage] = useState(1);
 
+  // Determine user's view scope based on role
+  const isGlobalView = user?.roleType === ROLE_TYPES.ADMIN || user?.roleType === ROLE_TYPES.EXECUTIVE;
+  const isTeamView = user?.roleType === ROLE_TYPES.OFFICE_MANAGER || user?.roleType === ROLE_TYPES.SALES_MANAGER || user?.isManager;
+
+  // Build filter params based on role
+  const filterParams = useMemo(() => {
+    const params = {
+      search,
+      page,
+      limit: 25,
+    };
+
+    // Apply status filter from tab
+    if (activeTab === 'active') {
+      params.status = 'ACTIVE';
+    } else if (activeTab === 'prospect') {
+      params.status = 'PROSPECT';
+    } else if (activeTab === 'my') {
+      params.ownerId = user?.id;
+    }
+
+    // Apply role-based filters (except for "my" tab which already filters by user)
+    if (activeTab !== 'my' && !isGlobalView) {
+      if (isTeamView && user?.teamMemberIds?.length > 0) {
+        params.ownerIds = [user.id, ...user.teamMemberIds].join(',');
+      }
+      if (user?.officeAssignment) {
+        params.office = user.officeAssignment;
+      }
+    }
+
+    return params;
+  }, [search, activeTab, page, user, isGlobalView, isTeamView]);
+
   const { data, isLoading } = useQuery({
-    queryKey: ['accounts', { search, page }],
-    queryFn: () => accountsApi.getAccounts({ search, page, limit: 25 }),
+    queryKey: ['accounts', filterParams],
+    queryFn: () => accountsApi.getAccounts(filterParams),
   });
 
   const accounts = data?.data || [];
   const pagination = data?.pagination || {};
 
+  // Get scope label for header
+  const getScopeLabel = () => {
+    if (isGlobalView) return null;
+    if (isTeamView) return user?.officeAssignment ? `${user.officeAssignment} Office` : 'Team';
+    return user?.officeAssignment || null;
+  };
+
+  const scopeLabel = getScopeLabel();
+
+  // Tabs for SubNav
+  const tabs = [
+    { id: 'all', label: 'All', count: pagination.total || 0 },
+    { id: 'active', label: 'Active', count: null },
+    { id: 'prospect', label: 'Prospect', count: null },
+    { id: 'my', label: 'My Accounts', count: null },
+  ];
+
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Accounts</h1>
-          <p className="text-gray-500">Manage your customer accounts</p>
+      {/* Scope indicator for team/office managers */}
+      {scopeLabel && (
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            {isTeamView ? (
+              <Users className="w-4 h-4 text-panda-primary" />
+            ) : (
+              <MapPin className="w-4 h-4 text-panda-primary" />
+            )}
+            <span className="text-sm font-medium text-gray-600">
+              Viewing: <span className="text-panda-primary">{scopeLabel} Accounts</span>
+            </span>
+          </div>
+          {pagination.total && (
+            <span className="text-sm text-gray-500">
+              {pagination.total} total accounts
+            </span>
+          )}
         </div>
-        <button className="flex items-center space-x-2 px-4 py-2 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg hover:opacity-90">
-          <Plus className="w-4 h-4" />
-          <span>New Account</span>
-        </button>
-      </div>
+      )}
 
-      {/* Filters */}
-      <div className="flex items-center space-x-4">
-        <div className="flex-1 relative">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
-          <input
-            type="text"
-            placeholder="Search accounts..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none"
-          />
-        </div>
-        <button className="flex items-center space-x-2 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50">
-          <Filter className="w-4 h-4" />
-          <span>Filters</span>
-        </button>
-      </div>
+      {/* Sub Navigation */}
+      <SubNav
+        entity="Account"
+        basePath="/accounts"
+        tabs={tabs}
+        activeTab={activeTab}
+        onTabChange={(tab) => {
+          setActiveTab(tab);
+          setPage(1);
+        }}
+        showNewButton={true}
+        newButtonPath="/accounts/new"
+        searchValue={search}
+        onSearch={(value) => {
+          setSearch(value);
+          setPage(1);
+        }}
+        showSearch={true}
+      />
 
       {/* Accounts List */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100">
@@ -67,6 +130,9 @@ export default function Accounts() {
           <div className="flex flex-col items-center justify-center h-64 text-gray-500">
             <Building2 className="w-12 h-12 mb-2 text-gray-300" />
             <p>No accounts found</p>
+            {scopeLabel && (
+              <p className="text-sm mt-1">in {scopeLabel}</p>
+            )}
           </div>
         ) : (
           <div className="divide-y divide-gray-100">
@@ -93,6 +159,11 @@ export default function Accounts() {
                         <span className="flex items-center">
                           <Phone className="w-3 h-3 mr-1" />
                           {account.phone}
+                        </span>
+                      )}
+                      {account.owner && !isTeamView && (
+                        <span className="text-xs text-gray-400">
+                          Owner: {account.owner.firstName} {account.owner.lastName}
                         </span>
                       )}
                     </div>

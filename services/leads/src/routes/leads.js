@@ -141,4 +141,39 @@ router.delete('/:id', async (req, res, next) => {
   }
 });
 
+// ============================================================================
+// CALL CENTER ENDPOINTS - Notes for Lead Management
+// ============================================================================
+
+/**
+ * GET /:id/notes
+ * Get all notes for a lead
+ */
+router.get('/:id/notes', async (req, res, next) => {
+  try {
+    const notes = await leadService.getLeadNotes(req.params.id);
+    res.json({ success: true, data: notes });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /:id/notes
+ * Add a note to a lead (Call Center documentation)
+ */
+router.post('/:id/notes', async (req, res, next) => {
+  try {
+    const { note, title } = req.body;
+    const result = await leadService.addLeadNote(req.params.id, {
+      note,
+      title,
+      createdBy: req.user?.id,
+    });
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
 export default router;

@@ -8,6 +8,8 @@ import { logger } from './middleware/logger.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { authMiddleware } from './middleware/auth.js';
 import leadRoutes from './routes/leads.js';
+import leadAssignmentRoutes from './routes/leadAssignment.js';
+import callCenterRoutes from './routes/callCenter.js';
 
 const app = express();
 const PORT = process.env.PORT || 3003;
@@ -15,7 +17,12 @@ const PORT = process.env.PORT || 3003;
 // Middleware
 app.use(helmet());
 app.use(cors({
-  origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
+  origin: process.env.ALLOWED_ORIGINS?.split(',') || [
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'https://crm.pandaadmin.com',
+    'https://crm.pandaexteriors.com'
+  ],
   credentials: true,
 }));
 app.use(express.json());
@@ -29,8 +36,10 @@ app.get('/health', (req, res) => {
 // Apply auth middleware to all routes below
 app.use(authMiddleware);
 
-// Routes
-app.use('/leads', leadRoutes);
+// Routes - /api/leads/* to match ALB path-based routing
+app.use('/api/leads', leadRoutes);
+app.use('/api/leads/assignment', leadAssignmentRoutes);
+app.use('/api/leads/call-center', callCenterRoutes);
 
 // Error handling
 app.use(errorHandler);

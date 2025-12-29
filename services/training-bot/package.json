@@ -1,0 +1,26 @@
+{
+  "name": "panda-crm-training-bot",
+  "version": "1.0.0",
+  "description": "AI-powered training assistant for Panda CRM",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "jest",
+    "deploy": "rm -f training-bot.zip && zip -r training-bot.zip src node_modules package.json && aws lambda update-function-code --function-name panda-crm-training-bot --zip-file fileb://training-bot.zip"
+  },
+  "keywords": [
+    "training",
+    "bot",
+    "crm",
+    "panda"
+  ],
+  "author": "Panda Exteriors",
+  "license": "ISC",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.0.0",
+    "@aws-sdk/lib-dynamodb": "^3.0.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
+}

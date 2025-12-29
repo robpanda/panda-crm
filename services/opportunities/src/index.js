@@ -15,7 +15,12 @@ const PORT = process.env.PORT || 3004;
 // Middleware
 app.use(helmet());
 app.use(cors({
-  origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
+  origin: process.env.ALLOWED_ORIGINS?.split(',') || [
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'https://crm.pandaadmin.com',
+    'https://crm.pandaexteriors.com'
+  ],
   credentials: true,
 }));
 app.use(express.json());
@@ -29,8 +34,8 @@ app.get('/health', (req, res) => {
 // Apply auth middleware to all routes below
 app.use(authMiddleware);
 
-// Routes
-app.use('/opportunities', opportunityRoutes);
+// Routes - /api/opportunities/* to match ALB path-based routing
+app.use('/api/opportunities', opportunityRoutes);
 
 // Error handling
 app.use(errorHandler);

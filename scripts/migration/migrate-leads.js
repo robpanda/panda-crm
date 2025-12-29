@@ -34,15 +34,34 @@ const LEAD_FIELDS = [
 
 function mapLeadStatus(sfStatus) {
   const statusMap = {
+    // New/Not Contacted statuses -> NEW
     'New': 'NEW',
     'Open - Not Contacted': 'NEW',
+    'Raw lead': 'NEW',
+    'Not Home/No Answer': 'NEW',
+    'Not Set': 'NEW',
+
+    // Working/Contacted statuses -> CONTACTED
     'Working - Contacted': 'CONTACTED',
     'Contacted': 'CONTACTED',
+    'Working': 'CONTACTED',
+    'Lead Not Set': 'CONTACTED',  // Attempted contact but not set
+
+    // Qualified/Set statuses -> QUALIFIED
     'Qualified': 'QUALIFIED',
+    'Lead Set': 'QUALIFIED',  // Appointment set = qualified
+    'Inspection Scheduled': 'QUALIFIED',
+    'Service Agreement': 'QUALIFIED',  // Has agreement = qualified
+
+    // Unqualified/Canceled statuses -> UNQUALIFIED
     'Unqualified': 'UNQUALIFIED',
+    'Canceled': 'UNQUALIFIED',
+    'Closed - Not Converted': 'UNQUALIFIED',
+
+    // Converted/Completed statuses -> CONVERTED
     'Closed - Converted': 'CONVERTED',
     'Converted': 'CONVERTED',
-    'Closed - Not Converted': 'UNQUALIFIED',
+    'Completed': 'CONVERTED',  // Completed = converted
   };
   return statusMap[sfStatus] || 'NEW';
 }
@@ -57,34 +76,33 @@ function mapLeadRating(sfRating) {
 }
 
 function transformLead(sfLead) {
-  return {
+  // Build lead object with all Salesforce fields mapped to schema fields
+  const lead = {
     salesforceId: sfLead.Id,
-    firstName: sfLead.FirstName,
-    lastName: sfLead.LastName,
-    email: sfLead.Email,
-    phone: sfLead.Phone,
-    mobilePhone: sfLead.MobilePhone,
-    company: sfLead.Company,
-    title: sfLead.Title,
-    street: sfLead.Street,
-    city: sfLead.City,
-    state: sfLead.State,
-    postalCode: sfLead.PostalCode,
-    country: sfLead.Country || 'USA',
-    description: sfLead.Description,
+    firstName: sfLead.FirstName || 'Unknown',
+    lastName: sfLead.LastName || 'Lead',
+    email: sfLead.Email || undefined,
+    phone: sfLead.Phone || undefined,
+    mobilePhone: sfLead.MobilePhone || undefined,
+    company: sfLead.Company || undefined,
+    title: sfLead.Title || undefined,
+    street: sfLead.Street || undefined,
+    city: sfLead.City || undefined,
+    state: sfLead.State || undefined,
+    postalCode: sfLead.PostalCode || undefined,
+    country: sfLead.Country || undefined,
+    description: sfLead.Description || undefined,
     status: mapLeadStatus(sfLead.Status),
-    leadSource: sfLead.LeadSource,
+    source: sfLead.LeadSource || undefined,
     rating: mapLeadRating(sfLead.Rating),
-    industry: sfLead.Industry,
+    industry: sfLead.Industry || undefined,
     isConverted: sfLead.IsConverted || false,
-    convertedDate: sfLead.ConvertedDate ? new Date(sfLead.ConvertedDate) : null,
-    sfConvertedAccountId: sfLead.ConvertedAccountId,
-    sfConvertedContactId: sfLead.ConvertedContactId,
-    sfConvertedOpportunityId: sfLead.ConvertedOpportunityId,
-    sfOwnerId: sfLead.OwnerId,
+    convertedDate: sfLead.ConvertedDate ? new Date(sfLead.ConvertedDate) : undefined,
     createdAt: new Date(sfLead.CreatedDate),
     updatedAt: new Date(sfLead.LastModifiedDate),
   };
+
+  return lead;
 }
 
 async function migrateLeads() {

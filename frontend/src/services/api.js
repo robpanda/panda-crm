@@ -139,6 +139,22 @@ export const accountsApi = {
     const response = await api.get('/api/accounts/search', { params: { q: query } });
     return response.data.data;
   },
+
+  // Service Request methods (per Creating A Service Request SOP)
+  async getServiceRequests(params = {}) {
+    const response = await api.get('/api/accounts/service-requests', { params });
+    return response.data;
+  },
+
+  async createServiceRequest(accountId, data) {
+    const response = await api.post(`/api/accounts/${accountId}/service-request`, data);
+    return response.data;
+  },
+
+  async completeServiceRequest(accountId) {
+    const response = await api.post(`/api/accounts/${accountId}/service-request/complete`);
+    return response.data;
+  },
 };
 
 // Contacts API
@@ -292,6 +308,34 @@ export const leadsApi = {
     const response = await api.get('/api/leads/assignment/stats', { params });
     return response.data.data;
   },
+
+  // Call Center Dashboard APIs
+  async getCallCenterLeaderboard(params = {}) {
+    const response = await api.get('/api/leads/call-center/leaderboard', { params });
+    return response.data.data;
+  },
+
+  async getMyCallCenterStats(params = {}) {
+    const response = await api.get('/api/leads/call-center/my-stats', { params });
+    return response.data.data;
+  },
+
+  async getCallCenterTeamTotals(params = {}) {
+    const response = await api.get('/api/leads/call-center/team-totals', { params });
+    return response.data.data;
+  },
+
+  // Unconfirmed Leads - leads with tentative appointment that need confirmation
+  async getUnconfirmedLeads(params = {}) {
+    const response = await api.get('/api/leads/call-center/unconfirmed', { params });
+    return response.data;
+  },
+
+  // Add call center note to lead
+  async addLeadNote(id, note) {
+    const response = await api.post(`/api/leads/${id}/notes`, { note });
+    return response.data.data;
+  },
 };
 
 // Opportunities API
@@ -389,6 +433,40 @@ export const opportunitiesApi = {
   // Get documents/agreements
   async getDocuments(id) {
     const response = await api.get(`/api/opportunities/${id}/documents`);
+    return response.data.data;
+  },
+
+  // ============================================================================
+  // CALL CENTER ENDPOINTS
+  // ============================================================================
+
+  // Get unscheduled appointments - opportunities that need service appointment booked
+  async getUnscheduledAppointments(params = {}) {
+    const response = await api.get('/api/opportunities/call-center/unscheduled', { params });
+    return response.data;
+  },
+
+  // Book/schedule appointment on an opportunity
+  async bookAppointment(id, appointmentData) {
+    const response = await api.post(`/api/opportunities/${id}/appointments/book`, appointmentData);
+    return response.data.data;
+  },
+
+  // Reschedule an existing appointment
+  async rescheduleAppointment(id, appointmentId, newDateTime) {
+    const response = await api.put(`/api/opportunities/${id}/appointments/${appointmentId}/reschedule`, newDateTime);
+    return response.data.data;
+  },
+
+  // Cancel an appointment
+  async cancelAppointment(id, appointmentId, reason) {
+    const response = await api.post(`/api/opportunities/${id}/appointments/${appointmentId}/cancel`, { reason });
+    return response.data.data;
+  },
+
+  // Add job message/note to opportunity
+  async addJobMessage(id, message) {
+    const response = await api.post(`/api/opportunities/${id}/messages`, { message });
     return response.data.data;
   },
 };

@@ -20,6 +20,9 @@ on:
           - quotes
           - invoices
           - auth
+          - workflows
+          - documents
+          - integrations
 
 env:
   AWS_REGION: us-east-2
@@ -50,6 +53,12 @@ jobs:
             port: 3007
           - name: auth
             port: 3000
+          - name: workflows
+            port: 3008
+          - name: documents
+            port: 3009
+          - name: integrations
+            port: 3010
 
     steps:
       - name: Checkout

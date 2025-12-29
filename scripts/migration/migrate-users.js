@@ -44,23 +44,18 @@ function mapUserRole(sfProfile, sfRole) {
 }
 
 function transformUser(sfUser) {
-  const roleName = sfUser.UserRole?.Name;
-  const profileName = sfUser.Profile?.Name;
-
   return {
     salesforceId: sfUser.Id,
     email: sfUser.Email,
-    firstName: sfUser.FirstName,
+    firstName: sfUser.FirstName || 'Unknown',  // firstName is required
     lastName: sfUser.LastName,
-    name: `${sfUser.FirstName || ''} ${sfUser.LastName || ''}`.trim(),
+    fullName: `${sfUser.FirstName || ''} ${sfUser.LastName || ''}`.trim(),
     phone: sfUser.Phone || sfUser.MobilePhone,
     title: sfUser.Title,
     department: sfUser.Department,
-    role: mapUserRole(profileName, roleName),
+    status: sfUser.IsActive ? 'Active' : 'Inactive',
     isActive: sfUser.IsActive,
-    sfUsername: sfUser.Username,
-    sfProfile: profileName,
-    sfRole: roleName,
+    // Note: role is now a relationship - skip it for now, can be set later
     createdAt: new Date(sfUser.CreatedDate),
     updatedAt: new Date(sfUser.LastModifiedDate),
   };
@@ -78,7 +73,7 @@ async function createCognitoUser(user, temporaryPassword) {
         UserAttributes: [
           { Name: 'email', Value: user.email },
           { Name: 'email_verified', Value: 'true' },
-          { Name: 'name', Value: user.name },
+          { Name: 'name', Value: user.fullName },
           { Name: 'custom:role', Value: user.role },
           { Name: 'custom:department', Value: user.department || '' },
           { Name: 'custom:salesforce_id', Value: user.salesforceId },

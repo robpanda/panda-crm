@@ -11,7 +11,12 @@ const PORT = process.env.PORT || 3007;
 // Middleware
 app.use(helmet());
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || '*',
+  origin: process.env.CORS_ORIGIN?.split(',') || [
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'https://crm.pandaadmin.com',
+    'https://crm.pandaexteriors.com'
+  ],
   credentials: true,
 }));
 app.use(morgan('combined'));

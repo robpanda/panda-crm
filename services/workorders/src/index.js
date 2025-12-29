@@ -7,6 +7,7 @@ import serviceAppointmentRoutes from './routes/serviceAppointments.js';
 import resourceRoutes from './routes/resources.js';
 import schedulingRoutes from './routes/scheduling.js';
 import googleCalendarRoutes from './routes/googleCalendar.js';
+import materialOrderRoutes from './routes/materialOrders.js';
 
 const app = express();
 const PORT = process.env.PORT || 3005;
@@ -14,7 +15,12 @@ const PORT = process.env.PORT || 3005;
 // Middleware
 app.use(helmet());
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || '*',
+  origin: process.env.CORS_ORIGIN?.split(',') || [
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'https://crm.pandaadmin.com',
+    'https://crm.pandaexteriors.com'
+  ],
   credentials: true,
 }));
 app.use(morgan('combined'));
@@ -31,6 +37,7 @@ app.use('/api/service-appointments', serviceAppointmentRoutes);
 app.use('/api/resources', resourceRoutes);
 app.use('/api/scheduling', schedulingRoutes);
 app.use('/api/google', googleCalendarRoutes);
+app.use('/api/material-orders', materialOrderRoutes);
 
 // Error handling
 app.use((err, req, res, next) => {

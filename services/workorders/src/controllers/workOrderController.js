@@ -17,7 +17,7 @@ const createWorkOrderSchema = z.object({
 });
 
 const updateWorkOrderSchema = createWorkOrderSchema.partial().extend({
-  status: z.enum(['NEW', 'IN_PROGRESS', 'ON_HOLD', 'COMPLETED', 'CANCELED']).optional(),
+  status: z.enum(['NEW', 'READY_TO_SCHEDULE', 'SCHEDULED', 'IN_PROGRESS', 'ON_HOLD', 'COMPLETED', 'CANCELLED', 'CANCELED']).optional(),
 });
 
 // Generate work order number
@@ -377,17 +377,42 @@ export async function getWorkOrderStats(req, res, next) {
       }),
     ]);
 
+    // Convert byStatus to friendly keys for frontend
+    const statusCounts = byStatus.reduce((acc, s) => {
+      acc[s.status] = s._count.status;
+      return acc;
+    }, {});
+
     res.json({
       total,
-      byStatus: byStatus.reduce((acc, s) => {
-        acc[s.status] = s._count.status;
-        return acc;
-      }, {}),
+      // Friendly keys for frontend stats cards
+      new: statusCounts.NEW || 0,
+      readyToSchedule: statusCounts.READY_TO_SCHEDULE || 0,
+      scheduled: statusCounts.SCHEDULED || 0,
+      inProgress: statusCounts.IN_PROGRESS || 0,
+      onHold: statusCounts.ON_HOLD || 0,
+      completed: statusCounts.COMPLETED || 0,
+      cancelled: (statusCounts.CANCELLED || 0) + (statusCounts.CANCELED || 0),
+      // Raw data for other uses
+      byStatus: statusCounts,
       byPriority: byPriority.reduce((acc, p) => {
         acc[p.priority] = p._count.priority;
         return acc;
       }, {}),
     });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// Get all work types
+export async function getWorkTypes(req, res, next) {
+  try {
+    const workTypes = await prisma.workType.findMany({
+      orderBy: { name: 'asc' },
+    });
+
+    res.json({ data: workTypes });
   } catch (error) {
     next(error);
   }

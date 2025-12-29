@@ -90,15 +90,7 @@ export const authService = {
         expiresIn: response.AuthenticationResult.ExpiresIn,
       };
     } catch (error) {
-      if (error.name === 'NotAuthorizedException') {
-        throw new Error('Invalid email or password');
-      }
-      if (error.name === 'UserNotFoundException') {
-        throw new Error('User not found');
-      }
-      if (error.name === 'UserNotConfirmedException') {
-        throw new Error('Please verify your email before logging in');
-      }
+      // Re-throw Cognito errors with their original name so errorHandler can process them
       throw error;
     }
   },
@@ -255,13 +247,21 @@ export const authService = {
       attributes[attr.Name] = attr.Value;
     });
 
+    // Build name from given_name/family_name if name attribute not present
+    const name = attributes.name ||
+      (attributes.given_name && attributes.family_name
+        ? `${attributes.given_name} ${attributes.family_name}`
+        : attributes.given_name || attributes.family_name || null);
+
     return {
       username: response.Username,
       email: attributes.email,
-      name: attributes.name,
-      role: attributes['custom:role'],
-      department: attributes['custom:department'],
-      salesforceId: attributes['custom:salesforce_id'],
+      name,
+      firstName: attributes.given_name,
+      lastName: attributes.family_name,
+      role: attributes['custom:role'] || attributes['custom:custom:role'],
+      department: attributes['custom:department'] || attributes['custom:custom:department'],
+      salesforceId: attributes['custom:salesforce_id'] || attributes['custom:custom:salesforce_id'],
       emailVerified: attributes.email_verified === 'true',
     };
   },
@@ -374,9 +374,9 @@ export const authService = {
       username: response.Username,
       email: attributes.email,
       name: attributes.name,
-      role: attributes['custom:role'],
-      department: attributes['custom:department'],
-      salesforceId: attributes['custom:salesforce_id'],
+      role: attributes['custom:role'] || attributes['custom:custom:role'],
+      department: attributes['custom:department'] || attributes['custom:custom:department'],
+      salesforceId: attributes['custom:salesforce_id'] || attributes['custom:custom:salesforce_id'],
       status: response.UserStatus,
       enabled: response.Enabled,
       createdAt: response.UserCreateDate,

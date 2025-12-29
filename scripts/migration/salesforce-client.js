@@ -34,7 +34,8 @@ export async function querySalesforce(soql, options = {}) {
   const { batchSize = 2000, onBatch } = options;
 
   const records = [];
-  let query = conn.query(soql).maxFetch(50000);
+  // Use autoFetch with maxFetch to get all records (no limit)
+  let query = conn.query(soql).maxFetch(500000);
 
   return new Promise((resolve, reject) => {
     query.on('record', (record) => {
@@ -53,7 +54,7 @@ export async function querySalesforce(soql, options = {}) {
       reject(err);
     });
 
-    query.run({ autoFetch: true });
+    query.run({ autoFetch: true, maxFetch: 500000 });
   });
 }
 

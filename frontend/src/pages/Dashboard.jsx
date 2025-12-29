@@ -1,82 +1,253 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
-import { opportunitiesApi, leadsApi } from '../services/api';
+import { useAuth, ROLE_TYPES } from '../context/AuthContext';
+import { opportunitiesApi, leadsApi, accountsApi, contactsApi, workOrdersApi, usersApi } from '../services/api';
+import { formatDistanceToNow, format, parseISO } from 'date-fns';
+import { formatNumber } from '../utils/formatters';
 import {
   Target,
   UserPlus,
-  DollarSign,
-  TrendingUp,
+  Users,
+  Building2,
   Calendar,
   AlertCircle,
   ArrowRight,
   CheckCircle,
   Clock,
+  MapPin,
+  Briefcase,
+  TrendingUp,
 } from 'lucide-react';
+import CallCenterDashboard from './CallCenterDashboard';
 
 export default function Dashboard() {
   const { user } = useAuth();
 
+  // Route call center users (reps and managers) to specialized dashboard
+  if (user?.roleType === ROLE_TYPES.CALL_CENTER || user?.roleType === ROLE_TYPES.CALL_CENTER_MANAGER || user?.department === 'Call Center') {
+    return <CallCenterDashboard />;
+  }
+
+  // Determine user's view scope based on role
+  const isGlobalView = user?.roleType === ROLE_TYPES.ADMIN || user?.roleType === ROLE_TYPES.EXECUTIVE;
+  const isTeamView = user?.roleType === ROLE_TYPES.OFFICE_MANAGER || user?.roleType === ROLE_TYPES.SALES_MANAGER || user?.isManager;
+  const isPersonalView = !isGlobalView && !isTeamView;
+
+  // Get owner filter for API calls
+  const getOwnerFilter = () => {
+    if (isGlobalView) return 'all';
+    if (isTeamView) return 'team'; // Backend should filter by user's team
+    return 'mine'; // Personal view
+  };
+
+  const ownerFilter = getOwnerFilter();
+
+  // Build filter params for data fetching
+  const buildFilterParams = (additionalParams = {}) => {
+    const params = { ...additionalParams };
+    if (!isGlobalView) {
+      if (isTeamView && user?.teamMemberIds?.length > 0) {
+        params.ownerIds = [user.id, ...user.teamMemberIds].join(',');
+      } else if (isPersonalView && user?.id) {
+        params.ownerId = user.id;
+      }
+      if (user?.officeAssignment) {
+        params.office = user.officeAssignment;
+      }
+    }
+    return params;
+  };
+
+  // Build the list of owner IDs for team view
+  const teamOwnerIds = isTeamView && user?.teamMemberIds?.length > 0
+    ? [user.id, ...user.teamMemberIds]
+    : (isPersonalView && user?.id ? [user.id] : []);
+
+  // Fetch pipeline stage counts with appropriate filter
   const { data: stageCounts } = useQuery({
-    queryKey: ['opportunityStageCounts', 'mine'],
-    queryFn: () => opportunitiesApi.getStageCounts('mine'),
+    queryKey: ['opportunityStageCounts', ownerFilter, user?.id, teamOwnerIds],
+    queryFn: () => opportunitiesApi.getStageCounts(ownerFilter, teamOwnerIds),
   });
 
+  // Fetch lead counts
   const { data: leadCounts } = useQuery({
-    queryKey: ['leadCounts'],
-    queryFn: () => leadsApi.getLeadCounts(),
+    queryKey: ['leadCounts', ownerFilter, user?.id],
+    queryFn: () => leadsApi.getLeadCounts(buildFilterParams()),
   });
 
+  // Fetch counts for stats cards with appropriate filtering
+  const { data: accountsData } = useQuery({
+    queryKey: ['accountsCount', ownerFilter, user?.id],
+    queryFn: () => accountsApi.getAccounts(buildFilterParams({ limit: 1 })),
+  });
+
+  const { data: contactsData } = useQuery({
+    queryKey: ['contactsCount', ownerFilter, user?.id],
+    queryFn: () => contactsApi.getContacts(buildFilterParams({ limit: 1 })),
+  });
+
+  const { data: opportunitiesData } = useQuery({
+    queryKey: ['opportunitiesCount', ownerFilter, user?.id],
+    queryFn: () => opportunitiesApi.getOpportunities(buildFilterParams({ limit: 1 })),
+  });
+
+  const { data: leadsData } = useQuery({
+    queryKey: ['leadsCount', ownerFilter, user?.id],
+    queryFn: () => leadsApi.getLeads(buildFilterParams({ limit: 1 })),
+  });
+
+  // Fetch recent jobs for activity feed
+  const { data: recentOpportunities } = useQuery({
+    queryKey: ['recentOpportunities', ownerFilter, user?.id],
+    queryFn: () => opportunitiesApi.getOpportunities(buildFilterParams({
+      limit: 10,
+      sortBy: 'updatedAt',
+      sortOrder: 'desc',
+    })),
+  });
+
+  // Fetch work orders for today's schedule
+  const { data: workOrders } = useQuery({
+    queryKey: ['todaysWorkOrders', ownerFilter, user?.id],
+    queryFn: () => workOrdersApi.getWorkOrders(buildFilterParams({
+      limit: 10,
+      scheduledDateFrom: format(new Date(), 'yyyy-MM-dd'),
+      scheduledDateTo: format(new Date(), 'yyyy-MM-dd'),
+    })),
+  });
+
+  // Fetch jobs needing attention
+  const { data: attentionItems } = useQuery({
+    queryKey: ['attentionItems', ownerFilter, user?.id],
+    queryFn: () => opportunitiesApi.getOpportunities(buildFilterParams({
+      limit: 5,
+      attentionNeeded: true,
+      sortBy: 'closeDate',
+      sortOrder: 'asc',
+    })),
+  });
+
+  // Get display labels based on view scope
+  const getScopeLabel = () => {
+    if (isGlobalView) return 'Company';
+    if (isTeamView) return user?.officeAssignment ? `${user.officeAssignment} Office` : 'Your Team';
+    return 'Your';
+  };
+
+  const scopeLabel = getScopeLabel();
+
+  // Stats cards - show different totals based on role
   const stats = [
     {
-      label: 'Open Opportunities',
-      value: stageCounts?.open || 0,
-      icon: Target,
-      color: 'from-blue-500 to-blue-600',
-      link: '/opportunities?stage=open',
-    },
-    {
-      label: 'New Leads',
-      value: leadCounts?.new || 0,
+      label: `${isPersonalView ? 'Your ' : ''}Leads`,
+      value: leadsData?.pagination?.total || 0,
       icon: UserPlus,
       color: 'from-green-500 to-green-600',
-      link: '/leads?status=new',
+      link: '/leads',
     },
     {
-      label: 'Pipeline Value',
-      value: `$${((stageCounts?.pipelineValue || 0) / 1000).toFixed(0)}K`,
-      icon: DollarSign,
+      label: `${isPersonalView ? 'Your ' : ''}Open Jobs`,
+      value: opportunitiesData?.pagination?.total || stageCounts?.total || 0,
+      icon: Briefcase,
+      color: 'from-blue-500 to-blue-600',
+      link: '/jobs',
+    },
+    {
+      label: `${isPersonalView ? 'Your ' : ''}Accounts`,
+      value: accountsData?.pagination?.total || 0,
+      icon: Building2,
       color: 'from-purple-500 to-purple-600',
-      link: '/reports/pipeline',
+      link: '/accounts',
     },
     {
-      label: 'Win Rate',
-      value: `${stageCounts?.winRate || 0}%`,
-      icon: TrendingUp,
+      label: `${isPersonalView ? 'Your ' : ''}Contacts`,
+      value: contactsData?.pagination?.total || 0,
+      icon: Users,
       color: 'from-orange-500 to-orange-600',
-      link: '/reports/performance',
+      link: '/contacts',
     },
   ];
 
+  // Pipeline stages
   const pipelineStages = [
-    { stage: 'Lead Unassigned', count: stageCounts?.leadUnassigned || 0, color: 'bg-gray-400' },
-    { stage: 'Lead Assigned', count: stageCounts?.leadAssigned || 0, color: 'bg-blue-400' },
-    { stage: 'Scheduled', count: stageCounts?.scheduled || 0, color: 'bg-indigo-400' },
-    { stage: 'Inspected', count: stageCounts?.inspected || 0, color: 'bg-purple-400' },
-    { stage: 'Claim Filed', count: stageCounts?.claimFiled || 0, color: 'bg-pink-400' },
-    { stage: 'Approved', count: stageCounts?.approved || 0, color: 'bg-green-400' },
-    { stage: 'Contract Signed', count: stageCounts?.contractSigned || 0, color: 'bg-emerald-400' },
-    { stage: 'In Production', count: stageCounts?.inProduction || 0, color: 'bg-yellow-400' },
+    { stage: 'Lead Unassigned', count: stageCounts?.LEAD_UNASSIGNED?.count || 0, color: 'bg-gray-400' },
+    { stage: 'Lead Assigned', count: stageCounts?.LEAD_ASSIGNED?.count || 0, color: 'bg-blue-400' },
+    { stage: 'Scheduled', count: stageCounts?.SCHEDULED?.count || 0, color: 'bg-indigo-400' },
+    { stage: 'Inspected', count: stageCounts?.INSPECTED?.count || 0, color: 'bg-purple-400' },
+    { stage: 'Claim Filed', count: stageCounts?.CLAIM_FILED?.count || 0, color: 'bg-pink-400' },
+    { stage: 'Approved', count: stageCounts?.APPROVED?.count || 0, color: 'bg-green-400' },
+    { stage: 'Contract Signed', count: stageCounts?.CONTRACT_SIGNED?.count || 0, color: 'bg-emerald-400' },
+    { stage: 'In Production', count: stageCounts?.IN_PRODUCTION?.count || 0, color: 'bg-yellow-400' },
   ];
+
+  // Attention queue
+  const attentionQueue = (attentionItems?.data || []).map(opp => ({
+    id: opp.id,
+    title: opp.name || 'Untitled Job',
+    type: opp.stageName || opp.stage || 'Job',
+    urgency: opp.closeDate && new Date(opp.closeDate) < new Date() ? 'high' :
+             opp.daysInStage > 14 ? 'medium' : 'low',
+    link: `/jobs/${opp.id}`,
+  }));
+
+  // Recent activity
+  const recentActivity = (recentOpportunities?.data || []).slice(0, 5).map(opp => {
+    const action = opp.stage === 'CLOSED_WON' ? 'Closed won' :
+                   opp.stage === 'CLOSED_LOST' ? 'Closed lost' :
+                   opp.createdAt === opp.updatedAt ? 'Created job' :
+                   `Updated to ${opp.stageName || opp.stage}`;
+    return {
+      action,
+      subject: opp.name || 'Unknown',
+      time: opp.updatedAt ? formatDistanceToNow(parseISO(opp.updatedAt), { addSuffix: true }) : 'Recently',
+      icon: opp.stage === 'CLOSED_WON' ? CheckCircle :
+            opp.stage === 'CLOSED_LOST' ? AlertCircle : Target,
+      link: `/jobs/${opp.id}`,
+    };
+  });
+
+  // Today's schedule
+  const todaysSchedule = (workOrders?.data || []).map(wo => ({
+    id: wo.id,
+    time: wo.scheduledStart ? format(parseISO(wo.scheduledStart), 'h:mm a') : 'TBD',
+    title: wo.subject || wo.workType || 'Work Order',
+    type: wo.workType || 'Service',
+    address: wo.address || '',
+    link: `/workorders/${wo.id}`,
+  }));
+
+  const attentionCount = attentionQueue.length;
+
+  // Get greeting based on time of day
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) return 'Good morning';
+    if (hour < 17) return 'Good afternoon';
+    return 'Good evening';
+  };
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold text-gray-900">
-          Welcome back, {user?.name?.split(' ')[0] || 'User'}
+          {getGreeting()}, {user?.name?.split(' ')[0] || 'User'}
         </h1>
-        <p className="text-gray-500">Here's what's happening with your sales today.</p>
+        <p className="text-gray-500">
+          {isGlobalView ? (
+            "Here's an overview of company-wide activity."
+          ) : isTeamView ? (
+            <>Here's what's happening with <span className="font-medium text-panda-primary">{scopeLabel}</span> today.</>
+          ) : (
+            "Here's what's happening with your sales today."
+          )}
+        </p>
+        {!isGlobalView && user?.officeAssignment && (
+          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-panda-light text-panda-primary mt-2">
+            <MapPin className="w-3 h-3 mr-1" />
+            {user.officeAssignment}
+          </span>
+        )}
       </div>
 
       {/* Stats Grid */}
@@ -92,7 +263,7 @@ export default function Dashboard() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm text-gray-500">{stat.label}</p>
-                  <p className="text-2xl font-bold text-gray-900 mt-1">{stat.value}</p>
+                  <p className="text-2xl font-bold text-gray-900 mt-1">{formatNumber(stat.value)}</p>
                 </div>
                 <div className={`w-12 h-12 rounded-lg bg-gradient-to-br ${stat.color} flex items-center justify-center`}>
                   <Icon className="w-6 h-6 text-white" />
@@ -109,30 +280,35 @@ export default function Dashboard() {
         <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-100">
           <div className="p-5 border-b border-gray-100">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-gray-900">Pipeline Overview</h2>
-              <Link to="/opportunities" className="text-panda-primary text-sm hover:underline flex items-center">
+              <h2 className="text-lg font-semibold text-gray-900">
+                {isTeamView && !isGlobalView ? `${scopeLabel} Pipeline` : 'Pipeline Overview'}
+              </h2>
+              <Link to="/jobs" className="text-panda-primary text-sm hover:underline flex items-center">
                 View All <ArrowRight className="w-4 h-4 ml-1" />
               </Link>
             </div>
           </div>
           <div className="p-5">
             <div className="space-y-4">
-              {pipelineStages.map((item) => (
-                <div key={item.stage} className="flex items-center">
-                  <div className="w-32 text-sm text-gray-600">{item.stage}</div>
-                  <div className="flex-1 mx-4">
-                    <div className="h-6 bg-gray-100 rounded-full overflow-hidden">
-                      <div
-                        className={`h-full ${item.color} rounded-full transition-all duration-500`}
-                        style={{
-                          width: `${Math.min(100, (item.count / 20) * 100)}%`,
-                        }}
-                      />
+              {pipelineStages.map((item) => {
+                const maxCount = Math.max(...pipelineStages.map(s => s.count), 1);
+                return (
+                  <div key={item.stage} className="flex items-center">
+                    <div className="w-32 text-sm text-gray-600 truncate">{item.stage}</div>
+                    <div className="flex-1 mx-4">
+                      <div className="h-6 bg-gray-100 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full ${item.color} rounded-full transition-all duration-500`}
+                          style={{
+                            width: `${Math.min(100, (item.count / maxCount) * 100)}%`,
+                          }}
+                        />
+                      </div>
                     </div>
+                    <div className="w-10 text-right font-semibold text-gray-900">{formatNumber(item.count)}</div>
                   </div>
-                  <div className="w-8 text-right font-semibold text-gray-900">{item.count}</div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
@@ -142,19 +318,18 @@ export default function Dashboard() {
           <div className="p-5 border-b border-gray-100">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold text-gray-900">Attention Queue</h2>
-              <span className="bg-red-100 text-red-600 text-xs font-bold px-2 py-1 rounded-full">
-                3 items
-              </span>
+              {attentionCount > 0 && (
+                <span className="bg-red-100 text-red-600 text-xs font-bold px-2 py-1 rounded-full">
+                  {attentionCount} item{attentionCount !== 1 ? 's' : ''}
+                </span>
+              )}
             </div>
           </div>
           <div className="p-2">
-            {[
-              { title: 'Follow up with John Smith', type: 'Opportunity', urgency: 'high' },
-              { title: 'Schedule inspection for 123 Main St', type: 'Work Order', urgency: 'medium' },
-              { title: 'Send quote to Mary Johnson', type: 'Quote', urgency: 'low' },
-            ].map((item, index) => (
-              <div
-                key={index}
+            {attentionQueue.length > 0 ? attentionQueue.map((item, index) => (
+              <Link
+                key={item.id || index}
+                to={item.link}
                 className="flex items-start space-x-3 p-3 hover:bg-gray-50 rounded-lg cursor-pointer"
               >
                 <div className={`w-2 h-2 mt-2 rounded-full ${
@@ -169,8 +344,13 @@ export default function Dashboard() {
                   item.urgency === 'high' ? 'text-red-500' :
                   item.urgency === 'medium' ? 'text-yellow-500' : 'text-green-500'
                 }`} />
+              </Link>
+            )) : (
+              <div className="p-4 text-center text-gray-500 text-sm">
+                <CheckCircle className="w-8 h-8 text-green-400 mx-auto mb-2" />
+                All caught up! No items need attention.
               </div>
-            ))}
+            )}
           </div>
           <div className="p-3 border-t border-gray-100">
             <Link
@@ -188,30 +368,36 @@ export default function Dashboard() {
         {/* Recent Activity */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100">
           <div className="p-5 border-b border-gray-100">
-            <h2 className="text-lg font-semibold text-gray-900">Recent Activity</h2>
+            <h2 className="text-lg font-semibold text-gray-900">
+              {isTeamView && !isGlobalView ? `${scopeLabel} Activity` : 'Recent Activity'}
+            </h2>
           </div>
           <div className="p-2 max-h-80 overflow-y-auto">
-            {[
-              { action: 'Created opportunity', subject: 'Johnson Residence Roof', time: '2 hours ago', icon: Target },
-              { action: 'Closed won', subject: 'Smith Family Siding Project', time: '5 hours ago', icon: CheckCircle },
-              { action: 'Scheduled inspection', subject: '456 Oak Lane', time: 'Yesterday', icon: Calendar },
-              { action: 'Added contact', subject: 'Mike Thompson', time: 'Yesterday', icon: UserPlus },
-            ].map((activity, index) => {
+            {recentActivity.length > 0 ? recentActivity.map((activity, index) => {
               const Icon = activity.icon;
               return (
-                <div key={index} className="flex items-start space-x-3 p-3 hover:bg-gray-50 rounded-lg">
+                <Link
+                  key={index}
+                  to={activity.link}
+                  className="flex items-start space-x-3 p-3 hover:bg-gray-50 rounded-lg"
+                >
                   <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center">
                     <Icon className="w-4 h-4 text-gray-500" />
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-gray-900">
-                      <span className="font-medium">{activity.action}</span> {activity.subject}
+                      <span className="font-medium">{activity.action}</span>{' '}
+                      <span className="text-gray-600">{activity.subject}</span>
                     </p>
                     <p className="text-xs text-gray-500">{activity.time}</p>
                   </div>
-                </div>
+                </Link>
               );
-            })}
+            }) : (
+              <div className="p-4 text-center text-gray-500 text-sm">
+                No recent activity to show
+              </div>
+            )}
           </div>
         </div>
 
@@ -219,31 +405,112 @@ export default function Dashboard() {
         <div className="bg-white rounded-xl shadow-sm border border-gray-100">
           <div className="p-5 border-b border-gray-100">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-gray-900">Today's Schedule</h2>
+              <h2 className="text-lg font-semibold text-gray-900">
+                {isTeamView && !isGlobalView ? `${scopeLabel} Schedule` : "Today's Schedule"}
+              </h2>
               <Link to="/schedule" className="text-panda-primary text-sm hover:underline flex items-center">
                 Full Calendar <ArrowRight className="w-4 h-4 ml-1" />
               </Link>
             </div>
           </div>
           <div className="p-2">
-            {[
-              { time: '9:00 AM', title: 'Inspection - 123 Main St', type: 'Inspection' },
-              { time: '11:30 AM', title: 'Quote Review - Thompson Project', type: 'Meeting' },
-              { time: '2:00 PM', title: 'Follow-up Call - Davis Family', type: 'Call' },
-              { time: '4:00 PM', title: 'Site Visit - Commercial Plaza', type: 'Visit' },
-            ].map((event, index) => (
-              <div key={index} className="flex items-start space-x-3 p-3 hover:bg-gray-50 rounded-lg">
-                <div className="w-16 text-sm font-medium text-gray-500">{event.time}</div>
+            {todaysSchedule.length > 0 ? todaysSchedule.map((event, index) => (
+              <Link
+                key={event.id || index}
+                to={event.link}
+                className="flex items-start space-x-3 p-3 hover:bg-gray-50 rounded-lg"
+              >
+                <div className="w-16 text-sm font-medium text-panda-primary">{event.time}</div>
                 <div className="flex-1">
                   <p className="text-sm font-medium text-gray-900">{event.title}</p>
                   <p className="text-xs text-gray-500">{event.type}</p>
+                  {event.address && (
+                    <p className="text-xs text-gray-400 flex items-center mt-1">
+                      <MapPin className="w-3 h-3 mr-1" />
+                      {event.address}
+                    </p>
+                  )}
                 </div>
                 <Clock className="w-4 h-4 text-gray-400" />
+              </Link>
+            )) : (
+              <div className="p-4 text-center text-gray-500 text-sm">
+                <Calendar className="w-8 h-8 text-gray-300 mx-auto mb-2" />
+                No appointments scheduled for today
               </div>
-            ))}
+            )}
           </div>
         </div>
       </div>
+
+      {/* Quick Actions */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+        <h2 className="text-lg font-semibold text-gray-900 mb-4">Quick Actions</h2>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <Link
+            to="/leads/new"
+            className="flex flex-col items-center justify-center p-4 rounded-lg border-2 border-dashed border-gray-200 hover:border-panda-primary hover:bg-panda-light transition-colors group"
+          >
+            <UserPlus className="w-6 h-6 text-gray-400 group-hover:text-panda-primary mb-2" />
+            <span className="text-sm text-gray-600 group-hover:text-panda-primary">New Lead</span>
+          </Link>
+          <Link
+            to="/accounts/new"
+            className="flex flex-col items-center justify-center p-4 rounded-lg border-2 border-dashed border-gray-200 hover:border-panda-primary hover:bg-panda-light transition-colors group"
+          >
+            <Building2 className="w-6 h-6 text-gray-400 group-hover:text-panda-primary mb-2" />
+            <span className="text-sm text-gray-600 group-hover:text-panda-primary">New Account</span>
+          </Link>
+          <Link
+            to="/jobs/new"
+            className="flex flex-col items-center justify-center p-4 rounded-lg border-2 border-dashed border-gray-200 hover:border-panda-primary hover:bg-panda-light transition-colors group"
+          >
+            <Briefcase className="w-6 h-6 text-gray-400 group-hover:text-panda-primary mb-2" />
+            <span className="text-sm text-gray-600 group-hover:text-panda-primary">New Job</span>
+          </Link>
+          <Link
+            to="/schedule"
+            className="flex flex-col items-center justify-center p-4 rounded-lg border-2 border-dashed border-gray-200 hover:border-panda-primary hover:bg-panda-light transition-colors group"
+          >
+            <Calendar className="w-6 h-6 text-gray-400 group-hover:text-panda-primary mb-2" />
+            <span className="text-sm text-gray-600 group-hover:text-panda-primary">Schedule</span>
+          </Link>
+        </div>
+      </div>
+
+      {/* Team Overview - Only show for managers */}
+      {isTeamView && user?.teamMembers?.length > 0 && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold text-gray-900">
+              <Users className="w-5 h-5 inline mr-2" />
+              Team Members ({user.teamMembers.length})
+            </h2>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {user.teamMembers.slice(0, 6).map((member) => (
+              <div key={member.id} className="flex items-center space-x-3 p-3 bg-gray-50 rounded-lg">
+                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-panda-primary to-panda-secondary flex items-center justify-center text-white font-medium">
+                  {member.firstName?.[0]}{member.lastName?.[0]}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-900 truncate">
+                    {member.firstName} {member.lastName}
+                  </p>
+                  <p className="text-xs text-gray-500 truncate">{member.title || 'Sales Rep'}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+          {user.teamMembers.length > 6 && (
+            <div className="mt-3 text-center">
+              <Link to="/admin/users" className="text-sm text-panda-primary hover:underline">
+                View all {user.teamMembers.length} team members
+              </Link>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

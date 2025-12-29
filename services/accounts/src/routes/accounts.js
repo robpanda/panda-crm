@@ -1,6 +1,6 @@
 // Account Routes
 import { Router } from 'express';
-import { body, param, query } from 'express-validator';
+import { body, param, query, validationResult } from 'express-validator';
 import { accountController } from '../controllers/accountController.js';
 import { requireRole } from '../middleware/auth.js';
 
@@ -25,15 +25,14 @@ const validateUpdate = [
 ];
 
 const validatePagination = [
-  query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
-  query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
+  query('page').optional().isInt({ min: 1 }).toInt().withMessage('Page must be a positive integer'),
+  query('limit').optional().isInt({ min: 1, max: 5000 }).toInt().withMessage('Limit must be between 1 and 5000'), // Increased for dashboards
   query('sortBy').optional().isIn(['createdAt', 'updatedAt', 'name', 'status', 'totalSalesVolume']),
   query('sortOrder').optional().isIn(['asc', 'desc']),
 ];
 
 // Validation error handler
 const handleValidation = (req, res, next) => {
-  const { validationResult } = require('express-validator');
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({
@@ -52,6 +51,9 @@ const handleValidation = (req, res, next) => {
 
 // Search (must be before /:id to avoid conflict)
 router.get('/search', validatePagination, handleValidation, accountController.search);
+
+// Service Requests (must be before /:id to avoid conflict)
+router.get('/service-requests', validatePagination, handleValidation, accountController.getServiceRequests);
 
 // List accounts
 router.get('/', validatePagination, handleValidation, accountController.list);
@@ -82,5 +84,15 @@ router.patch('/:id', validateUpdate, handleValidation, accountController.patch);
 
 // Delete account (admin only)
 router.delete('/:id', requireRole('admin', 'system'), accountController.delete);
+
+// ============================================================================
+// SERVICE REQUEST ROUTES (per Creating A Service Request SOP)
+// ============================================================================
+
+// Create service request on account
+router.post('/:id/service-request', accountController.createServiceRequest);
+
+// Mark service request as complete
+router.post('/:id/service-request/complete', accountController.completeServiceRequest);
 
 export default router;

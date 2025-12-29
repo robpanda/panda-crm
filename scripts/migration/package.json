@@ -1,20 +1,23 @@
 {
-  "name": "@panda-crm/migration",
+  "name": "panda-crm-migration",
   "version": "1.0.0",
-  "type": "module",
-  "description": "Salesforce to PostgreSQL migration scripts",
+  "description": "Salesforce to Panda CRM data migration scripts",
+  "main": "salesforce-sync.js",
   "scripts": {
-    "migrate:accounts": "node migrate-accounts.js",
-    "migrate:contacts": "node migrate-contacts.js",
-    "migrate:leads": "node migrate-leads.js",
-    "migrate:opportunities": "node migrate-opportunities.js",
-    "migrate:users": "node migrate-users.js",
-    "migrate:all": "node migrate-all.js",
-    "validate": "node validate-migration.js"
+    "sync": "node salesforce-sync.js",
+    "sync:users": "node salesforce-sync.js --entity users",
+    "sync:accounts": "node salesforce-sync.js --entity accounts",
+    "sync:contacts": "node salesforce-sync.js --entity contacts",
+    "sync:opportunities": "node salesforce-sync.js --entity opportunities",
+    "sync:workorders": "node salesforce-sync.js --entity workorders",
+    "sync:full": "node salesforce-sync.js --full"
   },
   "dependencies": {
-    "@prisma/client": "^5.7.0",
-    "dotenv": "^16.3.1",
-    "jsforce": "^2.0.0-beta.29"
+    "@aws-sdk/client-cognito-identity-provider": "^3.958.0",
+    "@aws-sdk/client-secrets-manager": "^3.0.0",
+    "@prisma/client": "^5.0.0",
+    "dotenv": "^16.0.0",
+    "jsforce": "^2.0.0-beta.29",
+    "pg": "^8.16.3"
   }
 }

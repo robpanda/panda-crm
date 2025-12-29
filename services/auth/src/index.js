@@ -6,8 +6,11 @@ import morgan from 'morgan';
 import dotenv from 'dotenv';
 
 import authRoutes from './routes/auth.js';
+import permissionRoutes from './routes/permissions.js';
+import auditRoutes from './routes/audit.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { logger } from './middleware/logger.js';
+import { permissionService } from './services/permissionService.js';
 
 dotenv.config();
 
@@ -17,7 +20,13 @@ const PORT = process.env.AUTH_PORT || 3000;
 // Middleware
 app.use(helmet());
 app.use(cors({
-  origin: process.env.CORS_ORIGINS?.split(',') || ['http://localhost:3000', 'https://crm.pandaexteriors.com'],
+  origin: process.env.CORS_ORIGINS?.split(',') || [
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'https://crm.pandaadmin.com',
+    'https://crm.pandaexteriors.com',
+    'https://bamboo.pandaadmin.com'
+  ],
   credentials: true,
 }));
 app.use(morgan('combined', { stream: { write: (message) => logger.info(message.trim()) } }));
@@ -28,8 +37,10 @@ app.get('/health', (req, res) => {
   res.json({ status: 'healthy', service: 'auth', timestamp: new Date().toISOString() });
 });
 
-// Routes
-app.use('/auth', authRoutes);
+// Routes - /api/auth/* to match ALB path-based routing
+app.use('/api/auth', authRoutes);
+app.use('/api/permissions', permissionRoutes);
+app.use('/api/audit', auditRoutes);
 
 // Error handling
 app.use(errorHandler);
@@ -42,8 +53,19 @@ app.use((req, res) => {
   });
 });
 
+// Initialize default permissions on startup
+const initializePermissions = async () => {
+  try {
+    await permissionService.initializeDefaultPermissions();
+    logger.info('Default permissions initialized');
+  } catch (error) {
+    logger.error('Failed to initialize permissions:', error);
+  }
+};
+
 app.listen(PORT, () => {
   logger.info(`Auth service running on port ${PORT}`);
+  initializePermissions();
 });
 
 export default app;

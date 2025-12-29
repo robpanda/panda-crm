@@ -1,0 +1,17 @@
+{
+  "name": "panda-crm-sync",
+  "version": "1.0.0",
+  "description": "Bidirectional sync between Salesforce and Panda CRM",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "deploy": "npm run build && aws lambda update-function-code --function-name panda-crm-sync --zip-file fileb://dist/function.zip",
+    "build": "mkdir -p dist && cd dist && cp -r ../src/* . && cp ../package.json . && npm install --production && zip -r function.zip ."
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.0.0",
+    "@aws-sdk/client-secrets-manager": "^3.0.0",
+    "jsforce": "^2.0.0-beta.29",
+    "pg": "^8.11.0"
+  }
+}

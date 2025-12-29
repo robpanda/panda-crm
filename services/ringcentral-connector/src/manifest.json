@@ -1,0 +1,166 @@
+{
+  "serverUrl": "https://bamboo.pandaadmin.com/api/ringcentral",
+  "redirectUri": "https://bamboo.pandaadmin.com/api/ringcentral/oauth/callback",
+  "author": {
+    "name": "Panda Exteriors",
+    "email": "support@pandaexteriors.com",
+    "website": "https://pandaexteriors.com"
+  },
+  "version": "1.0.0",
+  "platforms": {
+    "pandacrm": {
+      "name": "pandacrm",
+      "displayName": "Panda CRM",
+      "urlIdentifier": ["crm.pandaadmin.com", "bamboo.pandaadmin.com"],
+      "logoUrl": "https://crm.pandaadmin.com/panda-logo.png",
+      "environment": {
+        "type": "fixed",
+        "url": "https://bamboo.pandaadmin.com"
+      },
+      "auth": {
+        "type": "oauth",
+        "oauth": {
+          "authorizationUri": "https://bamboo.pandaadmin.com/api/ringcentral/oauth/authorize",
+          "tokenUri": "https://bamboo.pandaadmin.com/api/ringcentral/oauth/token",
+          "revokeUri": "https://bamboo.pandaadmin.com/api/ringcentral/oauth/revoke"
+        }
+      },
+      "embedUrls": [
+        "https://crm.pandaadmin.com/*",
+        "https://bamboo.pandaadmin.com/*"
+      ],
+      "contactPageUrl": "https://crm.pandaadmin.com/contacts/{id}",
+      "logPageUrl": "https://crm.pandaadmin.com/activities/{id}",
+      "contactTypes": [
+        {
+          "display": "Contact",
+          "value": "Contact"
+        },
+        {
+          "display": "Lead",
+          "value": "Lead"
+        },
+        {
+          "display": "Account",
+          "value": "Account"
+        }
+      ],
+      "canOpenLogPage": true,
+      "serverSideLogging": {
+        "enabled": true,
+        "supportCallDisposition": true,
+        "supportMessageLog": true
+      },
+      "settings": {
+        "sections": [
+          {
+            "id": "general",
+            "title": "General Settings",
+            "items": [
+              {
+                "id": "autoLogCalls",
+                "type": "toggle",
+                "label": "Auto-log calls",
+                "defaultValue": true
+              },
+              {
+                "id": "autoLogMessages",
+                "type": "toggle",
+                "label": "Auto-log SMS messages",
+                "defaultValue": true
+              },
+              {
+                "id": "defaultContactType",
+                "type": "dropdown",
+                "label": "Default contact type for new contacts",
+                "options": [
+                  { "label": "Contact", "value": "Contact" },
+                  { "label": "Lead", "value": "Lead" }
+                ],
+                "defaultValue": "Lead"
+              }
+            ]
+          },
+          {
+            "id": "callLogging",
+            "title": "Call Logging",
+            "items": [
+              {
+                "id": "callLogSubject",
+                "type": "text",
+                "label": "Call log subject template",
+                "defaultValue": "{direction} call with {contactName}"
+              },
+              {
+                "id": "includeRecording",
+                "type": "toggle",
+                "label": "Include call recording link",
+                "defaultValue": true
+              },
+              {
+                "id": "includeTranscription",
+                "type": "toggle",
+                "label": "Include AI transcription/summary",
+                "defaultValue": true
+              }
+            ]
+          }
+        ]
+      },
+      "page": {
+        "callLog": {
+          "title": "Log Call to Panda CRM",
+          "noteField": {
+            "label": "Notes",
+            "placeholder": "Enter call notes..."
+          },
+          "dispositionField": {
+            "label": "Call Outcome",
+            "options": [
+              { "label": "Answered - Interested", "value": "interested" },
+              { "label": "Answered - Not Interested", "value": "not_interested" },
+              { "label": "Answered - Callback Requested", "value": "callback" },
+              { "label": "Left Voicemail", "value": "voicemail" },
+              { "label": "No Answer", "value": "no_answer" },
+              { "label": "Wrong Number", "value": "wrong_number" },
+              { "label": "Appointment Set", "value": "appointment_set" },
+              { "label": "Follow Up Required", "value": "follow_up" }
+            ]
+          }
+        },
+        "messageLog": {
+          "title": "Log Message to Panda CRM",
+          "noteField": {
+            "label": "Notes",
+            "placeholder": "Add notes about this conversation..."
+          }
+        },
+        "feedback": {
+          "enabled": true,
+          "feedbackUrl": "https://crm.pandaadmin.com/feedback"
+        }
+      },
+      "additionalFields": {
+        "callLog": [
+          {
+            "id": "opportunityId",
+            "type": "dropdown",
+            "label": "Link to Opportunity",
+            "fetchOptionsUrl": "/api/ringcentral/opportunities",
+            "dependsOn": "contactId"
+          },
+          {
+            "id": "workOrderId",
+            "type": "dropdown",
+            "label": "Link to Work Order",
+            "fetchOptionsUrl": "/api/ringcentral/workorders",
+            "dependsOn": "contactId"
+          }
+        ]
+      },
+      "documentationUrl": "https://docs.pandaexteriors.com/ringcentral",
+      "releaseNotesUrl": "https://docs.pandaexteriors.com/ringcentral/releases",
+      "getSupportUrl": "https://support.pandaexteriors.com"
+    }
+  }
+}

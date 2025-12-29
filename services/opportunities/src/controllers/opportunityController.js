@@ -6,9 +6,15 @@ export const opportunityController = {
   // Get stage counts for dashboard
   async getStageCounts(req, res, next) {
     try {
+      // Parse ownerIds from comma-separated string
+      const ownerIds = req.query.ownerIds
+        ? req.query.ownerIds.split(',').filter(id => id.trim())
+        : [];
+
       const counts = await opportunityService.getStageCounts(
         req.user?.id,
-        req.query.ownerFilter
+        req.query.ownerFilter,
+        ownerIds
       );
       res.json(successResponse(counts));
     } catch (error) {

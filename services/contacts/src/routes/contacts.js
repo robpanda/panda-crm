@@ -31,7 +31,7 @@ const validateCreate = [
 
 const validatePagination = [
   query('page').optional().isInt({ min: 1 }).withMessage('Page must be positive integer'),
-  query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be 1-100'),
+  query('limit').optional().isInt({ min: 1, max: 1000 }).withMessage('Limit must be 1-1000'),
   query('prospectFilter').optional().isIn([
     'past_customers',
     'recent_closed',

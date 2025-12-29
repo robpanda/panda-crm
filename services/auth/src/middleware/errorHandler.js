@@ -1,21 +1,29 @@
 // Global Error Handler for Auth Service
 import { logger } from './logger.js';
 
+// Helper to get error name from AWS SDK v3 errors
+function getErrorName(err) {
+  // AWS SDK v3 uses err.name or err.__type
+  return err.name || err.__type || err.code || '';
+}
+
 export function errorHandler(err, req, res, next) {
-  logger.error('Auth Error:', { message: err.message, stack: err.stack });
+  const errorName = getErrorName(err);
+  logger.error('Auth Error:', { name: errorName, message: err.message, stack: err.stack });
 
   // Cognito-specific errors
-  if (err.name === 'NotAuthorizedException') {
+  if (errorName === 'NotAuthorizedException' || errorName.includes('NotAuthorizedException')) {
     return res.status(401).json({
       success: false,
-      error: { code: 'INVALID_CREDENTIALS', message: err.message || 'Invalid credentials' },
+      error: { code: 'INVALID_CREDENTIALS', message: 'Invalid email or password' },
     });
   }
 
-  if (err.name === 'UserNotFoundException') {
-    return res.status(404).json({
+  if (errorName === 'UserNotFoundException' || errorName.includes('UserNotFoundException')) {
+    // Return same message as invalid credentials to prevent user enumeration
+    return res.status(401).json({
       success: false,
-      error: { code: 'USER_NOT_FOUND', message: 'User not found' },
+      error: { code: 'INVALID_CREDENTIALS', message: 'Invalid email or password' },
     });
   }
 

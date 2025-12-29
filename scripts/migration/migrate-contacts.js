@@ -33,36 +33,35 @@ const CONTACT_FIELDS = [
 
 function transformContact(sfContact, accountIdMap) {
   // Look up internal account ID from Salesforce ID
-  const accountId = accountIdMap.get(sfContact.AccountId) || null;
+  const accountId = accountIdMap.get(sfContact.AccountId) || undefined;
 
-  return {
+  // Build the contact object with only fields that exist in the schema
+  const contact = {
     salesforceId: sfContact.Id,
-    firstName: sfContact.FirstName,
-    lastName: sfContact.LastName,
-    email: sfContact.Email,
-    phone: sfContact.Phone,
-    mobilePhone: sfContact.MobilePhone,
-    title: sfContact.Title,
-    accountId: accountId,
-    sfAccountId: sfContact.AccountId,
-    mailingStreet: sfContact.MailingStreet,
-    mailingCity: sfContact.MailingCity,
-    mailingState: sfContact.MailingState,
-    mailingPostalCode: sfContact.MailingPostalCode,
-    mailingCountry: sfContact.MailingCountry || 'USA',
-    otherStreet: sfContact.OtherStreet,
-    otherCity: sfContact.OtherCity,
-    otherState: sfContact.OtherState,
-    otherPostalCode: sfContact.OtherPostalCode,
-    otherCountry: sfContact.OtherCountry,
-    description: sfContact.Description,
-    leadSource: sfContact.LeadSource,
-    smsNumber: sfContact.Mogli_SMS__Mogli_Number__c,
+    firstName: sfContact.FirstName || 'Unknown', // firstName is required, default to 'Unknown'
+    lastName: sfContact.LastName || 'Contact',   // lastName is required, default to 'Contact'
+    email: sfContact.Email || undefined,
+    phone: sfContact.Phone || undefined,
+    mobilePhone: sfContact.MobilePhone || undefined,
+    title: sfContact.Title || undefined,
+    mailingStreet: sfContact.MailingStreet || undefined,
+    mailingCity: sfContact.MailingCity || undefined,
+    mailingState: sfContact.MailingState || undefined,
+    mailingPostalCode: sfContact.MailingPostalCode || undefined,
+    // Note: mailingCountry, otherStreet, otherCity, otherState, otherPostalCode, otherCountry
+    // are not in the schema, so we skip them
+    smsNumber: sfContact.Mogli_SMS__Mogli_Number__c || undefined,
     smsOptOut: sfContact.Mogli_SMS__Mogli_Opt_Out__c || false,
-    sfOwnerId: sfContact.OwnerId,
     createdAt: new Date(sfContact.CreatedDate),
     updatedAt: new Date(sfContact.LastModifiedDate),
   };
+
+  // Only add accountId if we have a valid mapping
+  if (accountId) {
+    contact.accountId = accountId;
+  }
+
+  return contact;
 }
 
 async function buildAccountIdMap() {

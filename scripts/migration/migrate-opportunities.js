@@ -22,7 +22,7 @@ const OPPORTUNITY_FIELDS = [
   'IsWon',
   'Status__c',
   'Work_Type__c',
-  'isPandaClaims__c',
+  'isSureClaims__c',
   'SelfGen_Lead__c',
 ];
 
@@ -53,33 +53,39 @@ function mapOpportunityType(sfType) {
 }
 
 function transformOpportunity(sfOpp, accountIdMap, contactIdMap) {
-  const accountId = accountIdMap.get(sfOpp.AccountId) || null;
-  const contactId = contactIdMap.get(sfOpp.ContactId) || null;
+  const accountId = accountIdMap.get(sfOpp.AccountId) || undefined;
+  const contactId = contactIdMap.get(sfOpp.ContactId) || undefined;
 
-  return {
+  // Only include fields that exist in the Prisma schema
+  const opp = {
     salesforceId: sfOpp.Id,
-    name: sfOpp.Name,
-    accountId: accountId,
-    contactId: contactId,
-    sfAccountId: sfOpp.AccountId,
-    sfContactId: sfOpp.ContactId,
-    amount: sfOpp.Amount || 0,
+    name: sfOpp.Name || 'Unnamed Opportunity',
+    amount: sfOpp.Amount || undefined,
     stage: mapOpportunityStage(sfOpp.StageName),
     probability: sfOpp.Probability || 0,
-    closeDate: sfOpp.CloseDate ? new Date(sfOpp.CloseDate) : null,
+    closeDate: sfOpp.CloseDate ? new Date(sfOpp.CloseDate) : undefined,
     type: mapOpportunityType(sfOpp.Type),
-    leadSource: sfOpp.LeadSource,
-    description: sfOpp.Description,
-    status: sfOpp.Status__c,
-    workType: sfOpp.Work_Type__c,
-    isPandaClaims: sfOpp.isPandaClaims__c || false,
+    leadSource: sfOpp.LeadSource || undefined,
+    description: sfOpp.Description || undefined,
+    status: sfOpp.Status__c || undefined,
+    workType: sfOpp.Work_Type__c || undefined,
+    isPandaClaims: sfOpp.isSureClaims__c || false,
     isSelfGen: sfOpp.SelfGen_Lead__c || false,
-    isClosed: sfOpp.IsClosed || false,
-    isWon: sfOpp.IsWon || false,
-    sfOwnerId: sfOpp.OwnerId,
     createdAt: new Date(sfOpp.CreatedDate),
     updatedAt: new Date(sfOpp.LastModifiedDate),
   };
+
+  // Only add accountId if we have a valid mapping (required field)
+  if (accountId) {
+    opp.accountId = accountId;
+  }
+
+  // Only add contactId if we have a valid mapping (optional)
+  if (contactId) {
+    opp.contactId = contactId;
+  }
+
+  return opp;
 }
 
 async function buildIdMaps() {
@@ -123,8 +129,13 @@ async function migrateOpportunities() {
     const sfOpps = await querySalesforce(soql);
     console.log(`Found ${sfOpps.length} opportunities to migrate`);
 
-    // Transform records
-    const opportunities = sfOpps.map((o) => transformOpportunity(o, accountIdMap, contactIdMap));
+    // Transform records - filter out those without valid accountId
+    const allOpportunities = sfOpps.map((o) => transformOpportunity(o, accountIdMap, contactIdMap));
+    const opportunities = allOpportunities.filter((o) => o.accountId);
+    const skippedCount = allOpportunities.length - opportunities.length;
+    if (skippedCount > 0) {
+      console.log(`Skipping ${skippedCount} opportunities without valid account mapping`);
+    }
 
     // Upsert to PostgreSQL
     console.log('Upserting to PostgreSQL...');
@@ -134,11 +145,11 @@ async function migrateOpportunities() {
     console.log(`Processed: ${opportunities.length}`);
     console.log(`Errors: ${results.errors.length}`);
 
-    // Summary stats
-    const open = opportunities.filter((o) => !o.isClosed).length;
-    const won = opportunities.filter((o) => o.isWon).length;
-    const lost = opportunities.filter((o) => o.isClosed && !o.isWon).length;
-    console.log(`Open: ${open}, Won: ${won}, Lost: ${lost}`);
+    // Summary stats based on stage
+    const closedWon = opportunities.filter((o) => o.stage === 'CLOSED_WON').length;
+    const closedLost = opportunities.filter((o) => o.stage === 'CLOSED_LOST').length;
+    const open = opportunities.length - closedWon - closedLost;
+    console.log(`Open: ${open}, Won: ${closedWon}, Lost: ${closedLost}`);
 
     if (results.errors.length > 0) {
       console.log('Sample errors:');
