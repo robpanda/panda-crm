@@ -1948,6 +1948,273 @@ class OpportunityService {
       },
     };
   }
+
+  // ============================================================================
+  // SERVICE REQUEST METHODS
+  // Per Creating A Service Request SOP - service requests live on jobs (opportunities)
+  // ============================================================================
+
+  /**
+   * Get opportunities with active service requests
+   * Used by: Project Manager dashboard to track service needs
+   */
+  async getServiceRequests(options = {}) {
+    const { status = 'pending', projectManagerId, page = 1, limit = 50 } = options;
+    const skip = (page - 1) * limit;
+
+    // Build where clause
+    const where = {
+      serviceRequired: true,
+    };
+
+    if (status === 'pending') {
+      where.serviceComplete = false;
+    } else if (status === 'complete') {
+      where.serviceComplete = true;
+    }
+    // 'all' doesn't add serviceComplete filter
+
+    if (projectManagerId) {
+      where.projectManagerId = projectManagerId;
+    }
+
+    const [opportunities, total] = await Promise.all([
+      prisma.opportunity.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { serviceRequestDate: 'desc' },
+        include: {
+          account: {
+            select: { id: true, name: true, phone: true, billingCity: true, billingState: true },
+          },
+          contact: {
+            select: { id: true, firstName: true, lastName: true, phone: true, email: true },
+          },
+          owner: {
+            select: { id: true, firstName: true, lastName: true },
+          },
+          projectManager: {
+            select: { id: true, firstName: true, lastName: true, email: true },
+          },
+        },
+      }),
+      prisma.opportunity.count({ where }),
+    ]);
+
+    const data = opportunities.map((opp) => ({
+      id: opp.id,
+      name: opp.name,
+      stage: opp.stage,
+      stageName: this.formatStageName(opp.stage),
+      type: opp.type,
+      // Service request fields
+      serviceRequired: opp.serviceRequired,
+      serviceComplete: opp.serviceComplete,
+      serviceRequestDate: opp.serviceRequestDate,
+      serviceNotes: opp.serviceNotes,
+      // Related records
+      account: opp.account
+        ? {
+            id: opp.account.id,
+            name: opp.account.name,
+            phone: opp.account.phone,
+            location: `${opp.account.billingCity || ''}, ${opp.account.billingState || ''}`.replace(/^, |, $/, ''),
+          }
+        : null,
+      contact: opp.contact
+        ? {
+            id: opp.contact.id,
+            name: `${opp.contact.firstName} ${opp.contact.lastName}`,
+            phone: opp.contact.phone,
+            email: opp.contact.email,
+          }
+        : null,
+      owner: opp.owner
+        ? {
+            id: opp.owner.id,
+            name: `${opp.owner.firstName} ${opp.owner.lastName}`,
+          }
+        : null,
+      projectManager: opp.projectManager
+        ? {
+            id: opp.projectManager.id,
+            name: `${opp.projectManager.firstName} ${opp.projectManager.lastName}`,
+            email: opp.projectManager.email,
+          }
+        : null,
+      createdAt: opp.createdAt,
+    }));
+
+    return {
+      data,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+        hasMore: page * limit < total,
+      },
+    };
+  }
+
+  /**
+   * Create a service request on an opportunity
+   * Per SOP: PM creates service request when service is needed
+   */
+  async createServiceRequest(opportunityId, data) {
+    const { projectManagerId, serviceNotes, createdBy } = data;
+
+    // Verify opportunity exists
+    const opportunity = await prisma.opportunity.findUnique({
+      where: { id: opportunityId },
+      select: { id: true, name: true },
+    });
+
+    if (!opportunity) {
+      const error = new Error(`Opportunity not found: ${opportunityId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    // Update opportunity with service request fields
+    const updated = await prisma.opportunity.update({
+      where: { id: opportunityId },
+      data: {
+        serviceRequired: true,
+        serviceComplete: false,
+        serviceRequestDate: new Date(),
+        serviceNotes: serviceNotes,
+        projectManagerId: projectManagerId,
+      },
+      include: {
+        projectManager: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+    });
+
+    // Create note documenting the service request
+    await prisma.note.create({
+      data: {
+        title: 'Service Request Created',
+        body: `Service request created. ${serviceNotes ? `Notes: ${serviceNotes}` : ''}`,
+        opportunityId: opportunityId,
+        createdById: createdBy,
+      },
+    });
+
+    logger.info(`Service request created for opportunity ${opportunityId}`);
+
+    return {
+      success: true,
+      opportunity: {
+        id: updated.id,
+        name: updated.name,
+        serviceRequired: updated.serviceRequired,
+        serviceComplete: updated.serviceComplete,
+        serviceRequestDate: updated.serviceRequestDate,
+        serviceNotes: updated.serviceNotes,
+        projectManager: updated.projectManager
+          ? {
+              id: updated.projectManager.id,
+              name: `${updated.projectManager.firstName} ${updated.projectManager.lastName}`,
+              email: updated.projectManager.email,
+            }
+          : null,
+      },
+    };
+  }
+
+  /**
+   * Update a service request on an opportunity
+   */
+  async updateServiceRequest(opportunityId, data) {
+    const { serviceComplete, serviceNotes, projectManagerId, updatedBy } = data;
+
+    // Verify opportunity exists and has a service request
+    const opportunity = await prisma.opportunity.findUnique({
+      where: { id: opportunityId },
+      select: { id: true, name: true, serviceRequired: true },
+    });
+
+    if (!opportunity) {
+      const error = new Error(`Opportunity not found: ${opportunityId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    if (!opportunity.serviceRequired) {
+      const error = new Error(`No service request exists for opportunity: ${opportunityId}`);
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    // Build update data
+    const updateData = {};
+    if (serviceComplete !== undefined) updateData.serviceComplete = serviceComplete;
+    if (serviceNotes !== undefined) updateData.serviceNotes = serviceNotes;
+    if (projectManagerId !== undefined) updateData.projectManagerId = projectManagerId;
+
+    const updated = await prisma.opportunity.update({
+      where: { id: opportunityId },
+      data: updateData,
+      include: {
+        projectManager: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+    });
+
+    // Create note if status changed
+    if (serviceComplete !== undefined) {
+      await prisma.note.create({
+        data: {
+          title: serviceComplete ? 'Service Request Completed' : 'Service Request Reopened',
+          body: serviceComplete
+            ? `Service request marked as complete. ${serviceNotes ? `Notes: ${serviceNotes}` : ''}`
+            : `Service request reopened. ${serviceNotes ? `Notes: ${serviceNotes}` : ''}`,
+          opportunityId: opportunityId,
+          createdById: updatedBy,
+        },
+      });
+    }
+
+    logger.info(`Service request updated for opportunity ${opportunityId}`);
+
+    return {
+      success: true,
+      opportunity: {
+        id: updated.id,
+        name: updated.name,
+        serviceRequired: updated.serviceRequired,
+        serviceComplete: updated.serviceComplete,
+        serviceRequestDate: updated.serviceRequestDate,
+        serviceNotes: updated.serviceNotes,
+        projectManager: updated.projectManager
+          ? {
+              id: updated.projectManager.id,
+              name: `${updated.projectManager.firstName} ${updated.projectManager.lastName}`,
+              email: updated.projectManager.email,
+            }
+          : null,
+      },
+    };
+  }
+
+  /**
+   * Mark a service request as complete
+   * Shortcut method for completing a service request
+   */
+  async completeServiceRequest(opportunityId, data) {
+    const { notes, completedBy } = data;
+
+    return this.updateServiceRequest(opportunityId, {
+      serviceComplete: true,
+      serviceNotes: notes,
+      updatedBy: completedBy,
+    });
+  }
 }
 
 export const opportunityService = new OpportunityService();

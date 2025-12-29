@@ -258,13 +258,18 @@ export default function LeadWizard() {
 
   const [lead, setLead] = useState(null);
 
-  // Set owner to current user for new leads
+  // Set owner and leadSetBy to current user for new leads
+  // This is critical for call center tracking - the person who creates the lead is the "setter"
   useEffect(() => {
     if (isNewLead && user) {
+      const userName = user.name || `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email;
       setFormData(prev => ({
         ...prev,
         ownerId: user.id || user.username,
-        ownerName: user.name || user.email,
+        ownerName: userName,
+        // Auto-set leadSetById to current user - tracks who entered the lead
+        leadSetById: user.id || user.username,
+        leadSetByName: userName,
       }));
     }
   }, [isNewLead, user]);
@@ -386,6 +391,11 @@ export default function LeadWizard() {
         propertyType: formData.propertyType,
         workType: formData.workType,
         leadNotes: formData.leadNotes,
+        // Call Center tracking - who entered/set this lead
+        leadSetById: formData.leadSetById,
+        tentativeAppointmentDate: formData.tentativeAppointmentDate || null,
+        tentativeAppointmentTime: formData.tentativeAppointmentTime || null,
+        disposition: formData.leadDisposition || null,
       };
 
       if (isNewLead) {

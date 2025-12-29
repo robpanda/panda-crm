@@ -139,22 +139,6 @@ export const accountsApi = {
     const response = await api.get('/api/accounts/search', { params: { q: query } });
     return response.data.data;
   },
-
-  // Service Request methods (per Creating A Service Request SOP)
-  async getServiceRequests(params = {}) {
-    const response = await api.get('/api/accounts/service-requests', { params });
-    return response.data;
-  },
-
-  async createServiceRequest(accountId, data) {
-    const response = await api.post(`/api/accounts/${accountId}/service-request`, data);
-    return response.data;
-  },
-
-  async completeServiceRequest(accountId) {
-    const response = await api.post(`/api/accounts/${accountId}/service-request/complete`);
-    return response.data;
-  },
 };
 
 // Contacts API
@@ -468,6 +452,35 @@ export const opportunitiesApi = {
   async addJobMessage(id, message) {
     const response = await api.post(`/api/opportunities/${id}/messages`, { message });
     return response.data.data;
+  },
+
+  // ============================================================================
+  // SERVICE REQUEST ENDPOINTS
+  // Per Creating A Service Request SOP - service requests live on jobs (opportunities)
+  // ============================================================================
+
+  // Get opportunities with active service requests
+  async getServiceRequests(params = {}) {
+    const response = await api.get('/api/opportunities/service-requests', { params });
+    return response.data;
+  },
+
+  // Create a service request on an opportunity
+  async createServiceRequest(opportunityId, data) {
+    const response = await api.post(`/api/opportunities/${opportunityId}/service-request`, data);
+    return response.data;
+  },
+
+  // Update a service request on an opportunity
+  async updateServiceRequest(opportunityId, data) {
+    const response = await api.put(`/api/opportunities/${opportunityId}/service-request`, data);
+    return response.data;
+  },
+
+  // Mark a service request as complete
+  async completeServiceRequest(opportunityId, notes = null) {
+    const response = await api.post(`/api/opportunities/${opportunityId}/service-request/complete`, { notes });
+    return response.data;
   },
 };
 

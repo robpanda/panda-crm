@@ -52,9 +52,6 @@ const handleValidation = (req, res, next) => {
 // Search (must be before /:id to avoid conflict)
 router.get('/search', validatePagination, handleValidation, accountController.search);
 
-// Service Requests (must be before /:id to avoid conflict)
-router.get('/service-requests', validatePagination, handleValidation, accountController.getServiceRequests);
-
 // List accounts
 router.get('/', validatePagination, handleValidation, accountController.list);
 
@@ -84,15 +81,5 @@ router.patch('/:id', validateUpdate, handleValidation, accountController.patch);
 
 // Delete account (admin only)
 router.delete('/:id', requireRole('admin', 'system'), accountController.delete);
-
-// ============================================================================
-// SERVICE REQUEST ROUTES (per Creating A Service Request SOP)
-// ============================================================================
-
-// Create service request on account
-router.post('/:id/service-request', accountController.createServiceRequest);
-
-// Mark service request as complete
-router.post('/:id/service-request/complete', accountController.completeServiceRequest);
 
 export default router;

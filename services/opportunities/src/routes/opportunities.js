@@ -339,4 +339,81 @@ router.post('/:id/messages', async (req, res, next) => {
   }
 });
 
+// ============================================================================
+// SERVICE REQUEST ENDPOINTS
+// Per Creating A Service Request SOP - service requests live on jobs (opportunities)
+// ============================================================================
+
+/**
+ * GET /service-requests
+ * Get all opportunities with active service requests
+ */
+router.get('/service-requests', async (req, res, next) => {
+  try {
+    const result = await opportunityService.getServiceRequests({
+      status: req.query.status, // 'pending', 'complete', 'all'
+      projectManagerId: req.query.projectManagerId,
+      page: parseInt(req.query.page) || 1,
+      limit: parseInt(req.query.limit) || 50,
+    });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /:id/service-request
+ * Create a service request on an opportunity
+ */
+router.post('/:id/service-request', async (req, res, next) => {
+  try {
+    const { projectManagerId, serviceNotes } = req.body;
+    const result = await opportunityService.createServiceRequest(req.params.id, {
+      projectManagerId,
+      serviceNotes,
+      createdBy: req.user?.id,
+    });
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * PUT /:id/service-request
+ * Update a service request on an opportunity
+ */
+router.put('/:id/service-request', async (req, res, next) => {
+  try {
+    const { serviceComplete, serviceNotes, projectManagerId } = req.body;
+    const result = await opportunityService.updateServiceRequest(req.params.id, {
+      serviceComplete,
+      serviceNotes,
+      projectManagerId,
+      updatedBy: req.user?.id,
+    });
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /:id/service-request/complete
+ * Mark a service request as complete
+ */
+router.post('/:id/service-request/complete', async (req, res, next) => {
+  try {
+    const { notes } = req.body;
+    const result = await opportunityService.completeServiceRequest(req.params.id, {
+      notes,
+      completedBy: req.user?.id,
+    });
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
 export default router;
