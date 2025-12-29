@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth, ROLE_TYPES } from '../context/AuthContext';
 import { leadsApi, opportunitiesApi, usersApi, accountsApi } from '../services/api';
 import { formatDistanceToNow, format, parseISO, startOfDay, startOfWeek, startOfMonth, endOfDay, endOfWeek, endOfMonth, isToday, isTomorrow, addDays } from 'date-fns';
@@ -70,10 +70,20 @@ const APPT_DATE_FILTERS = [
 export default function CallCenterDashboard() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const queryClient = useQueryClient();
   const [timePeriod, setTimePeriod] = useState('today');
   const [activeTab, setActiveTab] = useState('dashboard');
   const [apptDateFilter, setApptDateFilter] = useState('today');
+
+  // Read tab from URL query param (e.g., /call-center?tab=serviceRequests)
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const tab = params.get('tab');
+    if (tab && DASHBOARD_TABS.some(t => t.id === tab)) {
+      setActiveTab(tab);
+    }
+  }, [location.search]);
 
   // Modal states for lead confirmation and appointment booking
   const [confirmLeadModal, setConfirmLeadModal] = useState({ open: false, lead: null });

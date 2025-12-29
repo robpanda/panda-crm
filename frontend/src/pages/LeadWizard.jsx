@@ -942,9 +942,9 @@ export default function LeadWizard() {
                     )}
                   </div>
                   {/* Lead Set By Dropdown */}
-                  {showLeadSetByDropdown && leadSetByUsersData?.users?.length > 0 && !formData.leadSetByName && (
+                  {showLeadSetByDropdown && leadSetByUsersData?.data?.length > 0 && !formData.leadSetByName && (
                     <div className="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                      {leadSetByUsersData.users.map(u => (
+                      {leadSetByUsersData.data.map(u => (
                         <button
                           key={u.id}
                           type="button"
@@ -1102,9 +1102,9 @@ export default function LeadWizard() {
                   )}
                 </div>
                 {/* User Search Dropdown */}
-                {showUserDropdown && usersData?.users?.length > 0 && !formData.creatorName && (
+                {showUserDropdown && usersData?.data?.length > 0 && !formData.creatorName && (
                   <div className="absolute z-10 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                    {usersData.users.map(u => (
+                    {usersData.data.map(u => (
                       <button
                         key={u.id}
                         type="button"

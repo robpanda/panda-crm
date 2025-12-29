@@ -17,6 +17,7 @@ import {
   MapPin,
   Briefcase,
   TrendingUp,
+  Wrench,
 } from 'lucide-react';
 import CallCenterDashboard from './CallCenterDashboard';
 
@@ -446,7 +447,7 @@ export default function Dashboard() {
       {/* Quick Actions */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Quick Actions</h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <Link
             to="/leads/new"
             className="flex flex-col items-center justify-center p-4 rounded-lg border-2 border-dashed border-gray-200 hover:border-panda-primary hover:bg-panda-light transition-colors group"
@@ -467,6 +468,13 @@ export default function Dashboard() {
           >
             <Briefcase className="w-6 h-6 text-gray-400 group-hover:text-panda-primary mb-2" />
             <span className="text-sm text-gray-600 group-hover:text-panda-primary">New Job</span>
+          </Link>
+          <Link
+            to="/call-center?tab=serviceRequests"
+            className="flex flex-col items-center justify-center p-4 rounded-lg border-2 border-dashed border-gray-200 hover:border-orange-500 hover:bg-orange-50 transition-colors group"
+          >
+            <Wrench className="w-6 h-6 text-gray-400 group-hover:text-orange-500 mb-2" />
+            <span className="text-sm text-gray-600 group-hover:text-orange-500">Service Request</span>
           </Link>
           <Link
             to="/schedule"
