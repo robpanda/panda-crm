@@ -33,7 +33,24 @@ api.interceptors.response.use(
 
       try {
         const refreshToken = localStorage.getItem('refreshToken');
-        const userEmail = localStorage.getItem('userEmail');
+        let userEmail = localStorage.getItem('userEmail');
+
+        // Fallback: try to extract email from idToken if not stored
+        if (!userEmail) {
+          const idToken = localStorage.getItem('idToken');
+          if (idToken) {
+            try {
+              const payload = JSON.parse(atob(idToken.split('.')[1]));
+              userEmail = payload.email;
+              if (userEmail) {
+                localStorage.setItem('userEmail', userEmail);
+              }
+            } catch (e) {
+              // Could not parse idToken
+            }
+          }
+        }
+
         if (refreshToken && userEmail) {
           const response = await axios.post(`${API_BASE}/api/auth/refresh`, {
             refreshToken,
