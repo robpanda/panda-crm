@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { contactsApi } from '../services/api';
+import { useRingCentral } from '../context/RingCentralContext';
 import { formatNumber } from '../utils/formatters';
 import {
   Users,
@@ -19,6 +20,7 @@ import {
 
 export default function ContactList() {
   const [searchParams] = useSearchParams();
+  const { clickToCall } = useRingCentral();
 
   const [search, setSearch] = useState('');
   const [ownerFilter, setOwnerFilter] = useState('all');
@@ -259,10 +261,13 @@ export default function ContactList() {
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-600">
                       {contact.phone || contact.mobilePhone ? (
-                        <a href={`tel:${contact.mobilePhone || contact.phone}`} className="flex items-center hover:text-panda-primary">
+                        <button
+                          onClick={() => clickToCall(contact.mobilePhone || contact.phone)}
+                          className="flex items-center hover:text-panda-primary cursor-pointer"
+                        >
                           <Phone className="w-3 h-3 mr-1 text-gray-400" />
                           {contact.mobilePhone || contact.phone}
-                        </a>
+                        </button>
                       ) : '-'}
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-600">

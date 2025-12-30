@@ -22,6 +22,7 @@ import {
   X,
 } from 'lucide-react';
 import { opportunitiesApi, accountsApi, contactsApi } from '../services/api';
+import { useRingCentral } from '../context/RingCentralContext';
 
 // Opportunity Stages with colors
 const STAGES = [
@@ -135,6 +136,7 @@ export default function OpportunityWizard() {
   });
 
   const [activities, setActivities] = useState([]);
+  const { clickToCall } = useRingCentral();
 
   // Load existing opportunity if editing
   useEffect(() => {
@@ -643,13 +645,13 @@ export default function OpportunityWizard() {
               <div className="mt-6 p-4 bg-gray-50 rounded-lg">
                 <h3 className="text-sm font-medium text-gray-700 mb-3">Quick Contact Actions</h3>
                 <div className="flex flex-wrap gap-3">
-                  <a
-                    href={`tel:${selectedContact.phone}`}
+                  <button
+                    onClick={() => clickToCall(selectedContact.phone)}
                     className="inline-flex items-center px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors"
                   >
                     <Phone className="w-4 h-4 mr-2" />
                     Call
-                  </a>
+                  </button>
                   <a
                     href={`sms:${selectedContact.phone}`}
                     className="inline-flex items-center px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors"

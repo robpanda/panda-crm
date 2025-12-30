@@ -1,5 +1,5 @@
 // Integrations Service - Entry Point
-// Handles CompanyCam, Google Calendar, Five9, EagleView/GAF, Scheduling, and Mobile integrations
+// Handles CompanyCam, Google Calendar, RingCentral, EagleView/GAF, ABC Supply, Scheduling, and Mobile integrations
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -7,8 +7,9 @@ import morgan from 'morgan';
 import dotenv from 'dotenv';
 
 import integrationRoutes from './routes/integrations.js';
-import five9Routes from './routes/five9.js';
+import ringCentralRoutes from './routes/ringcentral.js';
 import measurementRoutes from './routes/measurements.js';
+import abcSupplyRoutes from './routes/abcSupply.js';
 import schedulingRoutes from './routes/scheduling.js';
 import mobileRoutes from './routes/mobile.js';
 import fieldServiceRoutes from './routes/fieldService.js';
@@ -63,9 +64,10 @@ app.get('/health', (req, res) => {
     features: [
       'companycam',
       'google-calendar',
-      'five9',
+      'ringcentral',
       'eagleview',
       'gaf-quickmeasure',
+      'abc-supply',
       'hover-3d',
       'scheduling',
       'mobile',
@@ -78,8 +80,9 @@ app.get('/health', (req, res) => {
 app.use('/api/integrations', integrationRoutes);
 
 // Phase 4 Integration Routes
-app.use('/api/integrations/five9', five9Routes);
+app.use('/api/integrations/ringcentral', ringCentralRoutes);
 app.use('/api/integrations/measurements', measurementRoutes);
+app.use('/api/integrations/abc-supply', abcSupplyRoutes);
 app.use('/api/integrations/scheduling', schedulingRoutes);
 app.use('/api/integrations/mobile', mobileRoutes);
 

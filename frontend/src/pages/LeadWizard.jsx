@@ -155,13 +155,13 @@ export default function LeadWizard() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { clickToCall, clickToSMS, isReady: isRingCentralReady, currentCall } = useRingCentral();
+  const { clickToCall, isReady: isRingCentralReady, currentCall } = useRingCentral();
   const isNewLead = !id || id === 'new';
 
   // Determine if user is call center based on role or department
-  const isCallCenter = user?.role === 'call_center' ||
-                       user?.department?.toLowerCase() === 'call center' ||
-                       user?.role === 'call-center';
+  const isCallCenter = user?.role?.name?.toLowerCase()?.includes('call center') ||
+                       user?.roleType === 'CALL_CENTER' || user?.roleType === 'CALL_CENTER_MANAGER' ||
+                       user?.department?.toLowerCase() === 'call center';
 
   // Call center users only see Inspection, others see all work types
   const WORK_TYPES = isCallCenter ? CALL_CENTER_WORK_TYPES : ALL_WORK_TYPES;

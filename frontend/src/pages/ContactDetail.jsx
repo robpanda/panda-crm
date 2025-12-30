@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { contactsApi, accountsApi } from '../services/api';
+import { useRingCentral } from '../context/RingCentralContext';
 import {
   Users, ArrowLeft, Phone, Mail, Building2, Edit, Save, X,
   MapPin, User, Clock, MessageSquare, PhoneOff, MailX, FileText
@@ -28,6 +29,7 @@ const CONTACT_METHODS = [
 export default function ContactDetail() {
   const { id } = useParams();
   const queryClient = useQueryClient();
+  const { clickToCall } = useRingCentral();
   const [isEditing, setIsEditing] = useState(false);
   const [formData, setFormData] = useState({});
 
@@ -215,10 +217,13 @@ export default function ContactDetail() {
               {contact.title && <p className="text-gray-500">{contact.title}</p>}
               <div className="flex items-center space-x-4 mt-2">
                 {contact.phone && (
-                  <a href={`tel:${contact.phone}`} className="flex items-center text-sm text-panda-primary hover:underline">
+                  <button
+                    onClick={() => clickToCall(contact.phone)}
+                    className="flex items-center text-sm text-panda-primary hover:underline cursor-pointer"
+                  >
                     <Phone className="w-4 h-4 mr-1" />
                     {contact.phone}
-                  </a>
+                  </button>
                 )}
                 {contact.email && (
                   <a href={`mailto:${contact.email}`} className="flex items-center text-sm text-panda-primary hover:underline">

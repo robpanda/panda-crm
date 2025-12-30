@@ -58,6 +58,7 @@ import PandaSign from './pages/admin/PandaSign';
 import Bamboogli from './pages/admin/Bamboogli';
 import FieldService from './pages/admin/FieldService';
 import TrainingBotAnalytics from './pages/admin/TrainingBotAnalytics';
+import RingCentral from './pages/admin/RingCentral';
 
 // Search
 import Search from './pages/Search';
@@ -168,6 +169,7 @@ export default function App() {
         <Route path="admin/bamboogli" element={<Bamboogli />} />
         <Route path="admin/field-service" element={<FieldService />} />
         <Route path="admin/training-bot" element={<TrainingBotAnalytics />} />
+        <Route path="admin/ringcentral" element={<RingCentral />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />

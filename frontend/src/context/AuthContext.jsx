@@ -20,7 +20,10 @@ export const ROLE_TYPES = {
 };
 
 // Map Cognito role names to role types
-function getRoleType(roleName) {
+function getRoleType(roleInput) {
+  if (!roleInput) return ROLE_TYPES.SALES_REP;
+  // Handle case where role is an object with a name property
+  const roleName = typeof roleInput === 'object' ? roleInput?.name : roleInput;
   if (!roleName) return ROLE_TYPES.SALES_REP;
   const role = roleName.toLowerCase();
   if (role.includes('super_admin') || role.includes('admin')) return ROLE_TYPES.ADMIN;
@@ -243,9 +246,9 @@ export function AuthProvider({ children }) {
       try {
         const impersonated = JSON.parse(storedImpersonation);
         // Check if actual user is admin
-        const role = user.role?.toLowerCase() || '';
-        const userIsAdmin = role.includes('super_admin') || role.includes('admin') ||
-                           role === 'super admin' || role === 'admin';
+        const roleName = user.role?.name?.toLowerCase() || '';
+        const userIsAdmin = roleName.includes('admin') ||
+                           user.roleType === 'ADMIN' || user.roleType === 'EXECUTIVE';
         if (userIsAdmin) {
           setActualUser(user);
           setImpersonatedUserState(impersonated);

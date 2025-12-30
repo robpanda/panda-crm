@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth, ROLE_TYPES } from '../context/AuthContext';
-import { leadsApi, opportunitiesApi, usersApi, accountsApi } from '../services/api';
+import { useRingCentral } from '../context/RingCentralContext';
+import { leadsApi, opportunitiesApi, usersApi, accountsApi, bamboogliApi } from '../services/api';
 import { formatDistanceToNow, format, parseISO, startOfDay, startOfWeek, startOfMonth, endOfDay, endOfWeek, endOfMonth, isToday, isTomorrow, addDays } from 'date-fns';
 import { formatNumber } from '../utils/formatters';
 import {
@@ -42,6 +43,10 @@ import {
   Edit3,
   Wrench,
   CheckCheck,
+  Mail,
+  Loader2,
+  FileText,
+  Send,
 } from 'lucide-react';
 
 // Time period options for the leaderboard
@@ -67,8 +72,399 @@ const APPT_DATE_FILTERS = [
   { id: 'all', label: 'All' },
 ];
 
+// SMS Modal Component with Canned Responses
+function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {} }) {
+  const [message, setMessage] = useState('');
+  const [isSending, setIsSending] = useState(false);
+  const [error, setError] = useState('');
+  const [templates, setTemplates] = useState([]);
+  const [selectedTemplate, setSelectedTemplate] = useState('');
+  const [loadingTemplates, setLoadingTemplates] = useState(false);
+
+  // Load SMS templates when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      loadTemplates();
+      setMessage('');
+      setSelectedTemplate('');
+      setError('');
+    }
+  }, [isOpen]);
+
+  const loadTemplates = async () => {
+    setLoadingTemplates(true);
+    try {
+      const data = await bamboogliApi.getMessageTemplates({ channel: 'SMS', isActive: true });
+      setTemplates(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Failed to load templates:', err);
+      setTemplates([]);
+    } finally {
+      setLoadingTemplates(false);
+    }
+  };
+
+  // Apply template with merge field interpolation
+  const handleTemplateSelect = (templateId) => {
+    setSelectedTemplate(templateId);
+    if (!templateId) return;
+
+    const template = templates.find((t) => t.id === templateId);
+    if (template) {
+      // Interpolate merge fields
+      let interpolated = template.body || '';
+      const data = {
+        firstName: mergeData.firstName || '',
+        lastName: mergeData.lastName || '',
+        fullName: mergeData.fullName || `${mergeData.firstName || ''} ${mergeData.lastName || ''}`.trim(),
+        company: mergeData.company || '',
+        phone: mergeData.phone || phone,
+        ...mergeData,
+      };
+
+      // Replace {{variable}} and {variable} patterns
+      interpolated = interpolated.replace(/\{\{?(\w+)\}?\}/g, (match, key) => {
+        return data[key] !== undefined && data[key] !== '' ? data[key] : match;
+      });
+
+      setMessage(interpolated);
+    }
+  };
+
+  const handleSend = async () => {
+    if (!message.trim()) return;
+
+    setIsSending(true);
+    setError('');
+
+    try {
+      await bamboogliApi.sendSms({
+        to: phone,
+        message: message.trim(),
+        recipientName,
+      });
+      setMessage('');
+      setSelectedTemplate('');
+      onSent?.();
+      onClose();
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to send SMS');
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  // Group templates by category
+  const templatesByCategory = templates.reduce((acc, t) => {
+    const cat = t.category || 'General';
+    if (!acc[cat]) acc[cat] = [];
+    acc[cat].push(t);
+    return acc;
+  }, {});
+
+  return (
+    <div className="fixed inset-0 z-50 overflow-y-auto">
+      <div className="flex items-center justify-center min-h-screen px-4">
+        <div className="fixed inset-0 bg-black bg-opacity-50" onClick={onClose} />
+        <div className="relative bg-white rounded-xl shadow-xl max-w-lg w-full p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-gray-900 flex items-center">
+              <MessageSquare className="w-5 h-5 mr-2 text-blue-500" />
+              Send SMS
+            </h3>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">To</label>
+            <div className="px-3 py-2 bg-gray-50 rounded-lg text-gray-600">
+              {recipientName} • {phone}
+            </div>
+          </div>
+
+          {/* Canned Response Selector */}
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              <FileText className="w-4 h-4 inline mr-1" />
+              Quick Response
+            </label>
+            <select
+              value={selectedTemplate}
+              onChange={(e) => handleTemplateSelect(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+              disabled={loadingTemplates}
+            >
+              <option value="">{loadingTemplates ? 'Loading templates...' : 'Select a template...'}</option>
+              {Object.entries(templatesByCategory).map(([category, categoryTemplates]) => (
+                <optgroup key={category} label={category}>
+                  {categoryTemplates.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </div>
+
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">Message</label>
+            <textarea
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              rows={4}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+              placeholder="Type your message or select a quick response..."
+              autoFocus
+            />
+            <div className="text-xs text-gray-400 mt-1 text-right">
+              {message.length} characters {message.length > 160 && `(${Math.ceil(message.length / 153)} segments)`}
+            </div>
+          </div>
+
+          {error && (
+            <div className="mb-4 p-3 bg-red-50 text-red-600 text-sm rounded-lg">
+              {error}
+            </div>
+          )}
+
+          <div className="flex justify-end space-x-3">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSend}
+              disabled={!message.trim() || isSending}
+              className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+            >
+              {isSending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Send className="w-4 h-4" />
+              )}
+              <span>{isSending ? 'Sending...' : 'Send'}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Email Modal Component with Canned Responses
+function EmailModal({ isOpen, onClose, email, recipientName, onSent, mergeData = {} }) {
+  const [subject, setSubject] = useState('');
+  const [body, setBody] = useState('');
+  const [isSending, setIsSending] = useState(false);
+  const [error, setError] = useState('');
+  const [templates, setTemplates] = useState([]);
+  const [selectedTemplate, setSelectedTemplate] = useState('');
+  const [loadingTemplates, setLoadingTemplates] = useState(false);
+
+  // Load email templates when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      loadTemplates();
+      setSubject('');
+      setBody('');
+      setSelectedTemplate('');
+      setError('');
+    }
+  }, [isOpen]);
+
+  const loadTemplates = async () => {
+    setLoadingTemplates(true);
+    try {
+      const data = await bamboogliApi.getMessageTemplates({ channel: 'EMAIL', isActive: true });
+      setTemplates(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Failed to load templates:', err);
+      setTemplates([]);
+    } finally {
+      setLoadingTemplates(false);
+    }
+  };
+
+  // Apply template with merge field interpolation
+  const handleTemplateSelect = (templateId) => {
+    setSelectedTemplate(templateId);
+    if (!templateId) return;
+
+    const template = templates.find((t) => t.id === templateId);
+    if (template) {
+      const data = {
+        firstName: mergeData.firstName || '',
+        lastName: mergeData.lastName || '',
+        fullName: mergeData.fullName || `${mergeData.firstName || ''} ${mergeData.lastName || ''}`.trim(),
+        company: mergeData.company || '',
+        email: mergeData.email || email,
+        ...mergeData,
+      };
+
+      // Interpolate subject
+      let interpolatedSubject = template.subject || '';
+      interpolatedSubject = interpolatedSubject.replace(/\{\{?(\w+)\}?\}/g, (match, key) => {
+        return data[key] !== undefined && data[key] !== '' ? data[key] : match;
+      });
+
+      // Interpolate body
+      let interpolatedBody = template.body || '';
+      interpolatedBody = interpolatedBody.replace(/\{\{?(\w+)\}?\}/g, (match, key) => {
+        return data[key] !== undefined && data[key] !== '' ? data[key] : match;
+      });
+
+      setSubject(interpolatedSubject);
+      setBody(interpolatedBody);
+    }
+  };
+
+  const handleSend = async () => {
+    if (!subject.trim() || !body.trim()) return;
+
+    setIsSending(true);
+    setError('');
+
+    try {
+      await bamboogliApi.sendEmail({
+        to: email,
+        subject: subject.trim(),
+        body: body.trim(),
+        recipientName,
+      });
+      setSubject('');
+      setBody('');
+      setSelectedTemplate('');
+      onSent?.();
+      onClose();
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to send email');
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  // Group templates by category
+  const templatesByCategory = templates.reduce((acc, t) => {
+    const cat = t.category || 'General';
+    if (!acc[cat]) acc[cat] = [];
+    acc[cat].push(t);
+    return acc;
+  }, {});
+
+  return (
+    <div className="fixed inset-0 z-50 overflow-y-auto">
+      <div className="flex items-center justify-center min-h-screen px-4">
+        <div className="fixed inset-0 bg-black bg-opacity-50" onClick={onClose} />
+        <div className="relative bg-white rounded-xl shadow-xl max-w-2xl w-full p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-gray-900 flex items-center">
+              <Mail className="w-5 h-5 mr-2 text-purple-500" />
+              Compose Email
+            </h3>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">To</label>
+            <div className="px-3 py-2 bg-gray-50 rounded-lg text-gray-600">
+              {recipientName} &lt;{email}&gt;
+            </div>
+          </div>
+
+          {/* Canned Response Selector */}
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              <FileText className="w-4 h-4 inline mr-1" />
+              Email Template
+            </label>
+            <select
+              value={selectedTemplate}
+              onChange={(e) => handleTemplateSelect(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white"
+              disabled={loadingTemplates}
+            >
+              <option value="">{loadingTemplates ? 'Loading templates...' : 'Select a template...'}</option>
+              {Object.entries(templatesByCategory).map(([category, categoryTemplates]) => (
+                <optgroup key={category} label={category}>
+                  {categoryTemplates.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </div>
+
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">Subject</label>
+            <input
+              type="text"
+              value={subject}
+              onChange={(e) => setSubject(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+              placeholder="Email subject..."
+              autoFocus
+            />
+          </div>
+
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">Message</label>
+            <textarea
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              rows={8}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none"
+              placeholder="Type your message or select a template..."
+            />
+          </div>
+
+          {error && (
+            <div className="mb-4 p-3 bg-red-50 text-red-600 text-sm rounded-lg">
+              {error}
+            </div>
+          )}
+
+          <div className="flex justify-end space-x-3">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleSend}
+              disabled={!subject.trim() || !body.trim() || isSending}
+              className="flex items-center space-x-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50"
+            >
+              {isSending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Send className="w-4 h-4" />
+              )}
+              <span>{isSending ? 'Sending...' : 'Send Email'}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function CallCenterDashboard() {
   const { user } = useAuth();
+  const { clickToCall } = useRingCentral();
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
@@ -90,6 +486,9 @@ export default function CallCenterDashboard() {
   const [bookApptModal, setBookApptModal] = useState({ open: false, opportunity: null });
   const [addNoteModal, setAddNoteModal] = useState({ open: false, record: null, type: null }); // type: 'lead' or 'opportunity'
   const [serviceRequestModal, setServiceRequestModal] = useState({ open: false, account: null }); // For creating new service requests
+  // SMS and Email modals
+  const [smsModal, setSmsModal] = useState({ open: false, phone: '', recipientName: '', mergeData: {} });
+  const [emailModal, setEmailModal] = useState({ open: false, email: '', recipientName: '', mergeData: {} });
 
   // Form states for modals
   const [confirmFormData, setConfirmFormData] = useState({
@@ -109,7 +508,7 @@ export default function CallCenterDashboard() {
   });
 
   // Check if user is a call center manager
-  const isManager = user?.roleType === ROLE_TYPES.CALL_CENTER_MANAGER || user?.role?.includes('manager');
+  const isManager = user?.roleType === ROLE_TYPES.CALL_CENTER_MANAGER || user?.role?.name?.toLowerCase()?.includes('manager');
 
   // Calculate date range based on selected period
   const getDateRange = () => {
@@ -149,14 +548,16 @@ export default function CallCenterDashboard() {
     enabled: !!user?.id,
   });
 
-  // Fetch my recent leads
+  // Fetch my recent leads (filtered by the selected time period)
   const { data: myRecentLeads } = useQuery({
-    queryKey: ['myRecentLeads', user?.id],
+    queryKey: ['myRecentLeads', user?.id, timePeriod],
     queryFn: () => leadsApi.getLeads({
       ownerId: user?.id,
       limit: 10,
       sortBy: 'createdAt',
       sortOrder: 'desc',
+      startDate: format(dateRange.start, 'yyyy-MM-dd'),
+      endDate: format(dateRange.end, 'yyyy-MM-dd'),
     }),
     enabled: !!user?.id,
   });
@@ -215,11 +616,12 @@ export default function CallCenterDashboard() {
   const unconfirmedLeads = unconfirmedLeadsData?.data || [];
   const unscheduledAppointments = unscheduledData?.data || unscheduledData?.opportunities || [];
 
-  // Fetch service requests (accounts with serviceRequired=true, serviceComplete=false)
+  // Fetch service requests (opportunities with serviceRequired=true, serviceComplete=false)
+  // Service requests now live on Jobs (Opportunities) per the Opportunity Hub architecture
   const { data: serviceRequestsData, isLoading: serviceRequestsLoading, refetch: refetchServiceRequests } = useQuery({
     queryKey: ['serviceRequests'],
-    queryFn: () => accountsApi.getServiceRequests({
-      includeCompleted: false,
+    queryFn: () => opportunitiesApi.getServiceRequests({
+      status: 'pending',
     }),
     enabled: activeTab === 'serviceRequests',
   });
@@ -278,10 +680,10 @@ export default function CallCenterDashboard() {
     },
   });
 
-  // Mutation: Complete service request
+  // Mutation: Complete service request (now on opportunities)
   const completeServiceRequestMutation = useMutation({
-    mutationFn: async (accountId) => {
-      return accountsApi.completeServiceRequest(accountId);
+    mutationFn: async (opportunityId) => {
+      return opportunitiesApi.completeServiceRequest(opportunityId);
     },
     onSuccess: () => {
       queryClient.invalidateQueries(['serviceRequests']);
@@ -451,6 +853,54 @@ export default function CallCenterDashboard() {
     const date = parseISO(dateStr);
     const dateLabel = isToday(date) ? 'Today' : isTomorrow(date) ? 'Tomorrow' : format(date, 'EEE, MMM d');
     return timeStr ? `${dateLabel} at ${timeStr}` : dateLabel;
+  };
+
+  // Open SMS modal
+  const openSmsModal = (record, type) => {
+    const phone = type === 'lead'
+      ? record.phone
+      : (record.contact?.phone || record.account?.phone);
+    const recipientName = type === 'lead'
+      ? `${record.firstName} ${record.lastName}`
+      : (record.contact?.name || record.account?.name || record.name);
+    const mergeData = type === 'lead'
+      ? {
+          firstName: record.firstName,
+          lastName: record.lastName,
+          company: record.company,
+          phone: record.phone,
+        }
+      : {
+          firstName: record.contact?.firstName || record.account?.name?.split(' ')[0] || '',
+          lastName: record.contact?.lastName || '',
+          company: record.account?.name || '',
+          phone: record.contact?.phone || record.account?.phone,
+        };
+    setSmsModal({ open: true, phone, recipientName, mergeData });
+  };
+
+  // Open Email modal
+  const openEmailModal = (record, type) => {
+    const email = type === 'lead'
+      ? record.email
+      : (record.contact?.email || record.account?.email);
+    const recipientName = type === 'lead'
+      ? `${record.firstName} ${record.lastName}`
+      : (record.contact?.name || record.account?.name || record.name);
+    const mergeData = type === 'lead'
+      ? {
+          firstName: record.firstName,
+          lastName: record.lastName,
+          company: record.company,
+          email: record.email,
+        }
+      : {
+          firstName: record.contact?.firstName || record.account?.name?.split(' ')[0] || '',
+          lastName: record.contact?.lastName || '',
+          company: record.account?.name || '',
+          email: record.contact?.email || record.account?.email,
+        };
+    setEmailModal({ open: true, email, recipientName, mergeData });
   };
 
   return (
@@ -902,13 +1352,36 @@ export default function CallCenterDashboard() {
 
                     {/* Action Buttons */}
                     <div className="flex items-center gap-2">
-                      <a
-                        href={`tel:${lead.phone}`}
-                        className="p-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors"
-                        title="Call"
-                      >
-                        <Phone className="w-4 h-4" />
-                      </a>
+                      {/* RingCentral Call Button - Opens RingCentral directly */}
+                      {lead.phone && (
+                        <button
+                          onClick={() => clickToCall(lead.phone)}
+                          className="p-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors"
+                          title="Call via RingCentral"
+                        >
+                          <Phone className="w-4 h-4" />
+                        </button>
+                      )}
+                      {/* SMS Button */}
+                      {lead.phone && (
+                        <button
+                          onClick={() => openSmsModal(lead, 'lead')}
+                          className="p-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-colors"
+                          title="Send SMS"
+                        >
+                          <MessageSquare className="w-4 h-4" />
+                        </button>
+                      )}
+                      {/* Email Button */}
+                      {lead.email && (
+                        <button
+                          onClick={() => openEmailModal(lead, 'lead')}
+                          className="p-2 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 transition-colors"
+                          title="Send Email"
+                        >
+                          <Mail className="w-4 h-4" />
+                        </button>
+                      )}
                       <button
                         onClick={() => setAddNoteModal({ open: true, record: lead, type: 'lead' })}
                         className="p-2 bg-yellow-100 text-yellow-700 rounded-lg hover:bg-yellow-200 transition-colors"
@@ -1028,14 +1501,35 @@ export default function CallCenterDashboard() {
 
                     {/* Action Buttons */}
                     <div className="flex items-center gap-2">
+                      {/* RingCentral Call Button - Opens RingCentral directly */}
                       {(opp.account?.phone || opp.contact?.phone) && (
-                        <a
-                          href={`tel:${opp.contact?.phone || opp.account?.phone}`}
+                        <button
+                          onClick={() => clickToCall(opp.contact?.phone || opp.account?.phone)}
                           className="p-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors"
-                          title="Call"
+                          title="Call via RingCentral"
                         >
                           <Phone className="w-4 h-4" />
-                        </a>
+                        </button>
+                      )}
+                      {/* SMS Button */}
+                      {(opp.account?.phone || opp.contact?.phone) && (
+                        <button
+                          onClick={() => openSmsModal(opp, 'opportunity')}
+                          className="p-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-colors"
+                          title="Send SMS"
+                        >
+                          <MessageSquare className="w-4 h-4" />
+                        </button>
+                      )}
+                      {/* Email Button */}
+                      {(opp.account?.email || opp.contact?.email) && (
+                        <button
+                          onClick={() => openEmailModal(opp, 'opportunity')}
+                          className="p-2 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 transition-colors"
+                          title="Send Email"
+                        >
+                          <Mail className="w-4 h-4" />
+                        </button>
                       )}
                       <button
                         onClick={() => setAddNoteModal({ open: true, record: opp, type: 'opportunity' })}
@@ -1085,7 +1579,7 @@ export default function CallCenterDashboard() {
                   Service Requests
                 </h2>
                 <p className="text-sm text-gray-500 mt-1">
-                  Accounts with pending service work - mark complete when resolved
+                  Jobs with pending service work - mark complete when resolved
                 </p>
               </div>
               <button
@@ -1105,47 +1599,45 @@ export default function CallCenterDashboard() {
             </div>
           ) : serviceRequests.length > 0 ? (
             <div className="divide-y divide-gray-100">
-              {serviceRequests.map((account) => (
+              {serviceRequests.map((opp) => (
                 <div
-                  key={account.id}
+                  key={opp.id}
                   className="flex items-center p-4 hover:bg-gray-50 transition-colors"
                 >
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-3">
                       <Link
-                        to={`/accounts/${account.id}`}
+                        to={`/opportunities/${opp.id}`}
                         className="font-medium text-gray-900 hover:text-panda-primary truncate"
                       >
-                        {account.name}
+                        {opp.name}
                       </Link>
-                      {account.opportunities?.[0] && (
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
-                          {account.opportunities[0].stage?.replace(/_/g, ' ') || 'Active Job'}
-                        </span>
-                      )}
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
+                        {opp.stageName || opp.stage?.replace(/_/g, ' ') || 'Active Job'}
+                      </span>
                     </div>
                     <div className="flex items-center gap-4 mt-1 text-sm text-gray-500">
-                      {account.phone && (
+                      {(opp.account?.phone || opp.contact?.phone) && (
                         <span className="flex items-center gap-1">
                           <Phone className="w-3 h-3" />
-                          {account.phone}
+                          {opp.contact?.phone || opp.account?.phone}
                         </span>
                       )}
-                      {account.billingCity && account.billingState && (
+                      {opp.account?.location && (
                         <span className="flex items-center gap-1">
                           <MapPin className="w-3 h-3" />
-                          {account.billingCity}, {account.billingState}
+                          {opp.account.location}
                         </span>
                       )}
-                      {account.projectManager && (
+                      {opp.projectManager && (
                         <span className="text-purple-600">
-                          PM: {account.projectManager.firstName} {account.projectManager.lastName}
+                          PM: {opp.projectManager.name}
                         </span>
                       )}
                     </div>
-                    {account.serviceNotes && (
+                    {opp.serviceNotes && (
                       <p className="mt-2 text-sm text-gray-600 bg-yellow-50 p-2 rounded border-l-2 border-yellow-400">
-                        {account.serviceNotes}
+                        {opp.serviceNotes}
                       </p>
                     )}
                   </div>
@@ -1154,8 +1646,8 @@ export default function CallCenterDashboard() {
                     {/* Request Date */}
                     <div className="text-right">
                       <p className="text-sm font-medium text-gray-900">
-                        {account.serviceRequestDate
-                          ? formatDistanceToNow(parseISO(account.serviceRequestDate), { addSuffix: true })
+                        {opp.serviceRequestDate
+                          ? formatDistanceToNow(parseISO(opp.serviceRequestDate), { addSuffix: true })
                           : '-'}
                       </p>
                       <p className="text-xs text-gray-500">Requested</p>
@@ -1163,17 +1655,38 @@ export default function CallCenterDashboard() {
 
                     {/* Action Buttons */}
                     <div className="flex items-center gap-2">
-                      {account.phone && (
-                        <a
-                          href={`tel:${account.phone}`}
+                      {/* RingCentral Call Button - Opens RingCentral directly */}
+                      {(opp.account?.phone || opp.contact?.phone) && (
+                        <button
+                          onClick={() => clickToCall(opp.contact?.phone || opp.account?.phone)}
                           className="p-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors"
-                          title="Call"
+                          title="Call via RingCentral"
                         >
                           <Phone className="w-4 h-4" />
-                        </a>
+                        </button>
+                      )}
+                      {/* SMS Button */}
+                      {(opp.account?.phone || opp.contact?.phone) && (
+                        <button
+                          onClick={() => openSmsModal(opp, 'opportunity')}
+                          className="p-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-colors"
+                          title="Send SMS"
+                        >
+                          <MessageSquare className="w-4 h-4" />
+                        </button>
+                      )}
+                      {/* Email Button */}
+                      {(opp.account?.email || opp.contact?.email) && (
+                        <button
+                          onClick={() => openEmailModal(opp, 'opportunity')}
+                          className="p-2 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 transition-colors"
+                          title="Send Email"
+                        >
+                          <Mail className="w-4 h-4" />
+                        </button>
                       )}
                       <button
-                        onClick={() => completeServiceRequestMutation.mutate(account.id)}
+                        onClick={() => completeServiceRequestMutation.mutate(opp.id)}
                         disabled={completeServiceRequestMutation.isPending}
                         className="px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center gap-1 text-sm font-medium disabled:opacity-50"
                         title="Mark Complete"
@@ -1182,9 +1695,9 @@ export default function CallCenterDashboard() {
                         Complete
                       </button>
                       <Link
-                        to={`/accounts/${account.id}`}
+                        to={`/opportunities/${opp.id}`}
                         className="p-2 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition-colors"
-                        title="View Account"
+                        title="View Job"
                       >
                         <ArrowRight className="w-4 h-4" />
                       </Link>
@@ -1486,6 +1999,30 @@ export default function CallCenterDashboard() {
           </div>
         </div>
       )}
+
+      {/* SMS Modal */}
+      <SmsModal
+        isOpen={smsModal.open}
+        onClose={() => setSmsModal({ open: false, phone: '', recipientName: '', mergeData: {} })}
+        phone={smsModal.phone}
+        recipientName={smsModal.recipientName}
+        mergeData={smsModal.mergeData}
+        onSent={() => {
+          // Optionally refresh data or show success message
+        }}
+      />
+
+      {/* Email Modal */}
+      <EmailModal
+        isOpen={emailModal.open}
+        onClose={() => setEmailModal({ open: false, email: '', recipientName: '', mergeData: {} })}
+        email={emailModal.email}
+        recipientName={emailModal.recipientName}
+        mergeData={emailModal.mergeData}
+        onSent={() => {
+          // Optionally refresh data or show success message
+        }}
+      />
     </div>
   );
 }

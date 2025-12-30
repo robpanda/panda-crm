@@ -32,6 +32,12 @@ model Account {
   shippingPostalCode String? @map("shipping_postal_code")
   shippingCountry    String? @map("shipping_country")
 
+  // Geolocation (for route optimization)
+  latitude      Float?    @map("latitude")
+  longitude     Float?    @map("longitude")
+  geocodedAt    DateTime? @map("geocoded_at")
+  geocodeStatus String?   @map("geocode_status") // 'success', 'partial', 'failed', 'pending'
+
   // Contact Info
   phone   String?
   email   String?
@@ -465,6 +471,15 @@ model ServiceAppointment {
   state      String?
   postalCode String? @map("postal_code")
 
+  // Geolocation (for route optimization)
+  latitude   Float?    @map("latitude")
+  longitude  Float?    @map("longitude")
+  geocodedAt DateTime? @map("geocoded_at")
+
+  // Travel time (from previous appointment in route)
+  travelTimeMinutes   Int?   @map("travel_time_minutes")
+  travelDistanceMiles Float? @map("travel_distance_miles")
+
   // Scheduling
   earliestStart  DateTime? @map("earliest_start")
   dueDate        DateTime? @map("due_date")
@@ -528,8 +543,9 @@ model ServiceResource {
   absences         ResourceAbsence[]
 
   // Phase 4 Relations
-  capacities ResourceCapacity[]
-  skills     ResourceSkill[]
+  capacities    ResourceCapacity[]
+  skills        ResourceSkill[]
+  capacityPlans ResourceCapacityPlan[]
 
   @@index([resourceType])
   @@index([isActive])
@@ -681,6 +697,97 @@ model ResourceSkill {
 }
 
 // ============================================================================
+// ROUTE OPTIMIZATION
+// ============================================================================
+
+model DistanceCache {
+  id String @id @default(cuid())
+
+  // Origin and destination as lat/lon pairs (rounded to 4 decimals for clustering)
+  originLat Float @map("origin_lat")
+  originLon Float @map("origin_lon")
+  destLat   Float @map("dest_lat")
+  destLon   Float @map("dest_lon")
+
+  // Cached results
+  distanceMeters  Int @map("distance_meters")
+  durationSeconds Int @map("duration_seconds")
+
+  // Cache metadata
+  provider  String   @default("google") // 'google', 'osrm', 'mapbox'
+  createdAt DateTime @default(now()) @map("created_at")
+  expiresAt DateTime @map("expires_at") // Refresh cache periodically
+
+  @@unique([originLat, originLon, destLat, destLon, provider])
+  @@index([originLat, originLon])
+  @@index([destLat, destLon])
+  @@map("distance_cache")
+}
+
+model SchedulingPolicy {
+  id String @id @default(cuid())
+
+  name        String  @unique
+  description String?
+  isDefault   Boolean @default(false) @map("is_default")
+  isActive    Boolean @default(true) @map("is_active")
+
+  // Constraint weights (0-100, higher = more important)
+  weightCustomerPreference  Int @default(80) @map("weight_customer_preference")
+  weightSkillMatch          Int @default(90) @map("weight_skill_match")
+  weightTravelDistance      Int @default(70) @map("weight_travel_distance")
+  weightResourceUtilization Int @default(60) @map("weight_resource_utilization")
+  weightSameDayCompletion   Int @default(50) @map("weight_same_day_completion")
+  weightPriority            Int @default(85) @map("weight_priority")
+
+  // Hard constraints
+  requireExactSkillMatch  Boolean @default(false) @map("require_exact_skill_match")
+  requireSameTerritory    Boolean @default(true) @map("require_same_territory")
+  allowOvertimeScheduling Boolean @default(false) @map("allow_overtime_scheduling")
+
+  // Limits
+  maxTravelTimeMinutes  Int @default(60) @map("max_travel_time_minutes")
+  maxAppointmentsPerDay Int @default(8) @map("max_appointments_per_day")
+  minBufferMinutes      Int @default(15) @map("min_buffer_minutes") // Between appointments
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("scheduling_policies")
+}
+
+model ResourceCapacityPlan {
+  id String @id @default(cuid())
+
+  resourceId String          @map("resource_id")
+  resource   ServiceResource @relation(fields: [resourceId], references: [id])
+
+  date DateTime @db.Date
+
+  // Capacity in minutes
+  plannedCapacity  Int @default(480) @map("planned_capacity") // 8 hours default
+  scheduledMinutes Int @default(0) @map("scheduled_minutes")
+  travelMinutes    Int @default(0) @map("travel_minutes")
+  availableMinutes Int @default(480) @map("available_minutes")
+
+  // Utilization metrics
+  targetUtilization Float @default(0.75) @map("target_utilization") // 75%
+  actualUtilization Float @default(0) @map("actual_utilization")
+
+  // Appointment counts
+  appointmentCount Int @default(0) @map("appointment_count")
+  completedCount   Int @default(0) @map("completed_count")
+
+  // Timestamps
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([resourceId, date])
+  @@index([date])
+  @@map("resource_capacity_plans")
+}
+
+// ============================================================================
 // FINANCIAL
 // ============================================================================
 
@@ -762,10 +869,18 @@ model Order {
   tax      Decimal @default(0) @db.Decimal(12, 2)
   total    Decimal @default(0) @db.Decimal(12, 2)
 
+  // Delivery
+  deliveryDate DateTime? @map("delivery_date")
+
   // ABC Supply
-  abcConfirmationNumber String? @map("abc_confirmation_number")
-  abcOrderNumber        String? @map("abc_order_number")
-  abcStatus             String? @map("abc_status")
+  abcConfirmationNumber String?   @map("abc_confirmation_number")
+  abcOrderNumber        String?   @map("abc_order_number")
+  abcStatus             String?   @map("abc_status")
+  abcShipmentNumber     String?   @map("abc_shipment_number")
+  abcShipmentStatus     String?   @map("abc_shipment_status")
+  abcTrackingId         String?   @map("abc_tracking_id")
+  abcProofOfDeliveryUrl String?   @map("abc_proof_of_delivery_url")
+  abcLastUpdate         DateTime? @map("abc_last_update")
 
   // Relations
   opportunityId String?      @map("opportunity_id")
@@ -796,10 +911,15 @@ model OrderLineItem {
   productId String?  @map("product_id")
   product   Product? @relation(fields: [productId], references: [id])
 
+  productName String? @map("product_name")
   description String?
   quantity    Decimal @default(1) @db.Decimal(10, 2)
   unitPrice   Decimal @map("unit_price") @db.Decimal(12, 2)
   totalPrice  Decimal @map("total_price") @db.Decimal(12, 2)
+  uom         String? // Unit of measure (EA, SQ, LF, etc.)
+
+  // ABC Supply
+  abcItemNumber String? @map("abc_item_number")
 
   @@index([orderId])
   @@map("order_line_items")
@@ -4101,17 +4221,17 @@ enum AttentionSourceType {
 // PHASE 4: INTEGRATIONS & ADVANCED FEATURES
 // ===========================================
 
-// Five9 Call Log - Linked to Opportunity Hub
+// RingCentral Call Log - Linked to Opportunity Hub
 model CallLog {
   id String @id @default(cuid())
 
-  // Five9 identifiers
-  five9CallId       String? @unique @map("five9_call_id")
-  five9SessionId    String? @map("five9_session_id")
-  five9CampaignId   String? @map("five9_campaign_id")
-  five9CampaignName String? @map("five9_campaign_name")
-  five9AgentId      String? @map("five9_agent_id")
-  five9AgentName    String? @map("five9_agent_name")
+  // RingCentral identifiers (replaces Five9)
+  ringCentralCallId     String? @unique @map("ringcentral_call_id")
+  ringCentralSessionId  String? @map("ringcentral_session_id")
+  ringCentralTelephonyId String? @map("ringcentral_telephony_id")
+  extensionId           String? @map("extension_id")
+  extensionName         String? @map("extension_name")
+  recordingId           String? @map("recording_id")
 
   // Call details
   direction      CallDirection @default(OUTBOUND)
@@ -4163,7 +4283,7 @@ model CallLog {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  @@index([five9CallId])
+  @@index([ringCentralCallId])
   @@index([opportunityId])
   @@index([accountId])
   @@index([contactId])

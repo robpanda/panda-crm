@@ -24,7 +24,7 @@ export function errorHandler(err, req, res, next) {
     });
   }
 
-  if (err.name === 'NotFoundError') {
+  if (err.name === 'NotFoundError' || err.code === 'NOT_FOUND') {
     return res.status(404).json({
       success: false,
       error: {

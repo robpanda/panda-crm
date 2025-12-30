@@ -1052,7 +1052,7 @@ If critical issues arise within first 2 weeks post-cutover:
 
 | Salesforce Feature | Replacement | Notes |
 |--------------------|-------------|-------|
-| Five9 Integration | Keep Five9, new API | CTI integration separate project |
+| RingCentral Integration | COMPLETE | Click-to-dial, SMS, call logging, webhooks |
 | EagleView/GAF | Keep as-is | Standalone integration |
 | ABC Supply | Keep as-is | Already API-based |
 | QuickBooks | Keep QB, new sync | QB integration already documented |

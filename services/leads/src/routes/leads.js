@@ -32,6 +32,10 @@ const validatePagination = [
   query('ownerFilter').optional().isIn(['mine', 'all']),
 ];
 
+// ============================================================================
+// STATIC ROUTES - Must come BEFORE /:id routes
+// ============================================================================
+
 // Get lead statuses
 router.get('/statuses', (req, res) => {
   res.json({ success: true, data: leadService.getLeadStatuses() });
@@ -52,6 +56,93 @@ router.get('/counts', async (req, res, next) => {
   }
 });
 
+// ============================================================================
+// CALL CENTER ENDPOINTS - Must come BEFORE /:id routes
+// ============================================================================
+
+/**
+ * GET /call-center/leaderboard
+ * Get call center agent leaderboard for leads set this month
+ */
+router.get('/call-center/leaderboard', async (req, res, next) => {
+  try {
+    const { startDate, endDate } = req.query;
+    const result = await leadService.getCallCenterLeaderboard({ startDate, endDate });
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /call-center/my-stats
+ * Get current user's call center stats
+ */
+router.get('/call-center/my-stats', async (req, res, next) => {
+  try {
+    const userId = req.user?.id;
+    const { startDate, endDate } = req.query;
+    const result = await leadService.getMyCallCenterStats(userId, { startDate, endDate });
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /call-center/team-totals
+ * Get team-wide call center totals
+ */
+router.get('/call-center/team-totals', async (req, res, next) => {
+  try {
+    const { startDate, endDate } = req.query;
+    const result = await leadService.getCallCenterTeamTotals({ startDate, endDate });
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /call-center/unconfirmed
+ * Get unconfirmed leads (leads set but not yet confirmed/scheduled)
+ */
+router.get('/call-center/unconfirmed', async (req, res, next) => {
+  try {
+    const { page = 1, limit = 50 } = req.query;
+    const result = await leadService.getUnconfirmedLeads({
+      page: parseInt(page),
+      limit: parseInt(limit),
+      currentUserId: req.user?.id,
+    });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /call-center/unscheduled
+ * Get leads with tentative appointments but no scheduled service appointment
+ */
+router.get('/call-center/unscheduled', async (req, res, next) => {
+  try {
+    const { page = 1, limit = 50 } = req.query;
+    const result = await leadService.getUnscheduledAppointments({
+      page: parseInt(page),
+      limit: parseInt(limit),
+      currentUserId: req.user?.id,
+    });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ============================================================================
+// LIST & CRUD ROUTES
+// ============================================================================
+
 // List leads
 router.get('/', validatePagination, handleValidation, async (req, res, next) => {
   try {
@@ -66,18 +157,10 @@ router.get('/', validatePagination, handleValidation, async (req, res, next) => 
       sortBy: req.query.sortBy || 'createdAt',
       sortOrder: req.query.sortOrder || 'desc',
       currentUserId: req.user?.id,
+      startDate: req.query.startDate,
+      endDate: req.query.endDate,
     });
     res.json({ success: true, ...result });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// Get lead by ID
-router.get('/:id', async (req, res, next) => {
-  try {
-    const lead = await leadService.getLeadById(req.params.id);
-    res.json({ success: true, data: lead });
   } catch (error) {
     next(error);
   }
@@ -91,6 +174,20 @@ router.post('/', validateCreate, handleValidation, async (req, res, next) => {
       ownerId: req.body.ownerId || req.user?.id,
     });
     res.status(201).json({ success: true, data: lead });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ============================================================================
+// DYNAMIC :id ROUTES - Must come AFTER static routes
+// ============================================================================
+
+// Get lead by ID
+router.get('/:id', async (req, res, next) => {
+  try {
+    const lead = await leadService.getLeadById(req.params.id);
+    res.json({ success: true, data: lead });
   } catch (error) {
     next(error);
   }
@@ -141,14 +238,7 @@ router.delete('/:id', async (req, res, next) => {
   }
 });
 
-// ============================================================================
-// CALL CENTER ENDPOINTS - Notes for Lead Management
-// ============================================================================
-
-/**
- * GET /:id/notes
- * Get all notes for a lead
- */
+// Get notes for a lead
 router.get('/:id/notes', async (req, res, next) => {
   try {
     const notes = await leadService.getLeadNotes(req.params.id);
@@ -158,10 +248,7 @@ router.get('/:id/notes', async (req, res, next) => {
   }
 });
 
-/**
- * POST /:id/notes
- * Add a note to a lead (Call Center documentation)
- */
+// Add a note to a lead
 router.post('/:id/notes', async (req, res, next) => {
   try {
     const { note, title } = req.body;

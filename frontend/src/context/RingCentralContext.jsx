@@ -2,11 +2,12 @@ import { createContext, useContext, useState, useEffect, useCallback } from 'rea
 
 const RingCentralContext = createContext(null);
 
-// RingCentral Embeddable configuration (fallback for users without App Connect)
+// RingCentral Embeddable configuration
 const RC_EMBEDDABLE_URL = 'https://apps.ringcentral.com/integration/ringcentral-embeddable/latest/adapter.js';
 
-// App Connect configuration
-const APP_CONNECT_APP_ID = 'panda_exteriors.pandaadmin';
+// RingCentral Voice App credentials
+const RC_CLIENT_ID = '9SphzQfJPE1fyyeZUL0eIr';
+const RC_SERVER = 'https://platform.ringcentral.com';
 
 export function RingCentralProvider({ children }) {
   const [isLoaded, setIsLoaded] = useState(false);
@@ -14,43 +15,6 @@ export function RingCentralProvider({ children }) {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [currentCall, setCurrentCall] = useState(null);
   const [callHistory, setCallHistory] = useState([]);
-  const [hasAppConnect, setHasAppConnect] = useState(false);
-
-  // Check if App Connect extension is installed
-  useEffect(() => {
-    const checkAppConnect = () => {
-      // App Connect extension injects a global object or responds to custom events
-      // Check for the extension by looking for its injected elements or by sending a test message
-      const appConnectDetected =
-        document.querySelector('[data-ringcentral-app-connect]') ||
-        window.RingCentralAppConnect ||
-        document.documentElement.dataset.ringcentralAppConnect === 'true';
-
-      if (appConnectDetected) {
-        console.log('RingCentral App Connect extension detected');
-        setHasAppConnect(true);
-        setIsReady(true);
-      }
-    };
-
-    // Check immediately and after a short delay (extension may load after page)
-    checkAppConnect();
-    const timer = setTimeout(checkAppConnect, 1000);
-
-    // Listen for App Connect ready event
-    const handleAppConnectReady = () => {
-      console.log('RingCentral App Connect ready event received');
-      setHasAppConnect(true);
-      setIsReady(true);
-    };
-
-    window.addEventListener('ringcentral-app-connect-ready', handleAppConnectReady);
-
-    return () => {
-      clearTimeout(timer);
-      window.removeEventListener('ringcentral-app-connect-ready', handleAppConnectReady);
-    };
-  }, []);
 
   // Load RingCentral widget on demand (not automatically)
   const loadWidget = useCallback(() => {
@@ -71,6 +35,8 @@ export function RingCentralProvider({ children }) {
 
       // Configure the adapter before loading
       window.RCAdapterConfig = {
+        clientId: RC_CLIENT_ID,
+        appServer: RC_SERVER,
         defaultDirection: 'right',
         enableMinimize: true,
         minimized: false,
@@ -78,7 +44,7 @@ export function RingCentralProvider({ children }) {
         closed: false, // Open immediately when loaded on demand
         enableAnalytics: false,
         enableCall: true,
-        enableSMS: true,
+        enableSMS: false,
         enableMeeting: false,
         enableGlip: false,
         disableGlip: true,
@@ -121,9 +87,8 @@ export function RingCentralProvider({ children }) {
     });
   }, []);
 
-  // DO NOT auto-load the widget - only load when user clicks to call
+  // Listen for RingCentral events
   useEffect(() => {
-    // Listen for RingCentral events
     const handleMessage = (event) => {
       if (!event.data || !event.data.type) return;
 
@@ -200,7 +165,7 @@ export function RingCentralProvider({ children }) {
     };
   }, [currentCall]);
 
-  // Click-to-dial function - uses App Connect if available, otherwise loads widget
+  // Click-to-dial function - loads widget and initiates call
   const clickToCall = useCallback(async (phoneNumber, startCall = true) => {
     // Clean the phone number first
     const cleanNumber = phoneNumber.replace(/\D/g, '');
@@ -213,33 +178,7 @@ export function RingCentralProvider({ children }) {
     const formattedNumber = cleanNumber.length === 10 ? `+1${cleanNumber}` : `+${cleanNumber}`;
 
     try {
-      // Method 1: Use App Connect if extension is installed
-      if (hasAppConnect || window.RingCentralAppConnect) {
-        console.log('Using RingCentral App Connect for call...');
-
-        // App Connect uses the tel: protocol which the extension intercepts
-        // Create a temporary link and click it to trigger App Connect
-        const telLink = document.createElement('a');
-        telLink.href = `tel:${formattedNumber}`;
-        telLink.dataset.rcAppConnect = APP_CONNECT_APP_ID;
-        telLink.style.display = 'none';
-        document.body.appendChild(telLink);
-        telLink.click();
-        document.body.removeChild(telLink);
-
-        // Also dispatch custom event for App Connect
-        window.dispatchEvent(new CustomEvent('ringcentral-call-request', {
-          detail: {
-            phoneNumber: formattedNumber,
-            appId: APP_CONNECT_APP_ID,
-            action: 'call'
-          }
-        }));
-
-        return true;
-      }
-
-      // Method 2: Fall back to Embeddable widget
+      // Load widget if not already loaded
       if (!window.RCAdapter) {
         console.log('Loading RingCentral widget for call...');
         await loadWidget();
@@ -250,67 +189,11 @@ export function RingCentralProvider({ children }) {
     } catch (error) {
       console.error('Error initiating call:', error);
 
-      // Ultimate fallback: open in RingCentral web app
+      // Fallback: open in RingCentral web app
       window.open(`https://app.ringcentral.com/phone/dialer?phoneNumber=${encodeURIComponent(formattedNumber)}`, '_blank');
       return true;
     }
-  }, [loadWidget, hasAppConnect]);
-
-  // Click-to-SMS function - uses App Connect if available, otherwise loads widget
-  const clickToSMS = useCallback(async (phoneNumber, text = '') => {
-    // Clean the phone number first
-    const cleanNumber = phoneNumber.replace(/\D/g, '');
-    if (!cleanNumber) {
-      console.warn('Invalid phone number');
-      return false;
-    }
-
-    // Format with country code if needed
-    const formattedNumber = cleanNumber.length === 10 ? `+1${cleanNumber}` : `+${cleanNumber}`;
-
-    try {
-      // Method 1: Use App Connect if extension is installed
-      if (hasAppConnect || window.RingCentralAppConnect) {
-        console.log('Using RingCentral App Connect for SMS...');
-
-        // App Connect can intercept sms: protocol
-        const smsLink = document.createElement('a');
-        smsLink.href = text ? `sms:${formattedNumber}?body=${encodeURIComponent(text)}` : `sms:${formattedNumber}`;
-        smsLink.dataset.rcAppConnect = APP_CONNECT_APP_ID;
-        smsLink.style.display = 'none';
-        document.body.appendChild(smsLink);
-        smsLink.click();
-        document.body.removeChild(smsLink);
-
-        // Also dispatch custom event for App Connect
-        window.dispatchEvent(new CustomEvent('ringcentral-sms-request', {
-          detail: {
-            phoneNumber: formattedNumber,
-            text: text,
-            appId: APP_CONNECT_APP_ID,
-            action: 'sms'
-          }
-        }));
-
-        return true;
-      }
-
-      // Method 2: Fall back to Embeddable widget
-      if (!window.RCAdapter) {
-        console.log('Loading RingCentral widget for SMS...');
-        await loadWidget();
-      }
-
-      window.RCAdapter.clickToSMS(formattedNumber, text);
-      return true;
-    } catch (error) {
-      console.error('Error opening SMS:', error);
-
-      // Ultimate fallback: open in RingCentral web app
-      window.open(`https://app.ringcentral.com/sms?to=${encodeURIComponent(formattedNumber)}`, '_blank');
-      return true;
-    }
-  }, [loadWidget, hasAppConnect]);
+  }, [loadWidget]);
 
   // Minimize/maximize the widget
   const setMinimized = useCallback((minimized) => {
@@ -340,6 +223,15 @@ export function RingCentralProvider({ children }) {
     });
   }, [isReady]);
 
+  // Logout from RingCentral
+  const logout = useCallback(() => {
+    if (window.RCAdapter) {
+      window.RCAdapter.logout();
+      setIsLoggedIn(false);
+      console.log('Logged out from RingCentral');
+    }
+  }, []);
+
   const value = {
     // State
     isLoaded,
@@ -347,15 +239,14 @@ export function RingCentralProvider({ children }) {
     isLoggedIn,
     currentCall,
     callHistory,
-    hasAppConnect, // Whether App Connect extension is installed
     // Actions
     loadWidget,
     clickToCall,
-    clickToSMS,
     setMinimized,
     setVisible,
     openPopup,
     showAlert,
+    logout,
   };
 
   return (

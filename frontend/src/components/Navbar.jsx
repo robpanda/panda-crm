@@ -714,7 +714,7 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
                     {user?.firstName && user?.lastName ? `${user.firstName} ${user.lastName}` : user?.name || displayName}
                   </p>
                   <p className="text-xs text-gray-500 truncate">{user?.email}</p>
-                  <p className="text-xs text-panda-primary capitalize mt-1">{user?.role}</p>
+                  <p className="text-xs text-panda-primary capitalize mt-1">{user?.role?.name || user?.roleType}</p>
                 </div>
 
                 <Link

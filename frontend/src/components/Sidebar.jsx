@@ -23,6 +23,8 @@ import {
   PenTool,
   MessageSquare,
   Bot,
+  PhoneCall,
+  Wrench,
 } from 'lucide-react';
 
 const mainNavItems = [
@@ -44,16 +46,18 @@ const secondaryNavItems = [
 ];
 
 const adminNavItems = [
-  { path: '/admin/workflows', icon: Workflow, label: 'Workflows' },
-  { path: '/admin/commissions', icon: DollarSign, label: 'Commissions' },
-  { path: '/admin/pandasign', icon: PenTool, label: 'PandaSign' },
-  { path: '/admin/bamboogli', icon: MessageSquare, label: 'Bamboogli' },
-  { path: '/admin/templates', icon: FileText, label: 'Templates' },
-  { path: '/admin/integrations', icon: Camera, label: 'Integrations' },
-  { path: '/admin/users', icon: Users, label: 'User Management' },
-  { path: '/admin/roles', icon: Shield, label: 'Roles & Permissions' },
   { path: '/admin/audit', icon: ClipboardList, label: 'Audit Logs' },
+  { path: '/admin/bamboogli', icon: MessageSquare, label: 'Bamboogli' },
+  { path: '/admin/commissions', icon: DollarSign, label: 'Commissions' },
+  { path: '/admin/field-service', icon: Wrench, label: 'Field Service' },
+  { path: '/admin/integrations', icon: Camera, label: 'Integrations' },
+  { path: '/admin/pandasign', icon: PenTool, label: 'PandaSign' },
+  { path: '/admin/ringcentral', icon: PhoneCall, label: 'RingCentral' },
+  { path: '/admin/roles', icon: Shield, label: 'Roles & Permissions' },
+  { path: '/admin/templates', icon: FileText, label: 'Templates' },
   { path: '/admin/training-bot', icon: Bot, label: 'Training Bot' },
+  { path: '/admin/users', icon: Users, label: 'User Management' },
+  { path: '/admin/workflows', icon: Workflow, label: 'Workflows' },
 ];
 
 export default function Sidebar({ isOpen, onClose, isMobile }) {
@@ -61,7 +65,8 @@ export default function Sidebar({ isOpen, onClose, isMobile }) {
   const { user } = useAuth();
 
   // Check if user has admin access
-  const isAdmin = user?.role === 'Super Admin' || user?.role === 'Admin';
+  const isAdmin = user?.role?.name === 'Super Admin' || user?.role?.name === 'Admin' ||
+                  user?.roleType === 'ADMIN' || user?.roleType === 'EXECUTIVE';
 
   const isActive = (path) => {
     if (path === '/') return location.pathname === '/';

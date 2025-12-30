@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Plus,
   Search,
@@ -6,6 +7,7 @@ import {
   Calendar,
   CreditCard,
   Phone,
+  PhoneCall,
   Mail,
   Cloud,
   Check,
@@ -16,14 +18,16 @@ import {
   AlertTriangle,
   Zap,
   Activity,
+  Brain,
 } from 'lucide-react';
-import api, { companyCamApi, googleCalendarApi } from '../../services/api';
+import api, { companyCamApi, googleCalendarApi, ringCentralApi } from '../../services/api';
 
 const integrationIcons = {
   companycam: Camera,
   google_calendar: Calendar,
   quickbooks: CreditCard,
   twilio: Phone,
+  ringcentral: PhoneCall,
   sendgrid: Mail,
   salesforce: Cloud,
 };
@@ -36,6 +40,7 @@ const statusColors = {
 };
 
 export default function Integrations() {
+  const navigate = useNavigate();
   const [integrations, setIntegrations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -136,6 +141,35 @@ export default function Integrations() {
             lastError: null,
           },
           webhooks: ['message.received', 'message.status'],
+        },
+        {
+          id: 'ringcentral',
+          name: 'RingCentral',
+          description: 'Phone system, call logging, and AI call analytics',
+          status: integrationStatus.ringCentral?.connected ? 'connected' : 'disconnected',
+          icon: 'ringcentral',
+          lastSync: integrationStatus.ringCentral?.lastSync || null,
+          syncFrequency: 'Real-time',
+          hasDetailPage: true,
+          config: {
+            clientId: '••••••••••••••••',
+            environment: 'production',
+            aiEnabled: true,
+          },
+          stats: {
+            callsToday: integrationStatus.ringCentral?.callsToday || 0,
+            avgCallDuration: integrationStatus.ringCentral?.avgCallDuration || '0:00',
+            aiAnalysisEnabled: true,
+            lastError: integrationStatus.ringCentral?.error || null,
+          },
+          features: [
+            { name: 'Click-to-Call', enabled: true },
+            { name: 'Call Logging', enabled: true },
+            { name: 'AI Transcription', enabled: true },
+            { name: 'Sentiment Analysis', enabled: true },
+            { name: 'Coaching Insights', enabled: true },
+          ],
+          webhooks: ['call.completed', 'voicemail.received', 'presence.changed'],
         },
         {
           id: 'sendgrid',
@@ -455,9 +489,37 @@ export default function Integrations() {
                   </div>
                 )}
 
+                {/* AI Features Badge for RingCentral */}
+                {integration.id === 'ringcentral' && integration.features && (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {integration.features.map((feature, idx) => (
+                      <span
+                        key={idx}
+                        className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                          feature.enabled ? 'bg-purple-100 text-purple-700' : 'bg-gray-100 text-gray-500'
+                        }`}
+                      >
+                        {feature.name === 'AI Transcription' || feature.name === 'Sentiment Analysis' || feature.name === 'Coaching Insights' ? (
+                          <Brain className="w-3 h-3 mr-1" />
+                        ) : null}
+                        {feature.name}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
                 <div className="mt-4 pt-4 border-t border-gray-100 flex flex-wrap gap-2">
                   {integration.status === 'connected' && (
                     <>
+                      {integration.hasDetailPage && (
+                        <button
+                          onClick={() => navigate(`/admin/${integration.id}`)}
+                          className="flex-1 sm:flex-none px-3 py-2 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg text-sm font-medium hover:opacity-90 flex items-center justify-center"
+                        >
+                          <ExternalLink className="w-4 h-4 mr-2" />
+                          View Details
+                        </button>
+                      )}
                       <button
                         onClick={() => handleSync(integration.id)}
                         disabled={integration.status === 'syncing'}

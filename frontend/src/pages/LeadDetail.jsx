@@ -424,7 +424,7 @@ const LEAD_SOURCES = [
   { value: 'Door Knock', label: 'Door Knock' },
   { value: 'Canvassing', label: 'Canvassing' },
   { value: 'Self-Gen', label: 'Self-Gen' },
-  { value: 'Five9', label: 'Five9' },
+  { value: 'RingCentral', label: 'RingCentral' },
   { value: 'Marketing', label: 'Marketing' },
   { value: 'Trade Show', label: 'Trade Show' },
   { value: 'Partner', label: 'Partner' },
@@ -696,10 +696,13 @@ export default function LeadDetail() {
               )}
               <div className="flex items-center space-x-4 mt-2">
                 {lead.phone && (
-                  <a href={`tel:${lead.phone}`} className="flex items-center text-sm text-panda-primary hover:underline">
+                  <button
+                    onClick={() => clickToCall(lead.phone)}
+                    className="flex items-center text-sm text-panda-primary hover:underline"
+                  >
                     <Phone className="w-4 h-4 mr-1" />
                     {lead.phone}
-                  </a>
+                  </button>
                 )}
                 {lead.email && (
                   <a href={`mailto:${lead.email}`} className="flex items-center text-sm text-panda-primary hover:underline">

@@ -521,3 +521,68 @@ export async function getCrews(req, res, next) {
     next(error);
   }
 }
+
+// List all territories
+export async function listTerritories(req, res, next) {
+  try {
+    const { isActive } = req.query;
+
+    const where = {};
+    if (isActive !== undefined) where.isActive = isActive === 'true';
+
+    const territories = await prisma.serviceTerritory.findMany({
+      where,
+      include: {
+        _count: {
+          select: { members: true },
+        },
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    res.json({ data: territories });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// List all skills
+export async function listSkills(req, res, next) {
+  try {
+    const skills = await prisma.skill.findMany({
+      include: {
+        _count: {
+          select: { resources: true },
+        },
+      },
+      orderBy: { name: 'asc' },
+    });
+
+    res.json({ data: skills });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// List scheduling policies (hardcoded for now, can be moved to DB later)
+export async function listSchedulingPolicies(req, res, next) {
+  try {
+    // These match FSL scheduling policies
+    const policies = [
+      { id: 'panda-policy', name: 'Panda Policy', description: 'Default scheduling policy' },
+      { id: 'crew-scheduling', name: 'Crew Scheduling Policy', description: 'Optimized for crew assignments' },
+      { id: 'customer-first', name: 'Customer First', description: 'Prioritize customer preferences' },
+      { id: 'emergency', name: 'Emergency', description: 'For urgent/emergency jobs' },
+      { id: 'emergency-crew', name: 'Emergency Crew Policy', description: 'Emergency with crew optimization' },
+      { id: 'high-intensity', name: 'High Intensity', description: 'For high-priority work' },
+      { id: 'initial-appointment', name: 'Initial Appointment Scheduling', description: 'First-time appointments' },
+      { id: 'pm-scheduling', name: 'PM Scheduling Policy', description: 'Project manager scheduling' },
+      { id: 'self-gen', name: 'Self Gen Policy', description: 'Self-generated leads' },
+      { id: 'soft-boundaries', name: 'Soft Boundaries', description: 'Flexible territory boundaries' },
+    ];
+
+    res.json({ data: policies });
+  } catch (error) {
+    next(error);
+  }
+}

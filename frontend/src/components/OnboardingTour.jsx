@@ -16,6 +16,8 @@ import {
 } from 'lucide-react';
 
 const TOUR_STORAGE_KEY = 'panda-crm-onboarding-complete';
+const TOUR_VIEW_COUNT_KEY = 'panda-crm-tour-view-count';
+const MAX_TOUR_VIEWS = 2; // Only show tour the first 2 times user logs in
 const API_URL = import.meta.env.VITE_API_URL || 'https://7paaginnvg.execute-api.us-east-2.amazonaws.com/prod';
 
 // Tour steps with positioning and content
@@ -79,23 +81,48 @@ export default function OnboardingTour() {
   const { user } = useAuth();
   const navigate = useNavigate();
 
-  // Check if user has completed the tour
+  // Check if user has completed the tour or exceeded max views
   useEffect(() => {
     const checkTourStatus = () => {
-      const completed = localStorage.getItem(TOUR_STORAGE_KEY);
       const userId = user?.id || user?.email;
+      if (!userId) return;
 
+      // Check if user has explicitly completed/skipped the tour
+      const completed = localStorage.getItem(TOUR_STORAGE_KEY);
       if (completed) {
         try {
           const completedUsers = JSON.parse(completed);
           if (completedUsers.includes(userId)) {
-            return;
+            return; // User completed tour, don't show
           }
         } catch {
           // Invalid data, reset
           localStorage.removeItem(TOUR_STORAGE_KEY);
         }
       }
+
+      // Check view count for this user
+      let viewCounts = {};
+      try {
+        const stored = localStorage.getItem(TOUR_VIEW_COUNT_KEY);
+        if (stored) {
+          viewCounts = JSON.parse(stored);
+        }
+      } catch {
+        // Invalid data, start fresh
+        localStorage.removeItem(TOUR_VIEW_COUNT_KEY);
+      }
+
+      const userViewCount = viewCounts[userId] || 0;
+
+      // If user has seen the tour MAX_TOUR_VIEWS times, don't show again
+      if (userViewCount >= MAX_TOUR_VIEWS) {
+        return;
+      }
+
+      // Increment view count for this user
+      viewCounts[userId] = userViewCount + 1;
+      localStorage.setItem(TOUR_VIEW_COUNT_KEY, JSON.stringify(viewCounts));
 
       // Show tour for new users after a brief delay
       setTimeout(() => {
@@ -264,7 +291,23 @@ export default function OnboardingTour() {
 
   // Reset tour (for testing or if user wants to see it again)
   const resetTour = () => {
+    const userId = user?.id || user?.email;
+
+    // Remove from completed list
     localStorage.removeItem(TOUR_STORAGE_KEY);
+
+    // Reset view count for this user
+    try {
+      const stored = localStorage.getItem(TOUR_VIEW_COUNT_KEY);
+      if (stored) {
+        const viewCounts = JSON.parse(stored);
+        delete viewCounts[userId];
+        localStorage.setItem(TOUR_VIEW_COUNT_KEY, JSON.stringify(viewCounts));
+      }
+    } catch {
+      localStorage.removeItem(TOUR_VIEW_COUNT_KEY);
+    }
+
     setCurrentStep(0);
     setIsActive(true);
   };
@@ -379,5 +422,6 @@ export default function OnboardingTour() {
 // Export a function to manually trigger the tour (e.g., from settings)
 export const triggerOnboardingTour = () => {
   localStorage.removeItem(TOUR_STORAGE_KEY);
+  localStorage.removeItem(TOUR_VIEW_COUNT_KEY);
   window.location.reload();
 };

@@ -513,10 +513,11 @@ export const upsertSupplier = async (req, res) => {
   }
 };
 
-// Submit to ABC Supply (placeholder - will integrate with ABC API)
+// Submit to ABC Supply via integrations service
 export const submitToAbcSupply = async (req, res) => {
   try {
     const { id } = req.params;
+    const { deliveryType = 'DR', shippingType = 'GroundDrop', deliveryDate, deliveryTime = 'Anytime', comment } = req.body;
 
     const materialOrder = await prisma.materialOrder.findUnique({
       where: { id },
@@ -525,9 +526,24 @@ export const submitToAbcSupply = async (req, res) => {
         workOrder: {
           include: {
             account: true,
+            opportunity: {
+              include: {
+                contact: true,
+              },
+            },
           },
         },
-        lineItems: true,
+        opportunity: {
+          include: {
+            account: true,
+            contact: true,
+          },
+        },
+        lineItems: {
+          include: {
+            product: true,
+          },
+        },
       },
     });
 
@@ -539,17 +555,85 @@ export const submitToAbcSupply = async (req, res) => {
       return res.status(400).json({ error: 'Supplier is not ABC Supply' });
     }
 
-    // TODO: Integrate with ABC Supply API
-    // This will call the ABC Partner API similar to existing Salesforce implementation
-    // For now, we'll mark it as ordered with a placeholder
+    // Get account and contact info
+    const account = materialOrder.workOrder?.account || materialOrder.opportunity?.account;
+    const contact = materialOrder.workOrder?.opportunity?.contact || materialOrder.opportunity?.contact;
 
+    if (!account) {
+      return res.status(400).json({ error: 'No account found for this order' });
+    }
+
+    if (!materialOrder.lineItems?.length) {
+      return res.status(400).json({ error: 'No line items on this order' });
+    }
+
+    // Format line items for ABC Supply API
+    const lineItems = materialOrder.lineItems.map(item => ({
+      itemNumber: item.sku || item.product?.sku || item.description,
+      quantity: item.quantity,
+      uom: item.unit || 'EA',
+      name: item.product?.name || item.description,
+      unitPrice: item.unitPrice,
+    }));
+
+    // Call integrations service ABC Supply API
+    const integrationsUrl = process.env.INTEGRATIONS_SERVICE_URL || 'http://localhost:3010';
+
+    const abcResponse = await fetch(`${integrationsUrl}/api/integrations/abc-supply/orders`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': req.headers.authorization || '',
+      },
+      body: JSON.stringify({
+        orderId: materialOrder.orderId,
+        opportunityId: materialOrder.opportunityId,
+        deliveryType,
+        shippingType,
+        deliveryDate: deliveryDate || materialOrder.deliveryDate?.toISOString().split('T')[0],
+        deliveryTime,
+        lineItems,
+        comment: comment || materialOrder.deliveryNotes,
+        account: {
+          name: account.name,
+          billingStreet: account.billingStreet || materialOrder.deliveryStreet,
+          billingCity: account.billingCity || materialOrder.deliveryCity,
+          billingState: account.billingState || materialOrder.deliveryState,
+          billingPostalCode: account.billingPostalCode || materialOrder.deliveryPostalCode,
+        },
+        contact: contact ? {
+          name: `${contact.firstName || ''} ${contact.lastName || ''}`.trim() || 'Panda Exteriors',
+          email: contact.email || '',
+          phone: contact.phone || contact.mobilePhone || '',
+        } : {
+          name: req.user?.name || 'Panda Exteriors',
+          email: req.user?.email || '',
+          phone: '',
+        },
+      }),
+    });
+
+    const abcResult = await abcResponse.json();
+
+    if (!abcResponse.ok || !abcResult.success) {
+      console.error('ABC Supply API error:', abcResult);
+      return res.status(abcResponse.status || 500).json({
+        error: abcResult.error?.message || 'Failed to submit to ABC Supply',
+        details: abcResult,
+      });
+    }
+
+    // Update material order with ABC confirmation
     const updated = await prisma.materialOrder.update({
       where: { id },
       data: {
         materialStatus: 'ORDERED',
         orderedAt: new Date(),
         orderedById: req.user?.id,
-        abcStatus: 'SUBMITTED',
+        supplierOrderNumber: abcResult.data.confirmationNumber,
+        abcConfirmationNumber: abcResult.data.confirmationNumber,
+        abcOrderNumber: abcResult.data.orderNumber,
+        abcStatus: 'Submitted',
       },
       include: {
         supplier: true,
@@ -558,17 +642,20 @@ export const submitToAbcSupply = async (req, res) => {
             account: true,
           },
         },
+        lineItems: true,
       },
     });
 
     res.json({
       success: true,
       message: 'Order submitted to ABC Supply',
+      confirmationNumber: abcResult.data.confirmationNumber,
+      orderNumber: abcResult.data.orderNumber,
       materialOrder: updated,
     });
   } catch (error) {
     console.error('Error submitting to ABC Supply:', error);
-    res.status(500).json({ error: 'Failed to submit to ABC Supply' });
+    res.status(500).json({ error: 'Failed to submit to ABC Supply', details: error.message });
   }
 };
 

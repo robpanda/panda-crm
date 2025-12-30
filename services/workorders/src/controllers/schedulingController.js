@@ -12,6 +12,11 @@ import {
   differenceInMinutes,
 } from 'date-fns';
 
+// Import the new FSL-equivalent services
+import * as geocodingService from '../services/geocodingService.js';
+import * as routeOptimizationService from '../services/routeOptimizationService.js';
+import * as schedulingPolicyService from '../services/schedulingPolicyService.js';
+
 const prisma = new PrismaClient();
 
 // Auto-schedule request schema
@@ -556,42 +561,350 @@ export async function getDispatchBoard(req, res, next) {
   }
 }
 
-// Optimize schedule (simple reordering based on location)
+// Optimize schedule using route optimization service (FSL-equivalent)
 export async function optimizeSchedule(req, res, next) {
   try {
-    const { resourceId, date } = req.body;
+    const { resourceId, date, applyChanges = false, algorithm = '2opt' } = req.body;
 
     const targetDate = date ? parseISO(date) : new Date();
 
-    const assignments = await prisma.assignedResource.findMany({
-      where: {
-        serviceResourceId: resourceId,
-        serviceAppointment: {
-          scheduledStart: { gte: startOfDay(targetDate), lte: endOfDay(targetDate) },
-          status: { in: ['SCHEDULED', 'DISPATCHED'] },
-        },
-      },
-      include: {
-        serviceAppointment: true,
-      },
-    });
+    // Use the route optimization service
+    const result = await routeOptimizationService.optimizeResourceRoute(resourceId, targetDate, { algorithm });
 
-    // For now, just return current order with optimization suggestions
-    // In production, this would integrate with a routing API
-    const appointments = assignments.map((a) => a.serviceAppointment);
+    // If applyChanges is true, update travel times on appointments
+    if (applyChanges && result.optimizedOrder.length > 0) {
+      await routeOptimizationService.updateAppointmentTravelTimes(resourceId, targetDate);
+    }
 
     res.json({
       resourceId,
       date: format(targetDate, 'yyyy-MM-dd'),
-      appointmentCount: appointments.length,
-      currentOrder: appointments.map((apt, idx) => ({
-        order: idx + 1,
-        id: apt.id,
-        appointmentNumber: apt.appointmentNumber,
-        scheduledStart: apt.scheduledStart,
-        address: `${apt.street || ''}, ${apt.city || ''}, ${apt.state || ''}`.trim(),
-      })),
-      message: 'Schedule optimization would reorder based on geographic proximity',
+      appointmentCount: result.originalOrder.length,
+      originalOrder: result.originalOrder,
+      optimizedOrder: result.optimizedOrder,
+      savings: result.savings,
+      original: {
+        totalMiles: result.original?.totalMiles || 0,
+        totalMinutes: result.original?.totalMinutes || 0,
+      },
+      optimized: {
+        totalMiles: result.optimized?.totalMiles || 0,
+        totalMinutes: result.optimized?.totalMinutes || 0,
+      },
+      changesApplied: applyChanges,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// ============================================
+// NEW FSL-EQUIVALENT ENDPOINTS
+// ============================================
+
+// Geocode endpoints
+export async function geocodeAddress(req, res, next) {
+  try {
+    const { address } = req.body;
+    if (!address) {
+      return res.status(400).json({ error: 'Address is required' });
+    }
+    const result = await geocodingService.geocodeAddress(address);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function geocodeAccount(req, res, next) {
+  try {
+    const { accountId } = req.params;
+    const result = await geocodingService.geocodeAccount(accountId);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function geocodeAppointment(req, res, next) {
+  try {
+    const { appointmentId } = req.params;
+    const result = await geocodingService.geocodeServiceAppointment(appointmentId);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function batchGeocodeAccounts(req, res, next) {
+  try {
+    const { limit = 100, forceRegeocode = false } = req.body;
+    const result = await geocodingService.batchGeocodeAccounts(limit, forceRegeocode);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function batchGeocodeAppointments(req, res, next) {
+  try {
+    const { limit = 100 } = req.body;
+    const result = await geocodingService.batchGeocodeAppointments(limit);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+// Distance calculation endpoints
+export async function calculateDistance(req, res, next) {
+  try {
+    const { origin, destination } = req.body;
+    if (!origin?.lat || !origin?.lng || !destination?.lat || !destination?.lng) {
+      return res.status(400).json({ error: 'Origin and destination coordinates are required' });
+    }
+    const result = await routeOptimizationService.getCachedDistance(
+      origin.lat,
+      origin.lng,
+      destination.lat,
+      destination.lng
+    );
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function findNearbyAppointments(req, res, next) {
+  try {
+    const { lat, lng, radiusMiles = 10, startDate, endDate, status, workTypeId } = req.body;
+    if (!lat || !lng) {
+      return res.status(400).json({ error: 'Latitude and longitude are required' });
+    }
+    const result = await routeOptimizationService.findAppointmentsInRadius(lat, lng, radiusMiles, {
+      startDate,
+      endDate,
+      status,
+      workTypeId,
+    });
+    res.json({ count: result.length, appointments: result });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function suggestTimeSlots(req, res, next) {
+  try {
+    const { location, resourceId, date, durationMinutes = 60 } = req.body;
+    if (!location?.lat || !location?.lng || !resourceId || !date) {
+      return res.status(400).json({ error: 'Location, resourceId, and date are required' });
+    }
+    const result = await routeOptimizationService.suggestOptimalTimeSlot(
+      location,
+      resourceId,
+      parseISO(date),
+      durationMinutes
+    );
+    res.json({ count: result.length, slots: result });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// Scheduling policy endpoints
+export async function getSchedulingPolicies(req, res, next) {
+  try {
+    const policies = await schedulingPolicyService.getAllPolicies();
+    res.json(policies);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function getActivePolicy(req, res, next) {
+  try {
+    const policy = await schedulingPolicyService.getActivePolicy();
+    res.json(policy);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function upsertPolicy(req, res, next) {
+  try {
+    const policy = await schedulingPolicyService.upsertPolicy(req.body);
+    res.json(policy);
+  } catch (error) {
+    next(error);
+  }
+}
+
+// Resource matching endpoints
+export async function checkSkillMatch(req, res, next) {
+  try {
+    const { resourceId, workTypeId } = req.params;
+    const { exactMatch = 'false' } = req.query;
+    const result = await schedulingPolicyService.checkSkillMatch(resourceId, workTypeId, exactMatch === 'true');
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function checkTerritoryMatch(req, res, next) {
+  try {
+    const { resourceId, territoryId } = req.params;
+    const result = await schedulingPolicyService.checkTerritoryMatch(resourceId, territoryId);
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function getResourceUtilization(req, res, next) {
+  try {
+    const { resourceId } = req.params;
+    const { date = new Date().toISOString() } = req.query;
+    const result = await schedulingPolicyService.calculateResourceUtilization(resourceId, parseISO(date));
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function findBestResources(req, res, next) {
+  try {
+    const { appointmentId } = req.params;
+    const { limit = 5, policyId } = req.query;
+    const result = await schedulingPolicyService.findBestResources(appointmentId, {
+      limit: parseInt(limit),
+      policyId,
+    });
+    res.json({ appointmentId, count: result.length, resources: result });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// Smart auto-scheduling with policy engine
+export async function smartAutoSchedule(req, res, next) {
+  try {
+    const { appointmentId } = req.params;
+    const { preferredDate, preferredResourceId } = req.body;
+    const result = await schedulingPolicyService.autoScheduleAppointment(appointmentId, {
+      preferredDate: preferredDate ? parseISO(preferredDate) : null,
+      preferredResourceId,
+    });
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function batchAutoSchedule(req, res, next) {
+  try {
+    const { appointmentIds, preferredDate, policyId } = req.body;
+    if (!appointmentIds || !Array.isArray(appointmentIds) || appointmentIds.length === 0) {
+      return res.status(400).json({ error: 'appointmentIds array is required' });
+    }
+    const result = await schedulingPolicyService.batchScheduleAppointments(appointmentIds, {
+      preferredDate: preferredDate ? parseISO(preferredDate) : null,
+      policyId,
+    });
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+}
+
+// Capacity planning endpoints
+export async function getResourceCapacity(req, res, next) {
+  try {
+    const { resourceId } = req.params;
+    const { startDate, endDate } = req.query;
+
+    const start = startDate ? parseISO(startDate) : new Date();
+    const end = endDate ? parseISO(endDate) : addDays(start, 7);
+
+    const capacityPlans = await prisma.resourceCapacityPlan.findMany({
+      where: {
+        resourceId,
+        date: { gte: start, lte: end },
+      },
+      orderBy: { date: 'asc' },
+    });
+
+    // If no plans exist, generate on the fly
+    if (capacityPlans.length === 0) {
+      const plans = [];
+      let current = new Date(start);
+      while (current <= end) {
+        const utilization = await schedulingPolicyService.calculateResourceUtilization(resourceId, current);
+        plans.push({ date: format(current, 'yyyy-MM-dd'), ...utilization });
+        current = addDays(current, 1);
+      }
+      return res.json({ resourceId, plans });
+    }
+
+    res.json({ resourceId, plans: capacityPlans });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function updateResourceCapacity(req, res, next) {
+  try {
+    const { resourceId } = req.params;
+    const { date = new Date().toISOString() } = req.body;
+
+    await schedulingPolicyService.updateCapacityPlan(resourceId, parseISO(date));
+    const utilization = await schedulingPolicyService.calculateResourceUtilization(resourceId, parseISO(date));
+
+    res.json({ resourceId, date, ...utilization });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function getTeamCapacity(req, res, next) {
+  try {
+    const { territoryId } = req.params;
+    const { date = new Date().toISOString() } = req.query;
+
+    const memberships = await prisma.serviceTerritoryMember.findMany({
+      where: { territoryId },
+      include: { resource: true },
+    });
+
+    const targetDate = parseISO(date);
+    const teamCapacity = [];
+
+    for (const membership of memberships) {
+      if (!membership.resource.isActive) continue;
+      const utilization = await schedulingPolicyService.calculateResourceUtilization(membership.resource.id, targetDate);
+      teamCapacity.push({
+        resourceId: membership.resource.id,
+        resourceName: membership.resource.name,
+        isPrimary: membership.isPrimary,
+        ...utilization,
+      });
+    }
+
+    const totals = {
+      totalResources: teamCapacity.length,
+      totalScheduledMinutes: teamCapacity.reduce((sum, r) => sum + r.scheduledMinutes, 0),
+      totalAvailableMinutes: teamCapacity.reduce((sum, r) => sum + r.availableMinutes, 0),
+      totalAppointments: teamCapacity.reduce((sum, r) => sum + r.appointmentCount, 0),
+      averageUtilization: teamCapacity.length > 0
+        ? teamCapacity.reduce((sum, r) => sum + r.utilizationPercent, 0) / teamCapacity.length
+        : 0,
+    };
+
+    res.json({
+      territoryId,
+      date: format(targetDate, 'yyyy-MM-dd'),
+      totals,
+      resources: teamCapacity.sort((a, b) => b.utilizationPercent - a.utilizationPercent),
     });
   } catch (error) {
     next(error);

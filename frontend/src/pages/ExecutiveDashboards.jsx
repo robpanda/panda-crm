@@ -263,7 +263,7 @@ const DASHBOARD_FOLDERS = [
     dashboards: [
       { id: 'call-center-operations', name: 'Call Center Operations', description: 'Call center daily operations' },
       { id: 'lead-assignment', name: 'Lead Assignment', description: 'Lead assignment tracking' },
-      { id: 'five9-integration', name: 'Five9 Integration', description: 'Five9 call metrics' },
+      { id: 'ringcentral-integration', name: 'RingCentral Integration', description: 'RingCentral call metrics' },
     ],
   },
   // Onboarding & Expediting

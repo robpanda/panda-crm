@@ -32,11 +32,15 @@ const validateCreate = [
 
 const validatePagination = [
   query('page').optional().isInt({ min: 1 }).toInt(),
-  query('limit').optional().isInt({ min: 1, max: 5000 }).toInt(), // Increased from 1000 to 5000 for dashboards
+  query('limit').optional().isInt({ min: 1, max: 5000 }).toInt(),
   query('stage').optional(),
   query('type').optional().isIn(['all', 'INSURANCE', 'RETAIL', 'COMMERCIAL']),
   query('ownerFilter').optional().isIn(['mine', 'all']),
 ];
+
+// ============================================================================
+// STATIC ROUTES - Must come BEFORE /:id routes
+// ============================================================================
 
 // Get stage counts for dashboard
 router.get('/counts', async (req, res, next) => {
@@ -47,6 +51,68 @@ router.get('/counts', async (req, res, next) => {
     next(error);
   }
 });
+
+// ============================================================================
+// CALL CENTER ENDPOINTS - Must come BEFORE /:id routes
+// ============================================================================
+
+/**
+ * GET /call-center/unscheduled
+ * Returns opportunities that have been converted from leads but don't have
+ * a scheduled service appointment yet (need to book appointment)
+ */
+router.get('/call-center/unscheduled', async (req, res, next) => {
+  try {
+    const { startDate, endDate, sortBy = 'tentativeAppointmentDate', sortOrder = 'asc' } = req.query;
+
+    const result = await opportunityService.getUnscheduledAppointments({
+      startDate,
+      endDate,
+      sortBy,
+      sortOrder,
+    });
+
+    res.json({
+      success: true,
+      data: result.opportunities,
+      pagination: {
+        total: result.total,
+        page: 1,
+        limit: result.total,
+        totalPages: 1,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ============================================================================
+// SERVICE REQUEST ENDPOINTS - Must come BEFORE /:id routes
+// Per Creating A Service Request SOP - service requests live on jobs (opportunities)
+// ============================================================================
+
+/**
+ * GET /service-requests
+ * Get all opportunities with active service requests
+ */
+router.get('/service-requests', async (req, res, next) => {
+  try {
+    const result = await opportunityService.getServiceRequests({
+      status: req.query.status, // 'pending', 'complete', 'all'
+      projectManagerId: req.query.projectManagerId,
+      page: parseInt(req.query.page) || 1,
+      limit: parseInt(req.query.limit) || 50,
+    });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ============================================================================
+// LIST & CREATE ROUTES
+// ============================================================================
 
 // List opportunities
 router.get('/', validatePagination, handleValidation, async (req, res, next) => {
@@ -69,6 +135,23 @@ router.get('/', validatePagination, handleValidation, async (req, res, next) => 
     next(error);
   }
 });
+
+// Create opportunity
+router.post('/', validateCreate, handleValidation, async (req, res, next) => {
+  try {
+    const opportunity = await opportunityService.createOpportunity({
+      ...req.body,
+      ownerId: req.body.ownerId || req.user?.id,
+    });
+    res.status(201).json({ success: true, data: opportunity });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ============================================================================
+// DYNAMIC :id ROUTES - Must come AFTER static routes
+// ============================================================================
 
 // Get opportunity details (HUB view)
 router.get('/:id', async (req, res, next) => {
@@ -189,19 +272,6 @@ router.get('/:id/documents', async (req, res, next) => {
   }
 });
 
-// Create opportunity
-router.post('/', validateCreate, handleValidation, async (req, res, next) => {
-  try {
-    const opportunity = await opportunityService.createOpportunity({
-      ...req.body,
-      ownerId: req.body.ownerId || req.user?.id,
-    });
-    res.status(201).json({ success: true, data: opportunity });
-  } catch (error) {
-    next(error);
-  }
-});
-
 // Update opportunity
 router.put('/:id', async (req, res, next) => {
   try {
@@ -232,39 +302,8 @@ router.delete('/:id', async (req, res, next) => {
 });
 
 // ============================================================================
-// CALL CENTER ENDPOINTS
+// APPOINTMENT MANAGEMENT ENDPOINTS
 // ============================================================================
-
-/**
- * GET /call-center/unscheduled
- * Returns opportunities that have been converted from leads but don't have
- * a scheduled service appointment yet (need to book appointment)
- */
-router.get('/call-center/unscheduled', async (req, res, next) => {
-  try {
-    const { startDate, endDate, sortBy = 'tentativeAppointmentDate', sortOrder = 'asc' } = req.query;
-
-    const result = await opportunityService.getUnscheduledAppointments({
-      startDate,
-      endDate,
-      sortBy,
-      sortOrder,
-    });
-
-    res.json({
-      success: true,
-      data: result.opportunities,
-      pagination: {
-        total: result.total,
-        page: 1,
-        limit: result.total,
-        totalPages: 1,
-      },
-    });
-  } catch (error) {
-    next(error);
-  }
-});
 
 /**
  * POST /:id/appointments/book
@@ -340,27 +379,8 @@ router.post('/:id/messages', async (req, res, next) => {
 });
 
 // ============================================================================
-// SERVICE REQUEST ENDPOINTS
-// Per Creating A Service Request SOP - service requests live on jobs (opportunities)
+// SERVICE REQUEST ENDPOINTS (on specific opportunity)
 // ============================================================================
-
-/**
- * GET /service-requests
- * Get all opportunities with active service requests
- */
-router.get('/service-requests', async (req, res, next) => {
-  try {
-    const result = await opportunityService.getServiceRequests({
-      status: req.query.status, // 'pending', 'complete', 'all'
-      projectManagerId: req.query.projectManagerId,
-      page: parseInt(req.query.page) || 1,
-      limit: parseInt(req.query.limit) || 50,
-    });
-    res.json({ success: true, ...result });
-  } catch (error) {
-    next(error);
-  }
-});
 
 /**
  * POST /:id/service-request

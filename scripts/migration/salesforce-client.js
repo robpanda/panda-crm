@@ -29,8 +29,24 @@ export async function getSalesforceConnection() {
   return connection;
 }
 
-export async function querySalesforce(soql, options = {}) {
-  const conn = await getSalesforceConnection();
+export async function querySalesforce(connOrSoql, soqlOrOptions = {}) {
+  // Support both calling patterns:
+  // querySalesforce(soql) - old pattern
+  // querySalesforce(conn, soql) - new pattern used by sync scripts
+  let conn, soql, options;
+
+  if (typeof connOrSoql === 'string') {
+    // Old pattern: querySalesforce(soql, options)
+    conn = await getSalesforceConnection();
+    soql = connOrSoql;
+    options = soqlOrOptions || {};
+  } else {
+    // New pattern: querySalesforce(conn, soql)
+    conn = connOrSoql;
+    soql = soqlOrOptions;
+    options = {};
+  }
+
   const { batchSize = 2000, onBatch } = options;
 
   const records = [];

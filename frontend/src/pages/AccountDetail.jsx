@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { accountsApi, usersApi } from '../services/api';
+import { useRingCentral } from '../context/RingCentralContext';
 import {
   Building2,
   ArrowLeft,
@@ -77,6 +78,7 @@ export default function AccountDetail() {
   const [editFormData, setEditFormData] = useState({});
 
   const actionsRef = useRef(null);
+  const { clickToCall } = useRingCentral();
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -771,10 +773,13 @@ export default function AccountDetail() {
               </div>
               <div className="flex items-center space-x-4 mt-2">
                 {account.phone && (
-                  <a href={`tel:${account.phone}`} className="flex items-center text-sm text-panda-primary hover:underline">
+                  <button
+                    onClick={() => clickToCall(account.phone)}
+                    className="flex items-center text-sm text-panda-primary hover:underline"
+                  >
                     <Phone className="w-4 h-4 mr-1" />
                     {account.phone}
-                  </a>
+                  </button>
                 )}
                 {account.email && (
                   <a href={`mailto:${account.email}`} className="flex items-center text-sm text-panda-primary hover:underline">

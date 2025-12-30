@@ -1400,6 +1400,99 @@ export const scheduleApi = {
     return response.data;
   },
 
+  // ====== FSL-EQUIVALENT SCHEDULING APIs ======
+
+  // Geocoding
+  async geocodeAddress(address) {
+    const response = await api.post('/api/scheduling/geocode', { address });
+    return response.data;
+  },
+
+  async geocodeAccount(accountId) {
+    const response = await api.post(`/api/scheduling/geocode/account/${accountId}`);
+    return response.data;
+  },
+
+  async geocodeAppointment(appointmentId) {
+    const response = await api.post(`/api/scheduling/geocode/appointment/${appointmentId}`);
+    return response.data;
+  },
+
+  async batchGeocodeAppointments(appointmentIds) {
+    const response = await api.post('/api/scheduling/geocode/appointments/batch', { appointmentIds });
+    return response.data;
+  },
+
+  // Distance & Route Calculation
+  async calculateDistance(fromLat, fromLng, toLat, toLng) {
+    const response = await api.post('/api/scheduling/distance', { fromLat, fromLng, toLat, toLng });
+    return response.data;
+  },
+
+  async findNearbyAppointments(lat, lng, radiusMiles = 10, date = null) {
+    const response = await api.post('/api/scheduling/appointments/nearby', { lat, lng, radiusMiles, date });
+    return response.data;
+  },
+
+  async suggestTimeSlots(appointmentId, params = {}) {
+    const response = await api.post('/api/scheduling/appointments/suggest-slots', { appointmentId, ...params });
+    return response.data;
+  },
+
+  // Resource Matching
+  async checkSkillMatch(resourceId, workTypeId) {
+    const response = await api.get(`/api/scheduling/resources/${resourceId}/skill-match/${workTypeId}`);
+    return response.data;
+  },
+
+  async checkTerritoryMatch(resourceId, territoryId) {
+    const response = await api.get(`/api/scheduling/resources/${resourceId}/territory-match/${territoryId}`);
+    return response.data;
+  },
+
+  async getResourceUtilization(resourceId, params = {}) {
+    const response = await api.get(`/api/scheduling/resources/${resourceId}/utilization`, { params });
+    return response.data;
+  },
+
+  async findBestResources(appointmentId, params = {}) {
+    const response = await api.get(`/api/scheduling/appointments/${appointmentId}/best-resources`, { params });
+    return response.data;
+  },
+
+  // Smart Scheduling (Policy-Based)
+  async smartAutoSchedule(appointmentId, policyId = null) {
+    const response = await api.post(`/api/scheduling/appointments/${appointmentId}/smart-schedule`, { policyId });
+    return response.data;
+  },
+
+  async batchSmartSchedule(appointmentIds, policyId = null) {
+    const response = await api.post('/api/scheduling/appointments/batch-schedule', { appointmentIds, policyId });
+    return response.data;
+  },
+
+  // Capacity Planning
+  async getResourceCapacity(resourceId, params = {}) {
+    const response = await api.get(`/api/scheduling/capacity/${resourceId}`, { params });
+    return response.data;
+  },
+
+  async updateResourceCapacity(resourceId, data) {
+    const response = await api.post(`/api/scheduling/capacity/${resourceId}`, data);
+    return response.data;
+  },
+
+  async getTeamCapacity(territoryId, params = {}) {
+    const response = await api.get(`/api/scheduling/capacity/team/${territoryId}`, { params });
+    return response.data;
+  },
+
+  // Route Optimization
+  async optimizeResourceRoute(resourceId, date) {
+    const response = await api.post('/api/scheduling/optimize', { resourceId, date });
+    return response.data;
+  },
+
   // Territories
   async getTerritories(params = {}) {
     const response = await api.get('/api/resources/territories', { params });
@@ -2576,6 +2669,229 @@ export const attentionApi = {
   // Cleanup old items
   async cleanupOldItems(olderThanDays = 30) {
     const response = await api.post('/api/attention/cleanup', { olderThanDays });
+    return response.data;
+  },
+};
+
+// ==========================================
+// RINGCENTRAL PHONE SYSTEM API
+// ==========================================
+export const ringCentralApi = {
+  // ============================================================================
+  // CONNECTION & STATUS
+  // ============================================================================
+
+  async getStatus() {
+    const response = await api.get('/api/integrations/ringcentral/status');
+    return response.data;
+  },
+
+  async getAuthUrl(state = null) {
+    const response = await api.get('/api/integrations/ringcentral/auth', {
+      params: state ? { state } : {},
+    });
+    return response.data;
+  },
+
+  async disconnect() {
+    const response = await api.post('/api/integrations/ringcentral/disconnect');
+    return response.data;
+  },
+
+  // ============================================================================
+  // CALL LOGS
+  // ============================================================================
+
+  async getCallLogs(params = {}) {
+    const response = await api.get('/api/integrations/ringcentral/calls', { params });
+    return response.data;
+  },
+
+  async getCallLog(id) {
+    const response = await api.get(`/api/integrations/ringcentral/calls/${id}`);
+    return response.data;
+  },
+
+  async syncCalls(options = {}) {
+    const response = await api.post('/api/integrations/ringcentral/sync', options);
+    return response.data;
+  },
+
+  async getCallStats(params = {}) {
+    const response = await api.get('/api/integrations/ringcentral/stats', { params });
+    return response.data;
+  },
+
+  async getAgentStats(agentId, params = {}) {
+    const response = await api.get(`/api/integrations/ringcentral/stats/agent/${agentId}`, { params });
+    return response.data;
+  },
+
+  // ============================================================================
+  // CLICK-TO-CALL (RingOut)
+  // ============================================================================
+
+  async initiateCall(data) {
+    const response = await api.post('/api/integrations/ringcentral/call', data);
+    return response.data;
+  },
+
+  async getRingOutStatus(ringoutId) {
+    const response = await api.get(`/api/integrations/ringcentral/call/${ringoutId}`);
+    return response.data;
+  },
+
+  async cancelRingOut(ringoutId) {
+    const response = await api.delete(`/api/integrations/ringcentral/call/${ringoutId}`);
+    return response.data;
+  },
+
+  // ============================================================================
+  // PHONE SYSTEM MANAGEMENT
+  // ============================================================================
+
+  async getPhoneNumbers() {
+    const response = await api.get('/api/integrations/ringcentral/phone-numbers');
+    return response.data;
+  },
+
+  async getExtensionPhoneNumbers(extensionId = '~') {
+    const response = await api.get(`/api/integrations/ringcentral/extensions/${extensionId}/phone-numbers`);
+    return response.data;
+  },
+
+  async getExtensionDetails(extensionId = '~') {
+    const response = await api.get(`/api/integrations/ringcentral/extensions/${extensionId}`);
+    return response.data;
+  },
+
+  async getExtensionDevices(extensionId = '~') {
+    const response = await api.get(`/api/integrations/ringcentral/extensions/${extensionId}/devices`);
+    return response.data;
+  },
+
+  // Presence
+  async getPresence(extensionId = '~') {
+    const response = await api.get(`/api/integrations/ringcentral/extensions/${extensionId}/presence`);
+    return response.data;
+  },
+
+  async updatePresence(extensionId, status) {
+    const response = await api.put(`/api/integrations/ringcentral/extensions/${extensionId}/presence`, { status });
+    return response.data;
+  },
+
+  // Active Calls
+  async getActiveCalls(extensionId = '~') {
+    const response = await api.get(`/api/integrations/ringcentral/extensions/${extensionId}/active-calls`);
+    return response.data;
+  },
+
+  // Caller ID
+  async getCallerIdSettings(extensionId = '~') {
+    const response = await api.get(`/api/integrations/ringcentral/extensions/${extensionId}/caller-id`);
+    return response.data;
+  },
+
+  async updateCallerIdSettings(extensionId, settings) {
+    const response = await api.put(`/api/integrations/ringcentral/extensions/${extensionId}/caller-id`, settings);
+    return response.data;
+  },
+
+  // Forwarding
+  async getForwardingNumbers(extensionId = '~') {
+    const response = await api.get(`/api/integrations/ringcentral/extensions/${extensionId}/forwarding`);
+    return response.data;
+  },
+
+  // Call Handling Rules
+  async getCallHandlingRules(extensionId = '~') {
+    const response = await api.get(`/api/integrations/ringcentral/extensions/${extensionId}/rules`);
+    return response.data;
+  },
+
+  // ============================================================================
+  // CALL QUEUES & IVR
+  // ============================================================================
+
+  async getCallQueues() {
+    const response = await api.get('/api/integrations/ringcentral/queues');
+    return response.data;
+  },
+
+  async getCallQueueMembers(queueId) {
+    const response = await api.get(`/api/integrations/ringcentral/queues/${queueId}/members`);
+    return response.data;
+  },
+
+  async getIvrMenus() {
+    const response = await api.get('/api/integrations/ringcentral/ivr-menus');
+    return response.data;
+  },
+
+  // ============================================================================
+  // VOICEMAIL
+  // ============================================================================
+
+  async getVoicemails(extensionId = '~', params = {}) {
+    const response = await api.get(`/api/integrations/ringcentral/voicemails`, {
+      params: { extensionId, ...params },
+    });
+    return response.data;
+  },
+
+  async getVoicemailContent(messageId, attachmentId, extensionId = '~') {
+    const response = await api.get(
+      `/api/integrations/ringcentral/voicemails/${messageId}/content/${attachmentId}`,
+      { params: { extensionId } }
+    );
+    return response.data;
+  },
+
+  // ============================================================================
+  // AI FEATURES
+  // ============================================================================
+
+  async getAiFeatures() {
+    const response = await api.get('/api/integrations/ringcentral/ai/features');
+    return response.data;
+  },
+
+  async analyzeCall(callId) {
+    const response = await api.post(`/api/integrations/ringcentral/calls/${callId}/analyze`);
+    return response.data;
+  },
+
+  async getCoachingInsights(callId) {
+    const response = await api.get(`/api/integrations/ringcentral/calls/${callId}/coaching`);
+    return response.data;
+  },
+
+  async getComplianceCheck(callId) {
+    const response = await api.get(`/api/integrations/ringcentral/calls/${callId}/compliance`);
+    return response.data;
+  },
+
+  // ============================================================================
+  // RECORDING & TRANSCRIPTION
+  // ============================================================================
+
+  async getRecording(callId) {
+    const response = await api.get(`/api/integrations/ringcentral/calls/${callId}/recording`);
+    return response.data;
+  },
+
+  async requestTranscription(callId) {
+    const response = await api.post(`/api/integrations/ringcentral/calls/${callId}/transcribe`);
+    return response.data;
+  },
+
+  // ============================================================================
+  // RECORD LINKING
+  // ============================================================================
+
+  async linkCallToRecord(callId, data) {
+    const response = await api.post(`/api/integrations/ringcentral/calls/${callId}/link`, data);
     return response.data;
   },
 };

@@ -28,4 +28,8 @@ router.delete('/:id', deleteAppointment);
 router.post('/:id/resources', assignResource);
 router.delete('/:id/resources/:resourceId', removeResource);
 
+// Alias for frontend compatibility - /assign routes
+router.post('/:id/assign', assignResource);
+router.delete('/:id/assign/:resourceId', removeResource);
+
 export default router;

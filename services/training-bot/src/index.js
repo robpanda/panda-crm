@@ -225,7 +225,7 @@ function buildContext(message, currentPath, userRole) {
     cantFindRecord: ["can't find", 'cannot find', 'where is', 'missing', 'lost'],
     quoteNotSaving: ['quote', 'save', 'not saving', 'error'],
     calendarNotLoading: ['calendar', 'schedule', 'not loading', 'blank'],
-    integrationIssues: ['integration', 'sync', 'quickbooks', 'five9', 'not working']
+    integrationIssues: ['integration', 'sync', 'quickbooks', 'ringcentral', 'not working']
   };
 
   for (const [issue, keywords] of Object.entries(troubleKeywords)) {

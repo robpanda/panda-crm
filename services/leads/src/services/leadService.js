@@ -58,6 +58,8 @@ class LeadService {
       sortBy = 'createdAt',
       sortOrder = 'desc',
       currentUserId,
+      startDate,
+      endDate,
     } = options;
 
     const skip = (page - 1) * limit;
@@ -77,6 +79,18 @@ class LeadService {
 
     if (source && source !== 'all') {
       where.source = source;
+    }
+
+    // Date range filtering
+    if (startDate && endDate) {
+      where.createdAt = {
+        gte: new Date(startDate),
+        lte: new Date(`${endDate}T23:59:59.999Z`),
+      };
+    } else if (startDate) {
+      where.createdAt = { gte: new Date(startDate) };
+    } else if (endDate) {
+      where.createdAt = { lte: new Date(`${endDate}T23:59:59.999Z`) };
     }
 
     if (search) {
@@ -814,6 +828,284 @@ class LeadService {
       logger.error(`Error finding best resource: ${error.message}`);
       return null;
     }
+  }
+
+  // ============================================================================
+  // CALL CENTER METHODS - Dashboard Stats & Queues
+  // ============================================================================
+
+  /**
+   * Get date range for filtering (defaults to current month)
+   * Handles date-only strings (YYYY-MM-DD) by treating them as full days in UTC
+   */
+  getDateRange(startDate, endDate) {
+    if (startDate && endDate) {
+      // Parse date-only strings properly
+      // startDate should be start of day (00:00:00.000)
+      // endDate should be end of day (23:59:59.999)
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+
+      // If endDate is a date-only string (no time component), set it to end of day
+      // Date-only strings like "2025-12-30" are parsed as UTC midnight
+      // We need to add 23:59:59.999 to cover the full day
+      if (typeof endDate === 'string' && endDate.length === 10) {
+        end.setUTCHours(23, 59, 59, 999);
+      }
+
+      return { start, end };
+    }
+    // Default to current month
+    const now = new Date();
+    return {
+      start: new Date(now.getFullYear(), now.getMonth(), 1),
+      end: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59),
+    };
+  }
+
+  /**
+   * Get call center leaderboard
+   * Shows agents ranked by leads created this month
+   * Uses ownerId (the assigned rep) since leadSetById isn't populated in migrated data
+   */
+  async getCallCenterLeaderboard(options = {}) {
+    const { start, end } = this.getDateRange(options.startDate, options.endDate);
+
+    // Get all leads created in the date range, grouped by owner
+    // Using ownerId since leadSetById is not populated in migrated data
+    const leadsCreatedByAgent = await prisma.lead.groupBy({
+      by: ['ownerId'],
+      where: {
+        ownerId: { not: null },
+        createdAt: { gte: start, lte: end },
+      },
+      _count: { id: true },
+    });
+
+    // Get agent details
+    const agentIds = leadsCreatedByAgent.map(l => l.ownerId).filter(Boolean);
+    const agents = await prisma.user.findMany({
+      where: { id: { in: agentIds } },
+      select: { id: true, firstName: true, lastName: true, email: true },
+    });
+
+    const agentMap = new Map(agents.map(a => [a.id, a]));
+
+    // Build leaderboard
+    const leaderboard = leadsCreatedByAgent
+      .map(item => {
+        const agent = agentMap.get(item.ownerId);
+        return {
+          userId: item.ownerId,
+          name: agent ? `${agent.firstName} ${agent.lastName}` : 'Unknown',
+          email: agent?.email,
+          leadsSet: item._count.id,
+        };
+      })
+      .sort((a, b) => b.leadsSet - a.leadsSet);
+
+    return {
+      leaderboard,
+      period: { start, end },
+      totalLeadsSet: leaderboard.reduce((sum, a) => sum + a.leadsSet, 0),
+    };
+  }
+
+  /**
+   * Get current user's call center stats
+   * Uses ownerId and createdAt since leadSetById/assignedAt aren't populated in migrated data
+   */
+  async getMyCallCenterStats(userId, options = {}) {
+    if (!userId) {
+      return { leadsSet: 0, leadsToday: 0, leadsThisWeek: 0, leadsThisMonth: 0 };
+    }
+
+    // Resolve user ID if it's a Cognito ID
+    const resolvedUserId = await this.resolveUserId(userId);
+    if (!resolvedUserId) {
+      return { leadsSet: 0, leadsToday: 0, leadsThisWeek: 0, leadsThisMonth: 0 };
+    }
+
+    const { start, end } = this.getDateRange(options.startDate, options.endDate);
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() - now.getDay());
+    weekStart.setHours(0, 0, 0, 0);
+
+    const [leadsSet, leadsToday, leadsThisWeek, leadsThisMonth] = await Promise.all([
+      // Total leads owned in period
+      prisma.lead.count({
+        where: {
+          ownerId: resolvedUserId,
+          createdAt: { gte: start, lte: end },
+        },
+      }),
+      // Leads created today
+      prisma.lead.count({
+        where: {
+          ownerId: resolvedUserId,
+          createdAt: { gte: todayStart },
+        },
+      }),
+      // Leads created this week
+      prisma.lead.count({
+        where: {
+          ownerId: resolvedUserId,
+          createdAt: { gte: weekStart },
+        },
+      }),
+      // Leads created this month
+      prisma.lead.count({
+        where: {
+          ownerId: resolvedUserId,
+          createdAt: { gte: start, lte: end },
+        },
+      }),
+    ]);
+
+    return {
+      leadsSet,
+      leadsToday,
+      leadsThisWeek,
+      leadsThisMonth,
+      period: { start, end },
+    };
+  }
+
+  /**
+   * Get team-wide call center totals
+   * Uses ownerId and createdAt since leadSetById/assignedAt aren't populated in migrated data
+   */
+  async getCallCenterTeamTotals(options = {}) {
+    const { start, end } = this.getDateRange(options.startDate, options.endDate);
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    const [totalLeadsCreated, leadsToday, unconfirmedCount, unscheduledCount] = await Promise.all([
+      // Total leads created in period (with owner)
+      prisma.lead.count({
+        where: {
+          ownerId: { not: null },
+          createdAt: { gte: start, lte: end },
+        },
+      }),
+      // Leads created today
+      prisma.lead.count({
+        where: {
+          ownerId: { not: null },
+          createdAt: { gte: todayStart },
+        },
+      }),
+      // Unconfirmed leads (assigned but not confirmed - no tentative appointment date)
+      prisma.lead.count({
+        where: {
+          isConverted: false,
+          ownerId: { not: null },
+          tentativeAppointmentDate: null,
+          status: { in: ['NEW', 'CONTACTED'] },
+        },
+      }),
+      // Unscheduled appointments (has tentative date but not converted yet)
+      prisma.lead.count({
+        where: {
+          isConverted: false,
+          tentativeAppointmentDate: { not: null },
+        },
+      }),
+    ]);
+
+    return {
+      totalLeadsSet: totalLeadsCreated,
+      leadsToday,
+      unconfirmedCount,
+      unscheduledCount,
+      period: { start, end },
+    };
+  }
+
+  /**
+   * Get unconfirmed leads (leads assigned but no appointment scheduled)
+   * Used by: Unconfirmed Leads tab
+   */
+  async getUnconfirmedLeads(options = {}) {
+    const { page = 1, limit = 50, currentUserId } = options;
+    const skip = (page - 1) * limit;
+
+    const where = {
+      isConverted: false,
+      ownerId: { not: null },
+      tentativeAppointmentDate: null,
+      status: { in: ['NEW', 'CONTACTED', 'QUALIFIED'] },
+    };
+
+    const [leads, total] = await Promise.all([
+      prisma.lead.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          owner: { select: { id: true, firstName: true, lastName: true } },
+          leadSetBy: { select: { id: true, firstName: true, lastName: true } },
+        },
+      }),
+      prisma.lead.count({ where }),
+    ]);
+
+    const wrappers = leads.map(lead => this.createLeadWrapper(lead));
+
+    return {
+      data: wrappers,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+        hasMore: page * limit < total,
+      },
+    };
+  }
+
+  /**
+   * Get unscheduled appointments (leads with tentative date but not yet converted/scheduled)
+   * Used by: Unscheduled Appts tab
+   */
+  async getUnscheduledAppointments(options = {}) {
+    const { page = 1, limit = 50, currentUserId } = options;
+    const skip = (page - 1) * limit;
+
+    const where = {
+      isConverted: false,
+      tentativeAppointmentDate: { not: null },
+    };
+
+    const [leads, total] = await Promise.all([
+      prisma.lead.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { tentativeAppointmentDate: 'asc' },
+        include: {
+          owner: { select: { id: true, firstName: true, lastName: true } },
+          leadSetBy: { select: { id: true, firstName: true, lastName: true } },
+        },
+      }),
+      prisma.lead.count({ where }),
+    ]);
+
+    const wrappers = leads.map(lead => this.createLeadWrapper(lead));
+
+    return {
+      data: wrappers,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+        hasMore: page * limit < total,
+      },
+    };
   }
 
   // ============================================================================

@@ -5,7 +5,8 @@ import {
   Truck, Wrench, ClipboardList, PlayCircle, PauseCircle, CheckCircle, XCircle,
   Link2, Unlink, ChevronDown, MoreVertical, Edit2, Trash2, Eye, UserPlus,
   CalendarDays, LayoutGrid, List, Zap, Timer, Package, ShoppingCart, CheckSquare,
-  FileText, Printer, Download, ExternalLink, Building
+  FileText, Printer, Download, ExternalLink, Building, Route, Target, BarChart3,
+  Gauge, TrendingUp, Sparkles, Navigation, Star
 } from 'lucide-react';
 import { scheduleApi } from '../services/api';
 
@@ -124,6 +125,7 @@ export default function Schedule() {
   // Crew Scheduler state (Gantt-style view)
   const [crewSchedulerDate, setCrewSchedulerDate] = useState(new Date());
   const [crewSchedulerView, setCrewSchedulerView] = useState('week'); // 'day', 'week', '2week'
+  const [ganttMode, setGanttMode] = useState('daily'); // 'daily' (week overview) or 'hourly' (FSL-style single day)
   const [crewSchedulerData, setCrewSchedulerData] = useState([]); // Crews with their appointments
   const [toBeScheduledQueue, setToBeScheduledQueue] = useState([]); // Unscheduled jobs queue
   const [unscheduledCount, setUnscheduledCount] = useState(0);
@@ -140,6 +142,29 @@ export default function Schedule() {
   const [showResourceModal, setShowResourceModal] = useState(false);
   const [showNewMaterialOrderModal, setShowNewMaterialOrderModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Crew Scheduler filters and modal state
+  const [showJobDetailModal, setShowJobDetailModal] = useState(false);
+  const [selectedJobForDetail, setSelectedJobForDetail] = useState(null);
+  const [schedulerTerritoryFilter, setSchedulerTerritoryFilter] = useState('');
+  const [schedulerSkillFilter, setSchedulerSkillFilter] = useState('');
+  const [schedulerCrewFilter, setSchedulerCrewFilter] = useState('');
+  const [schedulerPolicyFilter, setSchedulerPolicyFilter] = useState('');
+  const [territories, setTerritories] = useState([]);
+  const [skills, setSkills] = useState([]);
+  const [schedulingPolicies, setSchedulingPolicies] = useState([]);
+  const [scheduling, setScheduling] = useState(false);
+  const [showTerritorySidebar, setShowTerritorySidebar] = useState(true);
+  const [selectedTerritories, setSelectedTerritories] = useState(new Set()); // Multi-select territories
+
+  // FSL-equivalent scheduling state
+  const [resourceUtilization, setResourceUtilization] = useState({}); // { resourceId: { utilization, hoursScheduled, hoursAvailable } }
+  const [teamCapacity, setTeamCapacity] = useState(null);
+  const [optimizingRoute, setOptimizingRoute] = useState(false);
+  const [showCapacityPanel, setShowCapacityPanel] = useState(false);
+  const [bestResourcesForJob, setBestResourcesForJob] = useState([]);
+  const [showBestResourcesModal, setShowBestResourcesModal] = useState(false);
+  const [selectedJobForBestResources, setSelectedJobForBestResources] = useState(null);
 
   // Load data based on active tab
   useEffect(() => {
@@ -241,6 +266,40 @@ export default function Schedule() {
       const resourcesData = await scheduleApi.getResources();
       const crews = resourcesData?.data || resourcesData?.resources || [];
       setResources(crews);
+
+      // Load territories for filtering
+      try {
+        const territoriesData = await scheduleApi.getTerritories();
+        setTerritories(territoriesData?.data || []);
+      } catch (e) {
+        console.warn('Could not load territories:', e);
+        setTerritories([]);
+      }
+
+      // Load skills from API
+      try {
+        const skillsData = await scheduleApi.getSkills();
+        setSkills(skillsData?.data || []);
+      } catch (e) {
+        console.warn('Could not load skills:', e);
+        // Fallback: Extract unique skills from resources
+        const uniqueSkills = new Set();
+        crews.forEach(crew => {
+          crew.skills?.forEach(skill => {
+            if (skill.skill?.name) uniqueSkills.add(skill.skill.name);
+          });
+        });
+        setSkills(Array.from(uniqueSkills).sort().map(name => ({ id: name, name })));
+      }
+
+      // Load scheduling policies
+      try {
+        const policiesData = await scheduleApi.getSchedulingPolicies();
+        setSchedulingPolicies(policiesData?.data || []);
+      } catch (e) {
+        console.warn('Could not load scheduling policies:', e);
+        setSchedulingPolicies([]);
+      }
 
       // Calculate date range based on view
       const startDate = getWeekStart(crewSchedulerDate);
@@ -429,6 +488,112 @@ export default function Schedule() {
     }
   };
 
+  // Smart auto-schedule with policy selection (FSL-equivalent)
+  const handleSmartAutoSchedule = async (appointmentId, policyId = null) => {
+    try {
+      setScheduling(true);
+      const policy = policyId || schedulerPolicyFilter || null;
+      const result = await scheduleApi.smartAutoSchedule(appointmentId, policy);
+      if (result.success) {
+        await loadData();
+      } else {
+        setError(result.message || 'Failed to find available slot');
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to smart auto-schedule');
+    } finally {
+      setScheduling(false);
+    }
+  };
+
+  // Batch smart schedule unscheduled jobs
+  const handleBatchSmartSchedule = async () => {
+    if (toBeScheduledQueue.length === 0) return;
+    try {
+      setScheduling(true);
+      const appointmentIds = toBeScheduledQueue.slice(0, 10).map(j => j.id); // Limit to 10 at a time
+      const policy = schedulerPolicyFilter || null;
+      const result = await scheduleApi.batchSmartSchedule(appointmentIds, policy);
+      if (result.data) {
+        const scheduled = result.data.filter(r => r.success).length;
+        const failed = result.data.filter(r => !r.success).length;
+        if (failed > 0) {
+          setError(`Scheduled ${scheduled} jobs. ${failed} could not be scheduled.`);
+        }
+        await loadData();
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to batch schedule');
+    } finally {
+      setScheduling(false);
+    }
+  };
+
+  // Find best resources for a job
+  const handleFindBestResources = async (job) => {
+    try {
+      setSelectedJobForBestResources(job);
+      const result = await scheduleApi.findBestResources(job.id, {
+        policyId: schedulerPolicyFilter || null,
+        limit: 5,
+      });
+      setBestResourcesForJob(result.data || []);
+      setShowBestResourcesModal(true);
+    } catch (err) {
+      setError(err.message || 'Failed to find best resources');
+    }
+  };
+
+  // Optimize route for a resource
+  const handleOptimizeRoute = async (resourceId, date) => {
+    try {
+      setOptimizingRoute(true);
+      const result = await scheduleApi.optimizeResourceRoute(resourceId, date.toISOString());
+      if (result.success) {
+        await loadData();
+      } else {
+        setError(result.message || 'Failed to optimize route');
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to optimize route');
+    } finally {
+      setOptimizingRoute(false);
+    }
+  };
+
+  // Load resource utilization for visible crews
+  const loadResourceUtilization = async (crews) => {
+    const utilData = {};
+    const dateStr = currentDate.toISOString().split('T')[0];
+    for (const crew of crews.slice(0, 20)) { // Limit to avoid too many API calls
+      try {
+        const result = await scheduleApi.getResourceUtilization(crew.id, { date: dateStr });
+        if (result.data) {
+          utilData[crew.id] = result.data;
+        }
+      } catch (e) {
+        console.warn(`Could not load utilization for ${crew.name}:`, e);
+      }
+    }
+    setResourceUtilization(utilData);
+  };
+
+  // Load team capacity for selected territory
+  const loadTeamCapacity = async (territoryId) => {
+    try {
+      const startDate = getWeekStart(currentDate);
+      const endDate = new Date(startDate);
+      endDate.setDate(endDate.getDate() + 7);
+      const result = await scheduleApi.getTeamCapacity(territoryId, {
+        startDate: startDate.toISOString(),
+        endDate: endDate.toISOString(),
+      });
+      setTeamCapacity(result.data || null);
+    } catch (err) {
+      console.warn('Could not load team capacity:', err);
+    }
+  };
+
   // Update appointment status
   const handleUpdateStatus = async (appointmentId, status) => {
     try {
@@ -466,6 +631,107 @@ export default function Schedule() {
       await loadData();
     } catch (err) {
       setError(err.message || 'Failed to sync to Google Calendar');
+    }
+  };
+
+  // Schedule job to a crew on a specific date (drag-and-drop handler)
+  const handleScheduleJob = async (jobId, crewId, targetDate) => {
+    setScheduling(true);
+    setError(null);
+    try {
+      // Set scheduled start to 8 AM on the target date
+      const scheduledStart = new Date(targetDate);
+      scheduledStart.setHours(8, 0, 0, 0);
+
+      // Set scheduled end based on estimated duration or default 4 hours
+      const job = toBeScheduledQueue.find(j => j.id === jobId);
+      const durationMinutes = job?.workOrder?.workType?.estimatedDuration || 240;
+      const scheduledEnd = new Date(scheduledStart);
+      scheduledEnd.setMinutes(scheduledEnd.getMinutes() + durationMinutes);
+
+      // Update the appointment with scheduled times and status
+      await scheduleApi.updateServiceAppointment(jobId, {
+        scheduledStart: scheduledStart.toISOString(),
+        scheduledEnd: scheduledEnd.toISOString(),
+        status: 'SCHEDULED',
+      });
+
+      // Assign the resource to the appointment
+      await scheduleApi.assignResource(jobId, crewId, true);
+
+      // Reload data to refresh the view
+      await loadData();
+    } catch (err) {
+      console.error('Error scheduling job:', err);
+      setError(err.message || 'Failed to schedule job');
+    } finally {
+      setScheduling(false);
+    }
+  };
+
+  // Open job detail modal
+  const handleOpenJobDetail = (job) => {
+    setSelectedJobForDetail(job);
+    setShowJobDetailModal(true);
+  };
+
+  // Close job detail modal
+  const handleCloseJobDetail = () => {
+    setShowJobDetailModal(false);
+    setSelectedJobForDetail(null);
+  };
+
+  // Filter crews based on selected filters
+  const getFilteredCrews = () => {
+    let filtered = crewSchedulerData;
+
+    // Filter by crew name search
+    if (schedulerCrewFilter) {
+      filtered = filtered.filter(crew =>
+        crew.name?.toLowerCase().includes(schedulerCrewFilter.toLowerCase())
+      );
+    }
+
+    // Filter by territory (sidebar multi-select or dropdown single-select)
+    if (selectedTerritories.size > 0) {
+      filtered = filtered.filter(crew =>
+        crew.territoryMembers?.some(tm => selectedTerritories.has(tm.territory?.name))
+      );
+    } else if (schedulerTerritoryFilter) {
+      filtered = filtered.filter(crew =>
+        crew.territoryMembers?.some(tm => tm.territory?.name === schedulerTerritoryFilter)
+      );
+    }
+
+    // Filter by skill
+    if (schedulerSkillFilter) {
+      filtered = filtered.filter(crew =>
+        crew.skills?.some(s => s.skill?.name === schedulerSkillFilter)
+      );
+    }
+
+    return filtered;
+  };
+
+  // Toggle territory selection in sidebar
+  const toggleTerritorySelection = (territoryName) => {
+    const newSelected = new Set(selectedTerritories);
+    if (newSelected.has(territoryName)) {
+      newSelected.delete(territoryName);
+    } else {
+      newSelected.add(territoryName);
+    }
+    setSelectedTerritories(newSelected);
+    // Clear the dropdown filter when using sidebar
+    setSchedulerTerritoryFilter('');
+  };
+
+  // Select/deselect all territories
+  const toggleAllTerritories = () => {
+    if (selectedTerritories.size === territories.length) {
+      setSelectedTerritories(new Set());
+    } else {
+      setSelectedTerritories(new Set(territories.map(t => t.name)));
     }
   };
 
@@ -981,6 +1247,33 @@ export default function Schedule() {
                         </span>
                       )}
                     </div>
+                    {/* ABC Supply Order Tracking */}
+                    {order.abcConfirmationNumber && (
+                      <div className="mt-2 flex items-center flex-wrap gap-2 text-sm">
+                        <span className="px-2 py-0.5 bg-orange-50 text-orange-700 rounded text-xs">
+                          Confirmation: {order.abcConfirmationNumber}
+                        </span>
+                        {order.abcOrderNumber && (
+                          <span className="px-2 py-0.5 bg-orange-50 text-orange-700 rounded text-xs">
+                            ABC Order: {order.abcOrderNumber}
+                          </span>
+                        )}
+                        {order.abcStatus && (
+                          <span className={`px-2 py-0.5 rounded text-xs ${
+                            order.abcStatus === 'Delivered' ? 'bg-green-50 text-green-700' :
+                            order.abcStatus === 'Shipped' ? 'bg-blue-50 text-blue-700' :
+                            'bg-gray-50 text-gray-700'
+                          }`}>
+                            {order.abcStatus}
+                          </span>
+                        )}
+                        {order.abcTrackingId && (
+                          <span className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded text-xs">
+                            Tracking: {order.abcTrackingId}
+                          </span>
+                        )}
+                      </div>
+                    )}
                     {/* Line Items Preview */}
                     {order.lineItems?.length > 0 && (
                       <div className="mt-2 flex flex-wrap gap-1">
@@ -1057,47 +1350,289 @@ export default function Schedule() {
       return d;
     });
 
+    // Get filtered crews
+    const filteredCrews = getFilteredCrews();
+
     return (
-      <div className="space-y-4">
-        {/* Scheduler Header */}
-        <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2">
-              <button
-                onClick={() => {
-                  const prev = new Date(currentDate);
-                  prev.setDate(prev.getDate() - 7);
-                  setCurrentDate(prev);
-                }}
-                className="p-2 hover:bg-gray-100 rounded-lg"
-              >
-                <ChevronLeft className="w-5 h-5" />
-              </button>
-              <span className="font-medium text-gray-900">
-                {weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - {' '}
-                {weekDates[6].toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-              </span>
-              <button
-                onClick={() => {
-                  const next = new Date(currentDate);
-                  next.setDate(next.getDate() + 7);
-                  setCurrentDate(next);
-                }}
-                className="p-2 hover:bg-gray-100 rounded-lg"
-              >
-                <ChevronRight className="w-5 h-5" />
-              </button>
+      <div className="flex gap-4">
+        {/* Territory Sidebar (FSL-style) */}
+        {showTerritorySidebar && (
+          <div className="w-64 flex-shrink-0">
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+              {/* Sidebar Header */}
+              <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+                <div className="flex items-center">
+                  <MapPin className="w-4 h-4 text-gray-500 mr-2" />
+                  <span className="font-medium text-gray-900 text-sm">Territories</span>
+                </div>
+                <button
+                  onClick={() => setShowTerritorySidebar(false)}
+                  className="p-1 hover:bg-gray-200 rounded"
+                >
+                  <X className="w-4 h-4 text-gray-400" />
+                </button>
+              </div>
+
+              {/* Select All / Clear */}
+              <div className="px-4 py-2 border-b border-gray-100 flex items-center justify-between">
+                <button
+                  onClick={toggleAllTerritories}
+                  className="text-xs text-panda-primary hover:underline"
+                >
+                  {selectedTerritories.size === territories.length ? 'Clear all' : 'Select all'}
+                </button>
+                <span className="text-xs text-gray-500">
+                  {selectedTerritories.size} of {territories.length}
+                </span>
+              </div>
+
+              {/* Territory List */}
+              <div className="max-h-[400px] overflow-y-auto">
+                {territories.map((territory) => {
+                  const isSelected = selectedTerritories.has(territory.name);
+                  const crewCount = territory._count?.members || 0;
+                  return (
+                    <label
+                      key={territory.id}
+                      className={`flex items-center px-4 py-2 cursor-pointer hover:bg-gray-50 border-b border-gray-50 ${
+                        isSelected ? 'bg-panda-primary/5' : ''
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleTerritorySelection(territory.name)}
+                        className="w-4 h-4 text-panda-primary border-gray-300 rounded focus:ring-panda-primary"
+                      />
+                      <div className="ml-3 flex-1 min-w-0">
+                        <div className="text-sm text-gray-900 truncate">{territory.name}</div>
+                        <div className="text-xs text-gray-500">{crewCount} crew{crewCount !== 1 ? 's' : ''}</div>
+                      </div>
+                    </label>
+                  );
+                })}
+
+                {territories.length === 0 && (
+                  <div className="px-4 py-6 text-center text-gray-500 text-sm">
+                    No territories configured
+                  </div>
+                )}
+              </div>
             </div>
+          </div>
+        )}
+
+        {/* Main Content */}
+        <div className={`flex-1 space-y-4 ${!showTerritorySidebar ? 'w-full' : ''}`}>
+
+          {/* Show sidebar toggle when hidden */}
+          {!showTerritorySidebar && (
             <button
-              onClick={() => setCurrentDate(new Date())}
-              className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
+              onClick={() => setShowTerritorySidebar(true)}
+              className="flex items-center px-3 py-1.5 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50"
             >
-              Today
+              <MapPin className="w-4 h-4 mr-2" />
+              Show Territories
             </button>
+          )}
+        {/* Scheduler Header with Filters */}
+        <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <div className="flex flex-col gap-4">
+            {/* Date Navigation */}
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => {
+                    const prev = new Date(currentDate);
+                    prev.setDate(prev.getDate() - 7);
+                    setCurrentDate(prev);
+                  }}
+                  className="p-2 hover:bg-gray-100 rounded-lg"
+                >
+                  <ChevronLeft className="w-5 h-5" />
+                </button>
+                <span className="font-medium text-gray-900">
+                  {weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} - {' '}
+                  {weekDates[6].toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                </span>
+                <button
+                  onClick={() => {
+                    const next = new Date(currentDate);
+                    next.setDate(next.getDate() + 7);
+                    setCurrentDate(next);
+                  }}
+                  className="p-2 hover:bg-gray-100 rounded-lg"
+                >
+                  <ChevronRight className="w-5 h-5" />
+                </button>
+              </div>
+              <button
+                onClick={() => setCurrentDate(new Date())}
+                className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
+              >
+                Today
+              </button>
+
+              {/* Gantt Mode Toggle */}
+              <div className="flex items-center border border-gray-200 rounded-lg overflow-hidden ml-4">
+                <button
+                  onClick={() => setGanttMode('daily')}
+                  className={`px-3 py-1.5 text-sm font-medium transition-colors ${
+                    ganttMode === 'daily'
+                      ? 'bg-panda-primary text-white'
+                      : 'bg-white text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  Week View
+                </button>
+                <button
+                  onClick={() => setGanttMode('hourly')}
+                  className={`px-3 py-1.5 text-sm font-medium transition-colors ${
+                    ganttMode === 'hourly'
+                      ? 'bg-panda-primary text-white'
+                      : 'bg-white text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  Day View (Gantt)
+                </button>
+              </div>
+
+              {/* FSL Action Buttons */}
+              <div className="flex items-center space-x-2 ml-4">
+                {/* Capacity Dashboard Toggle */}
+                <button
+                  onClick={() => {
+                    setShowCapacityPanel(!showCapacityPanel);
+                    if (!showCapacityPanel && schedulerTerritoryFilter) {
+                      loadTeamCapacity(territories.find(t => t.name === schedulerTerritoryFilter)?.id);
+                    }
+                  }}
+                  className={`inline-flex items-center px-3 py-1.5 text-sm rounded-lg transition-colors ${
+                    showCapacityPanel
+                      ? 'bg-purple-100 text-purple-700 border border-purple-200'
+                      : 'border border-gray-200 text-gray-600 hover:bg-gray-50'
+                  }`}
+                  title="Toggle Capacity Dashboard"
+                >
+                  <Gauge className="w-4 h-4 mr-1" />
+                  Capacity
+                </button>
+
+                {/* Optimize Routes for Selected Date */}
+                {ganttMode === 'hourly' && (
+                  <button
+                    onClick={() => {
+                      // Optimize routes for all visible crews on current date
+                      const crews = getFilteredCrews();
+                      crews.forEach(crew => handleOptimizeRoute(crew.id, currentDate));
+                    }}
+                    disabled={optimizingRoute}
+                    className="inline-flex items-center px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+                    title="Optimize Routes for All Crews"
+                  >
+                    {optimizingRoute ? (
+                      <RefreshCw className="w-4 h-4 mr-1 animate-spin" />
+                    ) : (
+                      <Route className="w-4 h-4 mr-1" />
+                    )}
+                    Optimize Routes
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Filters Row */}
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2">
+                <Filter className="w-4 h-4 text-gray-400" />
+                <span className="text-sm text-gray-600">Filters:</span>
+              </div>
+
+              {/* Crew Search */}
+              <div className="relative">
+                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Search crew..."
+                  value={schedulerCrewFilter}
+                  onChange={(e) => setSchedulerCrewFilter(e.target.value)}
+                  className="pl-9 pr-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary w-40"
+                />
+              </div>
+
+              {/* Territory Filter */}
+              <select
+                value={schedulerTerritoryFilter}
+                onChange={(e) => setSchedulerTerritoryFilter(e.target.value)}
+                className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+              >
+                <option value="">All Territories</option>
+                {territories.map((t) => (
+                  <option key={t.id} value={t.name}>{t.name}</option>
+                ))}
+              </select>
+
+              {/* Skill Filter */}
+              <select
+                value={schedulerSkillFilter}
+                onChange={(e) => setSchedulerSkillFilter(e.target.value)}
+                className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+              >
+                <option value="">All Skills</option>
+                {skills.map((skill) => (
+                  <option key={skill.id || skill.name || skill} value={skill.name || skill}>
+                    {skill.name || skill}
+                  </option>
+                ))}
+              </select>
+
+              {/* Scheduling Policy Dropdown */}
+              <select
+                value={schedulerPolicyFilter}
+                onChange={(e) => setSchedulerPolicyFilter(e.target.value)}
+                className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+              >
+                <option value="">Scheduling Policy</option>
+                {schedulingPolicies.map((policy) => (
+                  <option key={policy.id} value={policy.id}>
+                    {policy.name}
+                  </option>
+                ))}
+              </select>
+
+              {/* Clear Filters */}
+              {(schedulerCrewFilter || schedulerTerritoryFilter || schedulerSkillFilter || schedulerPolicyFilter) && (
+                <button
+                  onClick={() => {
+                    setSchedulerCrewFilter('');
+                    setSchedulerTerritoryFilter('');
+                    setSchedulerSkillFilter('');
+                    setSchedulerPolicyFilter('');
+                  }}
+                  className="px-2 py-1 text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1"
+                >
+                  <X className="w-3 h-3" />
+                  Clear
+                </button>
+              )}
+
+              {/* Results Count */}
+              <span className="text-xs text-gray-500 ml-auto">
+                Showing {filteredCrews.length} of {crewSchedulerData.length} crews
+              </span>
+            </div>
           </div>
         </div>
 
-        {/* To Be Scheduled Queue */}
+        {/* Scheduling Indicator */}
+        {scheduling && (
+          <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 flex items-center justify-center">
+            <RefreshCw className="w-5 h-5 text-blue-600 animate-spin mr-2" />
+            <span className="text-blue-700">Scheduling job...</span>
+          </div>
+        )}
+
+        {/* To Be Scheduled Queue with Smart Scheduling */}
         {toBeScheduledQueue.length > 0 && (
           <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
             <div className="flex items-center justify-between mb-3">
@@ -1108,23 +1643,58 @@ export default function Schedule() {
                   {toBeScheduledQueue.length}
                 </span>
               </div>
+              <div className="flex items-center space-x-2">
+                <span className="text-xs text-amber-600 mr-2">Drag to calendar or:</span>
+                {/* Smart Auto-Schedule Button */}
+                <button
+                  onClick={handleBatchSmartSchedule}
+                  disabled={scheduling}
+                  className="inline-flex items-center px-3 py-1.5 bg-gradient-to-r from-panda-primary to-indigo-500 text-white text-sm rounded-lg hover:from-panda-primary/90 hover:to-indigo-500/90 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+                >
+                  <Sparkles className="w-4 h-4 mr-1" />
+                  Smart Schedule All
+                </button>
+              </div>
             </div>
             <div className="flex space-x-3 overflow-x-auto pb-2">
               {toBeScheduledQueue.slice(0, 5).map((job) => (
                 <div
                   key={job.id}
-                  className="flex-shrink-0 bg-white border border-amber-200 rounded-lg p-3 min-w-[200px] cursor-pointer hover:shadow-md"
+                  className="flex-shrink-0 bg-white border border-amber-200 rounded-lg p-3 min-w-[220px] cursor-grab hover:shadow-md active:cursor-grabbing transition-shadow group"
                   draggable
-                  onDragStart={(e) => e.dataTransfer.setData('jobId', job.id)}
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData('jobId', job.id);
+                    e.dataTransfer.effectAllowed = 'move';
+                  }}
                 >
-                  <div className="font-medium text-gray-900 truncate">{job.account?.name || job.subject}</div>
-                  <div className="text-sm text-gray-500 mt-1">{job.workType?.name}</div>
-                  {job.materialOrders?.[0] && (
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1 min-w-0" onClick={() => handleOpenJobDetail(job)}>
+                      <div className="font-medium text-gray-900 truncate">{job.workOrder?.account?.name || job.subject}</div>
+                      <div className="text-sm text-gray-500 mt-1">{job.workOrder?.workType?.name || 'No work type'}</div>
+                    </div>
+                    <div className="flex flex-col space-y-1">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleSmartAutoSchedule(job.id); }}
+                        className="p-1 text-indigo-600 hover:bg-indigo-50 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                        title="Smart Auto-Schedule"
+                      >
+                        <Sparkles className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleFindBestResources(job); }}
+                        className="p-1 text-green-600 hover:bg-green-50 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                        title="Find Best Crew"
+                      >
+                        <Target className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                  {job.workOrder?.materialOrders?.[0] && (
                     <div className="mt-2 flex items-center">
                       <span className={`w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold ${
-                        materialStatusIndicator[job.materialOrders[0].materialStatus]?.bg
-                      } ${materialStatusIndicator[job.materialOrders[0].materialStatus]?.text}`}>
-                        {materialStatusIndicator[job.materialOrders[0].materialStatus]?.letter}
+                        materialStatusIndicator[job.workOrder.materialOrders[0].materialStatus]?.bg
+                      } ${materialStatusIndicator[job.workOrder.materialOrders[0].materialStatus]?.text}`}>
+                        {materialStatusIndicator[job.workOrder.materialOrders[0].materialStatus]?.letter}
                       </span>
                       <span className="ml-1 text-xs text-gray-500">Materials</span>
                     </div>
@@ -1132,10 +1702,50 @@ export default function Schedule() {
                 </div>
               ))}
               {toBeScheduledQueue.length > 5 && (
-                <div className="flex-shrink-0 flex items-center justify-center min-w-[100px] text-amber-700 font-medium">
+                <button
+                  onClick={() => {/* Could open a modal showing all unscheduled jobs */}}
+                  className="flex-shrink-0 flex items-center justify-center min-w-[100px] text-amber-700 font-medium hover:underline"
+                >
                   +{toBeScheduledQueue.length - 5} more
-                </div>
+                </button>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Capacity Dashboard Panel (Toggle) */}
+        {showCapacityPanel && teamCapacity && (
+          <div className="bg-white rounded-xl border border-gray-200 p-4">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center">
+                <BarChart3 className="w-5 h-5 text-panda-primary mr-2" />
+                <span className="font-medium text-gray-900">Team Capacity Overview</span>
+              </div>
+              <button onClick={() => setShowCapacityPanel(false)} className="p-1 hover:bg-gray-100 rounded">
+                <X className="w-4 h-4 text-gray-400" />
+              </button>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="bg-gray-50 rounded-lg p-3">
+                <div className="text-sm text-gray-500">Total Capacity</div>
+                <div className="text-2xl font-bold text-gray-900">{teamCapacity.totalHoursAvailable || 0}h</div>
+              </div>
+              <div className="bg-blue-50 rounded-lg p-3">
+                <div className="text-sm text-blue-600">Scheduled</div>
+                <div className="text-2xl font-bold text-blue-700">{teamCapacity.totalHoursScheduled || 0}h</div>
+              </div>
+              <div className="bg-green-50 rounded-lg p-3">
+                <div className="text-sm text-green-600">Available</div>
+                <div className="text-2xl font-bold text-green-700">
+                  {(teamCapacity.totalHoursAvailable || 0) - (teamCapacity.totalHoursScheduled || 0)}h
+                </div>
+              </div>
+              <div className="bg-purple-50 rounded-lg p-3">
+                <div className="text-sm text-purple-600">Utilization</div>
+                <div className="text-2xl font-bold text-purple-700">
+                  {Math.round(((teamCapacity.totalHoursScheduled || 0) / (teamCapacity.totalHoursAvailable || 1)) * 100)}%
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -1143,6 +1753,8 @@ export default function Schedule() {
         {/* Gantt-style Crew Calendar */}
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           <div className="overflow-x-auto">
+            {/* Weekly View (Daily columns) */}
+            {ganttMode === 'daily' && (
             <table className="w-full min-w-[900px]">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-200">
@@ -1166,7 +1778,7 @@ export default function Schedule() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {crewSchedulerData.map((crew, crewIdx) => (
+                {filteredCrews.map((crew, crewIdx) => (
                   <tr key={crew.id} className="hover:bg-gray-50">
                     <td className="px-4 py-3 sticky left-0 bg-white border-r border-gray-100">
                       <div className="flex items-center space-x-2">
@@ -1176,7 +1788,12 @@ export default function Schedule() {
                         />
                         <div>
                           <div className="font-medium text-gray-900">{crew.name}</div>
-                          <div className="text-xs text-gray-500">{crew.resourceType}</div>
+                          <div className="text-xs text-gray-500">
+                            {crew.resourceType}
+                            {crew.territoryMembers?.[0]?.territory?.name && (
+                              <span className="ml-1">• {crew.territoryMembers[0].territory.name}</span>
+                            )}
+                          </div>
                         </div>
                       </div>
                     </td>
@@ -1186,17 +1803,28 @@ export default function Schedule() {
                         const aptDate = new Date(apt.scheduledStart).toISOString().split('T')[0];
                         return aptDate === dateStr;
                       }) || [];
+                      const isDropTarget = !scheduling;
 
                       return (
                         <td
                           key={dayIdx}
-                          className="px-1 py-2 align-top border-r border-gray-100 min-h-[80px]"
-                          onDragOver={(e) => e.preventDefault()}
+                          className={`px-1 py-2 align-top border-r border-gray-100 min-h-[80px] transition-colors ${
+                            isDropTarget ? 'hover:bg-green-50' : ''
+                          }`}
+                          onDragOver={(e) => {
+                            if (isDropTarget) {
+                              e.preventDefault();
+                              e.currentTarget.classList.add('bg-green-100');
+                            }
+                          }}
+                          onDragLeave={(e) => {
+                            e.currentTarget.classList.remove('bg-green-100');
+                          }}
                           onDrop={(e) => {
+                            e.currentTarget.classList.remove('bg-green-100');
                             const jobId = e.dataTransfer.getData('jobId');
-                            if (jobId) {
-                              // Handle drop - schedule job for this crew on this date
-                              console.log('Schedule job', jobId, 'for crew', crew.id, 'on', dateStr);
+                            if (jobId && !scheduling) {
+                              handleScheduleJob(jobId, crew.id, date);
                             }
                           }}
                         >
@@ -1204,7 +1832,7 @@ export default function Schedule() {
                             {dayJobs.map((job) => (
                               <div
                                 key={job.id}
-                                onClick={() => setSelectedAppointment(job)}
+                                onClick={() => handleOpenJobDetail(job)}
                                 className="p-2 rounded text-xs cursor-pointer hover:opacity-80 transition-opacity"
                                 style={{
                                   backgroundColor: crewColors[crewIdx % crewColors.length] + '20',
@@ -1233,18 +1861,192 @@ export default function Schedule() {
                     })}
                   </tr>
                 ))}
-                {crewSchedulerData.length === 0 && (
+                {filteredCrews.length === 0 && (
                   <tr>
                     <td colSpan={8} className="px-4 py-8 text-center text-gray-500">
                       <Users className="w-12 h-12 mx-auto text-gray-300 mb-3" />
-                      <p>No crews/resources configured</p>
-                      <p className="text-sm mt-1">Add service resources to start scheduling</p>
+                      {crewSchedulerData.length === 0 ? (
+                        <>
+                          <p>No crews/resources configured</p>
+                          <p className="text-sm mt-1">Add service resources to start scheduling</p>
+                        </>
+                      ) : (
+                        <>
+                          <p>No crews match your filters</p>
+                          <button
+                            onClick={() => {
+                              setSchedulerCrewFilter('');
+                              setSchedulerTerritoryFilter('');
+                              setSchedulerSkillFilter('');
+                            }}
+                            className="text-sm mt-1 text-panda-primary hover:underline"
+                          >
+                            Clear filters
+                          </button>
+                        </>
+                      )}
                     </td>
                   </tr>
                 )}
               </tbody>
             </table>
+            )}
+
+            {/* Hourly Gantt View (FSL-style single day) */}
+            {ganttMode === 'hourly' && (
+              <div className="min-w-[1400px]">
+                {/* Current Date Display */}
+                <div className="bg-gray-50 border-b border-gray-200 px-4 py-2">
+                  <span className="font-medium text-gray-900">
+                    {currentDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                  </span>
+                </div>
+
+                {/* Hours Header Row */}
+                <div className="flex border-b border-gray-200 bg-gray-50">
+                  <div className="w-48 flex-shrink-0 px-4 py-2 text-xs font-medium text-gray-500 uppercase sticky left-0 bg-gray-50 border-r border-gray-200">
+                    Crew / Resource
+                  </div>
+                  <div className="flex-1 flex">
+                    {/* Generate hours from 6 AM to 8 PM (working hours) */}
+                    {Array.from({ length: 15 }, (_, i) => 6 + i).map((hour) => (
+                      <div
+                        key={hour}
+                        className="flex-1 min-w-[60px] px-1 py-2 text-center text-xs font-medium text-gray-500 border-r border-gray-100"
+                      >
+                        {hour === 12 ? '12PM' : hour > 12 ? `${hour - 12}PM` : `${hour}AM`}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Crew Rows with Gantt Bars */}
+                {filteredCrews.map((crew, crewIdx) => {
+                  // Get appointments for current date
+                  const dateStr = currentDate.toISOString().split('T')[0];
+                  const dayJobs = crew.appointments?.filter(apt => {
+                    const aptDate = new Date(apt.scheduledStart).toISOString().split('T')[0];
+                    return aptDate === dateStr;
+                  }) || [];
+
+                  return (
+                    <div key={crew.id} className="flex border-b border-gray-100 hover:bg-gray-50 min-h-[60px]">
+                      {/* Crew Name Column */}
+                      <div className="w-48 flex-shrink-0 px-4 py-2 sticky left-0 bg-white border-r border-gray-100 flex items-center">
+                        <div className="flex items-center space-x-2">
+                          <div
+                            className="w-3 h-3 rounded-full flex-shrink-0"
+                            style={{ backgroundColor: crewColors[crewIdx % crewColors.length] }}
+                          />
+                          <div className="min-w-0">
+                            <div className="font-medium text-gray-900 text-sm truncate">{crew.name}</div>
+                            <div className="text-xs text-gray-500 truncate">
+                              {crew.territoryMembers?.[0]?.territory?.name || crew.resourceType}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Gantt Timeline */}
+                      <div
+                        className="flex-1 relative"
+                        style={{ minHeight: '60px' }}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.currentTarget.classList.add('bg-green-50');
+                        }}
+                        onDragLeave={(e) => {
+                          e.currentTarget.classList.remove('bg-green-50');
+                        }}
+                        onDrop={(e) => {
+                          e.currentTarget.classList.remove('bg-green-50');
+                          const jobId = e.dataTransfer.getData('jobId');
+                          if (jobId && !scheduling) {
+                            // Calculate drop position to determine time
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            const relativeX = e.clientX - rect.left;
+                            const percentX = relativeX / rect.width;
+                            const hourOffset = Math.floor(percentX * 15); // 15 hours (6AM-8PM)
+                            const dropHour = 6 + hourOffset;
+
+                            const scheduledDate = new Date(currentDate);
+                            scheduledDate.setHours(dropHour, 0, 0, 0);
+                            handleScheduleJob(jobId, crew.id, scheduledDate);
+                          }
+                        }}
+                      >
+                        {/* Hour Grid Lines */}
+                        <div className="absolute inset-0 flex pointer-events-none">
+                          {Array.from({ length: 15 }, (_, i) => (
+                            <div key={i} className="flex-1 border-r border-gray-100" />
+                          ))}
+                        </div>
+
+                        {/* Job Bars */}
+                        {dayJobs.map((job) => {
+                          const startTime = new Date(job.scheduledStart);
+                          const endTime = new Date(job.scheduledEnd);
+                          const startHour = startTime.getHours() + startTime.getMinutes() / 60;
+                          const endHour = endTime.getHours() + endTime.getMinutes() / 60;
+
+                          // Calculate position (6AM = 0%, 8PM = 100%)
+                          const startPercent = Math.max(0, ((startHour - 6) / 15) * 100);
+                          const endPercent = Math.min(100, ((endHour - 6) / 15) * 100);
+                          const widthPercent = endPercent - startPercent;
+
+                          if (widthPercent <= 0) return null;
+
+                          return (
+                            <div
+                              key={job.id}
+                              onClick={() => handleOpenJobDetail(job)}
+                              className="absolute top-2 bottom-2 rounded cursor-pointer hover:opacity-90 transition-opacity z-10 flex items-center px-2 overflow-hidden"
+                              style={{
+                                left: `${startPercent}%`,
+                                width: `${widthPercent}%`,
+                                backgroundColor: crewColors[crewIdx % crewColors.length],
+                                minWidth: '60px',
+                              }}
+                            >
+                              <div className="text-white text-xs font-medium truncate">
+                                {job.workOrder?.account?.name || job.subject}
+                              </div>
+                              {/* Lead Time / Block Indicator */}
+                              {job.workOrder?.leadTimeRequired && (
+                                <span className="ml-1 px-1 py-0.5 bg-white/30 rounded text-[10px] font-bold">
+                                  BLOCK
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+
+                        {/* Utilization indicator */}
+                        {dayJobs.length > 0 && (
+                          <div className="absolute right-2 top-1 text-[10px] text-gray-400">
+                            {Math.round((dayJobs.reduce((sum, job) => {
+                              const start = new Date(job.scheduledStart);
+                              const end = new Date(job.scheduledEnd);
+                              return sum + (end - start) / (1000 * 60 * 60);
+                            }, 0) / 8) * 100)}% util
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {/* Empty state */}
+                {filteredCrews.length === 0 && (
+                  <div className="px-4 py-8 text-center text-gray-500">
+                    <Users className="w-12 h-12 mx-auto text-gray-300 mb-3" />
+                    <p>No crews match your filters</p>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
+        </div>
         </div>
       </div>
     );
@@ -1553,6 +2355,37 @@ export default function Schedule() {
           }}
         />
       )}
+
+      {/* Job Detail Modal (Quick View) */}
+      {showJobDetailModal && selectedJobForDetail && (
+        <JobDetailModal
+          job={selectedJobForDetail}
+          onClose={handleCloseJobDetail}
+          onSchedule={(crewId, date) => {
+            handleScheduleJob(selectedJobForDetail.id, crewId, date);
+            handleCloseJobDetail();
+          }}
+          resources={resources}
+        />
+      )}
+
+      {/* Best Resources Modal (FSL-equivalent) */}
+      {showBestResourcesModal && selectedJobForBestResources && (
+        <BestResourcesModal
+          job={selectedJobForBestResources}
+          resources={bestResourcesForJob}
+          onClose={() => {
+            setShowBestResourcesModal(false);
+            setSelectedJobForBestResources(null);
+            setBestResourcesForJob([]);
+          }}
+          onSelectResource={(resourceId) => {
+            handleScheduleJob(selectedJobForBestResources.id, resourceId, new Date());
+            setShowBestResourcesModal(false);
+            setSelectedJobForBestResources(null);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -1578,7 +2411,7 @@ function AppointmentCard({ appointment, compact, expanded, onClick, onUpdateStat
           </span>
         </div>
         <div className="font-medium text-sm mt-1 truncate">{apt.subject || workTypeName}</div>
-        <div className="text-xs mt-1 truncate">{apt.account?.name || apt.contact?.name || ''}</div>
+        <div className="text-xs mt-1 truncate">{apt.workOrder?.account?.name || apt.contact?.name || ''}</div>
       </div>
     );
   }
@@ -1714,7 +2547,7 @@ function DispatchRow({ resource, appointments, onAssign, workTypes }) {
               title={`${apt.subject || apt.appointmentNumber}\n${formatTime(apt.scheduledStart)} - ${formatTime(apt.scheduledEnd)}`}
             >
               <div className="truncate font-medium">{apt.subject || apt.appointmentNumber}</div>
-              <div className="truncate opacity-80">{apt.account?.name}</div>
+              <div className="truncate opacity-80">{apt.workOrder?.account?.name}</div>
             </div>
           );
         })}
@@ -1944,7 +2777,7 @@ function AppointmentDetailModal({ appointment, resources, workTypes, onClose, on
             </div>
             <div>
               <label className="text-xs font-medium text-gray-500 uppercase">Account</label>
-              <p className="mt-1 text-gray-900">{apt.account?.name || '-'}</p>
+              <p className="mt-1 text-gray-900">{apt.workOrder?.account?.name || '-'}</p>
             </div>
             <div>
               <label className="text-xs font-medium text-gray-500 uppercase">Contact</label>
@@ -2385,6 +3218,276 @@ function NewWorkOrderModal({ workTypes, onClose, onSave }) {
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+// Job Detail Modal - Quick view for unscheduled jobs
+function JobDetailModal({ job, onClose, onSchedule, resources }) {
+  const [selectedCrew, setSelectedCrew] = useState('');
+  const [selectedDate, setSelectedDate] = useState('');
+
+  const workOrder = job.workOrder || {};
+  const account = workOrder.account || {};
+  const workType = workOrder.workType || {};
+  const materialOrder = workOrder.materialOrders?.[0] || job.materialOrders?.[0];
+
+  const handleQuickSchedule = () => {
+    if (selectedCrew && selectedDate) {
+      onSchedule(selectedCrew, new Date(selectedDate));
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={onClose}>
+      <div
+        className="bg-white rounded-xl max-w-lg w-full max-h-[90vh] overflow-y-auto shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="p-4 border-b border-gray-200 flex items-center justify-between bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-t-xl">
+          <div>
+            <h2 className="text-lg font-semibold">Job Details</h2>
+            <p className="text-white/80 text-sm">{job.appointmentNumber || 'New Appointment'}</p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-white/20 rounded-lg transition-colors">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="p-4 space-y-4">
+          {/* Customer Info */}
+          <div className="bg-gray-50 rounded-lg p-3">
+            <div className="flex items-start gap-3">
+              <Building className="w-5 h-5 text-gray-400 mt-0.5" />
+              <div className="flex-1">
+                <div className="font-medium text-gray-900">{account.name || job.subject || 'Unknown Customer'}</div>
+                {account.phone && (
+                  <div className="text-sm text-gray-500 flex items-center mt-1">
+                    <Phone className="w-3.5 h-3.5 mr-1" />
+                    {account.phone}
+                  </div>
+                )}
+                {(account.billingStreet || workOrder.street) && (
+                  <div className="text-sm text-gray-500 flex items-center mt-1">
+                    <MapPin className="w-3.5 h-3.5 mr-1" />
+                    {account.billingStreet || workOrder.street}, {account.billingCity || workOrder.city}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Work Type & Status */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="bg-blue-50 rounded-lg p-3">
+              <div className="text-xs text-blue-600 font-medium uppercase">Work Type</div>
+              <div className="font-medium text-gray-900 mt-1">{workType.name || 'Not specified'}</div>
+            </div>
+            <div className="bg-amber-50 rounded-lg p-3">
+              <div className="text-xs text-amber-600 font-medium uppercase">Status</div>
+              <div className="font-medium text-gray-900 mt-1">{job.status || 'NONE'}</div>
+            </div>
+          </div>
+
+          {/* Duration */}
+          {(workType.estimatedDuration || job.duration) && (
+            <div className="flex items-center gap-2 text-sm text-gray-600">
+              <Timer className="w-4 h-4" />
+              <span>Estimated Duration: {workType.estimatedDuration || job.duration || 240} minutes</span>
+            </div>
+          )}
+
+          {/* Material Status */}
+          {materialOrder && (
+            <div className={`rounded-lg p-3 flex items-center gap-3 ${
+              materialOrder.materialStatus === 'DELIVERED' ? 'bg-green-50' :
+              materialOrder.materialStatus === 'ORDERED' ? 'bg-blue-50' : 'bg-gray-50'
+            }`}>
+              <Package className={`w-5 h-5 ${
+                materialOrder.materialStatus === 'DELIVERED' ? 'text-green-600' :
+                materialOrder.materialStatus === 'ORDERED' ? 'text-blue-600' : 'text-gray-400'
+              }`} />
+              <div>
+                <div className="text-xs font-medium uppercase text-gray-500">Material Status</div>
+                <div className="font-medium text-gray-900">{materialOrder.materialStatus || 'Waiting'}</div>
+                {materialOrder.supplier && (
+                  <div className="text-sm text-gray-500">{materialOrder.supplier}</div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Description */}
+          {(workOrder.description || job.description) && (
+            <div className="bg-gray-50 rounded-lg p-3">
+              <div className="text-xs font-medium uppercase text-gray-500 mb-1">Description</div>
+              <p className="text-sm text-gray-700">{workOrder.description || job.description}</p>
+            </div>
+          )}
+
+          {/* Quick Schedule Section */}
+          <div className="border-t border-gray-200 pt-4">
+            <div className="text-sm font-medium text-gray-700 mb-3">Quick Schedule</div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Select Crew</label>
+                <select
+                  value={selectedCrew}
+                  onChange={(e) => setSelectedCrew(e.target.value)}
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-panda-primary/20"
+                >
+                  <option value="">Choose crew...</option>
+                  {resources.map((r) => (
+                    <option key={r.id} value={r.id}>{r.name}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Select Date</label>
+                <input
+                  type="date"
+                  value={selectedDate}
+                  onChange={(e) => setSelectedDate(e.target.value)}
+                  min={new Date().toISOString().split('T')[0]}
+                  className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-panda-primary/20"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Footer Actions */}
+        <div className="p-4 border-t border-gray-200 flex items-center justify-between bg-gray-50 rounded-b-xl">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm text-gray-600 hover:text-gray-900"
+          >
+            Close
+          </button>
+          <button
+            onClick={handleQuickSchedule}
+            disabled={!selectedCrew || !selectedDate}
+            className="px-4 py-2 bg-panda-primary text-white text-sm rounded-lg hover:bg-panda-primary/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+          >
+            <Calendar className="w-4 h-4" />
+            Schedule Job
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// FSL-equivalent Best Resources Modal - Shows ranked resource recommendations based on scheduling policy
+function BestResourcesModal({ job, resources, onClose, onSelectResource }) {
+  const workType = job.workOrder?.workType?.name || job.workType?.name || 'Unknown';
+  const account = job.workOrder?.account?.name || job.subject || 'Unknown';
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl max-w-lg w-full max-h-[80vh] overflow-hidden">
+        {/* Header */}
+        <div className="p-4 border-b border-gray-200 bg-gradient-to-r from-panda-primary to-indigo-500">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center text-white">
+              <Target className="w-5 h-5 mr-2" />
+              <span className="font-semibold">Best Crews for This Job</span>
+            </div>
+            <button onClick={onClose} className="p-1 hover:bg-white/20 rounded text-white">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="mt-2 text-white/80 text-sm">
+            {workType} • {account}
+          </div>
+        </div>
+
+        {/* Resource Recommendations */}
+        <div className="p-4 overflow-y-auto max-h-[50vh]">
+          {resources.length === 0 ? (
+            <div className="text-center py-8 text-gray-500">
+              <Users className="w-12 h-12 mx-auto text-gray-300 mb-3" />
+              <p>No matching resources found</p>
+              <p className="text-sm mt-1">Try adjusting the scheduling policy or filters</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {resources.map((resource, index) => (
+                <div
+                  key={resource.id || index}
+                  className="p-4 border border-gray-200 rounded-lg hover:border-panda-primary hover:bg-panda-primary/5 cursor-pointer transition-all group"
+                  onClick={() => onSelectResource(resource.id)}
+                >
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-center space-x-3">
+                      {/* Rank Badge */}
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
+                        index === 0 ? 'bg-yellow-100 text-yellow-700' :
+                        index === 1 ? 'bg-gray-100 text-gray-600' :
+                        index === 2 ? 'bg-orange-100 text-orange-700' :
+                        'bg-gray-50 text-gray-500'
+                      }`}>
+                        {index === 0 ? <Star className="w-4 h-4" /> : index + 1}
+                      </div>
+                      <div>
+                        <div className="font-medium text-gray-900">{resource.name}</div>
+                        <div className="text-sm text-gray-500">
+                          {resource.territoryName || resource.resourceType || 'Crew'}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Score */}
+                    <div className="text-right">
+                      <div className="text-lg font-bold text-panda-primary">
+                        {Math.round(resource.score || 0)}
+                      </div>
+                      <div className="text-xs text-gray-500">score</div>
+                    </div>
+                  </div>
+
+                  {/* Score Breakdown */}
+                  <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+                    {resource.skillMatch !== undefined && (
+                      <div className="flex items-center text-gray-600">
+                        <Wrench className="w-3 h-3 mr-1" />
+                        Skills: {resource.skillMatch ? '✓' : '✗'}
+                      </div>
+                    )}
+                    {resource.travelTime !== undefined && (
+                      <div className="flex items-center text-gray-600">
+                        <Navigation className="w-3 h-3 mr-1" />
+                        {resource.travelTime} min
+                      </div>
+                    )}
+                    {resource.utilization !== undefined && (
+                      <div className="flex items-center text-gray-600">
+                        <Gauge className="w-3 h-3 mr-1" />
+                        {Math.round(resource.utilization)}% util
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Select Button (appears on hover) */}
+                  <div className="mt-3 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button className="w-full py-2 bg-panda-primary text-white text-sm rounded-lg hover:bg-panda-primary/90 flex items-center justify-center">
+                      <CheckCircle className="w-4 h-4 mr-1" />
+                      Select This Crew
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="p-4 border-t border-gray-200 bg-gray-50 text-center text-xs text-gray-500">
+          Resources are ranked based on skills, territory, travel time, and utilization
+        </div>
       </div>
     </div>
   );

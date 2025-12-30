@@ -34,7 +34,7 @@ const crmKnowledge = {
       { name: "PandaSign", path: "/admin/pandasign", description: "E-signature and document signing" },
       { name: "Bamboogli", path: "/admin/bamboogli", description: "SMS and email messaging system" },
       { name: "Templates", path: "/admin/templates", description: "Email, SMS, and document templates" },
-      { name: "Integrations", path: "/admin/integrations", description: "QuickBooks, Five9, CompanyCam connections" },
+      { name: "Integrations", path: "/admin/integrations", description: "QuickBooks, RingCentral, CompanyCam connections" },
       { name: "User Management", path: "/admin/users", description: "Add and manage user accounts" },
       { name: "Roles & Permissions", path: "/admin/roles", description: "Control who can see and do what" },
       { name: "Audit Logs", path: "/admin/audit", description: "Track all system changes" }
@@ -55,7 +55,7 @@ const crmKnowledge = {
         "Lead assignment engine - automatically routes leads based on territory and availability",
         "Lead scoring - prioritizes hot leads",
         "Quick convert - turns leads into jobs with one click",
-        "Integration with Five9 for call tracking"
+        "Integration with RingCentral for call tracking"
       ],
       tips: [
         "Always verify the phone number before saving",
@@ -329,10 +329,10 @@ const crmKnowledge = {
 
     integrations: {
       title: "Integrations",
-      description: "Panda CRM connects with your other tools - QuickBooks for accounting, Five9 for phone, CompanyCam for photos, and more.",
+      description: "Panda CRM connects with your other tools - QuickBooks for accounting, RingCentral for phone, CompanyCam for photos, and more.",
       available: [
         { name: "QuickBooks", description: "Sync customers, invoices, and payments" },
-        { name: "Five9", description: "Click-to-dial, call logging, screen pops" },
+        { name: "RingCentral", description: "Click-to-dial, call logging, SMS, screen pops" },
         { name: "CompanyCam", description: "Photo sync from job sites" },
         { name: "EagleView", description: "Roof measurements and reports" },
         { name: "GAF QuickMeasure", description: "Alternative measurement service" },

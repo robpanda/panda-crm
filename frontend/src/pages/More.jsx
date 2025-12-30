@@ -17,6 +17,10 @@ import {
   HelpCircle,
   MessageSquare,
   Calendar,
+  PhoneCall,
+  PenTool,
+  Wrench,
+  Bot,
 } from 'lucide-react';
 
 export default function More() {
@@ -41,13 +45,18 @@ export default function More() {
       title: 'Admin',
       requiresAdmin: true,
       items: [
-        { path: '/admin/workflows', icon: Workflow, label: 'Workflows' },
-        { path: '/admin/commissions', icon: DollarSign, label: 'Commissions' },
-        { path: '/admin/templates', icon: FileCheck, label: 'Templates' },
-        { path: '/admin/integrations', icon: Camera, label: 'Integrations' },
-        { path: '/admin/users', icon: Users, label: 'User Management' },
-        { path: '/admin/roles', icon: Shield, label: 'Roles & Permissions' },
         { path: '/admin/audit', icon: ClipboardList, label: 'Audit Logs' },
+        { path: '/admin/bamboogli', icon: MessageSquare, label: 'Bamboogli' },
+        { path: '/admin/commissions', icon: DollarSign, label: 'Commissions' },
+        { path: '/admin/field-service', icon: Wrench, label: 'Field Service' },
+        { path: '/admin/integrations', icon: Camera, label: 'Integrations' },
+        { path: '/admin/pandasign', icon: PenTool, label: 'PandaSign' },
+        { path: '/admin/ringcentral', icon: PhoneCall, label: 'RingCentral' },
+        { path: '/admin/roles', icon: Shield, label: 'Roles & Permissions' },
+        { path: '/admin/templates', icon: FileCheck, label: 'Templates' },
+        { path: '/admin/training-bot', icon: Bot, label: 'Training Bot' },
+        { path: '/admin/users', icon: Users, label: 'User Management' },
+        { path: '/admin/workflows', icon: Workflow, label: 'Workflows' },
       ],
     },
     {
@@ -67,7 +76,8 @@ export default function More() {
   ];
 
   // Check if user is admin
-  const isAdmin = user?.role === 'super_admin' || user?.role === 'admin';
+  const isAdmin = user?.role?.name?.toLowerCase()?.includes('admin') ||
+                  user?.roleType === 'ADMIN' || user?.roleType === 'EXECUTIVE';
 
   return (
     <div className="space-y-6 pb-8">
