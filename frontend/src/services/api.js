@@ -33,9 +33,11 @@ api.interceptors.response.use(
 
       try {
         const refreshToken = localStorage.getItem('refreshToken');
-        if (refreshToken) {
+        const userEmail = localStorage.getItem('userEmail');
+        if (refreshToken && userEmail) {
           const response = await axios.post(`${API_BASE}/api/auth/refresh`, {
             refreshToken,
+            email: userEmail,
           });
 
           const { accessToken, idToken } = response.data.data;
@@ -73,8 +75,8 @@ export const authApi = {
     return response.data.data;
   },
 
-  async refreshToken(refreshToken) {
-    const response = await axios.post(`${API_BASE}/api/auth/refresh`, { refreshToken });
+  async refreshToken(refreshToken, email) {
+    const response = await axios.post(`${API_BASE}/api/auth/refresh`, { refreshToken, email });
     return response.data.data;
   },
 
@@ -1390,6 +1392,18 @@ export const scheduleApi = {
   async getTerritory(id) {
     const response = await api.get(`/api/resources/territories/${id}`);
     return response.data.data;
+  },
+
+  // Skills
+  async getSkills(params = {}) {
+    const response = await api.get('/api/resources/skills', { params });
+    return response.data;
+  },
+
+  // Scheduling Policies
+  async getSchedulingPolicies(params = {}) {
+    const response = await api.get('/api/resources/scheduling-policies', { params });
+    return response.data;
   },
 
   // Work Types

@@ -113,6 +113,7 @@ export function AuthProvider({ children }) {
     localStorage.setItem('accessToken', response.accessToken);
     localStorage.setItem('refreshToken', response.refreshToken);
     localStorage.setItem('idToken', response.idToken);
+    localStorage.setItem('userEmail', email.toLowerCase()); // Store email for token refresh
 
     const cognitoUser = await authApi.getCurrentUser(response.accessToken);
     const extendedUser = await fetchExtendedUserData(cognitoUser);
@@ -127,6 +128,7 @@ export function AuthProvider({ children }) {
     localStorage.setItem('accessToken', response.accessToken);
     localStorage.setItem('refreshToken', response.refreshToken);
     localStorage.setItem('idToken', response.idToken);
+    localStorage.setItem('userEmail', email.toLowerCase()); // Store email for token refresh
 
     const cognitoUser = await authApi.getCurrentUser(response.accessToken);
     const extendedUser = await fetchExtendedUserData(cognitoUser);
@@ -148,16 +150,18 @@ export function AuthProvider({ children }) {
     localStorage.removeItem('accessToken');
     localStorage.removeItem('refreshToken');
     localStorage.removeItem('idToken');
+    localStorage.removeItem('userEmail');
     setUser(null);
   }, []);
 
   const refreshToken = useCallback(async () => {
     const storedRefreshToken = localStorage.getItem('refreshToken');
-    if (!storedRefreshToken) {
-      throw new Error('No refresh token');
+    const userEmail = localStorage.getItem('userEmail');
+    if (!storedRefreshToken || !userEmail) {
+      throw new Error('No refresh token or email');
     }
 
-    const response = await authApi.refreshToken(storedRefreshToken);
+    const response = await authApi.refreshToken(storedRefreshToken, userEmail);
     localStorage.setItem('accessToken', response.accessToken);
     localStorage.setItem('idToken', response.idToken);
 
@@ -168,9 +172,17 @@ export function AuthProvider({ children }) {
   const isActualUserAdmin = useCallback(() => {
     const userToCheck = actualUser || user;
     if (!userToCheck) return false;
-    const role = userToCheck.role?.toLowerCase() || '';
-    return role.includes('super_admin') || role.includes('admin') ||
-           role === 'super admin' || role === 'admin';
+
+    // Handle both string role and object role (from database)
+    const roleName = typeof userToCheck.role === 'string'
+      ? userToCheck.role.toLowerCase()
+      : (userToCheck.role?.name?.toLowerCase() || '');
+    const roleType = userToCheck.role?.roleType?.toLowerCase() || userToCheck.roleType?.toLowerCase() || '';
+
+    // Check role name or roleType for admin permissions
+    return roleName.includes('super_admin') || roleName.includes('admin') ||
+           roleName === 'super admin' || roleName === 'admin' ||
+           roleType === 'super_admin' || roleType === 'admin';
   }, [actualUser, user]);
 
   // Start impersonating another user (admin only)

@@ -125,7 +125,7 @@ export const authService = {
   /**
    * Refresh access token using refresh token
    */
-  async refreshToken(refreshToken) {
+  async refreshToken(refreshToken, email) {
     const creds = await getCognitoCredentials();
 
     const params = {
@@ -133,7 +133,7 @@ export const authService = {
       ClientId: creds.clientId,
       AuthParameters: {
         REFRESH_TOKEN: refreshToken,
-        SECRET_HASH: calculateSecretHash('', creds.clientId, creds.clientSecret),
+        SECRET_HASH: calculateSecretHash(email, creds.clientId, creds.clientSecret),
       },
     };
 

@@ -49,7 +49,7 @@ router.post('/complete-new-password', async (req, res, next) => {
 // Refresh token
 router.post('/refresh', async (req, res, next) => {
   try {
-    const { refreshToken } = req.body;
+    const { refreshToken, email } = req.body;
 
     if (!refreshToken) {
       return res.status(400).json({
@@ -58,7 +58,14 @@ router.post('/refresh', async (req, res, next) => {
       });
     }
 
-    const result = await authService.refreshToken(refreshToken);
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Email is required for token refresh' },
+      });
+    }
+
+    const result = await authService.refreshToken(refreshToken, email);
     res.json({ success: true, data: result });
   } catch (error) {
     next(error);
