@@ -76,7 +76,9 @@ export default function More() {
   ];
 
   // Check if user is admin
-  const isAdmin = user?.role?.name?.toLowerCase()?.includes('admin') ||
+  // Handle both object role (role.name) and string role formats
+  const roleName = typeof user?.role === 'object' ? user?.role?.name : user?.role;
+  const isAdmin = roleName?.toLowerCase()?.includes('admin') ||
                   user?.roleType === 'ADMIN' || user?.roleType === 'EXECUTIVE';
 
   return (
