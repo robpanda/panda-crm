@@ -65,7 +65,9 @@ export default function Sidebar({ isOpen, onClose, isMobile }) {
   const { user } = useAuth();
 
   // Check if user has admin access
-  const isAdmin = user?.role?.name === 'Super Admin' || user?.role?.name === 'Admin' ||
+  // Handle both object role (role.name) and string role formats
+  const roleName = typeof user?.role === 'object' ? user?.role?.name : user?.role;
+  const isAdmin = roleName?.toLowerCase()?.includes('admin') ||
                   user?.roleType === 'ADMIN' || user?.roleType === 'EXECUTIVE';
 
   const isActive = (path) => {
