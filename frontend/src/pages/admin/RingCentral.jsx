@@ -810,9 +810,17 @@ export default function RingCentral() {
           <button
             onClick={() => {
               ringCentralApi.getAuthUrl().then(res => {
-                if (res.data?.url) {
-                  window.location.href = res.data.url;
+                // Backend returns authUrl, not url
+                const authUrl = res.data?.authUrl || res.data?.url;
+                if (authUrl) {
+                  window.location.href = authUrl;
+                } else {
+                  console.error('No auth URL returned:', res);
+                  alert('Failed to get RingCentral authorization URL. Please check the configuration.');
                 }
+              }).catch(err => {
+                console.error('Failed to get auth URL:', err);
+                alert('Failed to connect to RingCentral. Please try again.');
               });
             }}
             className="w-full px-4 py-2 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg font-medium hover:opacity-90"
