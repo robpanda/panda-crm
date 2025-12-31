@@ -19,6 +19,110 @@ class RingCentralService {
   }
 
   // ==========================================
+  // Connection Status & OAuth
+  // ==========================================
+
+  /**
+   * Check if RingCentral is configured and connected
+   */
+  async getConnectionStatus() {
+    const configured = !!(RC_CLIENT_ID && RC_CLIENT_SECRET && RC_JWT_TOKEN);
+
+    if (!configured) {
+      return {
+        configured: false,
+        connected: false,
+        accountId: null,
+        lastSync: null,
+      };
+    }
+
+    try {
+      // Try to get account info to verify connection
+      const accountInfo = await this.makeRequest('/restapi/v1.0/account/~');
+
+      return {
+        configured: true,
+        connected: true,
+        accountId: accountInfo?.id || null,
+        accountName: accountInfo?.mainNumber || null,
+        lastSync: new Date().toISOString(),
+      };
+    } catch (error) {
+      logger.warn('RingCentral connection check failed:', error.message);
+      return {
+        configured: true,
+        connected: false,
+        accountId: null,
+        lastSync: null,
+        error: error.message,
+      };
+    }
+  }
+
+  /**
+   * Get OAuth authorization URL for user-based auth
+   */
+  async getAuthorizationUrl() {
+    if (!RC_CLIENT_ID) {
+      throw new Error('RingCentral client ID not configured');
+    }
+
+    const redirectUri = process.env.RINGCENTRAL_REDIRECT_URI ||
+      `${process.env.APP_URL || 'https://bamboo.pandaadmin.com'}/api/integrations/ringcentral/auth/callback`;
+
+    const authUrl = new URL(`${RC_API_BASE}/restapi/oauth/authorize`);
+    authUrl.searchParams.set('response_type', 'code');
+    authUrl.searchParams.set('client_id', RC_CLIENT_ID);
+    authUrl.searchParams.set('redirect_uri', redirectUri);
+    authUrl.searchParams.set('state', 'panda-crm-auth');
+
+    return authUrl.toString();
+  }
+
+  /**
+   * Handle OAuth callback and exchange code for tokens
+   */
+  async handleAuthCallback(code, state) {
+    const redirectUri = process.env.RINGCENTRAL_REDIRECT_URI ||
+      `${process.env.APP_URL || 'https://bamboo.pandaadmin.com'}/api/integrations/ringcentral/auth/callback`;
+
+    const credentials = Buffer.from(`${RC_CLIENT_ID}:${RC_CLIENT_SECRET}`).toString('base64');
+
+    const response = await fetch(`${RC_API_BASE}/restapi/oauth/token`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${credentials}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: redirectUri,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`OAuth token exchange failed: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    this.accessToken = data.access_token;
+    this.refreshToken = data.refresh_token;
+    this.tokenExpiry = Date.now() + ((data.expires_in - 300) * 1000);
+
+    // Get account info
+    const accountInfo = await this.makeRequest('/restapi/v1.0/account/~');
+
+    return {
+      success: true,
+      accountId: accountInfo?.id,
+      accountName: accountInfo?.mainNumber,
+    };
+  }
+
+  // ==========================================
   // Authentication (JWT Flow)
   // ==========================================
 

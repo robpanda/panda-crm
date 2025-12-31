@@ -7,7 +7,7 @@ import { authMiddleware, requireRole } from '../middleware/auth.js';
 const router = Router();
 
 // ==========================================
-// Connection Status
+// Connection Status & Authentication
 // ==========================================
 
 /**
@@ -16,7 +16,19 @@ const router = Router();
 router.get('/status', authMiddleware, async (req, res, next) => {
   try {
     const status = await ringCentralService.getConnectionStatus();
-    res.json({ success: true, data: status });
+    res.json({
+      success: true,
+      data: {
+        ...status,
+        features: {
+          clickToCall: true,
+          callLogging: true,
+          voicemail: true,
+          presence: true,
+          aiAnalysis: true,
+        },
+      },
+    });
   } catch (error) {
     // Return disconnected status on error
     res.json({
@@ -24,8 +36,60 @@ router.get('/status', authMiddleware, async (req, res, next) => {
       data: {
         connected: false,
         error: error.message,
+        features: {
+          clickToCall: true,
+          callLogging: true,
+          voicemail: true,
+          presence: true,
+          aiAnalysis: true,
+        },
       },
     });
+  }
+});
+
+/**
+ * GET /ringcentral/auth - Get OAuth authorization URL
+ */
+router.get('/auth', authMiddleware, async (req, res, next) => {
+  try {
+    const authUrl = await ringCentralService.getAuthorizationUrl();
+
+    res.json({
+      success: true,
+      data: {
+        authUrl,
+        message: 'Redirect user to this URL to authorize RingCentral',
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /ringcentral/auth/callback - OAuth callback handler
+ */
+router.get('/auth/callback', async (req, res, next) => {
+  try {
+    const { code, state } = req.query;
+
+    if (!code) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'MISSING_CODE', message: 'Authorization code is required' },
+      });
+    }
+
+    const result = await ringCentralService.handleAuthCallback(code, state);
+
+    logger.info('RingCentral OAuth completed successfully');
+
+    // Redirect to frontend settings page
+    res.redirect('/settings/integrations?ringcentral=connected');
+  } catch (error) {
+    logger.error('RingCentral OAuth callback error:', error);
+    res.redirect('/settings/integrations?ringcentral=error');
   }
 });
 
@@ -584,8 +648,16 @@ router.get('/stats', authMiddleware, async (req, res, next) => {
 
     if (dateRange && !startDate) {
       const now = new Date();
-      const days = parseInt(dateRange) || 7;
+      // Handle formats like "7d", "30d", or just "7"
+      const days = parseInt(dateRange.replace(/d$/i, '')) || 7;
       computedStartDate = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+      computedEndDate = now;
+    }
+
+    // Default to last 7 days if no date params
+    if (!computedStartDate) {
+      const now = new Date();
+      computedStartDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
       computedEndDate = now;
     }
 
