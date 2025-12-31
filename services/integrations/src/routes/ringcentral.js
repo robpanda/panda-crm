@@ -63,7 +63,16 @@ router.get('/auth', authMiddleware, async (req, res, next) => {
       },
     });
   } catch (error) {
-    next(error);
+    // Return configuration status instead of throwing
+    res.json({
+      success: false,
+      data: {
+        configured: false,
+        message: 'RingCentral integration not configured. Use the embedded widget for calling.',
+        useEmbeddable: true,
+        embeddableClientId: '9SphzQfJPE1fyyeZUL0eIr',
+      },
+    });
   }
 });
 
@@ -669,7 +678,23 @@ router.get('/stats', authMiddleware, async (req, res, next) => {
 
     res.json({ success: true, data: stats });
   } catch (error) {
-    next(error);
+    // Return empty stats if RingCentral not configured
+    res.json({
+      success: true,
+      data: {
+        totalCalls: 0,
+        inboundCalls: 0,
+        outboundCalls: 0,
+        missedCalls: 0,
+        avgDuration: 0,
+        totalDuration: 0,
+        connectedCalls: 0,
+        connectionRate: 0,
+        callsByDay: [],
+        configured: false,
+        message: 'RingCentral backend not configured. Call stats are tracked via the embedded widget.',
+      },
+    });
   }
 });
 
