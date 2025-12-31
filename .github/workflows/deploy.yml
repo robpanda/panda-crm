@@ -35,6 +35,7 @@ jobs:
     runs-on: ubuntu-latest
 
     strategy:
+      fail-fast: false
       matrix:
         service:
           - name: accounts
@@ -72,6 +73,15 @@ jobs:
           else
             echo "should_deploy=false" >> $GITHUB_OUTPUT
           fi
+
+      - name: Check AWS credentials are configured
+        if: steps.check.outputs.should_deploy == 'true'
+        run: |
+          if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] || [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
+            echo "::error::AWS credentials not configured. Please add AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY to repository secrets."
+            exit 1
+          fi
+          echo "AWS credentials are configured"
 
       - name: Configure AWS credentials
         if: steps.check.outputs.should_deploy == 'true'
