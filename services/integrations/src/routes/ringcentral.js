@@ -7,6 +7,29 @@ import { authMiddleware, requireRole } from '../middleware/auth.js';
 const router = Router();
 
 // ==========================================
+// Connection Status
+// ==========================================
+
+/**
+ * GET /ringcentral/status - Get RingCentral connection status
+ */
+router.get('/status', authMiddleware, async (req, res, next) => {
+  try {
+    const status = await ringCentralService.getConnectionStatus();
+    res.json({ success: true, data: status });
+  } catch (error) {
+    // Return disconnected status on error
+    res.json({
+      success: true,
+      data: {
+        connected: false,
+        error: error.message,
+      },
+    });
+  }
+});
+
+// ==========================================
 // Call Sync & Logging
 // ==========================================
 
@@ -549,14 +572,26 @@ router.get('/calls/:id/recording', authMiddleware, async (req, res, next) => {
 
 /**
  * GET /ringcentral/stats - Get call statistics
+ * Supports dateRange param: 1d, 7d, 30d, 90d
  */
 router.get('/stats', authMiddleware, async (req, res, next) => {
   try {
-    const { startDate, endDate, userId } = req.query;
+    const { startDate, endDate, dateRange, userId } = req.query;
+
+    // Parse dateRange into start/end dates
+    let computedStartDate = startDate ? new Date(startDate) : undefined;
+    let computedEndDate = endDate ? new Date(endDate) : new Date();
+
+    if (dateRange && !startDate) {
+      const now = new Date();
+      const days = parseInt(dateRange) || 7;
+      computedStartDate = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+      computedEndDate = now;
+    }
 
     const stats = await ringCentralService.getCallStats({
-      startDate: startDate ? new Date(startDate) : undefined,
-      endDate: endDate ? new Date(endDate) : undefined,
+      startDate: computedStartDate,
+      endDate: computedEndDate,
       userId,
     });
 

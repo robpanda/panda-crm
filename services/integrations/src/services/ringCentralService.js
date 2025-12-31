@@ -88,6 +88,34 @@ class RingCentralService {
   }
 
   // ==========================================
+  // Connection Status
+  // ==========================================
+
+  /**
+   * Get RingCentral connection status
+   */
+  async getConnectionStatus() {
+    try {
+      // Try to authenticate and get account info
+      const accountInfo = await this.makeRequest('/restapi/v1.0/account/~');
+
+      return {
+        connected: true,
+        accountId: accountInfo.id,
+        accountName: accountInfo.mainNumber?.phoneNumber || accountInfo.name || 'RingCentral Account',
+        extensionName: null, // Will be populated by extension info
+        lastSync: null, // Could add this to track last successful sync
+      };
+    } catch (error) {
+      logger.error('RingCentral connection check failed:', error);
+      return {
+        connected: false,
+        error: error.message,
+      };
+    }
+  }
+
+  // ==========================================
   // Call Data Sync
   // ==========================================
 
@@ -1023,14 +1051,19 @@ class RingCentralService {
       take: 10,
     });
 
+    const directionMap = byDirection.reduce((acc, item) => {
+      acc[item.direction] = item._count.id;
+      return acc;
+    }, {});
+
     return {
-      totalCalls: stats._count.id,
+      totalCalls: stats._count.id || 0,
       totalDuration: stats._sum.duration || 0,
       avgDuration: Math.round(stats._avg.duration || 0),
-      byDirection: byDirection.reduce((acc, item) => {
-        acc[item.direction] = item._count.id;
-        return acc;
-      }, {}),
+      inboundCalls: directionMap.Inbound || 0,
+      outboundCalls: directionMap.Outbound || 0,
+      missedCalls: directionMap.Missed || 0,
+      byDirection: directionMap,
       topResults: byResult.map(r => ({
         result: r.result,
         count: r._count.id,
