@@ -68,28 +68,29 @@ const contactsNavItems = [
 ];
 
 const moreNavItems = [
-  { path: '/schedule', icon: Calendar, label: 'Schedule' },
+  { path: '/campaigns', icon: Mail, label: 'Campaigns' },
+  { path: '/dashboards', icon: LayoutDashboard, label: 'Dashboards' },
   { path: '/documents', icon: FileText, label: 'Documents' },
   { path: '/pricebooks', icon: BookOpen, label: 'Price Books' },
   { path: '/products', icon: Package, label: 'Products' },
-  { path: '/campaigns', icon: Mail, label: 'Campaigns' },
   { path: '/reports', icon: BarChart3, label: 'Reports' },
-  { path: '/dashboards', icon: LayoutDashboard, label: 'Dashboards' },
+  { path: '/schedule', icon: Calendar, label: 'Schedule' },
 ];
 
 const adminNavItems = [
-  { path: '/admin/workflows', icon: Workflow, label: 'Workflows' },
-  { path: '/admin/field-service', icon: Calendar, label: 'Schedule Admin' },
-  { path: '/admin/commissions', icon: DollarSign, label: 'Commissions' },
-  { path: '/admin/commission-engine', icon: Cog, label: 'Commission Engine' },
-  { path: '/admin/payment-engine', icon: CreditCard, label: 'Payment Center' },
-  { path: '/admin/pandasign', icon: PenTool, label: 'PandaSign' },
-  { path: '/admin/bamboogli', icon: MessageSquare, label: 'Bamboogli' },
-  { path: '/admin/templates', icon: FileText, label: 'Templates' },
-  { path: '/admin/integrations', icon: Camera, label: 'Integrations' },
-  { path: '/admin/users', icon: Users, label: 'User Management' },
-  { path: '/admin/roles', icon: Shield, label: 'Roles & Permissions' },
   { path: '/admin/audit', icon: ClipboardList, label: 'Audit Logs' },
+  { path: '/admin/bamboogli', icon: MessageSquare, label: 'Bamboogli' },
+  { path: '/admin/commission-engine', icon: Cog, label: 'Commission Engine' },
+  { path: '/admin/commissions', icon: DollarSign, label: 'Commissions' },
+  { path: '/admin/integrations', icon: Camera, label: 'Integrations' },
+  { path: '/admin/pandasign', icon: PenTool, label: 'PandaSign' },
+  { path: '/admin/payment-engine', icon: CreditCard, label: 'Payment Center' },
+  { path: '/admin/ringcentral', icon: Phone, label: 'RingCentral' },
+  { path: '/admin/roles', icon: Shield, label: 'Roles & Permissions' },
+  { path: '/admin/field-service', icon: Calendar, label: 'Schedule Admin' },
+  { path: '/admin/templates', icon: FileText, label: 'Templates' },
+  { path: '/admin/users', icon: Users, label: 'User Management' },
+  { path: '/admin/workflows', icon: Workflow, label: 'Workflows' },
 ];
 
 export default function Navbar({ onMenuClick, showMenuButton }) {
