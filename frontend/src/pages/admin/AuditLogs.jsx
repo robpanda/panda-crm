@@ -1,8 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Search,
   Download,
-  Filter,
   Clock,
   User,
   FileText,
@@ -18,6 +17,7 @@ import {
   Calendar,
   Database,
   Activity,
+  AlertCircle,
 } from 'lucide-react';
 import api from '../../services/api';
 
@@ -30,6 +30,7 @@ const actionColors = {
   LOGIN: 'bg-teal-100 text-teal-700',
   LOGOUT: 'bg-gray-100 text-gray-700',
   LOGIN_FAILED: 'bg-red-100 text-red-700',
+  PASSWORD_RESET: 'bg-yellow-100 text-yellow-700',
 };
 
 const actionIcons = {
@@ -41,177 +42,247 @@ const actionIcons = {
   LOGIN: LogIn,
   LOGOUT: LogOut,
   LOGIN_FAILED: LogIn,
+  PASSWORD_RESET: RefreshCw,
 };
 
 const tableLabels = {
   accounts: 'Accounts',
+  auth: 'Authentication',
+  commissions: 'Commissions',
   contacts: 'Contacts',
+  invoices: 'Invoices',
   leads: 'Leads',
   opportunities: 'Opportunities',
-  quotes: 'Quotes',
   orders: 'Orders',
-  invoices: 'Invoices',
-  workorders: 'Work Orders',
-  commissions: 'Commissions',
-  users: 'Users',
+  quotes: 'Quotes',
   roles: 'Roles',
-  auth: 'Authentication',
+  users: 'Users',
+  workorders: 'Work Orders',
 };
 
 export default function AuditLogs() {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [actionFilter, setActionFilter] = useState('all');
   const [tableFilter, setTableFilter] = useState('all');
   const [dateRange, setDateRange] = useState('today');
   const [expandedLog, setExpandedLog] = useState(null);
-  const [showFilters, setShowFilters] = useState(false);
+  const [stats, setStats] = useState({
+    today: 0,
+    thisWeek: 0,
+    totalUsers: 0,
+    topAction: '-',
+  });
+  const [pagination, setPagination] = useState({
+    total: 0,
+    limit: 50,
+    offset: 0,
+  });
+  const [filters, setFilters] = useState({
+    tables: [],
+    actions: [],
+    users: [],
+  });
 
-  const stats = {
-    today: 342,
-    thisWeek: 2156,
-    totalUsers: 45,
-    topAction: 'UPDATE',
-  };
+  // Calculate date range for API
+  const getDateRangeParams = useCallback(() => {
+    const now = new Date();
+    let startDate, endDate;
 
-  useEffect(() => {
-    loadLogs();
-  }, [actionFilter, tableFilter, dateRange]);
+    switch (dateRange) {
+      case 'today':
+        startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        endDate = now;
+        break;
+      case 'yesterday':
+        startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+        endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        break;
+      case 'thisWeek':
+        startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7);
+        endDate = now;
+        break;
+      case 'thisMonth':
+        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+        endDate = now;
+        break;
+      case 'last30':
+        startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 30);
+        endDate = now;
+        break;
+      default:
+        startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        endDate = now;
+    }
 
-  const loadLogs = async () => {
+    return {
+      startDate: startDate.toISOString(),
+      endDate: endDate.toISOString(),
+    };
+  }, [dateRange]);
+
+  // Load filter options
+  const loadFilters = useCallback(async () => {
     try {
-      // const response = await api.get('/audit', { params: { action: actionFilter, table: tableFilter, dateRange } });
-      // setLogs(response.data.logs);
-      // Mock data
-      setLogs([
-        {
-          id: '1',
-          tableName: 'opportunities',
-          recordId: 'opp-12345',
-          action: 'UPDATE',
-          changedFields: ['stage', 'amount', 'expectedCloseDate'],
-          oldValues: { stage: 'Proposal', amount: 15000, expectedCloseDate: '2025-12-20' },
-          newValues: { stage: 'Negotiation', amount: 16500, expectedCloseDate: '2025-12-25' },
-          userId: 'user-1',
-          userEmail: 'john.smith@pandaexteriors.com',
-          ipAddress: '192.168.1.100',
-          userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
-          source: 'web',
-          createdAt: '2025-12-18T10:30:00Z',
-        },
-        {
-          id: '2',
-          tableName: 'contacts',
-          recordId: 'contact-67890',
-          action: 'CREATE',
-          changedFields: ['firstName', 'lastName', 'email', 'phone'],
-          oldValues: null,
-          newValues: { firstName: 'Jane', lastName: 'Doe', email: 'jane.doe@example.com', phone: '+1234567890' },
-          userId: 'user-2',
-          userEmail: 'sarah.johnson@pandaexteriors.com',
-          ipAddress: '192.168.1.101',
-          userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-          source: 'web',
-          createdAt: '2025-12-18T10:25:00Z',
-        },
-        {
-          id: '3',
-          tableName: 'auth',
-          recordId: 'mike.davis@pandaexteriors.com',
-          action: 'LOGIN',
-          changedFields: [],
-          oldValues: null,
-          newValues: { loginMethod: 'password', mfaUsed: true },
-          userId: 'user-3',
-          userEmail: 'mike.davis@pandaexteriors.com',
-          ipAddress: '192.168.1.102',
-          userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0)',
-          source: 'auth',
-          createdAt: '2025-12-18T10:20:00Z',
-        },
-        {
-          id: '4',
-          tableName: 'commissions',
-          recordId: 'comm-11111',
-          action: 'UPDATE',
-          changedFields: ['status'],
-          oldValues: { status: 'pending' },
-          newValues: { status: 'approved' },
-          userId: 'user-4',
-          userEmail: 'emily.chen@pandaexteriors.com',
-          ipAddress: '192.168.1.103',
-          userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
-          source: 'web',
-          createdAt: '2025-12-18T10:15:00Z',
-        },
-        {
-          id: '5',
-          tableName: 'accounts',
-          recordId: 'acc-22222',
-          action: 'EXPORT',
-          changedFields: [],
-          oldValues: null,
-          newValues: { recordCount: 150, format: 'csv', filters: { status: 'active' } },
-          userId: 'user-1',
-          userEmail: 'john.smith@pandaexteriors.com',
-          ipAddress: '192.168.1.100',
-          userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
-          source: 'web',
-          createdAt: '2025-12-18T10:10:00Z',
-        },
-        {
-          id: '6',
-          tableName: 'workorders',
-          recordId: 'wo-33333',
-          action: 'DELETE',
-          changedFields: [],
-          oldValues: { id: 'wo-33333', status: 'cancelled', description: 'Duplicate work order' },
-          newValues: null,
-          userId: 'user-3',
-          userEmail: 'mike.davis@pandaexteriors.com',
-          ipAddress: '192.168.1.102',
-          userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0)',
-          source: 'web',
-          createdAt: '2025-12-18T10:05:00Z',
-        },
-        {
-          id: '7',
-          tableName: 'auth',
-          recordId: 'unknown@test.com',
-          action: 'LOGIN_FAILED',
-          changedFields: [],
-          oldValues: null,
-          newValues: { reason: 'Invalid credentials', attemptCount: 3 },
-          userId: null,
-          userEmail: 'unknown@test.com',
-          ipAddress: '203.0.113.50',
-          userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-          source: 'auth',
-          createdAt: '2025-12-18T10:00:00Z',
-        },
-      ]);
-    } catch (error) {
-      console.error('Failed to load audit logs:', error);
+      const response = await api.get('/audit/filters');
+      if (response.data.success) {
+        setFilters(response.data.data);
+      }
+    } catch (err) {
+      console.error('Failed to load filters:', err);
+    }
+  }, []);
+
+  // Load audit stats
+  const loadStats = useCallback(async () => {
+    try {
+      const response = await api.get('/audit/stats');
+      if (response.data.success) {
+        const data = response.data.data;
+
+        // Find top action
+        const actionCounts = data.actionCounts || {};
+        const topAction = Object.entries(actionCounts)
+          .sort((a, b) => b[1] - a[1])[0];
+
+        setStats({
+          today: data.recentActivity?.last24Hours || 0,
+          thisWeek: data.recentActivity?.last7Days || 0,
+          totalUsers: data.topUsers?.length || 0,
+          topAction: topAction ? topAction[0] : '-',
+        });
+      }
+    } catch (err) {
+      console.error('Failed to load stats:', err);
+    }
+  }, []);
+
+  // Load audit logs
+  const loadLogs = useCallback(async (resetPagination = false) => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      const { startDate, endDate } = getDateRangeParams();
+      const offset = resetPagination ? 0 : pagination.offset;
+
+      const params = {
+        startDate,
+        endDate,
+        limit: pagination.limit,
+        offset,
+      };
+
+      if (actionFilter !== 'all') {
+        params.action = actionFilter;
+      }
+      if (tableFilter !== 'all') {
+        params.tableName = tableFilter;
+      }
+      if (searchTerm) {
+        params.userEmail = searchTerm;
+      }
+
+      const response = await api.get('/audit/logs', { params });
+
+      if (response.data.success) {
+        setLogs(response.data.data || []);
+        setPagination(prev => ({
+          ...prev,
+          total: response.data.pagination?.total || 0,
+          offset: resetPagination ? 0 : prev.offset,
+        }));
+      } else {
+        throw new Error(response.data.error || 'Failed to load logs');
+      }
+    } catch (err) {
+      console.error('Failed to load audit logs:', err);
+      setError(err.message || 'Failed to load audit logs');
+      setLogs([]);
     } finally {
       setLoading(false);
     }
-  };
+  }, [actionFilter, tableFilter, dateRange, searchTerm, pagination.limit, pagination.offset, getDateRangeParams]);
+
+  // Initial load
+  useEffect(() => {
+    loadFilters();
+    loadStats();
+  }, [loadFilters, loadStats]);
+
+  // Reload logs when filters change
+  useEffect(() => {
+    loadLogs(true);
+  }, [actionFilter, tableFilter, dateRange]);
+
+  // Debounced search
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (searchTerm !== '') {
+        loadLogs(true);
+      }
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
 
   const handleExport = async () => {
-    // await api.get('/audit/export', { params: { action: actionFilter, table: tableFilter, dateRange }, responseType: 'blob' });
-    alert('Exporting audit logs...');
+    try {
+      const { startDate, endDate } = getDateRangeParams();
+      const params = {
+        startDate,
+        endDate,
+        format: 'csv',
+      };
+      if (actionFilter !== 'all') params.action = actionFilter;
+      if (tableFilter !== 'all') params.tableName = tableFilter;
+
+      const response = await api.get('/audit/export', {
+        params,
+        responseType: 'blob',
+      });
+
+      // Download the file
+      const blob = new Blob([response.data], { type: 'text/csv' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `audit_logs_${new Date().toISOString().split('T')[0]}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Failed to export:', err);
+      alert('Failed to export audit logs');
+    }
   };
 
-  const filteredLogs = logs.filter(log => {
-    const matchesSearch =
-      log.userEmail?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      log.recordId?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      log.tableName?.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesAction = actionFilter === 'all' || log.action === actionFilter;
-    const matchesTable = tableFilter === 'all' || log.tableName === tableFilter;
-    return matchesSearch && matchesAction && matchesTable;
-  });
+  const handleRefresh = () => {
+    loadStats();
+    loadLogs(true);
+  };
+
+  const handlePrevPage = () => {
+    if (pagination.offset > 0) {
+      setPagination(prev => ({
+        ...prev,
+        offset: Math.max(0, prev.offset - prev.limit),
+      }));
+      loadLogs();
+    }
+  };
+
+  const handleNextPage = () => {
+    if (pagination.offset + pagination.limit < pagination.total) {
+      setPagination(prev => ({
+        ...prev,
+        offset: prev.offset + prev.limit,
+      }));
+      loadLogs();
+    }
+  };
 
   const formatDateTime = (dateString) => {
     return new Date(dateString).toLocaleString();
@@ -239,16 +310,18 @@ export default function AuditLogs() {
         <div className="grid grid-cols-2 gap-4 text-sm">
           <div>
             <span className="text-gray-500">IP Address:</span>
-            <span className="ml-2 text-gray-900">{log.ipAddress}</span>
+            <span className="ml-2 text-gray-900">{log.ipAddress || 'N/A'}</span>
           </div>
           <div>
             <span className="text-gray-500">Source:</span>
-            <span className="ml-2 text-gray-900 capitalize">{log.source}</span>
+            <span className="ml-2 text-gray-900 capitalize">{log.source || 'N/A'}</span>
           </div>
         </div>
         <div className="text-sm">
           <span className="text-gray-500">User Agent:</span>
-          <p className="mt-1 text-gray-900 text-xs font-mono bg-white p-2 rounded border">{log.userAgent}</p>
+          <p className="mt-1 text-gray-900 text-xs font-mono bg-white p-2 rounded border">
+            {log.userAgent || 'N/A'}
+          </p>
         </div>
 
         {log.changedFields?.length > 0 && (
@@ -298,13 +371,21 @@ export default function AuditLogs() {
             Track all system activity and data changes
           </p>
         </div>
-        <button
-          onClick={handleExport}
-          className="inline-flex items-center justify-center px-4 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors"
-        >
-          <Download className="w-5 h-5 mr-2" />
-          <span>Export Logs</span>
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={handleRefresh}
+            className="inline-flex items-center justify-center px-4 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors"
+          >
+            <RefreshCw className="w-5 h-5" />
+          </button>
+          <button
+            onClick={handleExport}
+            className="inline-flex items-center justify-center px-4 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors"
+          >
+            <Download className="w-5 h-5 mr-2" />
+            <span>Export</span>
+          </button>
+        </div>
       </div>
 
       {/* Stats */}
@@ -315,7 +396,7 @@ export default function AuditLogs() {
               <Activity className="w-5 h-5 text-blue-600" />
             </div>
             <div>
-              <p className="text-2xl font-bold text-gray-900">{stats.today}</p>
+              <p className="text-2xl font-bold text-gray-900">{stats.today.toLocaleString()}</p>
               <p className="text-sm text-gray-500">Today</p>
             </div>
           </div>
@@ -326,7 +407,7 @@ export default function AuditLogs() {
               <Calendar className="w-5 h-5 text-green-600" />
             </div>
             <div>
-              <p className="text-2xl font-bold text-gray-900">{stats.thisWeek}</p>
+              <p className="text-2xl font-bold text-gray-900">{stats.thisWeek.toLocaleString()}</p>
               <p className="text-sm text-gray-500">This Week</p>
             </div>
           </div>
@@ -355,6 +436,14 @@ export default function AuditLogs() {
         </div>
       </div>
 
+      {/* Error Display */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-center gap-3">
+          <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0" />
+          <p className="text-red-700">{error}</p>
+        </div>
+      )}
+
       {/* Filters */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
         <div className="flex flex-col sm:flex-row gap-3">
@@ -362,7 +451,7 @@ export default function AuditLogs() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
             <input
               type="text"
-              placeholder="Search by user, record ID..."
+              placeholder="Search by user email..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
@@ -388,8 +477,10 @@ export default function AuditLogs() {
             className="px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-white"
           >
             <option value="all">All Objects</option>
-            {Object.entries(tableLabels).map(([value, label]) => (
-              <option key={value} value={value}>{label}</option>
+            {(filters.tables.length > 0 ? filters.tables : Object.keys(tableLabels)).map((table) => (
+              <option key={table} value={table}>
+                {tableLabels[table] || table}
+              </option>
             ))}
           </select>
           <select
@@ -412,14 +503,16 @@ export default function AuditLogs() {
           {loading ? (
             <div className="p-8 text-center">
               <div className="animate-spin w-8 h-8 border-2 border-panda-primary border-t-transparent rounded-full mx-auto" />
+              <p className="mt-2 text-gray-500">Loading audit logs...</p>
             </div>
-          ) : filteredLogs.length === 0 ? (
+          ) : logs.length === 0 ? (
             <div className="p-8 text-center text-gray-500">
               <FileText className="w-12 h-12 text-gray-300 mx-auto mb-4" />
               <p>No audit logs found</p>
+              <p className="text-sm mt-1">Try adjusting your filters or date range</p>
             </div>
           ) : (
-            filteredLogs.map((log) => {
+            logs.map((log) => {
               const ActionIcon = actionIcons[log.action] || Activity;
               const isExpanded = expandedLog === log.id;
 
@@ -437,13 +530,13 @@ export default function AuditLogs() {
                       )}
                     </div>
 
-                    <div className={`p-2 rounded-lg mr-4 ${actionColors[log.action]}`}>
+                    <div className={`p-2 rounded-lg mr-4 ${actionColors[log.action] || 'bg-gray-100 text-gray-700'}`}>
                       <ActionIcon className="w-5 h-5" />
                     </div>
 
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center flex-wrap gap-2">
-                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${actionColors[log.action]}`}>
+                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${actionColors[log.action] || 'bg-gray-100 text-gray-700'}`}>
                           {log.action}
                         </span>
                         <span className="px-2 py-0.5 bg-gray-100 text-gray-700 rounded text-xs font-medium">
@@ -458,7 +551,7 @@ export default function AuditLogs() {
                       <div className="mt-1 flex items-center text-sm text-gray-500 flex-wrap gap-x-4 gap-y-1">
                         <span className="flex items-center">
                           <User className="w-4 h-4 mr-1" />
-                          {log.userEmail || 'Unknown'}
+                          {log.userEmail || 'System'}
                         </span>
                         <span className="flex items-center">
                           <Clock className="w-4 h-4 mr-1" />
@@ -485,16 +578,24 @@ export default function AuditLogs() {
         </div>
       </div>
 
-      {/* Pagination would go here */}
+      {/* Pagination */}
       <div className="flex items-center justify-between">
         <p className="text-sm text-gray-500">
-          Showing {filteredLogs.length} of {logs.length} logs
+          Showing {pagination.offset + 1} - {Math.min(pagination.offset + logs.length, pagination.total)} of {pagination.total.toLocaleString()} logs
         </p>
         <div className="flex space-x-2">
-          <button className="px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-700 hover:bg-gray-50">
+          <button
+            onClick={handlePrevPage}
+            disabled={pagination.offset === 0}
+            className="px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
             Previous
           </button>
-          <button className="px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-700 hover:bg-gray-50">
+          <button
+            onClick={handleNextPage}
+            disabled={pagination.offset + pagination.limit >= pagination.total}
+            className="px-3 py-2 border border-gray-200 rounded-lg text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
             Next
           </button>
         </div>
