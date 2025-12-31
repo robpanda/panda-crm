@@ -2570,6 +2570,46 @@ export const bamboogliApi = {
     });
     return response.data?.totalUnread || 0;
   },
+
+  // ============================================================================
+  // SETTINGS
+  // ============================================================================
+
+  // Get all settings
+  async getSettings() {
+    const response = await api.get('/api/bamboogli/settings');
+    return response.data;
+  },
+
+  // Update settings
+  async updateSettings(data) {
+    const response = await api.put('/api/bamboogli/settings', data);
+    return response.data;
+  },
+
+  // Get channel connection status (Twilio/SendGrid)
+  async getChannelStatus() {
+    const response = await api.get('/api/bamboogli/settings/channel-status');
+    return response.data;
+  },
+
+  // Get message stats (real data from database)
+  async getMessageStats(params = {}) {
+    const response = await api.get('/api/bamboogli/settings/stats', { params });
+    return response.data;
+  },
+
+  // Test SMS connection
+  async testSmsConnection(phoneNumber) {
+    const response = await api.post('/api/bamboogli/settings/test-sms', { phoneNumber });
+    return response.data;
+  },
+
+  // Test email connection
+  async testEmailConnection(email) {
+    const response = await api.post('/api/bamboogli/settings/test-email', { email });
+    return response.data;
+  },
 };
 
 // ============================================================================

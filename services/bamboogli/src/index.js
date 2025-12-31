@@ -5,6 +5,7 @@ import messageRoutes from './routes/messages.js';
 import templateRoutes from './routes/templates.js';
 import webhookRoutes from './routes/webhooks.js';
 import activityRoutes from './routes/activities.js';
+import settingsRoutes from './routes/settings.js';
 
 const app = express();
 const PORT = process.env.PORT || 3012;
@@ -36,6 +37,7 @@ app.use('/api/messages', messageRoutes);
 app.use('/api/message-templates', templateRoutes);
 app.use('/api/webhooks', webhookRoutes);
 app.use('/api/activities', activityRoutes);
+app.use('/api/bamboogli/settings', settingsRoutes);
 
 // Error handling
 app.use((err, req, res, next) => {

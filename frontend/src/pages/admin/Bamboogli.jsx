@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   MessageSquare,
@@ -24,6 +24,8 @@ import {
   AlertCircle,
   Zap,
   Shield,
+  Loader2,
+  TestTube,
 } from 'lucide-react';
 import { bamboogliApi } from '../../services/api';
 
@@ -47,13 +49,100 @@ export default function Bamboogli() {
   const [page, setPage] = useState(1);
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState(null);
+  const [saveMessage, setSaveMessage] = useState(null);
+  const [testPhone, setTestPhone] = useState('');
+  const [testEmail, setTestEmail] = useState('');
   const limit = 20;
+
+  // Settings form state
+  const [settingsForm, setSettingsForm] = useState({
+    twilio: {
+      enabled: false,
+      accountSid: '',
+      authToken: '',
+      phoneNumber: '',
+      messagingServiceSid: '',
+    },
+    sendgrid: {
+      enabled: false,
+      apiKey: '',
+      fromEmail: '',
+      fromName: '',
+    },
+    autoResponse: {
+      enabled: false,
+      message: '',
+      delayMinutes: 5,
+    },
+    businessHours: {
+      enabled: false,
+      start: '09:00',
+      end: '17:00',
+      timezone: 'America/New_York',
+      afterHoursMessage: '',
+    },
+  });
 
   // Fetch conversation stats
   const { data: statsData, isLoading: loadingStats } = useQuery({
     queryKey: ['bamboogli-stats'],
     queryFn: () => bamboogliApi.getConversationStats(),
   });
+
+  // Fetch message stats (real data from database)
+  const { data: messageStatsData, isLoading: loadingMessageStats } = useQuery({
+    queryKey: ['bamboogli-message-stats'],
+    queryFn: () => bamboogliApi.getMessageStats({ period: '30d' }),
+    enabled: activeTab === 'overview',
+  });
+
+  // Fetch channel connection status
+  const { data: channelStatusData, isLoading: loadingChannelStatus, refetch: refetchChannelStatus } = useQuery({
+    queryKey: ['bamboogli-channel-status'],
+    queryFn: () => bamboogliApi.getChannelStatus(),
+    enabled: activeTab === 'overview' || activeTab === 'settings',
+    refetchInterval: 60000, // Refresh every minute
+  });
+
+  // Fetch settings
+  const { data: settingsData, isLoading: loadingSettings } = useQuery({
+    queryKey: ['bamboogli-settings'],
+    queryFn: () => bamboogliApi.getSettings(),
+    enabled: activeTab === 'settings',
+  });
+
+  // Update settings form when data is loaded
+  useEffect(() => {
+    if (settingsData) {
+      setSettingsForm({
+        twilio: {
+          enabled: settingsData.twilio?.enabled ?? false,
+          accountSid: settingsData.twilio?.accountSid ?? '',
+          authToken: settingsData.twilio?.authToken ?? '',
+          phoneNumber: settingsData.twilio?.phoneNumber ?? '',
+          messagingServiceSid: settingsData.twilio?.messagingServiceSid ?? '',
+        },
+        sendgrid: {
+          enabled: settingsData.sendgrid?.enabled ?? false,
+          apiKey: settingsData.sendgrid?.apiKey ?? '',
+          fromEmail: settingsData.sendgrid?.fromEmail ?? '',
+          fromName: settingsData.sendgrid?.fromName ?? '',
+        },
+        autoResponse: {
+          enabled: settingsData.autoResponse?.enabled ?? false,
+          message: settingsData.autoResponse?.message ?? '',
+          delayMinutes: settingsData.autoResponse?.delayMinutes ?? 5,
+        },
+        businessHours: {
+          enabled: settingsData.businessHours?.enabled ?? false,
+          start: settingsData.businessHours?.start ?? '09:00',
+          end: settingsData.businessHours?.end ?? '17:00',
+          timezone: settingsData.businessHours?.timezone ?? 'America/New_York',
+          afterHoursMessage: settingsData.businessHours?.afterHoursMessage ?? '',
+        },
+      });
+    }
+  }, [settingsData]);
 
   // Fetch templates
   const { data: templatesData, isLoading: loadingTemplates, refetch: refetchTemplates } = useQuery({
@@ -99,6 +188,51 @@ export default function Bamboogli() {
     },
   });
 
+  // Settings mutation
+  const updateSettingsMutation = useMutation({
+    mutationFn: bamboogliApi.updateSettings,
+    onSuccess: () => {
+      queryClient.invalidateQueries(['bamboogli-settings']);
+      queryClient.invalidateQueries(['bamboogli-channel-status']);
+      setSaveMessage({ type: 'success', text: 'Settings saved successfully!' });
+      setTimeout(() => setSaveMessage(null), 3000);
+    },
+    onError: (error) => {
+      setSaveMessage({ type: 'error', text: error.message || 'Failed to save settings' });
+      setTimeout(() => setSaveMessage(null), 5000);
+    },
+  });
+
+  // Test SMS mutation
+  const testSmsMutation = useMutation({
+    mutationFn: (phoneNumber) => bamboogliApi.testSmsConnection(phoneNumber),
+    onSuccess: (data) => {
+      setSaveMessage({ type: 'success', text: data.message || 'Test SMS sent successfully!' });
+      setTimeout(() => setSaveMessage(null), 3000);
+    },
+    onError: (error) => {
+      setSaveMessage({ type: 'error', text: error.response?.data?.error || 'Failed to send test SMS' });
+      setTimeout(() => setSaveMessage(null), 5000);
+    },
+  });
+
+  // Test Email mutation
+  const testEmailMutation = useMutation({
+    mutationFn: (email) => bamboogliApi.testEmailConnection(email),
+    onSuccess: (data) => {
+      setSaveMessage({ type: 'success', text: data.message || 'Test email sent successfully!' });
+      setTimeout(() => setSaveMessage(null), 3000);
+    },
+    onError: (error) => {
+      setSaveMessage({ type: 'error', text: error.response?.data?.error || 'Failed to send test email' });
+      setTimeout(() => setSaveMessage(null), 5000);
+    },
+  });
+
+  const handleSaveSettings = () => {
+    updateSettingsMutation.mutate(settingsForm);
+  };
+
   const stats = statsData || {
     total: 0,
     open: 0,
@@ -107,18 +241,28 @@ export default function Bamboogli() {
     todayMessages: 0,
   };
   const templates = templatesData || [];
-  const attentionQueue = attentionData?.conversations || [];
+  const attentionQueue = attentionData?.conversations || attentionData || [];
+  const messageStats = messageStatsData?.summary || {};
+  const channelStatus = channelStatusData || { twilio: {}, sendgrid: {} };
 
-  const StatCard = ({ icon: Icon, label, value, color, trend }) => (
+  const StatCard = ({ icon: Icon, label, value, color, trend, isLoading }) => (
     <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
       <div className="flex items-center justify-between">
         <div>
           <p className="text-sm text-gray-500">{label}</p>
-          <p className="text-2xl font-bold text-gray-900">{value}</p>
-          {trend && (
-            <p className={`text-xs mt-1 ${trend > 0 ? 'text-green-600' : 'text-red-600'}`}>
-              {trend > 0 ? '+' : ''}{trend}% vs last week
-            </p>
+          {isLoading ? (
+            <div className="h-8 flex items-center">
+              <Loader2 className="w-5 h-5 animate-spin text-gray-400" />
+            </div>
+          ) : (
+            <>
+              <p className="text-2xl font-bold text-gray-900">{value}</p>
+              {trend !== undefined && (
+                <p className={`text-xs mt-1 ${trend > 0 ? 'text-green-600' : trend < 0 ? 'text-red-600' : 'text-gray-500'}`}>
+                  {trend > 0 ? '+' : ''}{trend}% vs last period
+                </p>
+              )}
+            </>
           )}
         </div>
         <div className={`w-10 h-10 rounded-lg ${color} flex items-center justify-center`}>
@@ -135,6 +279,31 @@ export default function Bamboogli() {
       <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${config.color}`}>
         <Icon className="w-3 h-3 mr-1" />
         {config.label}
+      </span>
+    );
+  };
+
+  const ConnectionStatus = ({ connected, error }) => {
+    if (connected) {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
+          <CheckCircle className="w-3 h-3 mr-1" />
+          Connected
+        </span>
+      );
+    }
+    if (error) {
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700" title={error}>
+          <XCircle className="w-3 h-3 mr-1" />
+          Error
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+        <Clock className="w-3 h-3 mr-1" />
+        Not Configured
       </span>
     );
   };
@@ -288,6 +457,22 @@ export default function Bamboogli() {
 
   return (
     <div className="space-y-6">
+      {/* Save Message Toast */}
+      {saveMessage && (
+        <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg ${
+          saveMessage.type === 'success' ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
+        }`}>
+          <div className="flex items-center">
+            {saveMessage.type === 'success' ? (
+              <CheckCircle className="w-5 h-5 mr-2" />
+            ) : (
+              <XCircle className="w-5 h-5 mr-2" />
+            )}
+            {saveMessage.text}
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -299,7 +484,12 @@ export default function Bamboogli() {
         </div>
         <div className="flex space-x-2">
           <button
-            onClick={() => queryClient.invalidateQueries(['bamboogli'])}
+            onClick={() => {
+              queryClient.invalidateQueries(['bamboogli']);
+              queryClient.invalidateQueries(['bamboogli-stats']);
+              queryClient.invalidateQueries(['bamboogli-message-stats']);
+              queryClient.invalidateQueries(['bamboogli-channel-status']);
+            }}
             className="inline-flex items-center px-3 py-2 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
           >
             <RefreshCw className="w-4 h-4 mr-2" />
@@ -324,33 +514,38 @@ export default function Bamboogli() {
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
         <StatCard
           icon={MessageSquare}
-          label="Total Conversations"
-          value={stats.total}
+          label="Total Messages"
+          value={messageStats.totalMessages ?? stats.total}
           color="bg-gray-100 text-gray-600"
+          isLoading={loadingMessageStats}
         />
         <StatCard
-          icon={Users}
-          label="Open Conversations"
-          value={stats.open}
-          color="bg-blue-100 text-blue-600"
-        />
-        <StatCard
-          icon={CheckCircle}
-          label="Resolved"
-          value={stats.closed}
+          icon={Phone}
+          label="SMS Sent"
+          value={messageStats.sms?.sent ?? 0}
           color="bg-green-100 text-green-600"
+          isLoading={loadingMessageStats}
+        />
+        <StatCard
+          icon={Mail}
+          label="Emails Sent"
+          value={messageStats.email?.sent ?? 0}
+          color="bg-blue-100 text-blue-600"
+          isLoading={loadingMessageStats}
         />
         <StatCard
           icon={AlertCircle}
-          label="Needs Attention"
-          value={stats.needsAttention}
+          label="Failed"
+          value={messageStats.failedMessages ?? 0}
           color="bg-red-100 text-red-600"
+          isLoading={loadingMessageStats}
         />
         <StatCard
-          icon={Zap}
-          label="Messages Today"
-          value={stats.todayMessages}
+          icon={Users}
+          label="Active Conversations"
+          value={messageStats.activeConversations ?? stats.open}
           color="bg-yellow-100 text-yellow-600"
+          isLoading={loadingMessageStats}
         />
       </div>
 
@@ -442,30 +637,44 @@ export default function Bamboogli() {
               )}
             </div>
 
-            {/* Quick Stats */}
+            {/* Channel Status */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="bg-gray-50 rounded-xl p-5">
                 <h4 className="font-semibold text-gray-900 mb-4 flex items-center">
                   <Phone className="w-5 h-5 mr-2 text-green-600" />
                   SMS Channel
                 </h4>
-                <div className="space-y-3">
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Provider</span>
-                    <span className="font-medium text-gray-900">Twilio</span>
+                {loadingChannelStatus ? (
+                  <div className="flex items-center justify-center py-4">
+                    <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Status</span>
-                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
-                      <CheckCircle className="w-3 h-3 mr-1" />
-                      Connected
-                    </span>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Provider</span>
+                      <span className="font-medium text-gray-900">Twilio</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Status</span>
+                      <ConnectionStatus
+                        connected={channelStatus.twilio?.connected}
+                        error={channelStatus.twilio?.error}
+                      />
+                    </div>
+                    {channelStatus.twilio?.accountName && (
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Account</span>
+                        <span className="font-medium text-gray-900">{channelStatus.twilio.accountName}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">SMS This Period</span>
+                      <span className="font-medium text-gray-900">
+                        {loadingMessageStats ? '...' : (messageStats.sms?.total ?? 0).toLocaleString()}
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Messages This Month</span>
-                    <span className="font-medium text-gray-900">1,248</span>
-                  </div>
-                </div>
+                )}
               </div>
 
               <div className="bg-gray-50 rounded-xl p-5">
@@ -473,23 +682,37 @@ export default function Bamboogli() {
                   <Mail className="w-5 h-5 mr-2 text-blue-600" />
                   Email Channel
                 </h4>
-                <div className="space-y-3">
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Provider</span>
-                    <span className="font-medium text-gray-900">SendGrid</span>
+                {loadingChannelStatus ? (
+                  <div className="flex items-center justify-center py-4">
+                    <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Status</span>
-                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
-                      <CheckCircle className="w-3 h-3 mr-1" />
-                      Connected
-                    </span>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Provider</span>
+                      <span className="font-medium text-gray-900">SendGrid</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Status</span>
+                      <ConnectionStatus
+                        connected={channelStatus.sendgrid?.connected}
+                        error={channelStatus.sendgrid?.error}
+                      />
+                    </div>
+                    {channelStatus.sendgrid?.email && (
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">From</span>
+                        <span className="font-medium text-gray-900">{channelStatus.sendgrid.email}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Emails This Period</span>
+                      <span className="font-medium text-gray-900">
+                        {loadingMessageStats ? '...' : (messageStats.email?.total ?? 0).toLocaleString()}
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Emails This Month</span>
-                    <span className="font-medium text-gray-900">3,421</span>
-                  </div>
-                </div>
+                )}
               </div>
             </div>
           </div>
@@ -600,160 +823,401 @@ export default function Bamboogli() {
         {/* Settings Tab */}
         {activeTab === 'settings' && (
           <div className="p-6">
-            <div className="max-w-2xl space-y-8">
-              {/* SMS Settings */}
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-                  <Phone className="w-5 h-5 mr-2 text-green-600" />
-                  SMS Settings (Twilio)
-                </h3>
-                <div className="space-y-4 bg-gray-50 rounded-xl p-5">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Account SID
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="AC..."
-                      className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Auth Token
-                    </label>
-                    <input
-                      type="password"
-                      placeholder="********"
-                      className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Default From Number
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="+1 (555) 123-4567"
-                      className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-white"
-                    />
-                  </div>
-                </div>
+            {loadingSettings ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="w-8 h-8 animate-spin text-panda-primary" />
               </div>
-
-              {/* Email Settings */}
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-                  <Mail className="w-5 h-5 mr-2 text-blue-600" />
-                  Email Settings (SendGrid)
-                </h3>
-                <div className="space-y-4 bg-gray-50 rounded-xl p-5">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      API Key
-                    </label>
-                    <input
-                      type="password"
-                      placeholder="SG...."
-                      className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Default From Email
-                    </label>
-                    <input
-                      type="email"
-                      placeholder="info@pandaexteriors.com"
-                      className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Default From Name
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="Panda Exteriors"
-                      className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-white"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* Auto-Response Settings */}
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-                  <Zap className="w-5 h-5 mr-2 text-yellow-600" />
-                  Auto-Response Settings
-                </h3>
-                <div className="space-y-4 bg-gray-50 rounded-xl p-5">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="font-medium text-gray-900">Enable Auto-Responses</p>
-                      <p className="text-sm text-gray-500">Automatically respond to incoming messages</p>
+            ) : (
+              <div className="max-w-2xl space-y-8">
+                {/* SMS Settings */}
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                    <Phone className="w-5 h-5 mr-2 text-green-600" />
+                    SMS Settings (Twilio)
+                  </h3>
+                  <div className="space-y-4 bg-gray-50 rounded-xl p-5">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <p className="font-medium text-gray-900">Enable SMS</p>
+                        <p className="text-sm text-gray-500">Allow sending SMS messages via Twilio</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={settingsForm.twilio.enabled}
+                          onChange={(e) => setSettingsForm({
+                            ...settingsForm,
+                            twilio: { ...settingsForm.twilio, enabled: e.target.checked }
+                          })}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-panda-primary/20 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-panda-primary"></div>
+                      </label>
                     </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input type="checkbox" defaultChecked className="sr-only peer" />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-panda-primary/20 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-panda-primary"></div>
-                    </label>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Auto-Response Cooldown (minutes)
-                    </label>
-                    <input
-                      type="number"
-                      defaultValue={5}
-                      min={1}
-                      max={60}
-                      className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-white"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      Don't send another auto-response for this many minutes
-                    </p>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Account SID
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="AC..."
+                        value={settingsForm.twilio.accountSid}
+                        onChange={(e) => setSettingsForm({
+                          ...settingsForm,
+                          twilio: { ...settingsForm.twilio, accountSid: e.target.value }
+                        })}
+                        className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Auth Token
+                      </label>
+                      <input
+                        type="password"
+                        placeholder="Enter new token to update..."
+                        value={settingsForm.twilio.authToken}
+                        onChange={(e) => setSettingsForm({
+                          ...settingsForm,
+                          twilio: { ...settingsForm.twilio, authToken: e.target.value }
+                        })}
+                        className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Default From Number
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="+1 (555) 123-4567"
+                        value={settingsForm.twilio.phoneNumber}
+                        onChange={(e) => setSettingsForm({
+                          ...settingsForm,
+                          twilio: { ...settingsForm.twilio, phoneNumber: e.target.value }
+                        })}
+                        className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Messaging Service SID (Optional)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="MG..."
+                        value={settingsForm.twilio.messagingServiceSid}
+                        onChange={(e) => setSettingsForm({
+                          ...settingsForm,
+                          twilio: { ...settingsForm.twilio, messagingServiceSid: e.target.value }
+                        })}
+                        className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-white"
+                      />
+                    </div>
+                    {/* Test SMS */}
+                    <div className="pt-3 border-t border-gray-200">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Test SMS Connection
+                      </label>
+                      <div className="flex space-x-2">
+                        <input
+                          type="text"
+                          placeholder="+1 (555) 123-4567"
+                          value={testPhone}
+                          onChange={(e) => setTestPhone(e.target.value)}
+                          className="flex-1 px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-white"
+                        />
+                        <button
+                          onClick={() => testSmsMutation.mutate(testPhone)}
+                          disabled={!testPhone || testSmsMutation.isPending}
+                          className="px-4 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
+                        >
+                          {testSmsMutation.isPending ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <>
+                              <TestTube className="w-4 h-4 mr-2" />
+                              Test
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              {/* Security Settings */}
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-                  <Shield className="w-5 h-5 mr-2 text-purple-600" />
-                  Security & Compliance
-                </h3>
-                <div className="space-y-4 bg-gray-50 rounded-xl p-5">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="font-medium text-gray-900">Honor Opt-Outs</p>
-                      <p className="text-sm text-gray-500">Automatically stop messaging on STOP keyword</p>
+                {/* Email Settings */}
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                    <Mail className="w-5 h-5 mr-2 text-blue-600" />
+                    Email Settings (SendGrid)
+                  </h3>
+                  <div className="space-y-4 bg-gray-50 rounded-xl p-5">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <p className="font-medium text-gray-900">Enable Email</p>
+                        <p className="text-sm text-gray-500">Allow sending emails via SendGrid</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={settingsForm.sendgrid.enabled}
+                          onChange={(e) => setSettingsForm({
+                            ...settingsForm,
+                            sendgrid: { ...settingsForm.sendgrid, enabled: e.target.checked }
+                          })}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-panda-primary/20 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-panda-primary"></div>
+                      </label>
                     </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input type="checkbox" defaultChecked className="sr-only peer" />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-panda-primary/20 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-panda-primary"></div>
-                    </label>
-                  </div>
-                  <div className="flex items-center justify-between">
                     <div>
-                      <p className="font-medium text-gray-900">Log All Messages</p>
-                      <p className="text-sm text-gray-500">Keep a complete audit trail of communications</p>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        API Key
+                      </label>
+                      <input
+                        type="password"
+                        placeholder="Enter new key to update..."
+                        value={settingsForm.sendgrid.apiKey}
+                        onChange={(e) => setSettingsForm({
+                          ...settingsForm,
+                          sendgrid: { ...settingsForm.sendgrid, apiKey: e.target.value }
+                        })}
+                        className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-white"
+                      />
                     </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input type="checkbox" defaultChecked className="sr-only peer" />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-panda-primary/20 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-panda-primary"></div>
-                    </label>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Default From Email
+                      </label>
+                      <input
+                        type="email"
+                        placeholder="info@pandaexteriors.com"
+                        value={settingsForm.sendgrid.fromEmail}
+                        onChange={(e) => setSettingsForm({
+                          ...settingsForm,
+                          sendgrid: { ...settingsForm.sendgrid, fromEmail: e.target.value }
+                        })}
+                        className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Default From Name
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Panda Exteriors"
+                        value={settingsForm.sendgrid.fromName}
+                        onChange={(e) => setSettingsForm({
+                          ...settingsForm,
+                          sendgrid: { ...settingsForm.sendgrid, fromName: e.target.value }
+                        })}
+                        className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-white"
+                      />
+                    </div>
+                    {/* Test Email */}
+                    <div className="pt-3 border-t border-gray-200">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Test Email Connection
+                      </label>
+                      <div className="flex space-x-2">
+                        <input
+                          type="email"
+                          placeholder="test@example.com"
+                          value={testEmail}
+                          onChange={(e) => setTestEmail(e.target.value)}
+                          className="flex-1 px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-white"
+                        />
+                        <button
+                          onClick={() => testEmailMutation.mutate(testEmail)}
+                          disabled={!testEmail || testEmailMutation.isPending}
+                          className="px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
+                        >
+                          {testEmailMutation.isPending ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <>
+                              <TestTube className="w-4 h-4 mr-2" />
+                              Test
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              {/* Save Button */}
-              <div className="flex justify-end pt-4">
-                <button className="px-6 py-2.5 bg-gradient-to-r from-panda-primary to-panda-secondary text-white text-sm font-medium rounded-lg hover:opacity-90">
-                  <Save className="w-4 h-4 inline mr-2" />
-                  Save Settings
-                </button>
+                {/* Auto-Response Settings */}
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                    <Zap className="w-5 h-5 mr-2 text-yellow-600" />
+                    Auto-Response Settings
+                  </h3>
+                  <div className="space-y-4 bg-gray-50 rounded-xl p-5">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="font-medium text-gray-900">Enable Auto-Responses</p>
+                        <p className="text-sm text-gray-500">Automatically respond to incoming messages</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={settingsForm.autoResponse.enabled}
+                          onChange={(e) => setSettingsForm({
+                            ...settingsForm,
+                            autoResponse: { ...settingsForm.autoResponse, enabled: e.target.checked }
+                          })}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-panda-primary/20 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-panda-primary"></div>
+                      </label>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Auto-Response Message
+                      </label>
+                      <textarea
+                        placeholder="Thanks for contacting Panda Exteriors! We'll get back to you shortly."
+                        value={settingsForm.autoResponse.message}
+                        onChange={(e) => setSettingsForm({
+                          ...settingsForm,
+                          autoResponse: { ...settingsForm.autoResponse, message: e.target.value }
+                        })}
+                        rows={3}
+                        className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-white resize-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Cooldown (minutes)
+                      </label>
+                      <input
+                        type="number"
+                        value={settingsForm.autoResponse.delayMinutes}
+                        onChange={(e) => setSettingsForm({
+                          ...settingsForm,
+                          autoResponse: { ...settingsForm.autoResponse, delayMinutes: parseInt(e.target.value) || 5 }
+                        })}
+                        min={1}
+                        max={60}
+                        className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-white"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">
+                        Don't send another auto-response for this many minutes
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Business Hours Settings */}
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+                    <Clock className="w-5 h-5 mr-2 text-purple-600" />
+                    Business Hours
+                  </h3>
+                  <div className="space-y-4 bg-gray-50 rounded-xl p-5">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className="font-medium text-gray-900">Enable Business Hours</p>
+                        <p className="text-sm text-gray-500">Send different auto-response outside hours</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={settingsForm.businessHours.enabled}
+                          onChange={(e) => setSettingsForm({
+                            ...settingsForm,
+                            businessHours: { ...settingsForm.businessHours, enabled: e.target.checked }
+                          })}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-panda-primary/20 rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-panda-primary"></div>
+                      </label>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Start Time
+                        </label>
+                        <input
+                          type="time"
+                          value={settingsForm.businessHours.start}
+                          onChange={(e) => setSettingsForm({
+                            ...settingsForm,
+                            businessHours: { ...settingsForm.businessHours, start: e.target.value }
+                          })}
+                          className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          End Time
+                        </label>
+                        <input
+                          type="time"
+                          value={settingsForm.businessHours.end}
+                          onChange={(e) => setSettingsForm({
+                            ...settingsForm,
+                            businessHours: { ...settingsForm.businessHours, end: e.target.value }
+                          })}
+                          className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-white"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        Timezone
+                      </label>
+                      <select
+                        value={settingsForm.businessHours.timezone}
+                        onChange={(e) => setSettingsForm({
+                          ...settingsForm,
+                          businessHours: { ...settingsForm.businessHours, timezone: e.target.value }
+                        })}
+                        className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-white"
+                      >
+                        <option value="America/New_York">Eastern Time</option>
+                        <option value="America/Chicago">Central Time</option>
+                        <option value="America/Denver">Mountain Time</option>
+                        <option value="America/Los_Angeles">Pacific Time</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                        After-Hours Message
+                      </label>
+                      <textarea
+                        placeholder="Thanks for reaching out! Our office is currently closed. We'll respond during business hours."
+                        value={settingsForm.businessHours.afterHoursMessage}
+                        onChange={(e) => setSettingsForm({
+                          ...settingsForm,
+                          businessHours: { ...settingsForm.businessHours, afterHoursMessage: e.target.value }
+                        })}
+                        rows={3}
+                        className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-white resize-none"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Save Button */}
+                <div className="flex justify-end pt-4">
+                  <button
+                    onClick={handleSaveSettings}
+                    disabled={updateSettingsMutation.isPending}
+                    className="px-6 py-2.5 bg-gradient-to-r from-panda-primary to-panda-secondary text-white text-sm font-medium rounded-lg hover:opacity-90 disabled:opacity-50 flex items-center"
+                  >
+                    {updateSettingsMutation.isPending ? (
+                      <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                    ) : (
+                      <Save className="w-4 h-4 mr-2" />
+                    )}
+                    Save Settings
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
           </div>
         )}
       </div>
