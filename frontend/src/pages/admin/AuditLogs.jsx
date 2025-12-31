@@ -126,7 +126,7 @@ export default function AuditLogs() {
   // Load filter options
   const loadFilters = useCallback(async () => {
     try {
-      const response = await api.get('/audit/filters');
+      const response = await api.get('/api/audit/filters');
       if (response.data.success) {
         setFilters(response.data.data);
       }
@@ -138,7 +138,7 @@ export default function AuditLogs() {
   // Load audit stats
   const loadStats = useCallback(async () => {
     try {
-      const response = await api.get('/audit/stats');
+      const response = await api.get('/api/audit/stats');
       if (response.data.success) {
         const data = response.data.data;
 
@@ -185,7 +185,7 @@ export default function AuditLogs() {
         params.userEmail = searchTerm;
       }
 
-      const response = await api.get('/audit/logs', { params });
+      const response = await api.get('/api/audit/logs', { params });
 
       if (response.data.success) {
         setLogs(response.data.data || []);
@@ -238,7 +238,7 @@ export default function AuditLogs() {
       if (actionFilter !== 'all') params.action = actionFilter;
       if (tableFilter !== 'all') params.tableName = tableFilter;
 
-      const response = await api.get('/audit/export', {
+      const response = await api.get('/api/audit/export', {
         params,
         responseType: 'blob',
       });
