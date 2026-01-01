@@ -172,6 +172,13 @@ router.post('/', validateCreate, handleValidation, async (req, res, next) => {
     const lead = await leadService.createLead({
       ...req.body,
       ownerId: req.body.ownerId || req.user?.id,
+      // Audit context
+      _auditContext: {
+        userId: req.user?.id,
+        userEmail: req.user?.email,
+        ipAddress: req.ip || req.headers['x-forwarded-for']?.split(',')[0],
+        userAgent: req.headers['user-agent'],
+      },
     });
     res.status(201).json({ success: true, data: lead });
   } catch (error) {
@@ -196,7 +203,15 @@ router.get('/:id', async (req, res, next) => {
 // Update lead
 router.put('/:id', async (req, res, next) => {
   try {
-    const lead = await leadService.updateLead(req.params.id, req.body);
+    const lead = await leadService.updateLead(req.params.id, {
+      ...req.body,
+      _auditContext: {
+        userId: req.user?.id,
+        userEmail: req.user?.email,
+        ipAddress: req.ip || req.headers['x-forwarded-for']?.split(',')[0],
+        userAgent: req.headers['user-agent'],
+      },
+    });
     res.json({ success: true, data: lead });
   } catch (error) {
     next(error);
@@ -205,7 +220,15 @@ router.put('/:id', async (req, res, next) => {
 
 router.patch('/:id', async (req, res, next) => {
   try {
-    const lead = await leadService.updateLead(req.params.id, req.body);
+    const lead = await leadService.updateLead(req.params.id, {
+      ...req.body,
+      _auditContext: {
+        userId: req.user?.id,
+        userEmail: req.user?.email,
+        ipAddress: req.ip || req.headers['x-forwarded-for']?.split(',')[0],
+        userAgent: req.headers['user-agent'],
+      },
+    });
     res.json({ success: true, data: lead });
   } catch (error) {
     next(error);

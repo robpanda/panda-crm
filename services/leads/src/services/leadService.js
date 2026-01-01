@@ -7,6 +7,42 @@ import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 const prisma = new PrismaClient();
 const lambdaClient = new LambdaClient({ region: 'us-east-2' });
 
+// Audit logging helper
+const logAudit = async ({ tableName, recordId, action, oldValues, newValues, userId, userEmail, source = 'api' }) => {
+  try {
+    // Calculate changed fields
+    const changedFields = [];
+    if (oldValues && newValues) {
+      const allKeys = new Set([...Object.keys(oldValues), ...Object.keys(newValues)]);
+      for (const key of allKeys) {
+        if (JSON.stringify(oldValues[key]) !== JSON.stringify(newValues[key])) {
+          changedFields.push(key);
+        }
+      }
+    } else if (newValues) {
+      changedFields.push(...Object.keys(newValues));
+    }
+
+    await prisma.auditLog.create({
+      data: {
+        tableName,
+        recordId,
+        action,
+        oldValues: oldValues || undefined,
+        newValues: newValues || undefined,
+        changedFields,
+        userId,
+        userEmail,
+        source,
+      },
+    });
+    logger.debug(`Audit log created: ${action} on ${tableName}:${recordId}`);
+  } catch (error) {
+    logger.error('Failed to create audit log:', error);
+    // Don't throw - audit logging should not break the main operation
+  }
+};
+
 // Salesforce sync configuration
 const SALESFORCE_SYNC_ENABLED = process.env.SALESFORCE_SYNC_ENABLED !== 'false';
 const SYNC_LAMBDA_NAME = 'panda-crm-sync';
@@ -326,6 +362,26 @@ class LeadService {
 
     logger.info(`Lead created: ${lead.id} (${lead.firstName} ${lead.lastName})`);
 
+    // Log audit event
+    const auditContext = data._auditContext || {};
+    await logAudit({
+      tableName: 'leads',
+      recordId: lead.id,
+      action: 'CREATE',
+      newValues: {
+        firstName: lead.firstName,
+        lastName: lead.lastName,
+        email: lead.email,
+        phone: lead.phone,
+        status: lead.status,
+        source: lead.source,
+        ownerId: lead.ownerId,
+      },
+      userId: auditContext.userId,
+      userEmail: auditContext.userEmail,
+      source: 'web',
+    });
+
     // Push to Salesforce if sync is enabled and lead doesn't already have a Salesforce ID
     if (SALESFORCE_SYNC_ENABLED && !lead.salesforceId) {
       this.pushToSalesforce(lead.id).catch(err => {
@@ -364,6 +420,9 @@ class LeadService {
    * Update lead
    */
   async updateLead(id, data) {
+    // Get old values for audit logging
+    const oldLead = await prisma.lead.findUnique({ where: { id } });
+
     // Build update data, filtering out undefined values
     const updateData = {};
 
@@ -406,6 +465,36 @@ class LeadService {
     });
 
     logger.info(`Lead updated: ${id}`);
+
+    // Log audit event
+    const auditContext = data._auditContext || {};
+    await logAudit({
+      tableName: 'leads',
+      recordId: id,
+      action: 'UPDATE',
+      oldValues: oldLead ? {
+        firstName: oldLead.firstName,
+        lastName: oldLead.lastName,
+        email: oldLead.email,
+        phone: oldLead.phone,
+        status: oldLead.status,
+        source: oldLead.source,
+        ownerId: oldLead.ownerId,
+      } : null,
+      newValues: {
+        firstName: lead.firstName,
+        lastName: lead.lastName,
+        email: lead.email,
+        phone: lead.phone,
+        status: lead.status,
+        source: lead.source,
+        ownerId: lead.ownerId,
+      },
+      userId: auditContext.userId,
+      userEmail: auditContext.userEmail,
+      source: 'web',
+    });
+
     return this.createLeadWrapper(lead);
   }
 
