@@ -10,8 +10,8 @@ import settingsRoutes from './routes/settings.js';
 const app = express();
 const PORT = process.env.PORT || 3012;
 
-// Middleware - CORS with explicit origins
-app.use(cors({
+// CORS configuration - define once and reuse
+const corsOptions = {
   origin: process.env.ALLOWED_ORIGINS?.split(',') || [
     'http://localhost:3000',
     'http://localhost:5173',
@@ -20,9 +20,14 @@ app.use(cors({
     'https://bamboo.pandaadmin.com'
   ],
   credentials: true,
-}));
-// Handle preflight OPTIONS requests
-app.options('*', cors());
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+};
+
+// Handle preflight OPTIONS requests FIRST
+app.options('*', cors(corsOptions));
+// Then apply CORS to all routes
+app.use(cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true })); // For Twilio webhooks
 
