@@ -23,6 +23,7 @@ on:
           - workflows
           - documents
           - integrations
+          - bamboogli
 
 env:
   AWS_REGION: us-east-2
@@ -60,6 +61,8 @@ jobs:
             port: 3009
           - name: integrations
             port: 3010
+          - name: bamboogli
+            port: 3012
 
     steps:
       - name: Checkout
