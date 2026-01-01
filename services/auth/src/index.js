@@ -10,6 +10,7 @@ import permissionRoutes from './routes/permissions.js';
 import auditRoutes from './routes/audit.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { logger } from './middleware/logger.js';
+import { authMiddleware } from './middleware/auth.js';
 import { permissionService } from './services/permissionService.js';
 
 dotenv.config();
@@ -39,8 +40,8 @@ app.get('/health', (req, res) => {
 
 // Routes - /api/auth/* to match ALB path-based routing
 app.use('/api/auth', authRoutes);
-app.use('/api/permissions', permissionRoutes);
-app.use('/api/audit', auditRoutes);
+app.use('/api/permissions', authMiddleware, permissionRoutes);
+app.use('/api/audit', authMiddleware, auditRoutes);
 
 // Error handling
 app.use(errorHandler);
