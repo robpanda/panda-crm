@@ -35,6 +35,7 @@ app.get('/health', (req, res) => {
 app.use('/api/work-orders', workOrderRoutes);
 app.use('/api/service-appointments', serviceAppointmentRoutes);
 app.use('/api/resources', resourceRoutes);
+app.use('/api/field-service/resources', resourceRoutes); // Alias for frontend compatibility
 app.use('/api/scheduling', schedulingRoutes);
 app.use('/api/google', googleCalendarRoutes);
 app.use('/api/material-orders', materialOrderRoutes);
