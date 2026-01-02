@@ -3260,12 +3260,20 @@ export default function OpportunityDetail() {
                     </button>
                     <button
                       type="submit"
-                      disabled={orderGAFMeasureMutation.isLoading || !gafMeasureForm.street || !gafMeasureForm.city || !gafMeasureForm.state || !gafMeasureForm.zip}
+                      disabled={orderGAFMeasureMutation.isPending || !gafMeasureForm.street || !gafMeasureForm.city || !gafMeasureForm.state || !gafMeasureForm.zip}
                       className="px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-lg hover:from-blue-600 hover:to-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
                     >
-                      {orderGAFMeasureMutation.isLoading && <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
-                      <Ruler className="w-4 h-4" />
-                      <span>Submit Order</span>
+                      {orderGAFMeasureMutation.isPending ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          <span>Submitting...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Ruler className="w-4 h-4" />
+                          <span>Submit Order</span>
+                        </>
+                      )}
                     </button>
                   </div>
                 </form>
@@ -3488,12 +3496,20 @@ export default function OpportunityDetail() {
                     </button>
                     <button
                       type="submit"
-                      disabled={orderEagleViewMutation.isLoading || !eagleviewForm.street || !eagleviewForm.city || !eagleviewForm.state || !eagleviewForm.zip || !eagleviewForm.measurementType}
+                      disabled={orderEagleViewMutation.isPending || !eagleviewForm.street || !eagleviewForm.city || !eagleviewForm.state || !eagleviewForm.zip || !eagleviewForm.measurementType}
                       className="px-4 py-2 bg-gradient-to-r from-orange-500 to-red-600 text-white rounded-lg hover:from-orange-600 hover:to-red-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
                     >
-                      {orderEagleViewMutation.isLoading && <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
-                      <Eye className="w-4 h-4" />
-                      <span>Submit Order</span>
+                      {orderEagleViewMutation.isPending ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          <span>Submitting...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Eye className="w-4 h-4" />
+                          <span>Submit Order</span>
+                        </>
+                      )}
                     </button>
                   </div>
                 </form>
@@ -3616,12 +3632,20 @@ export default function OpportunityDetail() {
                     </button>
                     <button
                       type="submit"
-                      disabled={createHoverCaptureMutation.isLoading || !hoverCaptureForm.street || !hoverCaptureForm.city || !hoverCaptureForm.state || !hoverCaptureForm.zip}
+                      disabled={createHoverCaptureMutation.isPending || !hoverCaptureForm.street || !hoverCaptureForm.city || !hoverCaptureForm.state || !hoverCaptureForm.zip}
                       className="px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-600 text-white rounded-lg hover:from-purple-600 hover:to-pink-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
                     >
-                      {createHoverCaptureMutation.isLoading && <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
-                      <Camera className="w-4 h-4" />
-                      <span>Create Capture Request</span>
+                      {createHoverCaptureMutation.isPending ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          <span>Creating...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Camera className="w-4 h-4" />
+                          <span>Create Capture Request</span>
+                        </>
+                      )}
                     </button>
                   </div>
                 </form>
