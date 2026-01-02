@@ -39,6 +39,25 @@ let gafTokenCache = { token: null, expiresAt: 0 };
 let hoverTokenCache = { accessToken: null, refreshToken: null, expiresAt: 0 };
 
 class MeasurementService {
+  /**
+   * Look up internal User ID from Cognito ID
+   * Returns null if user not found (orderedById is optional)
+   */
+  async getUserIdFromCognitoId(cognitoId) {
+    if (!cognitoId) return null;
+
+    try {
+      const user = await prisma.user.findUnique({
+        where: { cognitoId },
+        select: { id: true },
+      });
+      return user?.id || null;
+    } catch (error) {
+      logger.warn(`Could not find user for Cognito ID ${cognitoId}:`, error.message);
+      return null;
+    }
+  }
+
   // ==========================================
   // EagleView Integration
   // ==========================================
@@ -67,6 +86,9 @@ class MeasurementService {
       throw new Error('Opportunity not found');
     }
 
+    // Look up internal user ID from Cognito ID (orderedById is optional)
+    const orderedById = await this.getUserIdFromCognitoId(userId);
+
     try {
       // Create pending measurement report
       const report = await prisma.measurementReport.create({
@@ -80,7 +102,7 @@ class MeasurementService {
           propertyZip: zip || opportunity.postalCode,
           opportunityId,
           accountId: opportunity.accountId,
-          orderedById: userId,
+          orderedById,
           orderedAt: new Date(),
         },
       });
@@ -357,6 +379,9 @@ class MeasurementService {
     // Map measurement type to report type
     const reportType = this.mapGAFMeasurementType(measurementType);
 
+    // Look up internal user ID from Cognito ID (orderedById is optional)
+    const orderedById = await this.getUserIdFromCognitoId(userId);
+
     try {
       const report = await prisma.measurementReport.create({
         data: {
@@ -371,7 +396,7 @@ class MeasurementService {
           longitude: longitude ? parseFloat(longitude) : null,
           opportunityId,
           accountId: opportunity.accountId,
-          orderedById: userId,
+          orderedById,
           orderedAt: new Date(),
           notes: comments,
           rawData: {
