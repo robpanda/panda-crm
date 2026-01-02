@@ -98,6 +98,7 @@ model Account {
   callLogs           CallLog[]
   measurementReports MeasurementReport[]
   mobileActivities   MobileActivity[]
+  companyCamProjects CompanyCamProject[]
 
   // Event & Email Relations
   events        Event[]        @relation("AccountEvents")
@@ -363,6 +364,7 @@ model Opportunity {
   callLogs           CallLog[]
   measurementReports MeasurementReport[]
   mobileActivities   MobileActivity[]
+  companyCamProject  CompanyCamProject?
 
   // Event & Email Relations
   events        Event[]        @relation("OpportunityEvents")
@@ -3085,8 +3087,10 @@ model CompanyCamProject {
   name         String
 
   // Linked records
-  opportunityId String? @unique @map("opportunity_id")
-  accountId     String? @map("account_id")
+  opportunityId String?      @unique @map("opportunity_id")
+  opportunity   Opportunity? @relation(fields: [opportunityId], references: [id])
+  accountId     String?      @map("account_id")
+  account       Account?     @relation(fields: [accountId], references: [id])
 
   // Address
   address   String?
@@ -3105,6 +3109,9 @@ model CompanyCamProject {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
+  // Relations
+  photos CompanyCamPhoto[]
+
   @@map("companycam_projects")
 }
 
@@ -3113,6 +3120,7 @@ model CompanyCamPhoto {
 
   companyCamId String @unique @map("companycam_id")
   projectId    String @map("project_id")
+  project      CompanyCamProject @relation(fields: [projectId], references: [id])
 
   // Photo details
   photoUrl     String  @map("photo_url")
