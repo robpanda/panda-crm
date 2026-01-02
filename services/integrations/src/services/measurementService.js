@@ -2,9 +2,16 @@
 // Handles ordering, receiving, and processing measurement reports
 // Also supports Hover 3D modeling and design visualization
 import { PrismaClient } from '@prisma/client';
+import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { logger } from '../middleware/logger.js';
 
 const prisma = new PrismaClient();
+
+// S3 configuration for document storage
+const S3_BUCKET = process.env.MEASUREMENT_DOCS_BUCKET || 'panda-crm-measurement-docs';
+const S3_REGION = process.env.AWS_REGION || 'us-east-2';
+const s3Client = new S3Client({ region: S3_REGION });
 
 // ==========================================
 // EagleView API Configuration (OAuth2)
@@ -302,6 +309,479 @@ class MeasurementService {
     logger.info(`EagleView report processed: ${reportId}`);
   }
 
+  // ==========================================
+  // EagleView Report Retrieval (Polling)
+  // Replicates Salesforce EgaleViewGetReports_API
+  // ==========================================
+
+  /**
+   * Fetch EagleView report by Report ID
+   * Called by polling job or manually to retrieve completed report
+   * Replicates: GetReports(ReportId, accId, accessToken) from Salesforce
+   */
+  async fetchEagleViewReport(reportId) {
+    const accessToken = await this.getEagleViewAccessToken();
+
+    // EagleView API v3 endpoint for report retrieval
+    const reportUrl = `https://apicenter.eagleview.com/v3/Report/GetReport?reportId=${reportId}`;
+
+    const response = await fetch(reportUrl, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      logger.error(`EagleView GetReport error for ${reportId}:`, error);
+      throw new Error(`EagleView API error: ${error}`);
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Fetch EagleView waste/complexity data
+   * Replicates: GetWasteTable(ReportId, accId, accessToken) from Salesforce
+   */
+  async fetchEagleViewWasteData(reportId) {
+    const accessToken = await this.getEagleViewAccessToken();
+
+    // EagleView API v1 endpoint for waste recommendations
+    const wasteUrl = `https://apicenter.eagleview.com/v1/reports/${reportId}/waste`;
+
+    const response = await fetch(wasteUrl, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      // Waste data may not be available for all reports
+      if (response.status === 404) {
+        logger.warn(`Waste data not available for report ${reportId}`);
+        return null;
+      }
+      const error = await response.text();
+      logger.error(`EagleView GetWaste error for ${reportId}:`, error);
+      throw new Error(`EagleView API error: ${error}`);
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Download EagleView PDF report and get download URL
+   * Replicates: PDF download and ContentVersion storage from Salesforce
+   */
+  async downloadEagleViewPdf(reportId) {
+    const accessToken = await this.getEagleViewAccessToken();
+
+    // EagleView API v1 endpoint for PDF download
+    const pdfUrl = `https://apicenter.eagleview.com/v1/File/GetReportFile?reportId=${reportId}&fileType=PDF`;
+
+    const response = await fetch(pdfUrl, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      logger.error(`EagleView PDF download error for ${reportId}:`, error);
+      throw new Error(`EagleView PDF download error: ${error}`);
+    }
+
+    // Return the response for streaming or buffer conversion
+    return {
+      response,
+      contentType: response.headers.get('content-type'),
+      contentDisposition: response.headers.get('content-disposition'),
+    };
+  }
+
+  /**
+   * Download EagleView PDF and store it in S3
+   * Replicates Salesforce ContentVersion storage functionality
+   * @param {string} eagleViewReportId - EagleView report ID
+   * @param {string} measurementReportId - Our internal measurement report ID
+   * @returns {Object} - { s3Key, s3Url } if successful
+   */
+  async downloadAndStorePdf(eagleViewReportId, measurementReportId) {
+    try {
+      const { response } = await this.downloadEagleViewPdf(eagleViewReportId);
+
+      // Convert response to buffer
+      const arrayBuffer = await response.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+
+      // Generate S3 key
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const s3Key = `eagleview/${measurementReportId}/${eagleViewReportId}_${timestamp}.pdf`;
+
+      // Upload to S3
+      const putCommand = new PutObjectCommand({
+        Bucket: S3_BUCKET,
+        Key: s3Key,
+        Body: buffer,
+        ContentType: 'application/pdf',
+        Metadata: {
+          'eagleview-report-id': eagleViewReportId,
+          'measurement-report-id': measurementReportId,
+          'uploaded-at': new Date().toISOString(),
+        },
+      });
+
+      await s3Client.send(putCommand);
+
+      // Generate presigned URL for access (valid for 7 days)
+      const getCommand = new GetObjectCommand({
+        Bucket: S3_BUCKET,
+        Key: s3Key,
+      });
+      const presignedUrl = await getSignedUrl(s3Client, getCommand, { expiresIn: 7 * 24 * 60 * 60 });
+
+      logger.info(`Stored EagleView PDF to S3: ${s3Key}`);
+
+      return {
+        s3Key,
+        s3Url: `s3://${S3_BUCKET}/${s3Key}`,
+        presignedUrl,
+      };
+    } catch (error) {
+      logger.error(`Failed to download and store PDF for ${eagleViewReportId}:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get a presigned URL for an existing PDF in S3
+   * @param {string} s3Key - The S3 key of the stored PDF
+   * @param {number} expiresIn - URL expiration in seconds (default 1 hour)
+   */
+  async getPdfPresignedUrl(s3Key, expiresIn = 3600) {
+    const getCommand = new GetObjectCommand({
+      Bucket: S3_BUCKET,
+      Key: s3Key,
+    });
+    return getSignedUrl(s3Client, getCommand, { expiresIn });
+  }
+
+  /**
+   * Poll for and retrieve a single pending EagleView report
+   * Used by batch job to check if report is ready
+   */
+  async pollEagleViewReport(measurementReportId) {
+    const measurementReport = await prisma.measurementReport.findUnique({
+      where: { id: measurementReportId },
+    });
+
+    if (!measurementReport || !measurementReport.externalId) {
+      throw new Error(`No EagleView external ID found for report ${measurementReportId}`);
+    }
+
+    const eagleViewReportId = measurementReport.externalId;
+
+    try {
+      // Fetch the report
+      const reportData = await this.fetchEagleViewReport(eagleViewReportId);
+
+      // Check if report is complete
+      if (reportData.Status === 'Complete' || reportData.status === 'complete') {
+        // Fetch waste data
+        let wasteData = null;
+        try {
+          wasteData = await this.fetchEagleViewWasteData(eagleViewReportId);
+        } catch (err) {
+          logger.warn(`Could not fetch waste data for ${eagleViewReportId}:`, err.message);
+        }
+
+        // Parse measurements from EagleView response
+        const measurements = this.parseEagleViewApiResponse(reportData, wasteData);
+
+        // Update our report
+        await prisma.measurementReport.update({
+          where: { id: measurementReportId },
+          data: {
+            orderStatus: 'DELIVERED',
+            deliveredAt: new Date(),
+            reportUrl: reportData.ReportLink || reportData.reportUrl,
+            reportPdfUrl: reportData.PdfReportLink || reportData.pdfUrl,
+            reportXmlUrl: reportData.XmlReportLink || reportData.xmlUrl,
+            latitude: reportData.Latitude || reportData.latitude,
+            longitude: reportData.Longitude || reportData.longitude,
+            ...measurements,
+            rawData: { reportData, wasteData },
+          },
+        });
+
+        logger.info(`EagleView report ${eagleViewReportId} retrieved and stored for ${measurementReportId}`);
+        return { success: true, status: 'DELIVERED' };
+      } else {
+        // Report still processing
+        logger.info(`EagleView report ${eagleViewReportId} still processing: ${reportData.Status || reportData.status}`);
+        return { success: false, status: reportData.Status || reportData.status };
+      }
+    } catch (error) {
+      logger.error(`Error polling EagleView report ${eagleViewReportId}:`, error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Parse EagleView API response format (different from webhook format)
+   * Based on Salesforce EgaleViewGetReports_API.GetReports parsing
+   */
+  parseEagleViewApiResponse(reportData, wasteData) {
+    // Handle both old and new API response formats
+    const measurements = reportData.Measurements || reportData.measurements || {};
+    const roofData = measurements.Roof || measurements.roof || {};
+    const structureData = measurements.Structure || measurements.structure || {};
+    const pitchTable = measurements.PitchTable || measurements.pitchTable || [];
+
+    // Parse pitch breakdown
+    const pitches = pitchTable.map(p => ({
+      pitch: p.Pitch || p.pitch,
+      area: p.Area || p.area,
+      percentage: p.Percentage || p.percentage,
+    }));
+
+    // Get predominant pitch (highest area)
+    const predominantPitch = pitches.length > 0
+      ? pitches.reduce((max, p) => (p.area > (max?.area || 0) ? p : max), null)?.pitch
+      : null;
+
+    // Parse waste data
+    let suggestedWasteFactor = null;
+    let complexityCategory = null;
+    if (wasteData) {
+      suggestedWasteFactor = wasteData.RecommendedWaste || wasteData.recommendedWaste || wasteData.WastePercent;
+      complexityCategory = wasteData.ComplexityCategory || wasteData.complexityCategory;
+    }
+
+    return {
+      totalRoofArea: roofData.TotalArea || roofData.totalArea,
+      totalRoofSquares: roofData.TotalSquares || roofData.totalSquares ||
+        (roofData.TotalArea ? roofData.TotalArea / 100 : null),
+      predominantPitch: predominantPitch?.toString(),
+      pitches: pitches.length > 0 ? pitches : null,
+      facets: roofData.FacetCount || roofData.facetCount || roofData.NumberOfFacets,
+      ridgeLength: roofData.Ridge || roofData.ridge || roofData.RidgeLength,
+      hipLength: roofData.Hip || roofData.hip || roofData.HipLength,
+      valleyLength: roofData.Valley || roofData.valley || roofData.ValleyLength,
+      rakeLength: roofData.Rake || roofData.rake || roofData.RakeLength,
+      eaveLength: roofData.Eave || roofData.eave || roofData.EaveLength,
+      flashingLength: roofData.Flashing || roofData.flashing || roofData.FlashingLength,
+      stepFlashingLength: roofData.StepFlashing || roofData.stepFlashing,
+      dripEdgeLength: roofData.DripEdge || roofData.dripEdge,
+      structureType: structureData.Type || structureData.type || structureData.BuildingType,
+      stories: structureData.Stories || structureData.stories || structureData.NumberOfStories,
+      buildingHeight: structureData.Height || structureData.height,
+      roofComplexity: complexityCategory ? this.mapComplexityCategory(complexityCategory) :
+        this.calculateComplexity(roofData.FacetCount || roofData.facetCount),
+      suggestedWasteFactor: suggestedWasteFactor,
+      windowCount: structureData.WindowCount || structureData.windowCount,
+      doorCount: structureData.DoorCount || structureData.doorCount,
+      skylightCount: roofData.SkylightCount || roofData.skylightCount,
+    };
+  }
+
+  /**
+   * Map EagleView complexity category to our enum
+   */
+  mapComplexityCategory(category) {
+    const categoryMap = {
+      'Simple': 'SIMPLE',
+      'Moderate': 'MODERATE',
+      'Complex': 'COMPLEX',
+      'Very Complex': 'VERY_COMPLEX',
+      '1': 'SIMPLE',
+      '2': 'MODERATE',
+      '3': 'COMPLEX',
+      '4': 'VERY_COMPLEX',
+    };
+    return categoryMap[category] || null;
+  }
+
+  /**
+   * Batch process all pending EagleView reports
+   * Replicates: EagleViewGetReportOnAccount_Batch from Salesforce
+   * Should be called by a scheduled job
+   */
+  async processPendingEagleViewReports() {
+    const pendingReports = await prisma.measurementReport.findMany({
+      where: {
+        provider: 'EAGLEVIEW',
+        orderStatus: { in: ['PENDING', 'ORDERED', 'PROCESSING'] },
+        externalId: { not: null },
+        // Only check reports ordered more than 5 minutes ago
+        orderedAt: { lt: new Date(Date.now() - 5 * 60 * 1000) },
+      },
+      take: 50, // Process in batches of 50
+      orderBy: { orderedAt: 'asc' },
+    });
+
+    logger.info(`Processing ${pendingReports.length} pending EagleView reports`);
+
+    const results = {
+      total: pendingReports.length,
+      delivered: 0,
+      stillPending: 0,
+      failed: 0,
+    };
+
+    for (const report of pendingReports) {
+      try {
+        const result = await this.pollEagleViewReport(report.id);
+        if (result.success) {
+          results.delivered++;
+        } else if (result.error) {
+          results.failed++;
+        } else {
+          results.stillPending++;
+        }
+        // Small delay between API calls to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 500));
+      } catch (error) {
+        logger.error(`Failed to poll report ${report.id}:`, error);
+        results.failed++;
+      }
+    }
+
+    logger.info(`EagleView batch complete: ${results.delivered} delivered, ${results.stillPending} pending, ${results.failed} failed`);
+
+    return results;
+  }
+
+  /**
+   * Batch process all pending GAF reports
+   * Similar to EagleView batch processing
+   */
+  async processPendingGAFReports() {
+    const pendingReports = await prisma.measurementReport.findMany({
+      where: {
+        provider: 'GAF_QUICKMEASURE',
+        orderStatus: { in: ['PENDING', 'ORDERED', 'PROCESSING'] },
+        externalId: { not: null },
+        orderedAt: { lt: new Date(Date.now() - 5 * 60 * 1000) },
+      },
+      take: 50,
+      orderBy: { orderedAt: 'asc' },
+    });
+
+    logger.info(`Processing ${pendingReports.length} pending GAF reports`);
+
+    const results = {
+      total: pendingReports.length,
+      delivered: 0,
+      stillPending: 0,
+      failed: 0,
+    };
+
+    for (const report of pendingReports) {
+      try {
+        const result = await this.pollGAFReport(report.id);
+        if (result.success) {
+          results.delivered++;
+        } else if (result.error) {
+          results.failed++;
+        } else {
+          results.stillPending++;
+        }
+        await new Promise(resolve => setTimeout(resolve, 500));
+      } catch (error) {
+        logger.error(`Failed to poll GAF report ${report.id}:`, error);
+        results.failed++;
+      }
+    }
+
+    logger.info(`GAF batch complete: ${results.delivered} delivered, ${results.stillPending} pending, ${results.failed} failed`);
+
+    return results;
+  }
+
+  /**
+   * Poll for and retrieve a single pending GAF report
+   */
+  async pollGAFReport(measurementReportId) {
+    const measurementReport = await prisma.measurementReport.findUnique({
+      where: { id: measurementReportId },
+    });
+
+    if (!measurementReport || !measurementReport.externalId) {
+      throw new Error(`No GAF external ID found for report ${measurementReportId}`);
+    }
+
+    const gafOrderNumber = measurementReport.externalId;
+
+    try {
+      const accessToken = await this.getGAFAccessToken();
+
+      // GAF API endpoint for order status
+      const statusUrl = `${GAF_API_BASE}/OrderStatus/${gafOrderNumber}`;
+
+      const response = await fetch(statusUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`GAF API error: ${error}`);
+      }
+
+      const statusData = await response.json();
+
+      // Check if report is complete
+      if (statusData.orderStatus === 'Completed' || statusData.orderStatus === 'Complete') {
+        // Fetch the actual measurement data
+        const measurementsUrl = `${GAF_API_BASE}/Download/${gafOrderNumber}`;
+
+        const measurementsResponse = await fetch(measurementsUrl, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+        });
+
+        if (measurementsResponse.ok) {
+          const measurementData = await measurementsResponse.json();
+          const measurements = this.parseGAFMeasurements(measurementData);
+
+          await prisma.measurementReport.update({
+            where: { id: measurementReportId },
+            data: {
+              orderStatus: 'DELIVERED',
+              deliveredAt: new Date(),
+              reportUrl: statusData.viewUrl || measurementData.viewUrl,
+              reportPdfUrl: statusData.pdfUrl || measurementData.pdfUrl,
+              ...measurements,
+              rawData: { statusData, measurementData },
+            },
+          });
+
+          logger.info(`GAF report ${gafOrderNumber} retrieved and stored for ${measurementReportId}`);
+          return { success: true, status: 'DELIVERED' };
+        }
+      }
+
+      logger.info(`GAF report ${gafOrderNumber} still processing: ${statusData.orderStatus}`);
+      return { success: false, status: statusData.orderStatus };
+    } catch (error) {
+      logger.error(`Error polling GAF report ${gafOrderNumber}:`, error);
+      return { success: false, error: error.message };
+    }
+  }
+
   parseEagleViewMeasurements(data) {
     const roof = data.roofMeasurements || {};
     const structure = data.structureInfo || {};
@@ -440,12 +920,14 @@ class MeasurementService {
   }
 
   mapGAFMeasurementType(type) {
+    // Map GAF measurement types to valid ReportType enum values
+    // Valid: BASIC, PREMIUM, ULTRA_PREMIUM, COMMERCIAL, WALLS_ONLY, ROOF_AND_WALLS
     const typeMap = {
-      'QuickMeasureResidentialSingleFamily': 'RESIDENTIAL_SINGLE',
-      'ResidentialMultiFamily': 'RESIDENTIAL_MULTI',
+      'QuickMeasureResidentialSingleFamily': 'BASIC',
+      'ResidentialMultiFamily': 'PREMIUM',
       'Commercial': 'COMMERCIAL',
     };
-    return typeMap[type] || 'RESIDENTIAL_SINGLE';
+    return typeMap[type] || 'BASIC';
   }
 
   /**
@@ -1038,11 +1520,20 @@ class MeasurementService {
     }
 
     try {
+      // Map captureType to valid ReportType enum
+      // Valid: BASIC, PREMIUM, ULTRA_PREMIUM, COMMERCIAL, WALLS_ONLY, ROOF_AND_WALLS
+      const reportTypeMap = {
+        'exterior': 'ROOF_AND_WALLS',
+        'interior': 'WALLS_ONLY',
+        'full': 'PREMIUM',
+      };
+      const reportType = reportTypeMap[captureType.toLowerCase()] || 'ROOF_AND_WALLS';
+
       // Create pending measurement report
       const report = await prisma.measurementReport.create({
         data: {
           provider: 'HOVER',
-          reportType: captureType.toUpperCase(),
+          reportType,
           orderStatus: 'PENDING',
           propertyAddress: address || opportunity.street,
           propertyCity: city || opportunity.city,

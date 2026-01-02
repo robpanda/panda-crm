@@ -5,6 +5,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
+import { CronJob } from 'cron';
 
 import integrationRoutes from './routes/integrations.js';
 import ringCentralRoutes from './routes/ringcentral.js';
@@ -14,6 +15,7 @@ import schedulingRoutes from './routes/scheduling.js';
 import mobileRoutes from './routes/mobile.js';
 import fieldServiceRoutes from './routes/fieldService.js';
 import { logger } from './middleware/logger.js';
+import { measurementService } from './services/measurementService.js';
 
 dotenv.config();
 
@@ -252,9 +254,39 @@ app.use((req, res) => {
   });
 });
 
+// Scheduled job to process pending measurement reports (runs every 5 minutes)
+// Replicates Salesforce "EagleView_Scheduled_Report_Retrieval" batch job
+const measurementPollingJob = new CronJob('*/5 * * * *', async () => {
+  try {
+    logger.info('Starting scheduled measurement report polling...');
+
+    // Process EagleView pending reports
+    const eagleViewResult = await measurementService.processPendingEagleViewReports();
+    if (eagleViewResult.processed > 0 || eagleViewResult.failed > 0) {
+      logger.info(`EagleView polling: ${eagleViewResult.processed} completed, ${eagleViewResult.failed} failed`);
+    }
+
+    // Process GAF pending reports
+    const gafResult = await measurementService.processPendingGAFReports();
+    if (gafResult.processed > 0 || gafResult.failed > 0) {
+      logger.info(`GAF polling: ${gafResult.processed} completed, ${gafResult.failed} failed`);
+    }
+  } catch (error) {
+    logger.error('Measurement polling job error:', error);
+  }
+});
+
 // Start server
 app.listen(PORT, () => {
   logger.info(`Integrations service running on port ${PORT}`);
+
+  // Start cron job for measurement report polling
+  if (process.env.ENABLE_MEASUREMENT_POLLING !== 'false') {
+    measurementPollingJob.start();
+    logger.info('Measurement report polling job started (runs every 5 minutes)');
+  } else {
+    logger.info('Measurement report polling job disabled (ENABLE_MEASUREMENT_POLLING=false)');
+  }
 });
 
 export default app;

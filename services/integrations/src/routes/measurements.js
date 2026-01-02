@@ -46,6 +46,75 @@ router.post('/eagleview/webhook', async (req, res, next) => {
   }
 });
 
+/**
+ * GET /measurements/eagleview/report/:reportId - Fetch EagleView report by ID
+ * Manual trigger to fetch a specific report
+ */
+router.get('/eagleview/report/:reportId', authMiddleware, async (req, res, next) => {
+  try {
+    const reportData = await measurementService.fetchEagleViewReport(req.params.reportId);
+    res.json({ success: true, data: reportData });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /measurements/eagleview/waste/:reportId - Fetch EagleView waste data
+ */
+router.get('/eagleview/waste/:reportId', authMiddleware, async (req, res, next) => {
+  try {
+    const wasteData = await measurementService.fetchEagleViewWasteData(req.params.reportId);
+    res.json({ success: true, data: wasteData });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /measurements/eagleview/pdf/:reportId - Download EagleView PDF
+ */
+router.get('/eagleview/pdf/:reportId', authMiddleware, async (req, res, next) => {
+  try {
+    const { response, contentType, contentDisposition } = await measurementService.downloadEagleViewPdf(req.params.reportId);
+
+    if (contentType) res.setHeader('Content-Type', contentType);
+    if (contentDisposition) res.setHeader('Content-Disposition', contentDisposition);
+    else res.setHeader('Content-Disposition', `attachment; filename="eagleview-report-${req.params.reportId}.pdf"`);
+
+    const buffer = await response.arrayBuffer();
+    res.send(Buffer.from(buffer));
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /measurements/eagleview/poll/:id - Manually poll for a specific report
+ */
+router.post('/eagleview/poll/:id', authMiddleware, async (req, res, next) => {
+  try {
+    const result = await measurementService.pollEagleViewReport(req.params.id);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /measurements/eagleview/process-pending - Process all pending EagleView reports
+ * Batch job endpoint - can be called by scheduler or manually
+ */
+router.post('/eagleview/process-pending', authMiddleware, async (req, res, next) => {
+  try {
+    const results = await measurementService.processPendingEagleViewReports();
+    logger.info('EagleView batch processing triggered', results);
+    res.json({ success: true, data: results });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ==========================================
 // GAF QuickMeasure Routes
 // ==========================================
@@ -83,6 +152,61 @@ router.post('/gaf/webhook', async (req, res, next) => {
   } catch (error) {
     logger.error('GAF webhook error:', error);
     res.sendStatus(500);
+  }
+});
+
+/**
+ * POST /measurements/gaf/poll/:id - Manually poll for a specific GAF report
+ */
+router.post('/gaf/poll/:id', authMiddleware, async (req, res, next) => {
+  try {
+    const result = await measurementService.pollGAFReport(req.params.id);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /measurements/gaf/process-pending - Process all pending GAF reports
+ * Batch job endpoint - can be called by scheduler or manually
+ */
+router.post('/gaf/process-pending', authMiddleware, async (req, res, next) => {
+  try {
+    const results = await measurementService.processPendingGAFReports();
+    logger.info('GAF batch processing triggered', results);
+    res.json({ success: true, data: results });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /measurements/process-all-pending - Process all pending reports (all providers)
+ * Combined batch job endpoint
+ */
+router.post('/process-all-pending', authMiddleware, async (req, res, next) => {
+  try {
+    const [eagleViewResults, gafResults] = await Promise.all([
+      measurementService.processPendingEagleViewReports(),
+      measurementService.processPendingGAFReports(),
+    ]);
+
+    const combinedResults = {
+      eagleView: eagleViewResults,
+      gaf: gafResults,
+      summary: {
+        total: eagleViewResults.total + gafResults.total,
+        delivered: eagleViewResults.delivered + gafResults.delivered,
+        stillPending: eagleViewResults.stillPending + gafResults.stillPending,
+        failed: eagleViewResults.failed + gafResults.failed,
+      },
+    };
+
+    logger.info('All providers batch processing complete', combinedResults.summary);
+    res.json({ success: true, data: combinedResults });
+  } catch (error) {
+    next(error);
   }
 });
 
