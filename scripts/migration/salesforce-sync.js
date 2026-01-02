@@ -14,11 +14,14 @@
  */
 
 const jsforce = require('jsforce');
-const { PrismaClient } = require('@prisma/client');
+const { PrismaClient, Prisma } = require('@prisma/client');
 const { SecretsManagerClient, GetSecretValueCommand } = require('@aws-sdk/client-secrets-manager');
 
 const prisma = new PrismaClient();
 const secretsClient = new SecretsManagerClient({ region: 'us-east-2' });
+
+// Job ID configuration
+const JOB_ID_STARTING_NUMBER = 999; // First job will be 1000
 
 // Configuration
 const BATCH_SIZE = 200;
@@ -143,6 +146,93 @@ function parseDate(value) {
   if (!value) return null;
   const date = new Date(value);
   return isNaN(date.getTime()) ? null : date;
+}
+
+// Generate Job ID for opportunities
+// Format: YYYY-NNNN (e.g., 2026-1000)
+async function generateJobId(tx = prisma) {
+  const currentYear = new Date().getFullYear();
+
+  try {
+    // Use raw query with row-level lock for thread safety
+    const sequences = await tx.$queryRaw`
+      SELECT id, year, last_number
+      FROM job_id_sequences
+      WHERE year = ${currentYear}
+      FOR UPDATE
+    `;
+
+    let nextNumber;
+    if (!sequences || sequences.length === 0) {
+      // Create new sequence for this year
+      await tx.jobIdSequence.create({
+        data: {
+          year: currentYear,
+          lastNumber: JOB_ID_STARTING_NUMBER + 1,
+        },
+      });
+      nextNumber = JOB_ID_STARTING_NUMBER + 1;
+    } else {
+      // Increment existing sequence
+      nextNumber = Number(sequences[0].last_number) + 1;
+      await tx.jobIdSequence.update({
+        where: { year: currentYear },
+        data: { lastNumber: nextNumber },
+      });
+    }
+
+    return `${currentYear}-${nextNumber}`;
+  } catch (err) {
+    console.error(`Failed to generate Job ID: ${err.message}`);
+    return null;
+  }
+}
+
+// Bulk generate Job IDs for multiple opportunities
+async function generateBulkJobIds(count) {
+  const currentYear = new Date().getFullYear();
+  const jobIds = [];
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      // Lock and get current sequence
+      const sequences = await tx.$queryRaw`
+        SELECT id, year, last_number
+        FROM job_id_sequences
+        WHERE year = ${currentYear}
+        FOR UPDATE
+      `;
+
+      let startNumber;
+      if (!sequences || sequences.length === 0) {
+        // Create new sequence for this year
+        startNumber = JOB_ID_STARTING_NUMBER + 1;
+        await tx.jobIdSequence.create({
+          data: {
+            year: currentYear,
+            lastNumber: startNumber + count - 1,
+          },
+        });
+      } else {
+        startNumber = Number(sequences[0].last_number) + 1;
+        await tx.jobIdSequence.update({
+          where: { year: currentYear },
+          data: { lastNumber: startNumber + count - 1 },
+        });
+      }
+
+      // Generate all Job IDs
+      for (let i = 0; i < count; i++) {
+        jobIds.push(`${currentYear}-${startNumber + i}`);
+      }
+    }, {
+      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+    });
+  } catch (err) {
+    console.error(`Failed to generate bulk Job IDs: ${err.message}`);
+  }
+
+  return jobIds;
 }
 
 // ============================================================================

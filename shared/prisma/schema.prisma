@@ -4823,3 +4823,23 @@ enum ActivityType {
   SYSTEM_NOTIFICATION
   WORKFLOW_TRIGGERED
 }
+
+// ============================================================================
+// SYSTEM SEQUENCES
+// ============================================================================
+
+// Job ID sequence tracking - one row per year
+// Used to generate sequential job IDs in format YYYY-NNNN
+model JobIdSequence {
+  id   String @id @default(cuid())
+  year Int    @unique // Calendar year (e.g., 2026)
+
+  // Current counter value (starts at 999, next job will be 1000)
+  // Incremented before use, so first job ID will be YYYY-1000
+  lastNumber Int @default(999) @map("last_number")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("job_id_sequences")
+}

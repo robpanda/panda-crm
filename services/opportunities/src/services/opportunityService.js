@@ -1,10 +1,13 @@
 // Opportunity Service - Business Logic Layer
 // Replicates SalesLeaderOpportunityDetailController.cls and related controllers
 // This is the HUB - Opportunity is the central object in Panda CRM
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 import { logger } from '../middleware/logger.js';
 
 const prisma = new PrismaClient();
+
+// Job ID starting number (first job ID will be YYYY-1000)
+const JOB_ID_STARTING_NUMBER = 999;
 
 // Lazy-load notification service to avoid circular dependencies
 let notificationService = null;
@@ -994,66 +997,125 @@ class OpportunityService {
   }
 
   /**
+   * Generate Job ID within a transaction
+   * @param {Object} tx - Prisma transaction client
+   * @returns {Promise<string|null>} Job ID in format YYYY-NNNN or null if failed
+   */
+  async generateJobId(tx = prisma) {
+    const currentYear = new Date().getFullYear();
+
+    try {
+      // Try to get and lock the sequence row for this year
+      const sequences = await tx.$queryRaw`
+        SELECT id, year, last_number
+        FROM job_id_sequences
+        WHERE year = ${currentYear}
+        FOR UPDATE
+      `;
+
+      let nextNumber;
+      if (!sequences || sequences.length === 0) {
+        // First job of the year - create the sequence
+        await tx.jobIdSequence.create({
+          data: {
+            year: currentYear,
+            lastNumber: JOB_ID_STARTING_NUMBER + 1,
+          },
+        });
+        nextNumber = JOB_ID_STARTING_NUMBER + 1;
+      } else {
+        // Increment the sequence
+        nextNumber = Number(sequences[0].last_number) + 1;
+        await tx.jobIdSequence.update({
+          where: { year: currentYear },
+          data: { lastNumber: nextNumber },
+        });
+      }
+
+      const jobId = `${currentYear}-${nextNumber}`;
+      logger.info(`Generated Job ID: ${jobId}`);
+      return jobId;
+    } catch (err) {
+      logger.warn(`Failed to generate Job ID: ${err.message}`);
+      return null;
+    }
+  }
+
+  /**
    * Create new opportunity
    */
   async createOpportunity(data) {
-    const opportunity = await prisma.opportunity.create({
-      data: {
-        name: data.name,
-        description: data.description,
-        stage: data.stage || 'LEAD_UNASSIGNED',
-        status: data.status,
-        probability: data.probability || 0,
-        closeDate: data.closeDate ? new Date(data.closeDate) : null,
-        appointmentDate: data.appointmentDate ? new Date(data.appointmentDate) : null,
-        amount: data.amount,
-        contractTotal: data.contractTotal,
-        type: data.type || 'INSURANCE',
-        workType: data.workType,
-        leadSource: data.leadSource,
-        isSelfGen: data.isSelfGen || false,
-        isPandaClaims: data.isPandaClaims || false,
-        isApproved: data.isApproved || false,
-        claimNumber: data.claimNumber,
-        claimFiledDate: data.claimFiledDate ? new Date(data.claimFiledDate) : null,
-        insuranceCarrier: data.insuranceCarrier,
-        rcvAmount: data.rcvAmount,
-        acvAmount: data.acvAmount,
-        deductible: data.deductible,
-        supplementsTotal: data.supplementsTotal,
-        // Address fields
-        street: data.street,
-        city: data.city,
-        state: data.state,
-        postalCode: data.postalCode,
-        accountId: data.accountId,
-        contactId: data.contactId,
-        ownerId: data.ownerId,
-        salesforceId: data.salesforceId,
-        // Create line items if provided
-        lineItems: data.lineItems?.length > 0 ? {
-          create: data.lineItems.map((li, index) => ({
-            name: li.name || li.product?.name || 'Line Item',
-            description: li.description,
-            productCode: li.productCode,
-            quantity: li.quantity || 1,
-            unitPrice: li.unitPrice || 0,
-            totalPrice: li.total || li.totalPrice || (li.quantity || 1) * (li.unitPrice || 0),
-            discount: li.discount,
-            sortOrder: index,
-            productId: li.productId,
-          })),
-        } : undefined,
-      },
-      include: {
-        account: { select: { id: true, name: true } },
-        contact: { select: { id: true, firstName: true, lastName: true } },
-        owner: { select: { id: true, firstName: true, lastName: true } },
-        lineItems: { include: { product: true } },
-      },
+    // Use transaction to ensure Job ID is assigned atomically
+    const opportunity = await prisma.$transaction(async (tx) => {
+      // Generate Job ID unless it's already provided (e.g., from Salesforce sync)
+      let jobId = data.jobId || null;
+      if (!jobId) {
+        jobId = await this.generateJobId(tx);
+      }
+
+      const opp = await tx.opportunity.create({
+        data: {
+          name: data.name,
+          jobId, // Auto-assigned Job ID
+          description: data.description,
+          stage: data.stage || 'LEAD_UNASSIGNED',
+          status: data.status,
+          probability: data.probability || 0,
+          closeDate: data.closeDate ? new Date(data.closeDate) : null,
+          appointmentDate: data.appointmentDate ? new Date(data.appointmentDate) : null,
+          amount: data.amount,
+          contractTotal: data.contractTotal,
+          type: data.type || 'INSURANCE',
+          workType: data.workType,
+          leadSource: data.leadSource,
+          isSelfGen: data.isSelfGen || false,
+          isPandaClaims: data.isPandaClaims || false,
+          isApproved: data.isApproved || false,
+          claimNumber: data.claimNumber,
+          claimFiledDate: data.claimFiledDate ? new Date(data.claimFiledDate) : null,
+          insuranceCarrier: data.insuranceCarrier,
+          rcvAmount: data.rcvAmount,
+          acvAmount: data.acvAmount,
+          deductible: data.deductible,
+          supplementsTotal: data.supplementsTotal,
+          // Address fields
+          street: data.street,
+          city: data.city,
+          state: data.state,
+          postalCode: data.postalCode,
+          accountId: data.accountId,
+          contactId: data.contactId,
+          ownerId: data.ownerId,
+          salesforceId: data.salesforceId,
+          // Create line items if provided
+          lineItems: data.lineItems?.length > 0 ? {
+            create: data.lineItems.map((li, index) => ({
+              name: li.name || li.product?.name || 'Line Item',
+              description: li.description,
+              productCode: li.productCode,
+              quantity: li.quantity || 1,
+              unitPrice: li.unitPrice || 0,
+              totalPrice: li.total || li.totalPrice || (li.quantity || 1) * (li.unitPrice || 0),
+              discount: li.discount,
+              sortOrder: index,
+              productId: li.productId,
+            })),
+          } : undefined,
+        },
+        include: {
+          account: { select: { id: true, name: true } },
+          contact: { select: { id: true, firstName: true, lastName: true } },
+          owner: { select: { id: true, firstName: true, lastName: true } },
+          lineItems: { include: { product: true } },
+        },
+      });
+
+      return opp;
+    }, {
+      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
     });
 
-    logger.info(`Opportunity created: ${opportunity.id} (${opportunity.name})`);
+    logger.info(`Opportunity created: ${opportunity.id} (${opportunity.name}) with Job ID: ${opportunity.jobId}`);
     return this.createOpportunityWrapper(opportunity, true);
   }
 

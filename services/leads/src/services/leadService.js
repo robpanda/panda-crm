@@ -1,11 +1,14 @@
 // Lead Service - Business Logic Layer
 // Replicates SalesLeaderLeadListController.cls and LeadWizard functionality
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 import { logger } from '../middleware/logger.js';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 
 const prisma = new PrismaClient();
 const lambdaClient = new LambdaClient({ region: 'us-east-2' });
+
+// Job ID starting number (first job ID will be YYYY-1000)
+const JOB_ID_STARTING_NUMBER = 999;
 
 // Audit logging helper
 const logAudit = async ({ tableName, recordId, action, oldValues, newValues, userId, userEmail, source = 'api' }) => {
@@ -580,9 +583,48 @@ class LeadService {
       // Create Opportunity if requested
       let opportunity = null;
       if (options.createOpportunity !== false) {
+        // Generate Job ID within transaction using row-level lock
+        const currentYear = new Date().getFullYear();
+        let jobId = null;
+
+        try {
+          // Try to get and lock the sequence row for this year
+          const sequences = await tx.$queryRaw`
+            SELECT id, year, last_number
+            FROM job_id_sequences
+            WHERE year = ${currentYear}
+            FOR UPDATE
+          `;
+
+          let nextNumber;
+          if (!sequences || sequences.length === 0) {
+            // First job of the year - create the sequence
+            await tx.jobIdSequence.create({
+              data: {
+                year: currentYear,
+                lastNumber: JOB_ID_STARTING_NUMBER + 1,
+              },
+            });
+            nextNumber = JOB_ID_STARTING_NUMBER + 1;
+          } else {
+            // Increment the sequence
+            nextNumber = Number(sequences[0].last_number) + 1;
+            await tx.jobIdSequence.update({
+              where: { year: currentYear },
+              data: { lastNumber: nextNumber },
+            });
+          }
+          jobId = `${currentYear}-${nextNumber}`;
+          logger.info(`Generated Job ID: ${jobId} for lead conversion`);
+        } catch (err) {
+          // Log error but don't fail the conversion - Job ID can be assigned later
+          logger.warn(`Failed to generate Job ID: ${err.message}`);
+        }
+
         opportunity = await tx.opportunity.create({
           data: {
             name: options.opportunityName || `${lead.firstName} ${lead.lastName} - ${new Date().toLocaleDateString()}`,
+            jobId, // Auto-assigned Job ID
             accountId: account.id,
             contactId: contact.id,
             stage: 'LEAD_ASSIGNED',
