@@ -2,6 +2,13 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
+// Helper to convert BigInt to Number for JSON serialization
+const serializeBigInt = (obj) => {
+  return JSON.parse(JSON.stringify(obj, (key, value) =>
+    typeof value === 'bigint' ? Number(value) : value
+  ));
+};
+
 // Settings keys for Bamboogli
 const SETTING_KEYS = {
   TWILIO_ENABLED: 'bamboogli.twilio.enabled',
@@ -365,7 +372,7 @@ export async function getMessageStats(req, res, next) {
         conversations,
         activeConversations,
       },
-      daily: dailyStats,
+      daily: serializeBigInt(dailyStats),
     });
   } catch (error) {
     next(error);
