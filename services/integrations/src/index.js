@@ -136,6 +136,98 @@ app.get('/api/integrations/diagnostics', (req, res) => {
   });
 });
 
+// Test connection endpoint - attempts to get OAuth tokens from EagleView and GAF
+app.get('/api/integrations/test-connection', async (req, res) => {
+  const results = {
+    eagleView: { status: 'unknown', error: null },
+    gaf: { status: 'unknown', error: null },
+  };
+
+  // Test EagleView token acquisition
+  try {
+    const evClientId = process.env.EAGLEVIEW_CLIENT_ID;
+    const evClientSecret = process.env.EAGLEVIEW_CLIENT_SECRET;
+    const evTokenUrl = process.env.EAGLEVIEW_TOKEN_URL || 'https://apicenter.eagleview.com/oauth2/v1/token';
+
+    if (!evClientId || !evClientSecret) {
+      results.eagleView = { status: 'not_configured', error: 'Missing credentials' };
+    } else {
+      const requestBody = `grant_type=client_credentials&client_id=${encodeURIComponent(evClientId)}&client_secret=${encodeURIComponent(evClientSecret)}`;
+
+      const response = await fetch(evTokenUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: requestBody,
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        results.eagleView = {
+          status: 'connected',
+          tokenType: data.token_type,
+          expiresIn: data.expires_in,
+        };
+      } else {
+        const errorText = await response.text();
+        results.eagleView = {
+          status: 'auth_failed',
+          httpStatus: response.status,
+          error: errorText.substring(0, 500),
+        };
+      }
+    }
+  } catch (error) {
+    results.eagleView = { status: 'error', error: error.message };
+  }
+
+  // Test GAF token acquisition
+  try {
+    const gafClientId = process.env.GAF_CLIENT_ID;
+    const gafClientSecret = process.env.GAF_CLIENT_SECRET;
+    const gafTokenUrl = process.env.GAF_TOKEN_URL || 'https://ssoext.gaf.com/oauth2/ausclyogeZBNESNcI4x6/v1/token';
+    const gafAudience = process.env.GAF_AUDIENCE || 'https://quickmeasureapi.gaf.com';
+    const gafScope = process.env.GAF_SCOPE || 'Subscriber:GetSubscriberDetails';
+
+    if (!gafClientId || !gafClientSecret) {
+      results.gaf = { status: 'not_configured', error: 'Missing credentials' };
+    } else {
+      const requestBody = `grant_type=client_credentials&client_id=${encodeURIComponent(gafClientId)}&client_secret=${encodeURIComponent(gafClientSecret)}&audience=${encodeURIComponent(gafAudience)}&scope=${encodeURIComponent(gafScope)}`;
+
+      const response = await fetch(gafTokenUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: requestBody,
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        results.gaf = {
+          status: 'connected',
+          tokenType: data.token_type,
+          expiresIn: data.expires_in,
+        };
+      } else {
+        const errorText = await response.text();
+        results.gaf = {
+          status: 'auth_failed',
+          httpStatus: response.status,
+          error: errorText.substring(0, 500),
+        };
+      }
+    }
+  } catch (error) {
+    results.gaf = { status: 'error', error: error.message };
+  }
+
+  const allConnected = results.eagleView.status === 'connected' && results.gaf.status === 'connected';
+
+  res.json({
+    success: allConnected,
+    message: allConnected ? 'All integrations connected successfully' : 'Some integrations failed',
+    data: results,
+  });
+});
+
 // Routes - /api/integrations/* to match ALB path-based routing
 app.use('/api/integrations', integrationRoutes);
 
