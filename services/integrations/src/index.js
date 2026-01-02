@@ -31,12 +31,35 @@ function errorHandler(err, req, res, next) {
     });
   }
 
+  // Provide meaningful error messages for common integration failures
+  let userMessage = 'An error occurred';
+  let errorCode = err.code || 'INTERNAL_ERROR';
+
+  if (err.message?.includes('credentials not configured')) {
+    userMessage = 'Integration not configured. Please contact support.';
+    errorCode = 'INTEGRATION_NOT_CONFIGURED';
+  } else if (err.message?.includes('authentication failed')) {
+    userMessage = 'Integration authentication failed. Please contact support.';
+    errorCode = 'INTEGRATION_AUTH_FAILED';
+  } else if (err.message?.includes('API error')) {
+    userMessage = 'External service error. Please try again later.';
+    errorCode = 'EXTERNAL_API_ERROR';
+  } else if (err.message?.includes('not found')) {
+    userMessage = err.message;
+    errorCode = 'NOT_FOUND';
+  } else if (err.message?.includes('PrismaClient')) {
+    userMessage = 'Database connection error. Please try again.';
+    errorCode = 'DATABASE_ERROR';
+  }
+
   const statusCode = err.statusCode || 500;
   res.status(statusCode).json({
     success: false,
     error: {
-      code: err.code || 'INTERNAL_ERROR',
-      message: process.env.NODE_ENV === 'production' ? 'An error occurred' : err.message,
+      code: errorCode,
+      message: userMessage,
+      // Include details in non-production for debugging
+      ...(process.env.NODE_ENV !== 'production' && { details: err.message }),
     },
   });
 }
@@ -73,6 +96,43 @@ app.get('/health', (req, res) => {
       'mobile',
       'field-service',
     ],
+  });
+});
+
+// Diagnostic endpoint to check integration configuration
+app.get('/api/integrations/diagnostics', (req, res) => {
+  // Check if key environment variables are set (without revealing values)
+  const checkEnv = (name) => process.env[name] ? 'configured' : 'missing';
+
+  res.json({
+    success: true,
+    data: {
+      eagleView: {
+        clientId: checkEnv('EAGLEVIEW_CLIENT_ID'),
+        clientSecret: checkEnv('EAGLEVIEW_CLIENT_SECRET'),
+        apiUrl: checkEnv('EAGLEVIEW_API_URL'),
+        tokenUrl: checkEnv('EAGLEVIEW_TOKEN_URL'),
+      },
+      gaf: {
+        clientId: checkEnv('GAF_CLIENT_ID'),
+        clientSecret: checkEnv('GAF_CLIENT_SECRET'),
+        apiUrl: checkEnv('GAF_API_URL'),
+        tokenUrl: checkEnv('GAF_TOKEN_URL'),
+        audience: checkEnv('GAF_AUDIENCE'),
+        scope: checkEnv('GAF_SCOPE'),
+      },
+      hover: {
+        clientId: checkEnv('HOVER_CLIENT_ID'),
+        clientSecret: checkEnv('HOVER_CLIENT_SECRET'),
+      },
+      database: {
+        url: checkEnv('DATABASE_URL'),
+      },
+      cognito: {
+        userPoolId: checkEnv('COGNITO_USER_POOL_ID'),
+        clientId: checkEnv('COGNITO_CLIENT_ID'),
+      },
+    },
   });
 });
 
