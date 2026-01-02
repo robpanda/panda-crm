@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { opportunitiesApi, companyCamApi, scheduleApi, casesApi, emailsApi, notificationsApi, bamboogliApi, approvalsApi, measurementsApi, contactsApi } from '../services/api';
+import { opportunitiesApi, companyCamApi, scheduleApi, casesApi, emailsApi, notificationsApi, bamboogliApi, approvalsApi, measurementsApi, contactsApi, ringCentralApi } from '../services/api';
 import PhotoGallery from '../components/PhotoGallery';
 import ApprovalQueue, { CreateApprovalForm } from '../components/ApprovalQueue';
 import DraggableMap from '../components/DraggableMap';
@@ -62,7 +62,301 @@ import {
   Scale,
   XCircle,
   Ruler,
+  PhoneCall,
+  PhoneIncoming,
+  PhoneOutgoing,
+  PhoneMissed,
+  MailOpen,
+  MessageCircle,
+  Loader2,
 } from 'lucide-react';
+
+// Communications Tab Component - Shows SMS, Email, and Phone call history
+function CommunicationsTab({ phone, email, contactName }) {
+  const [filter, setFilter] = useState('all'); // all, sms, email, phone
+
+  // Fetch SMS/Email conversation by phone or email
+  const { data: conversation, isLoading: conversationLoading } = useQuery({
+    queryKey: ['opp-conversation', phone, email],
+    queryFn: async () => {
+      try {
+        const identifier = phone || email;
+        if (!identifier) return null;
+        const data = await bamboogliApi.getConversationByIdentifier(identifier);
+        return data;
+      } catch (err) {
+        console.error('Failed to fetch conversation:', err);
+        return null;
+      }
+    },
+    enabled: !!(phone || email),
+  });
+
+  // Fetch messages for the conversation
+  const { data: messagesData, isLoading: messagesLoading } = useQuery({
+    queryKey: ['opp-messages', conversation?.id],
+    queryFn: async () => {
+      if (!conversation?.id) return { data: [] };
+      const data = await bamboogliApi.getMessagesByConversation(conversation.id, { limit: 100 });
+      return data;
+    },
+    enabled: !!conversation?.id,
+  });
+
+  // Fetch RingCentral call logs for this phone number
+  const { data: callLogsData, isLoading: callsLoading } = useQuery({
+    queryKey: ['opp-call-logs', phone],
+    queryFn: async () => {
+      if (!phone) return { data: [] };
+      try {
+        const data = await ringCentralApi.getCallLogs({ phoneNumber: phone, limit: 100 });
+        return data;
+      } catch (err) {
+        console.error('Failed to fetch call logs:', err);
+        return { data: [] };
+      }
+    },
+    enabled: !!phone,
+  });
+
+  const isLoading = conversationLoading || messagesLoading || callsLoading;
+  const messages = messagesData?.data || messagesData || [];
+  const callLogs = callLogsData?.data || callLogsData || [];
+
+  // Separate messages by type
+  const smsMessages = Array.isArray(messages) ? messages.filter(m => m.type === 'sms' || m.channel === 'sms') : [];
+  const emailMessages = Array.isArray(messages) ? messages.filter(m => m.type === 'email' || m.channel === 'email') : [];
+
+  // Combine all activity into a unified timeline
+  const allActivity = [
+    ...smsMessages.map(m => ({
+      ...m,
+      activityType: 'sms',
+      timestamp: new Date(m.createdAt || m.timestamp),
+      displayDate: new Date(m.createdAt || m.timestamp).toLocaleString(),
+    })),
+    ...emailMessages.map(m => ({
+      ...m,
+      activityType: 'email',
+      timestamp: new Date(m.createdAt || m.timestamp),
+      displayDate: new Date(m.createdAt || m.timestamp).toLocaleString(),
+    })),
+    ...(Array.isArray(callLogs) ? callLogs : []).map(c => ({
+      ...c,
+      activityType: 'phone',
+      timestamp: new Date(c.startTime || c.createdAt),
+      displayDate: new Date(c.startTime || c.createdAt).toLocaleString(),
+    })),
+  ].sort((a, b) => b.timestamp - a.timestamp);
+
+  // Filter by type
+  const filteredActivity = filter === 'all'
+    ? allActivity
+    : allActivity.filter(a => a.activityType === filter);
+
+  // Activity counts for summary
+  const counts = {
+    total: allActivity.length,
+    sms: smsMessages.length,
+    email: emailMessages.length,
+    phone: Array.isArray(callLogs) ? callLogs.length : 0,
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="w-8 h-8 animate-spin text-panda-primary" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Summary Cards */}
+      <div className="grid grid-cols-4 gap-4">
+        <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm">
+          <div className="flex items-center space-x-3">
+            <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center">
+              <Activity className="w-5 h-5 text-gray-600" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold text-gray-900">{counts.total}</p>
+              <p className="text-sm text-gray-500">Total</p>
+            </div>
+          </div>
+        </div>
+        <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm">
+          <div className="flex items-center space-x-3">
+            <div className="w-10 h-10 rounded-lg bg-blue-100 flex items-center justify-center">
+              <PhoneCall className="w-5 h-5 text-blue-600" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold text-gray-900">{counts.phone}</p>
+              <p className="text-sm text-gray-500">Phone</p>
+            </div>
+          </div>
+        </div>
+        <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm">
+          <div className="flex items-center space-x-3">
+            <div className="w-10 h-10 rounded-lg bg-green-100 flex items-center justify-center">
+              <MessageCircle className="w-5 h-5 text-green-600" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold text-gray-900">{counts.sms}</p>
+              <p className="text-sm text-gray-500">SMS</p>
+            </div>
+          </div>
+        </div>
+        <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm">
+          <div className="flex items-center space-x-3">
+            <div className="w-10 h-10 rounded-lg bg-purple-100 flex items-center justify-center">
+              <MailOpen className="w-5 h-5 text-purple-600" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold text-gray-900">{counts.email}</p>
+              <p className="text-sm text-gray-500">Email</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Filter Buttons */}
+      <div className="flex space-x-2">
+        {[
+          { id: 'all', label: 'All Activity', icon: Activity },
+          { id: 'phone', label: 'Phone', icon: PhoneCall },
+          { id: 'sms', label: 'SMS', icon: MessageCircle },
+          { id: 'email', label: 'Email', icon: MailOpen },
+        ].map(f => (
+          <button
+            key={f.id}
+            onClick={() => setFilter(f.id)}
+            className={`flex items-center space-x-2 px-4 py-2 rounded-lg font-medium transition-all ${
+              filter === f.id
+                ? 'bg-panda-primary text-white'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            <f.icon className="w-4 h-4" />
+            <span>{f.label}</span>
+            {f.id !== 'all' && (
+              <span className={`text-xs px-1.5 py-0.5 rounded ${
+                filter === f.id ? 'bg-white/20' : 'bg-gray-200'
+              }`}>
+                {counts[f.id]}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* Activity Timeline */}
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm">
+        {filteredActivity.length > 0 ? (
+          <div className="divide-y divide-gray-100">
+            {filteredActivity.map((item, index) => (
+              <div key={item.id || index} className="p-4 hover:bg-gray-50 transition-colors">
+                <div className="flex items-start space-x-3">
+                  {/* Icon */}
+                  <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                    item.activityType === 'phone'
+                      ? item.direction === 'Inbound'
+                        ? 'bg-green-100'
+                        : item.result === 'Missed' || item.result === 'No Answer'
+                          ? 'bg-red-100'
+                          : 'bg-blue-100'
+                      : item.activityType === 'sms'
+                        ? 'bg-green-100'
+                        : 'bg-purple-100'
+                  }`}>
+                    {item.activityType === 'phone' && (
+                      item.direction === 'Inbound'
+                        ? <PhoneIncoming className="w-5 h-5 text-green-600" />
+                        : item.result === 'Missed' || item.result === 'No Answer'
+                          ? <PhoneMissed className="w-5 h-5 text-red-600" />
+                          : <PhoneOutgoing className="w-5 h-5 text-blue-600" />
+                    )}
+                    {item.activityType === 'sms' && <MessageCircle className="w-5 h-5 text-green-600" />}
+                    {item.activityType === 'email' && <MailOpen className="w-5 h-5 text-purple-600" />}
+                  </div>
+
+                  {/* Content */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center space-x-2">
+                        <span className={`px-2 py-0.5 text-xs font-medium rounded ${
+                          item.activityType === 'phone' ? 'bg-blue-100 text-blue-700' :
+                          item.activityType === 'sms' ? 'bg-green-100 text-green-700' :
+                          'bg-purple-100 text-purple-700'
+                        }`}>
+                          {item.activityType === 'phone' ? 'Phone' :
+                           item.activityType === 'sms' ? 'SMS' : 'Email'}
+                        </span>
+                        {item.activityType === 'phone' && (
+                          <span className={`px-2 py-0.5 text-xs rounded ${
+                            item.direction === 'Inbound' ? 'bg-green-50 text-green-600' : 'bg-gray-100 text-gray-600'
+                          }`}>
+                            {item.direction || 'Outbound'}
+                          </span>
+                        )}
+                        {item.activityType !== 'phone' && (
+                          <span className={`px-2 py-0.5 text-xs rounded ${
+                            item.direction === 'inbound' || item.direction === 'received'
+                              ? 'bg-green-50 text-green-600'
+                              : 'bg-gray-100 text-gray-600'
+                          }`}>
+                            {item.direction === 'inbound' || item.direction === 'received' ? 'Received' : 'Sent'}
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-xs text-gray-500">{item.displayDate}</span>
+                    </div>
+
+                    {/* Message Content */}
+                    {item.activityType === 'phone' ? (
+                      <div className="mt-1">
+                        <p className="text-sm text-gray-900">
+                          {item.direction === 'Inbound' ? 'Incoming call' : 'Outgoing call'}
+                          {item.result && ` - ${item.result}`}
+                        </p>
+                        {item.duration && (
+                          <p className="text-xs text-gray-500 mt-0.5">
+                            Duration: {Math.floor(item.duration / 60)}m {item.duration % 60}s
+                          </p>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="mt-1">
+                        {item.subject && (
+                          <p className="text-sm font-medium text-gray-900">{item.subject}</p>
+                        )}
+                        {(item.body || item.content || item.text) && (
+                          <p className="text-sm text-gray-600 line-clamp-2">
+                            {item.body || item.content || item.text}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-center py-12 text-gray-500">
+            <Activity className="w-12 h-12 mx-auto text-gray-300 mb-3" />
+            <p className="font-medium">No communication history found</p>
+            <p className="text-sm mt-1">
+              {!phone && !email
+                ? 'No phone or email available for this contact'
+                : 'No SMS, Email, or Phone interactions recorded'}
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default function OpportunityDetail() {
   const { id } = useParams();
@@ -695,6 +989,7 @@ export default function OpportunityDetail() {
     { id: 'commissions', label: 'Commissions', icon: Percent, count: summary?.counts?.commissions || commissions?.length || 0 },
     { id: 'documents', label: 'Documents', icon: FileSignature, count: summary?.counts?.documents || documents?.length || 0 },
     { id: 'activity', label: 'Activity', icon: Activity, count: activityData?.items?.length || 0 },
+    { id: 'communications', label: 'Communications', icon: PhoneCall },
     { id: 'checklist', label: 'Checklist', icon: ClipboardList },
   ];
 
@@ -1455,7 +1750,27 @@ export default function OpportunityDetail() {
                       <div className="text-center py-8 text-gray-500">
                         <Calendar className="w-12 h-12 mx-auto text-gray-300 mb-2" />
                         <p>No appointments scheduled</p>
-                        <button className="mt-4 text-panda-primary hover:underline">+ Schedule Appointment</button>
+                        {workOrders && workOrders.length > 0 ? (
+                          <button
+                            onClick={() => {
+                              setActiveQuickAction({ type: 'addAppointment', workOrderId: workOrders[0].id });
+                              setShowQuickActionModal(true);
+                            }}
+                            className="mt-4 text-panda-primary hover:underline"
+                          >
+                            + Schedule Appointment
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              setActiveQuickAction('createWorkOrder');
+                              setShowQuickActionModal(true);
+                            }}
+                            className="mt-4 text-panda-primary hover:underline"
+                          >
+                            + Create Work Order First
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -2568,6 +2883,14 @@ export default function OpportunityDetail() {
                       </div>
                     )}
                   </div>
+                )}
+
+                {activeTab === 'communications' && (
+                  <CommunicationsTab
+                    phone={opportunity?.contact?.phone || opportunity?.contact?.mobilePhone}
+                    email={opportunity?.contact?.email}
+                    contactName={opportunity?.contact?.name || `${opportunity?.contact?.firstName || ''} ${opportunity?.contact?.lastName || ''}`}
+                  />
                 )}
 
                 {activeTab === 'checklist' && (

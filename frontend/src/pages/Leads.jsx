@@ -3,8 +3,45 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { leadsApi } from '../services/api';
 import { useAuth, ROLE_TYPES } from '../context/AuthContext';
-import { UserPlus, ChevronRight, Phone, Clock, MapPin, Users } from 'lucide-react';
+import { UserPlus, ChevronRight, Phone, Clock, MapPin, Users, X, Filter, Calendar } from 'lucide-react';
 import SubNav from '../components/SubNav';
+
+// Lead disposition options
+const DISPOSITION_OPTIONS = [
+  { value: '', label: 'All Dispositions' },
+  { value: 'NO_ANSWER', label: 'No Answer' },
+  { value: 'VOICEMAIL', label: 'Voicemail' },
+  { value: 'CALLBACK', label: 'Callback' },
+  { value: 'NOT_INTERESTED', label: 'Not Interested' },
+  { value: 'APPOINTMENT_SET', label: 'Appointment Set' },
+  { value: 'WRONG_NUMBER', label: 'Wrong Number' },
+  { value: 'DO_NOT_CALL', label: 'Do Not Call' },
+];
+
+// Lead source options
+const LEAD_SOURCE_OPTIONS = [
+  { value: '', label: 'All Sources' },
+  { value: 'Website', label: 'Website' },
+  { value: 'Referral', label: 'Referral' },
+  { value: 'Door Knock', label: 'Door Knock' },
+  { value: 'Storm Chase', label: 'Storm Chase' },
+  { value: 'Self-Gen', label: 'Self-Gen' },
+  { value: 'Marketing', label: 'Marketing' },
+  { value: 'GAF', label: 'GAF' },
+  { value: 'Angi', label: 'Angi' },
+];
+
+// Work type options
+const WORK_TYPE_OPTIONS = [
+  { value: '', label: 'All Work Types' },
+  { value: 'Roofing', label: 'Roofing' },
+  { value: 'Siding', label: 'Siding' },
+  { value: 'Windows', label: 'Windows' },
+  { value: 'Gutters', label: 'Gutters' },
+  { value: 'Solar', label: 'Solar' },
+  { value: 'Insurance', label: 'Insurance' },
+  { value: 'Retail', label: 'Retail' },
+];
 
 const statusColors = {
   NEW: 'badge-info',
@@ -20,6 +57,17 @@ export default function Leads() {
   const [status, setStatus] = useState('all');
   const [page, setPage] = useState(1);
 
+  // Filter state
+  const [showFilterPanel, setShowFilterPanel] = useState(false);
+  const [disposition, setDisposition] = useState('');
+  const [leadSource, setLeadSource] = useState('');
+  const [workType, setWorkType] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+
+  // Count active filters
+  const activeFilterCount = [disposition, leadSource, workType, startDate, endDate].filter(Boolean).length;
+
   // Determine user's view scope based on role
   const isGlobalView = user?.roleType === ROLE_TYPES.ADMIN || user?.roleType === ROLE_TYPES.EXECUTIVE;
   const isTeamView = user?.roleType === ROLE_TYPES.OFFICE_MANAGER || user?.roleType === ROLE_TYPES.SALES_MANAGER || user?.isManager;
@@ -32,6 +80,13 @@ export default function Leads() {
       page,
       limit: 25,
     };
+
+    // Apply advanced filters
+    if (disposition) params.disposition = disposition;
+    if (leadSource) params.leadSource = leadSource;
+    if (workType) params.workType = workType;
+    if (startDate) params.startDate = startDate;
+    if (endDate) params.endDate = endDate;
 
     // Apply role-based filters
     if (status === 'my') {
@@ -52,7 +107,7 @@ export default function Leads() {
     }
 
     return params;
-  }, [search, status, page, user, isGlobalView, isTeamView]);
+  }, [search, status, page, user, isGlobalView, isTeamView, disposition, leadSource, workType, startDate, endDate]);
 
   const { data, isLoading } = useQuery({
     queryKey: ['leads', filterParams],
@@ -99,6 +154,22 @@ export default function Leads() {
     { id: 'my', label: 'My Leads', count: counts?.myLeads || 0 },
   ];
 
+  // Clear all filters
+  const clearFilters = () => {
+    setDisposition('');
+    setLeadSource('');
+    setWorkType('');
+    setStartDate('');
+    setEndDate('');
+    setPage(1);
+  };
+
+  // Apply filters (close panel and reset page)
+  const applyFilters = () => {
+    setShowFilterPanel(false);
+    setPage(1);
+  };
+
   return (
     <div className="space-y-6">
       {/* Scope indicator for team/office managers */}
@@ -140,7 +211,165 @@ export default function Leads() {
           setPage(1); // Reset page on search
         }}
         showSearch={true}
+        showFilter={true}
+        onFilterClick={() => setShowFilterPanel(!showFilterPanel)}
       />
+
+      {/* Filter Panel */}
+      {showFilterPanel && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 mb-4">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center space-x-2">
+              <Filter className="w-5 h-5 text-panda-primary" />
+              <h3 className="font-medium text-gray-900">Filter Leads</h3>
+              {activeFilterCount > 0 && (
+                <span className="px-2 py-0.5 bg-panda-primary text-white text-xs rounded-full">
+                  {activeFilterCount} active
+                </span>
+              )}
+            </div>
+            <button
+              onClick={() => setShowFilterPanel(false)}
+              className="p-1 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+            {/* Disposition Filter */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Disposition</label>
+              <select
+                value={disposition}
+                onChange={(e) => setDisposition(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+              >
+                {DISPOSITION_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Lead Source Filter */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Lead Source</label>
+              <select
+                value={leadSource}
+                onChange={(e) => setLeadSource(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+              >
+                {LEAD_SOURCE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Work Type Filter */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Work Type</label>
+              <select
+                value={workType}
+                onChange={(e) => setWorkType(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+              >
+                {WORK_TYPE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Date Range - Start */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Created From</label>
+              <div className="relative">
+                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  className="w-full pl-10 pr-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+                />
+              </div>
+            </div>
+
+            {/* Date Range - End */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Created To</label>
+              <div className="relative">
+                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  className="w-full pl-10 pr-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Filter Actions */}
+          <div className="flex items-center justify-end space-x-3 mt-4 pt-4 border-t border-gray-100">
+            <button
+              onClick={clearFilters}
+              className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              Clear All
+            </button>
+            <button
+              onClick={applyFilters}
+              className="px-4 py-2 text-sm bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90 transition-colors"
+            >
+              Apply Filters
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Active Filters Summary */}
+      {activeFilterCount > 0 && !showFilterPanel && (
+        <div className="flex items-center flex-wrap gap-2 mb-4">
+          <span className="text-sm text-gray-500">Active filters:</span>
+          {disposition && (
+            <span className="inline-flex items-center px-2 py-1 bg-gray-100 text-gray-700 text-sm rounded-full">
+              {DISPOSITION_OPTIONS.find(o => o.value === disposition)?.label}
+              <button onClick={() => setDisposition('')} className="ml-1 text-gray-400 hover:text-gray-600">
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+          )}
+          {leadSource && (
+            <span className="inline-flex items-center px-2 py-1 bg-gray-100 text-gray-700 text-sm rounded-full">
+              {LEAD_SOURCE_OPTIONS.find(o => o.value === leadSource)?.label}
+              <button onClick={() => setLeadSource('')} className="ml-1 text-gray-400 hover:text-gray-600">
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+          )}
+          {workType && (
+            <span className="inline-flex items-center px-2 py-1 bg-gray-100 text-gray-700 text-sm rounded-full">
+              {WORK_TYPE_OPTIONS.find(o => o.value === workType)?.label}
+              <button onClick={() => setWorkType('')} className="ml-1 text-gray-400 hover:text-gray-600">
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+          )}
+          {(startDate || endDate) && (
+            <span className="inline-flex items-center px-2 py-1 bg-gray-100 text-gray-700 text-sm rounded-full">
+              {startDate && endDate ? `${startDate} - ${endDate}` : startDate || `Until ${endDate}`}
+              <button onClick={() => { setStartDate(''); setEndDate(''); }} className="ml-1 text-gray-400 hover:text-gray-600">
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+          )}
+          <button
+            onClick={clearFilters}
+            className="text-sm text-panda-primary hover:underline"
+          >
+            Clear all
+          </button>
+        </div>
+      )}
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-100">
         {isLoading ? (

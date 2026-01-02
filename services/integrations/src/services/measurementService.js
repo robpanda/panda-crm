@@ -504,6 +504,15 @@ class MeasurementService {
         // Parse measurements from EagleView response
         const measurements = this.parseEagleViewApiResponse(reportData, wasteData);
 
+        // Download and store PDF to S3 (like Salesforce ContentVersion)
+        let pdfStorage = null;
+        try {
+          pdfStorage = await this.downloadAndStorePdf(eagleViewReportId, measurementReportId);
+          logger.info(`PDF stored to S3 for report ${eagleViewReportId}: ${pdfStorage.s3Key}`);
+        } catch (err) {
+          logger.warn(`Could not download/store PDF for ${eagleViewReportId}:`, err.message);
+        }
+
         // Update our report
         await prisma.measurementReport.update({
           where: { id: measurementReportId },
@@ -511,17 +520,22 @@ class MeasurementService {
             orderStatus: 'DELIVERED',
             deliveredAt: new Date(),
             reportUrl: reportData.ReportLink || reportData.reportUrl,
-            reportPdfUrl: reportData.PdfReportLink || reportData.pdfUrl,
+            reportPdfUrl: pdfStorage?.presignedUrl || reportData.PdfReportLink || reportData.pdfUrl,
             reportXmlUrl: reportData.XmlReportLink || reportData.xmlUrl,
             latitude: reportData.Latitude || reportData.latitude,
             longitude: reportData.Longitude || reportData.longitude,
             ...measurements,
-            rawData: { reportData, wasteData },
+            rawData: {
+              reportData,
+              wasteData,
+              pdfS3Key: pdfStorage?.s3Key,
+              pdfS3Url: pdfStorage?.s3Url,
+            },
           },
         });
 
         logger.info(`EagleView report ${eagleViewReportId} retrieved and stored for ${measurementReportId}`);
-        return { success: true, status: 'DELIVERED' };
+        return { success: true, status: 'DELIVERED', pdfS3Key: pdfStorage?.s3Key };
       } else {
         // Report still processing
         logger.info(`EagleView report ${eagleViewReportId} still processing: ${reportData.Status || reportData.status}`);

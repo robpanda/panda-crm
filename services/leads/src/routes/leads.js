@@ -153,6 +153,9 @@ router.get('/', validatePagination, handleValidation, async (req, res, next) => 
       ownerId: req.query.ownerId,
       ownerFilter: req.query.ownerFilter,
       source: req.query.source,
+      leadSource: req.query.leadSource, // Alias for source
+      disposition: req.query.disposition,
+      workType: req.query.workType,
       search: req.query.search,
       sortBy: req.query.sortBy || 'createdAt',
       sortOrder: req.query.sortOrder || 'desc',

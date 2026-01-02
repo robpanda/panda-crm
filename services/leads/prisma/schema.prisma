@@ -99,7 +99,6 @@ model Account {
   callLogs           CallLog[]
   measurementReports MeasurementReport[]
   mobileActivities   MobileActivity[]
-  companyCamProjects CompanyCamProject[]
 
   // Event & Email Relations
   events        Event[]        @relation("AccountEvents")
@@ -365,7 +364,6 @@ model Opportunity {
   callLogs           CallLog[]
   measurementReports MeasurementReport[]
   mobileActivities   MobileActivity[]
-  companyCamProject  CompanyCamProject?
 
   // Event & Email Relations
   events        Event[]        @relation("OpportunityEvents")
@@ -3088,10 +3086,8 @@ model CompanyCamProject {
   name         String
 
   // Linked records
-  opportunityId String?      @unique @map("opportunity_id")
-  opportunity   Opportunity? @relation(fields: [opportunityId], references: [id])
-  accountId     String?      @map("account_id")
-  account       Account?     @relation(fields: [accountId], references: [id])
+  opportunityId String? @unique @map("opportunity_id")
+  accountId     String? @map("account_id")
 
   // Address
   address   String?
@@ -3110,18 +3106,14 @@ model CompanyCamProject {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  // Relations
-  photos CompanyCamPhoto[]
-
   @@map("companycam_projects")
 }
 
 model CompanyCamPhoto {
   id String @id @default(cuid())
 
-  companyCamId String            @unique @map("companycam_id")
-  projectId    String            @map("project_id")
-  project      CompanyCamProject @relation(fields: [projectId], references: [id])
+  companyCamId String @unique @map("companycam_id")
+  projectId    String @map("project_id")
 
   // Photo details
   photoUrl     String  @map("photo_url")
@@ -4235,12 +4227,12 @@ model CallLog {
   id String @id @default(cuid())
 
   // RingCentral identifiers (replaces Five9)
-  ringCentralCallId      String? @unique @map("ringcentral_call_id")
-  ringCentralSessionId   String? @map("ringcentral_session_id")
+  ringCentralCallId     String? @unique @map("ringcentral_call_id")
+  ringCentralSessionId  String? @map("ringcentral_session_id")
   ringCentralTelephonyId String? @map("ringcentral_telephony_id")
-  extensionId            String? @map("extension_id")
-  extensionName          String? @map("extension_name")
-  recordingId            String? @map("recording_id")
+  extensionId           String? @map("extension_id")
+  extensionName         String? @map("extension_name")
+  recordingId           String? @map("recording_id")
 
   // Call details
   direction      CallDirection @default(OUTBOUND)
@@ -4441,20 +4433,12 @@ enum MeasurementProvider {
 }
 
 enum ReportType {
-  // EagleView report types
   BASIC
   PREMIUM
   ULTRA_PREMIUM
   COMMERCIAL
   WALLS_ONLY
   ROOF_AND_WALLS
-  // GAF QuickMeasure report types
-  RESIDENTIAL_SINGLE
-  RESIDENTIAL_MULTI
-  // Hover report types
-  EXTERIOR
-  EXTERIOR_PLUS
-  FULL_PROPERTY
 }
 
 enum RoofComplexity {

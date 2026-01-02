@@ -67,8 +67,33 @@ async function verifyToken(token) {
     // Development bypass - decode JWT without verification
     try {
       const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+      const cognitoId = payload.sub;
+
+      // Look up the user in the database to get the actual database ID
+      const { PrismaClient } = await import('@prisma/client');
+      const prisma = new PrismaClient();
+      try {
+        const dbUser = await prisma.user.findFirst({
+          where: { cognitoId },
+          select: { id: true, email: true, roleId: true, role: { select: { name: true, roleType: true } } },
+        });
+
+        if (dbUser) {
+          return {
+            id: dbUser.id, // Use database ID, not Cognito ID
+            email: dbUser.email || payload.email,
+            role: dbUser.role?.name || payload.role || 'user',
+            roleType: dbUser.role?.roleType,
+            cognitoId: cognitoId,
+          };
+        }
+      } finally {
+        await prisma.$disconnect();
+      }
+
+      // Fallback to payload values
       return {
-        id: payload.sub || payload.userId,
+        id: payload.userId || payload.sub,
         email: payload.email,
         role: payload.role || 'user',
         cognitoId: payload.sub,
@@ -81,6 +106,7 @@ async function verifyToken(token) {
   // Production: Verify with Cognito
   // This will be implemented when we set up Cognito
   const { CognitoJwtVerifier } = await import('aws-jwt-verify');
+  const { PrismaClient } = await import('@prisma/client');
 
   const verifier = CognitoJwtVerifier.create({
     userPoolId: process.env.COGNITO_USER_POOL_ID,
@@ -89,12 +115,36 @@ async function verifyToken(token) {
   });
 
   const payload = await verifier.verify(token);
+  const cognitoId = payload.sub;
 
+  // Look up the user in the database to get the actual database ID
+  const prisma = new PrismaClient();
+  try {
+    const dbUser = await prisma.user.findFirst({
+      where: { cognitoId },
+      select: { id: true, email: true, roleId: true, role: { select: { name: true, roleType: true } } },
+    });
+
+    if (dbUser) {
+      return {
+        id: dbUser.id, // Use database ID, not Cognito ID
+        email: dbUser.email || payload.email,
+        role: dbUser.role?.name || payload['custom:role'] || 'user',
+        roleType: dbUser.role?.roleType,
+        cognitoId: cognitoId,
+        groups: payload['cognito:groups'] || [],
+      };
+    }
+  } finally {
+    await prisma.$disconnect();
+  }
+
+  // Fallback if user not found in DB
   return {
-    id: payload.sub,
+    id: cognitoId, // Fall back to Cognito ID if DB lookup fails
     email: payload.email,
     role: payload['custom:role'] || 'user',
-    cognitoId: payload.sub,
+    cognitoId: cognitoId,
     groups: payload['cognito:groups'] || [],
   };
 }

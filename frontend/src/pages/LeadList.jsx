@@ -51,6 +51,10 @@ export default function LeadList() {
   const [sortOrder, setSortOrder] = useState(searchParams.get('sortOrder') || 'desc');
   const [page, setPage] = useState(1);
   const [showFilters, setShowFilters] = useState(false);
+  const [leadSource, setLeadSource] = useState('');
+  const [workType, setWorkType] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
 
   // Build query params
   const queryParams = useMemo(() => {
@@ -64,8 +68,12 @@ export default function LeadList() {
       }
     }
     if (source) params.source = source;
+    if (leadSource) params.leadSource = leadSource;
+    if (workType) params.workType = workType;
+    if (startDate) params.startDate = startDate;
+    if (endDate) params.endDate = endDate;
     return params;
-  }, [search, status, source, sortBy, sortOrder, page]);
+  }, [search, status, source, sortBy, sortOrder, page, leadSource, workType, startDate, endDate]);
 
   const { data, isLoading } = useQuery({
     queryKey: ['leads', queryParams],
@@ -105,11 +113,15 @@ export default function LeadList() {
     setSearch('');
     setStatus('all');
     setSource('');
+    setLeadSource('');
+    setWorkType('');
+    setStartDate('');
+    setEndDate('');
     setSortBy('createdAt');
     setSortOrder('desc');
   };
 
-  const hasActiveFilters = search || (status && status !== 'all') || source;
+  const hasActiveFilters = search || (status && status !== 'all') || source || leadSource || workType || startDate || endDate;
 
   // Tabs for status filter
   const tabs = [
@@ -200,6 +212,92 @@ export default function LeadList() {
             )}
           </div>
         </div>
+
+        {/* Expanded Filter Panel */}
+        {showFilters && (
+          <div className="px-4 pb-4 border-b border-gray-100">
+            <div className="bg-gray-50 rounded-lg p-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                {/* Lead Source Filter */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Lead Source
+                  </label>
+                  <select
+                    value={leadSource}
+                    onChange={(e) => setLeadSource(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent bg-white"
+                  >
+                    <option value="">All Sources</option>
+                    <option value="Customer Referral">Customer Referral</option>
+                    <option value="Digital Marketing">Digital Marketing</option>
+                    <option value="Employee Referral">Employee Referral</option>
+                    <option value="Insurance Marketing">Insurance Marketing</option>
+                    <option value="Internet Lead">Internet Lead</option>
+                    <option value="Lead Aggregator">Lead Aggregator</option>
+                    <option value="Other">Other</option>
+                    <option value="Riley AI SMS">Riley AI SMS</option>
+                    <option value="Riley Widget">Riley Widget</option>
+                    <option value="Self-Gen">Self-Gen</option>
+                    <option value="Solar Marketing">Solar Marketing</option>
+                    <option value="Trade Show">Trade Show</option>
+                    <option value="Website">Website</option>
+                    <option value="Yard Sign">Yard Sign</option>
+                  </select>
+                </div>
+
+                {/* Work Type Filter */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Work Type
+                  </label>
+                  <select
+                    value={workType}
+                    onChange={(e) => setWorkType(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent bg-white"
+                  >
+                    <option value="">All Work Types</option>
+                    <option value="Inspection">Inspection</option>
+                    <option value="Insurance">Insurance</option>
+                    <option value="Retail">Retail</option>
+                  </select>
+                </div>
+
+                {/* Date From */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Created From
+                  </label>
+                  <div className="relative">
+                    <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                    <input
+                      type="date"
+                      value={startDate}
+                      onChange={(e) => setStartDate(e.target.value)}
+                      className="w-full pl-10 pr-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+                    />
+                  </div>
+                </div>
+
+                {/* Date To */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Created To
+                  </label>
+                  <div className="relative">
+                    <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                    <input
+                      type="date"
+                      value={endDate}
+                      onChange={(e) => setEndDate(e.target.value)}
+                      className="w-full pl-10 pr-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Status Tabs */}
         <div className="px-4 pb-4 border-b border-gray-100">

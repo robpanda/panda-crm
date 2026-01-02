@@ -1,10 +1,12 @@
 // EagleView, GAF QuickMeasure & Hover Integration Routes
 import { Router } from 'express';
+import { PrismaClient } from '@prisma/client';
 import { measurementService } from '../services/measurementService.js';
 import { logger } from '../middleware/logger.js';
 import { authMiddleware, requireRole } from '../middleware/auth.js';
 
 const router = Router();
+const prisma = new PrismaClient();
 
 // ==========================================
 // EagleView Routes
@@ -84,6 +86,62 @@ router.get('/eagleview/pdf/:reportId', authMiddleware, async (req, res, next) =>
 
     const buffer = await response.arrayBuffer();
     res.send(Buffer.from(buffer));
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /measurements/eagleview/store-pdf/:id - Download and store PDF to S3 for a measurement report
+ */
+router.post('/eagleview/store-pdf/:id', authMiddleware, async (req, res, next) => {
+  try {
+    // Get measurement report to find EagleView report ID
+    const report = await prisma.measurementReport.findUnique({
+      where: { id: req.params.id },
+    });
+
+    if (!report || !report.externalId) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Report not found or no external ID' },
+      });
+    }
+
+    const result = await measurementService.downloadAndStorePdf(report.externalId, req.params.id);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /measurements/pdf-url/:id - Get a fresh presigned URL for a stored PDF
+ */
+router.get('/pdf-url/:id', authMiddleware, async (req, res, next) => {
+  try {
+    const report = await prisma.measurementReport.findUnique({
+      where: { id: req.params.id },
+    });
+
+    if (!report) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Report not found' },
+      });
+    }
+
+    // Check if we have an S3 key stored
+    const s3Key = report.rawData?.pdfS3Key;
+    if (!s3Key) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NO_PDF', message: 'No PDF stored for this report' },
+      });
+    }
+
+    const presignedUrl = await measurementService.getPdfPresignedUrl(s3Key);
+    res.json({ success: true, data: { url: presignedUrl, s3Key } });
   } catch (error) {
     next(error);
   }

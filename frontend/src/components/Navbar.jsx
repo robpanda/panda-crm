@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
 import { Link, NavLink, useNavigate, useLocation } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../context/AuthContext';
 import { useRingCentral } from '../context/RingCentralContext';
-import { usersApi } from '../services/api';
+import { usersApi, attentionApi } from '../services/api';
 import {
   Bell,
   Search,
@@ -133,6 +134,16 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
 
   // Show admin for Super Admin or Admin roles only (checks actual user, not impersonated)
   const isAdmin = canImpersonate;
+
+  // Fetch attention queue count
+  const { data: attentionStats } = useQuery({
+    queryKey: ['attentionStats'],
+    queryFn: () => attentionApi.getStats(),
+    staleTime: 30000, // 30 seconds
+    refetchInterval: 60000, // Refresh every minute
+  });
+
+  const attentionCount = attentionStats?.total || attentionStats?.count || 0;
 
   // Build display name - show just first name in navbar
   const displayName = user?.firstName || user?.name?.split(' ')[0] || 'User';
@@ -446,9 +457,11 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
             >
               <AlertCircle className="w-4 h-4" />
               <span>Attention</span>
-              <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold w-5 h-5 flex items-center justify-center rounded-full">
-                3
-              </span>
+              {attentionCount > 0 && (
+                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold w-5 h-5 flex items-center justify-center rounded-full">
+                  {attentionCount > 99 ? '99+' : attentionCount}
+                </span>
+              )}
             </NavLink>
 
             {/* More Dropdown */}
@@ -685,10 +698,12 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
             </div>
           )}
 
-          {/* Notifications */}
-          <button className="relative p-2 text-gray-600 hover:bg-gray-100 active:bg-gray-200 rounded-lg">
+          {/* Notifications - placeholder for future notification system */}
+          <button
+            className="relative p-2 text-gray-600 hover:bg-gray-100 active:bg-gray-200 rounded-lg"
+            title="Notifications coming soon"
+          >
             <Bell className="w-5 h-5" />
-            <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
           </button>
 
           {/* User menu */}

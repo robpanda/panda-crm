@@ -155,7 +155,7 @@ export default function LeadWizard() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { clickToCall, isReady: isRingCentralReady, currentCall } = useRingCentral();
+  const { clickToCall, isReady: isRingCentralReady, currentCall, setVisible: setRingCentralVisible, loadWidget } = useRingCentral();
   const isNewLead = !id || id === 'new';
 
   // Determine if user is call center based on role or department
@@ -188,6 +188,59 @@ export default function LeadWizard() {
   const [smsPhoneNumber, setSmsPhoneNumber] = useState(''); // Selected phone number for SMS
   const [emailSubject, setEmailSubject] = useState('');
   const [emailBody, setEmailBody] = useState('');
+  const [selectedSmsTemplate, setSelectedSmsTemplate] = useState('');
+  const [selectedEmailTemplate, setSelectedEmailTemplate] = useState('');
+
+  // Fetch SMS templates
+  const { data: smsTemplatesData } = useQuery({
+    queryKey: ['bamboogli-templates-sms'],
+    queryFn: () => bamboogliApi.getMessageTemplates({ channel: 'SMS', isActive: true }),
+    staleTime: 60000,
+  });
+
+  // Fetch Email templates
+  const { data: emailTemplatesData } = useQuery({
+    queryKey: ['bamboogli-templates-email'],
+    queryFn: () => bamboogliApi.getMessageTemplates({ channel: 'EMAIL', isActive: true }),
+    staleTime: 60000,
+  });
+
+  // Replace merge fields in template with actual values
+  const replaceMergeFields = (content) => {
+    if (!content) return '';
+    return content
+      .replace(/\{\{firstName\}\}/gi, formData.firstName || '')
+      .replace(/\{\{lastName\}\}/gi, formData.lastName || '')
+      .replace(/\{\{fullName\}\}/gi, `${formData.firstName || ''} ${formData.lastName || ''}`.trim())
+      .replace(/\{\{company\}\}/gi, formData.company || '')
+      .replace(/\{\{phone\}\}/gi, formData.phone || formData.mobilePhone || '')
+      .replace(/\{\{email\}\}/gi, formData.email || '')
+      .replace(/\{\{city\}\}/gi, formData.city || '')
+      .replace(/\{\{state\}\}/gi, formData.state || '');
+  };
+
+  // Handle SMS template selection
+  const handleSmsTemplateSelect = (templateId) => {
+    setSelectedSmsTemplate(templateId);
+    if (templateId) {
+      const template = smsTemplatesData?.templates?.find(t => t.id === templateId);
+      if (template) {
+        setSmsMessage(replaceMergeFields(template.content));
+      }
+    }
+  };
+
+  // Handle Email template selection
+  const handleEmailTemplateSelect = (templateId) => {
+    setSelectedEmailTemplate(templateId);
+    if (templateId) {
+      const template = emailTemplatesData?.templates?.find(t => t.id === templateId);
+      if (template) {
+        setEmailSubject(replaceMergeFields(template.subject || template.name));
+        setEmailBody(replaceMergeFields(template.content));
+      }
+    }
+  };
 
   // Fetch users for Lead Creator search
   const { data: usersData } = useQuery({
@@ -507,13 +560,14 @@ export default function LeadWizard() {
   const completionScore = calculateCompletionScore();
 
   // Validation differs for call center vs sales reps
-  // Call center: firstName, lastName, phone/email, workType, status
+  // Call center: firstName, lastName, phone/email, workType, status, leadSource
   // Sales reps: firstName, lastName, phone/email, leadSource, propertyType, workType
   const hasRequiredFields = isCallCenter
     ? (formData.firstName &&
        formData.lastName &&
        formData.workType &&
        formData.status &&
+       formData.leadSource &&
        (formData.phone || formData.mobilePhone || formData.email))
     : (formData.firstName &&
        formData.lastName &&
@@ -1019,10 +1073,52 @@ export default function LeadWizard() {
               </div>
             </div>
 
-            {/* Call Center: Work Type field only (Inspection) */}
+            {/* Call Center: Lead Source, Property Type, Work Type */}
             {isCallCenter && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Work Type - Call Center only sees Inspection */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                {/* Lead Source */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Lead Source <span className="text-red-500">*</span>
+                  </label>
+                  <div className="relative">
+                    <Target className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                    <select
+                      name="leadSource"
+                      value={formData.leadSource}
+                      onChange={handleInputChange}
+                      className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent appearance-none"
+                    >
+                      <option value="">Select source...</option>
+                      {LEAD_SOURCES.map(source => (
+                        <option key={source.value} value={source.value}>{source.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Property Type */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Property Type <span className="text-red-500">*</span>
+                  </label>
+                  <div className="relative">
+                    <Home className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                    <select
+                      name="propertyType"
+                      value={formData.propertyType}
+                      onChange={handleInputChange}
+                      className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent appearance-none"
+                    >
+                      <option value="">Select property type...</option>
+                      {PROPERTY_TYPES.map(type => (
+                        <option key={type.value} value={type.value}>{type.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Work Type */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Work Type <span className="text-red-500">*</span>
@@ -1407,6 +1503,30 @@ export default function LeadWizard() {
                   </div>
                 </div>
 
+                {/* Lead Source for Call Center - Editable in Step 4 */}
+                {isCallCenter && (
+                  <div className="bg-amber-50 rounded-lg p-4 border border-amber-200">
+                    <h3 className="font-semibold text-amber-900 mb-3 flex items-center">
+                      <Target className="w-4 h-4 mr-2" />
+                      Lead Source
+                    </h3>
+                    <select
+                      name="leadSource"
+                      value={formData.leadSource || ''}
+                      onChange={(e) => setFormData(prev => ({ ...prev, leadSource: e.target.value }))}
+                      className="w-full px-4 py-2.5 border border-amber-300 rounded-lg focus:ring-2 focus:ring-amber-500 focus:border-transparent bg-white"
+                    >
+                      <option value="">Select Lead Source</option>
+                      {LEAD_SOURCES.map(source => (
+                        <option key={source.value} value={source.value}>{source.label}</option>
+                      ))}
+                    </select>
+                    <p className="mt-2 text-xs text-amber-700">
+                      Required: Select where this lead originated from
+                    </p>
+                  </div>
+                )}
+
                 {/* Conversion Preview */}
                 <div className="pt-6 border-t border-gray-200">
                   <h3 className="font-semibold text-gray-900 mb-4">Records to Create</h3>
@@ -1440,6 +1560,7 @@ export default function LeadWizard() {
                       { label: 'Phone or Email', check: !!(formData.phone || formData.mobilePhone || formData.email), step: 1, field: 'phone' },
                       { label: 'Work Type', check: !!formData.workType, step: 3, field: 'workType' },
                       { label: 'Lead Status', check: !!formData.status, step: 3, field: 'status' },
+                      { label: 'Lead Source', check: !!formData.leadSource, step: 4, field: 'leadSource' },
                       { label: 'Lead Set By', check: !!formData.leadSetById, optional: true, step: 3, field: 'leadSetBy' },
                       { label: 'Appointment Date', check: !!formData.tentativeAppointmentDate, optional: true, step: 3, field: 'tentativeAppointmentDate' },
                     ] : [
@@ -1505,7 +1626,7 @@ export default function LeadWizard() {
                       ) : (
                         <>
                           <Sparkles className="w-5 h-5" />
-                          <span>Convert Lead</span>
+                          <span>Convert Lead to Job</span>
                         </>
                       )}
                     </button>
@@ -1617,15 +1738,20 @@ export default function LeadWizard() {
                 {/* Call Button - RingCentral Integration */}
                 <button
                   type="button"
-                  onClick={() => {
+                  onClick={async () => {
                     const phoneNumber = formData.phone || formData.mobilePhone;
                     if (phoneNumber) {
+                      // Load widget first if not loaded, then show it and place call
+                      if (!isRingCentralReady) {
+                        await loadWidget();
+                      }
+                      setRingCentralVisible(true);
                       clickToCall(phoneNumber);
                     }
                   }}
-                  disabled={(!formData.phone && !formData.mobilePhone) || !isRingCentralReady}
+                  disabled={!formData.phone && !formData.mobilePhone}
                   className={`flex items-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all ${
-                    (formData.phone || formData.mobilePhone) && isRingCentralReady
+                    (formData.phone || formData.mobilePhone)
                       ? currentCall
                         ? 'bg-red-500 text-white hover:bg-red-600 animate-pulse'
                         : 'bg-green-500 text-white hover:bg-green-600'
@@ -1736,11 +1862,29 @@ export default function LeadWizard() {
                   )}
                 </div>
 
+                {/* Template Selection */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Template:</label>
+                  <select
+                    value={selectedSmsTemplate}
+                    onChange={(e) => handleSmsTemplateSelect(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+                  >
+                    <option value="">Select a template (optional)</option>
+                    {smsTemplatesData?.templates?.map(template => (
+                      <option key={template.id} value={template.id}>{template.name}</option>
+                    ))}
+                  </select>
+                </div>
+
                 {/* Message textarea */}
                 <textarea
                   value={smsMessage}
-                  onChange={(e) => setSmsMessage(e.target.value)}
-                  placeholder="Type your message..."
+                  onChange={(e) => {
+                    setSmsMessage(e.target.value);
+                    setSelectedSmsTemplate(''); // Clear template selection when manually editing
+                  }}
+                  placeholder="Type your message or select a template..."
                   rows={4}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
                 />
@@ -1794,17 +1938,37 @@ export default function LeadWizard() {
                 </button>
               </div>
               <div className="p-4 space-y-3">
+                {/* Template Selection */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Template:</label>
+                  <select
+                    value={selectedEmailTemplate}
+                    onChange={(e) => handleEmailTemplateSelect(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white"
+                  >
+                    <option value="">Select a template (optional)</option>
+                    {emailTemplatesData?.templates?.map(template => (
+                      <option key={template.id} value={template.id}>{template.name}</option>
+                    ))}
+                  </select>
+                </div>
                 <input
                   type="text"
                   value={emailSubject}
-                  onChange={(e) => setEmailSubject(e.target.value)}
+                  onChange={(e) => {
+                    setEmailSubject(e.target.value);
+                    setSelectedEmailTemplate(''); // Clear template selection when manually editing
+                  }}
                   placeholder="Subject"
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                 />
                 <textarea
                   value={emailBody}
-                  onChange={(e) => setEmailBody(e.target.value)}
-                  placeholder="Compose your email..."
+                  onChange={(e) => {
+                    setEmailBody(e.target.value);
+                    setSelectedEmailTemplate(''); // Clear template selection when manually editing
+                  }}
+                  placeholder="Compose your email or select a template..."
                   rows={6}
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none"
                 />

@@ -1,12 +1,13 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { leadsApi, usersApi, bamboogliApi } from '../services/api';
+import { leadsApi, usersApi, bamboogliApi, ringCentralApi } from '../services/api';
 import { useRingCentral } from '../context/RingCentralContext';
 import {
   UserPlus, ArrowLeft, Phone, Mail, Building2, Edit, ArrowRight,
   Save, X, MapPin, Calendar, Star, FileText, Clock, User, Tag,
-  MessageSquare, Send, Loader2, ChevronDown
+  MessageSquare, Send, Loader2, ChevronDown, Activity, PhoneCall,
+  PhoneIncoming, PhoneOutgoing, PhoneMissed, MailOpen, MessageCircle
 } from 'lucide-react';
 
 // SMS Modal Component with Canned Responses
@@ -398,6 +399,310 @@ function EmailModal({ isOpen, onClose, email, recipientName, onSent, mergeData =
   );
 }
 
+// Activity Tab Component - Shows communication history (SMS, Email, Phone Calls)
+function ActivityTab({ phone, email, leadName }) {
+  const [filter, setFilter] = useState('all'); // all, sms, email, phone
+
+  // Fetch SMS/Email conversation by phone or email
+  const { data: conversation, isLoading: conversationLoading } = useQuery({
+    queryKey: ['lead-conversation', phone, email],
+    queryFn: async () => {
+      try {
+        // Try to get conversation by phone first, then email
+        const identifier = phone || email;
+        if (!identifier) return null;
+        const data = await bamboogliApi.getConversationByIdentifier(identifier);
+        return data;
+      } catch (err) {
+        console.error('Failed to fetch conversation:', err);
+        return null;
+      }
+    },
+    enabled: !!(phone || email),
+  });
+
+  // Fetch messages for the conversation
+  const { data: messagesData, isLoading: messagesLoading } = useQuery({
+    queryKey: ['lead-messages', conversation?.id],
+    queryFn: async () => {
+      if (!conversation?.id) return { data: [] };
+      const data = await bamboogliApi.getMessagesByConversation(conversation.id, { limit: 100 });
+      return data;
+    },
+    enabled: !!conversation?.id,
+  });
+
+  // Fetch RingCentral call logs for this phone number
+  const { data: callLogsData, isLoading: callsLoading } = useQuery({
+    queryKey: ['lead-call-logs', phone],
+    queryFn: async () => {
+      if (!phone) return { data: [] };
+      try {
+        const data = await ringCentralApi.getCallLogs({ phoneNumber: phone, limit: 100 });
+        return data;
+      } catch (err) {
+        console.error('Failed to fetch call logs:', err);
+        return { data: [] };
+      }
+    },
+    enabled: !!phone,
+  });
+
+  const messages = messagesData?.data || messagesData || [];
+  const callLogs = callLogsData?.data || callLogsData || [];
+
+  // Separate messages by type
+  const smsMessages = Array.isArray(messages) ? messages.filter(m => m.channel === 'SMS' || m.type === 'sms') : [];
+  const emailMessages = Array.isArray(messages) ? messages.filter(m => m.channel === 'EMAIL' || m.type === 'email') : [];
+  const phoneCalls = Array.isArray(callLogs) ? callLogs : [];
+
+  // Combine all activities into a unified timeline
+  const allActivities = [
+    ...smsMessages.map(m => ({
+      id: m.id,
+      type: 'sms',
+      direction: m.direction || (m.from ? 'inbound' : 'outbound'),
+      timestamp: new Date(m.createdAt || m.timestamp || m.sentAt),
+      content: m.body || m.content || m.message,
+      status: m.status,
+    })),
+    ...emailMessages.map(m => ({
+      id: m.id,
+      type: 'email',
+      direction: m.direction || (m.from ? 'inbound' : 'outbound'),
+      timestamp: new Date(m.createdAt || m.timestamp || m.sentAt),
+      subject: m.subject,
+      content: m.body || m.content,
+      status: m.status,
+    })),
+    ...phoneCalls.map(c => ({
+      id: c.id,
+      type: 'phone',
+      direction: c.direction?.toLowerCase() || 'outbound',
+      timestamp: new Date(c.startTime || c.createdAt || c.timestamp),
+      duration: c.duration,
+      result: c.result || c.callResult,
+      status: c.status,
+      from: c.from?.phoneNumber || c.from,
+      to: c.to?.phoneNumber || c.to,
+    })),
+  ].sort((a, b) => b.timestamp - a.timestamp);
+
+  // Filter activities
+  const filteredActivities = filter === 'all'
+    ? allActivities
+    : allActivities.filter(a => a.type === filter);
+
+  const isLoading = conversationLoading || messagesLoading || callsLoading;
+
+  // Format duration in minutes:seconds
+  const formatDuration = (seconds) => {
+    if (!seconds) return '0:00';
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  // Get icon for activity type
+  const getActivityIcon = (activity) => {
+    if (activity.type === 'sms') {
+      return activity.direction === 'inbound' || activity.direction === 'incoming'
+        ? <MessageCircle className="w-4 h-4 text-purple-500" />
+        : <MessageSquare className="w-4 h-4 text-purple-600" />;
+    }
+    if (activity.type === 'email') {
+      return activity.direction === 'inbound' || activity.direction === 'incoming'
+        ? <MailOpen className="w-4 h-4 text-orange-500" />
+        : <Mail className="w-4 h-4 text-orange-600" />;
+    }
+    if (activity.type === 'phone') {
+      if (activity.result === 'Missed' || activity.result === 'missed') {
+        return <PhoneMissed className="w-4 h-4 text-red-500" />;
+      }
+      return activity.direction === 'inbound' || activity.direction === 'incoming'
+        ? <PhoneIncoming className="w-4 h-4 text-green-500" />
+        : <PhoneOutgoing className="w-4 h-4 text-blue-500" />;
+    }
+    return <Activity className="w-4 h-4 text-gray-500" />;
+  };
+
+  // Get badge color for activity type
+  const getActivityBadge = (activity) => {
+    const badges = {
+      sms: 'bg-purple-100 text-purple-700',
+      email: 'bg-orange-100 text-orange-700',
+      phone: 'bg-blue-100 text-blue-700',
+    };
+    return badges[activity.type] || 'bg-gray-100 text-gray-700';
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Activity Summary Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div
+          onClick={() => setFilter('all')}
+          className={`bg-white rounded-xl shadow-sm border p-4 cursor-pointer transition-all ${
+            filter === 'all' ? 'border-panda-primary ring-2 ring-panda-primary/20' : 'border-gray-100 hover:border-gray-300'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-500">Total Activity</p>
+              <p className="text-2xl font-bold text-gray-900">{allActivities.length}</p>
+            </div>
+            <div className="p-3 bg-gradient-to-br from-panda-primary to-purple-600 rounded-lg">
+              <Activity className="w-5 h-5 text-white" />
+            </div>
+          </div>
+        </div>
+
+        <div
+          onClick={() => setFilter('phone')}
+          className={`bg-white rounded-xl shadow-sm border p-4 cursor-pointer transition-all ${
+            filter === 'phone' ? 'border-blue-500 ring-2 ring-blue-500/20' : 'border-gray-100 hover:border-gray-300'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-500">Phone Calls</p>
+              <p className="text-2xl font-bold text-gray-900">{phoneCalls.length}</p>
+            </div>
+            <div className="p-3 bg-blue-500 rounded-lg">
+              <PhoneCall className="w-5 h-5 text-white" />
+            </div>
+          </div>
+        </div>
+
+        <div
+          onClick={() => setFilter('sms')}
+          className={`bg-white rounded-xl shadow-sm border p-4 cursor-pointer transition-all ${
+            filter === 'sms' ? 'border-purple-500 ring-2 ring-purple-500/20' : 'border-gray-100 hover:border-gray-300'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-500">SMS Messages</p>
+              <p className="text-2xl font-bold text-gray-900">{smsMessages.length}</p>
+            </div>
+            <div className="p-3 bg-purple-500 rounded-lg">
+              <MessageSquare className="w-5 h-5 text-white" />
+            </div>
+          </div>
+        </div>
+
+        <div
+          onClick={() => setFilter('email')}
+          className={`bg-white rounded-xl shadow-sm border p-4 cursor-pointer transition-all ${
+            filter === 'email' ? 'border-orange-500 ring-2 ring-orange-500/20' : 'border-gray-100 hover:border-gray-300'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-500">Emails</p>
+              <p className="text-2xl font-bold text-gray-900">{emailMessages.length}</p>
+            </div>
+            <div className="p-3 bg-orange-500 rounded-lg">
+              <Mail className="w-5 h-5 text-white" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Activity Timeline */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-gray-900 flex items-center">
+            <Activity className="w-5 h-5 mr-2 text-panda-primary" />
+            Activity Timeline
+          </h2>
+          <span className="text-sm text-gray-500">
+            {filteredActivities.length} {filter === 'all' ? 'activities' : filter === 'phone' ? 'calls' : filter === 'sms' ? 'messages' : 'emails'}
+          </span>
+        </div>
+
+        {isLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="w-8 h-8 animate-spin text-panda-primary" />
+          </div>
+        ) : filteredActivities.length === 0 ? (
+          <div className="text-center py-12">
+            <Activity className="w-12 h-12 mx-auto text-gray-300 mb-4" />
+            <p className="text-gray-500">No activity recorded yet</p>
+            <p className="text-sm text-gray-400 mt-1">
+              {!phone && !email ? 'No phone or email on record' : 'Communications will appear here'}
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {filteredActivities.map((activity, index) => (
+              <div
+                key={activity.id || index}
+                className="flex items-start space-x-4 p-4 rounded-lg bg-gray-50 hover:bg-gray-100 transition-colors"
+              >
+                <div className="flex-shrink-0 mt-1">
+                  {getActivityIcon(activity)}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center space-x-2 mb-1">
+                    <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${getActivityBadge(activity)}`}>
+                      {activity.type.toUpperCase()}
+                    </span>
+                    <span className="text-xs text-gray-500 capitalize">
+                      {activity.direction === 'inbound' || activity.direction === 'incoming' ? 'Incoming' : 'Outgoing'}
+                    </span>
+                    {activity.type === 'phone' && activity.result && (
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${
+                        activity.result === 'Missed' || activity.result === 'missed'
+                          ? 'bg-red-100 text-red-700'
+                          : activity.result === 'Answered' || activity.result === 'answered'
+                          ? 'bg-green-100 text-green-700'
+                          : 'bg-gray-100 text-gray-700'
+                      }`}>
+                        {activity.result}
+                      </span>
+                    )}
+                    {activity.type === 'phone' && activity.duration > 0 && (
+                      <span className="text-xs text-gray-500">
+                        {formatDuration(activity.duration)}
+                      </span>
+                    )}
+                  </div>
+                  {activity.type === 'email' && activity.subject && (
+                    <p className="text-sm font-medium text-gray-900 truncate">
+                      {activity.subject}
+                    </p>
+                  )}
+                  {activity.content && (
+                    <p className="text-sm text-gray-600 line-clamp-2">
+                      {activity.content}
+                    </p>
+                  )}
+                  {activity.type === 'phone' && !activity.content && (
+                    <p className="text-sm text-gray-600">
+                      {activity.direction === 'inbound' || activity.direction === 'incoming'
+                        ? `Call from ${activity.from || 'unknown'}`
+                        : `Call to ${activity.to || 'unknown'}`}
+                    </p>
+                  )}
+                </div>
+                <div className="flex-shrink-0 text-right">
+                  <p className="text-xs text-gray-500">
+                    {activity.timestamp.toLocaleDateString()}
+                  </p>
+                  <p className="text-xs text-gray-400">
+                    {activity.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // Constants from LeadWizard
 const LEAD_STATUSES = [
   { value: 'NEW', label: 'New' },
@@ -476,6 +781,7 @@ export default function LeadDetail() {
   const [formData, setFormData] = useState({});
   const [showSmsModal, setShowSmsModal] = useState(false);
   const [showEmailModal, setShowEmailModal] = useState(false);
+  const [activeTab, setActiveTab] = useState('details'); // details | activity
 
   const { data: lead, isLoading } = useQuery({
     queryKey: ['lead', id],
@@ -823,6 +1129,44 @@ export default function LeadDetail() {
         )}
       </div>
 
+      {/* Tab Navigation */}
+      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-1 flex space-x-1">
+        <button
+          onClick={() => setActiveTab('details')}
+          className={`flex-1 flex items-center justify-center space-x-2 px-4 py-3 rounded-lg font-medium transition-all ${
+            activeTab === 'details'
+              ? 'bg-panda-primary text-white'
+              : 'text-gray-600 hover:bg-gray-100'
+          }`}
+        >
+          <User className="w-4 h-4" />
+          <span>Details</span>
+        </button>
+        <button
+          onClick={() => setActiveTab('activity')}
+          className={`flex-1 flex items-center justify-center space-x-2 px-4 py-3 rounded-lg font-medium transition-all ${
+            activeTab === 'activity'
+              ? 'bg-panda-primary text-white'
+              : 'text-gray-600 hover:bg-gray-100'
+          }`}
+        >
+          <Activity className="w-4 h-4" />
+          <span>Activity</span>
+        </button>
+      </div>
+
+      {/* Activity Tab Content */}
+      {activeTab === 'activity' && (
+        <ActivityTab
+          phone={lead.mobilePhone || lead.phone}
+          email={lead.email}
+          leadName={`${lead.firstName} ${lead.lastName}`}
+        />
+      )}
+
+      {/* Details Tab Content */}
+      {activeTab === 'details' && (
+      <>
       {/* Edit Form / Detail View */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Contact Information */}
@@ -1323,6 +1667,8 @@ export default function LeadDetail() {
           )}
         </div>
       </div>
+      </>
+      )}
 
       {/* SMS Modal */}
       <SmsModal

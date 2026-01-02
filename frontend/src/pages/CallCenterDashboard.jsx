@@ -590,6 +590,7 @@ export default function CallCenterDashboard() {
   const apptDateRange = getApptDateRange();
 
   // Fetch unconfirmed leads (leads with tentative appointment that need confirmation)
+  // Always fetch so tab counts are visible on initial load
   const { data: unconfirmedLeadsData, isLoading: unconfirmedLoading, refetch: refetchUnconfirmed } = useQuery({
     queryKey: ['unconfirmedLeads', apptDateFilter],
     queryFn: () => leadsApi.getUnconfirmedLeads({
@@ -598,10 +599,11 @@ export default function CallCenterDashboard() {
       sortBy: 'tentativeAppointmentDate',
       sortOrder: 'asc',
     }),
-    enabled: activeTab === 'unconfirmed',
+    staleTime: 30000, // Consider data fresh for 30 seconds
   });
 
   // Fetch unscheduled appointments (opportunities that need service appointment booked)
+  // Always fetch so tab counts are visible on initial load
   const { data: unscheduledData, isLoading: unscheduledLoading, refetch: refetchUnscheduled } = useQuery({
     queryKey: ['unscheduledAppointments', apptDateFilter],
     queryFn: () => opportunitiesApi.getUnscheduledAppointments({
@@ -610,7 +612,7 @@ export default function CallCenterDashboard() {
       sortBy: 'tentativeAppointmentDate',
       sortOrder: 'asc',
     }),
-    enabled: activeTab === 'unscheduled',
+    staleTime: 30000, // Consider data fresh for 30 seconds
   });
 
   const unconfirmedLeads = unconfirmedLeadsData?.data || [];
@@ -618,12 +620,13 @@ export default function CallCenterDashboard() {
 
   // Fetch service requests (opportunities with serviceRequired=true, serviceComplete=false)
   // Service requests now live on Jobs (Opportunities) per the Opportunity Hub architecture
+  // Always fetch so tab counts are visible on initial load
   const { data: serviceRequestsData, isLoading: serviceRequestsLoading, refetch: refetchServiceRequests } = useQuery({
     queryKey: ['serviceRequests'],
     queryFn: () => opportunitiesApi.getServiceRequests({
       status: 'pending',
     }),
-    enabled: activeTab === 'serviceRequests',
+    staleTime: 30000, // Consider data fresh for 30 seconds
   });
 
   const serviceRequests = serviceRequestsData?.data || [];
@@ -1727,7 +1730,7 @@ export default function CallCenterDashboard() {
             <div className="p-5 border-b border-gray-100 flex items-center justify-between">
               <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
                 <CalendarCheck className="w-5 h-5 text-panda-primary" />
-                Confirm & Convert Lead
+                Confirm & Convert Lead to Job
               </h3>
               <button
                 onClick={() => setConfirmLeadModal({ open: false, lead: null })}

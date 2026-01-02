@@ -90,6 +90,9 @@ class LeadService {
       ownerId,
       ownerFilter, // 'mine' or 'all'
       source,
+      leadSource, // Alias for source (from frontend filter)
+      disposition,
+      workType,
       search,
       sortBy = 'createdAt',
       sortOrder = 'desc',
@@ -113,8 +116,20 @@ class LeadService {
       where.ownerId = ownerId;
     }
 
-    if (source && source !== 'all') {
-      where.source = source;
+    // Source filter - supports both 'source' and 'leadSource' params
+    const effectiveSource = source || leadSource;
+    if (effectiveSource && effectiveSource !== 'all') {
+      where.source = effectiveSource;
+    }
+
+    // Disposition filter
+    if (disposition && disposition !== 'all') {
+      where.disposition = disposition;
+    }
+
+    // Work type filter
+    if (workType && workType !== 'all') {
+      where.workType = workType;
     }
 
     // Date range filtering
@@ -177,16 +192,26 @@ class LeadService {
   async getLeadCounts(currentUserId) {
     const counts = {};
 
+    // Resolve user ID if it's a Cognito ID (starts with uuid format)
+    let resolvedUserId = currentUserId;
+    if (currentUserId) {
+      resolvedUserId = await this.resolveUserId(currentUserId);
+      logger.info(`getLeadCounts: currentUserId=${currentUserId}, resolvedUserId=${resolvedUserId}`);
+    }
+
     // Total unconverted leads
     counts.total = await prisma.lead.count({
       where: { isConverted: false },
     });
 
-    // My leads
-    if (currentUserId) {
+    // My leads - always set this, even if 0
+    if (resolvedUserId) {
       counts.mine = await prisma.lead.count({
-        where: { isConverted: false, ownerId: currentUserId },
+        where: { isConverted: false, ownerId: resolvedUserId },
       });
+      logger.info(`getLeadCounts: mine=${counts.mine} for resolvedUserId=${resolvedUserId}`);
+    } else {
+      counts.mine = 0;
     }
 
     // By status
@@ -971,6 +996,20 @@ class LeadService {
       _count: { id: true },
     });
 
+    // Get converted leads (appointments set) by agent in the date range
+    const convertedByAgent = await prisma.lead.groupBy({
+      by: ['ownerId'],
+      where: {
+        ownerId: { not: null },
+        isConverted: true,
+        convertedAt: { gte: start, lte: end },
+      },
+      _count: { id: true },
+    });
+
+    // Create a map for converted leads
+    const convertedMap = new Map(convertedByAgent.map(c => [c.ownerId, c._count.id]));
+
     // Get agent details
     const agentIds = leadsCreatedByAgent.map(l => l.ownerId).filter(Boolean);
     const agents = await prisma.user.findMany({
@@ -980,23 +1019,34 @@ class LeadService {
 
     const agentMap = new Map(agents.map(a => [a.id, a]));
 
-    // Build leaderboard
+    // Build leaderboard with fields the frontend expects
     const leaderboard = leadsCreatedByAgent
       .map(item => {
         const agent = agentMap.get(item.ownerId);
+        const leadsCreated = item._count.id;
+        const appointmentsSet = convertedMap.get(item.ownerId) || 0;
+        const conversionRate = leadsCreated > 0
+          ? Math.round((appointmentsSet / leadsCreated) * 100)
+          : 0;
+
         return {
           userId: item.ownerId,
           name: agent ? `${agent.firstName} ${agent.lastName}` : 'Unknown',
           email: agent?.email,
-          leadsSet: item._count.id,
+          leadsCreated,
+          appointmentsSet,
+          conversionRate,
+          // Keep leadsSet for backwards compatibility
+          leadsSet: leadsCreated,
         };
       })
-      .sort((a, b) => b.leadsSet - a.leadsSet);
+      .sort((a, b) => b.leadsCreated - a.leadsCreated);
 
     return {
       leaderboard,
       period: { start, end },
-      totalLeadsSet: leaderboard.reduce((sum, a) => sum + a.leadsSet, 0),
+      totalLeadsSet: leaderboard.reduce((sum, a) => sum + a.leadsCreated, 0),
+      totalAppointmentsSet: leaderboard.reduce((sum, a) => sum + a.appointmentsSet, 0),
     };
   }
 
@@ -1005,14 +1055,25 @@ class LeadService {
    * Uses ownerId and createdAt since leadSetById/assignedAt aren't populated in migrated data
    */
   async getMyCallCenterStats(userId, options = {}) {
+    const defaultStats = {
+      leadsCreated: 0,
+      appointmentsSet: 0,
+      callsMade: 0,
+      conversionRate: 0,
+      leadsSet: 0,
+      leadsToday: 0,
+      leadsThisWeek: 0,
+      leadsThisMonth: 0,
+    };
+
     if (!userId) {
-      return { leadsSet: 0, leadsToday: 0, leadsThisWeek: 0, leadsThisMonth: 0 };
+      return defaultStats;
     }
 
     // Resolve user ID if it's a Cognito ID
     const resolvedUserId = await this.resolveUserId(userId);
     if (!resolvedUserId) {
-      return { leadsSet: 0, leadsToday: 0, leadsThisWeek: 0, leadsThisMonth: 0 };
+      return defaultStats;
     }
 
     const { start, end } = this.getDateRange(options.startDate, options.endDate);
@@ -1022,12 +1083,20 @@ class LeadService {
     weekStart.setDate(now.getDate() - now.getDay());
     weekStart.setHours(0, 0, 0, 0);
 
-    const [leadsSet, leadsToday, leadsThisWeek, leadsThisMonth] = await Promise.all([
+    const [leadsCreated, appointmentsSet, leadsToday, leadsThisWeek] = await Promise.all([
       // Total leads owned in period
       prisma.lead.count({
         where: {
           ownerId: resolvedUserId,
           createdAt: { gte: start, lte: end },
+        },
+      }),
+      // Converted leads (appointments set) in period
+      prisma.lead.count({
+        where: {
+          ownerId: resolvedUserId,
+          isConverted: true,
+          convertedAt: { gte: start, lte: end },
         },
       }),
       // Leads created today
@@ -1044,20 +1113,24 @@ class LeadService {
           createdAt: { gte: weekStart },
         },
       }),
-      // Leads created this month
-      prisma.lead.count({
-        where: {
-          ownerId: resolvedUserId,
-          createdAt: { gte: start, lte: end },
-        },
-      }),
     ]);
 
+    // Calculate conversion rate
+    const conversionRate = leadsCreated > 0
+      ? Math.round((appointmentsSet / leadsCreated) * 100)
+      : 0;
+
     return {
-      leadsSet,
+      // Fields the frontend expects
+      leadsCreated,
+      appointmentsSet,
+      callsMade: 0, // TODO: Integrate with RingCentral call logs
+      conversionRate,
+      // Legacy fields for backwards compatibility
+      leadsSet: leadsCreated,
       leadsToday,
       leadsThisWeek,
-      leadsThisMonth,
+      leadsThisMonth: leadsCreated,
       period: { start, end },
     };
   }
@@ -1071,12 +1144,20 @@ class LeadService {
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-    const [totalLeadsCreated, leadsToday, unconfirmedCount, unscheduledCount] = await Promise.all([
+    const [totalLeadsCreated, totalConverted, leadsToday, unconfirmedCount, unscheduledCount] = await Promise.all([
       // Total leads created in period (with owner)
       prisma.lead.count({
         where: {
           ownerId: { not: null },
           createdAt: { gte: start, lte: end },
+        },
+      }),
+      // Total converted leads (appointments set) in period
+      prisma.lead.count({
+        where: {
+          ownerId: { not: null },
+          isConverted: true,
+          convertedAt: { gte: start, lte: end },
         },
       }),
       // Leads created today
@@ -1104,7 +1185,19 @@ class LeadService {
       }),
     ]);
 
+    // Calculate team conversion rate
+    const teamConversionRate = totalLeadsCreated > 0
+      ? Math.round((totalConverted / totalLeadsCreated) * 100)
+      : 0;
+
     return {
+      // Fields the frontend expects
+      totalLeads: totalLeadsCreated,
+      totalAppointments: totalConverted,
+      totalConverted: totalConverted,
+      teamConversionRate,
+      totalCalls: 0, // TODO: Integrate with RingCentral call logs
+      // Legacy fields for backwards compatibility
       totalLeadsSet: totalLeadsCreated,
       leadsToday,
       unconfirmedCount,
