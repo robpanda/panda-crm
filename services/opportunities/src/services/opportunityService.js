@@ -434,17 +434,23 @@ class OpportunityService {
             measurementReports: true,
           },
         },
-        // Get the most recent delivered measurement report for display
+        // Get the most recent measurement report for display (prioritize delivered, then by creation date)
         measurementReports: {
-          where: { orderStatus: 'DELIVERED' },
-          orderBy: { deliveredAt: 'desc' },
+          orderBy: [
+            { orderStatus: 'asc' }, // DELIVERED comes before ORDERED/PENDING alphabetically
+            { createdAt: 'desc' },
+          ],
           take: 1,
           select: {
             id: true,
             provider: true,
             reportType: true,
             orderStatus: true,
+            orderNumber: true,
+            orderedAt: true,
             reportPdfUrl: true,
+            modelViewerUrl: true,
+            designViewerUrl: true,
             totalRoofArea: true,
             totalRoofSquares: true,
             predominantPitch: true,
