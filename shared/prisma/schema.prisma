@@ -280,6 +280,10 @@ model Opportunity {
   id           String  @id @default(cuid())
   salesforceId String? @unique @map("salesforce_id")
 
+  // Job ID - Format: YYYY-NNNN (e.g., 2026-1000)
+  // Auto-assigned on creation, sequential per year, starting at 1000
+  jobId String? @unique @map("job_id")
+
   // Basic Info
   name        String
   description String?
