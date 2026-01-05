@@ -38,7 +38,7 @@ const HOVER_API_BASE = process.env.HOVER_API_URL || 'https://hover.to/api/v2';
 const HOVER_OAUTH_URL = process.env.HOVER_OAUTH_URL || 'https://hover.to/oauth';
 const HOVER_CLIENT_ID = process.env.HOVER_CLIENT_ID;
 const HOVER_CLIENT_SECRET = process.env.HOVER_CLIENT_SECRET;
-const HOVER_REDIRECT_URI = process.env.HOVER_REDIRECT_URI || 'https://bamboo.pandaadmin.com/api/integrations/hover/callback';
+const HOVER_REDIRECT_URI = process.env.HOVER_REDIRECT_URI || 'https://crm.pandaadmin.com/api/integrations/measurements/hover/callback';
 
 // Token caches to avoid repeated auth requests
 let eagleViewTokenCache = { token: null, expiresAt: 0 };
