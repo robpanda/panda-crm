@@ -8,6 +8,22 @@ import { authMiddleware, requireRole } from '../middleware/auth.js';
 const router = Router();
 const prisma = new PrismaClient();
 
+// Helper to handle Hover authorization errors
+function handleHoverAuthError(error, res) {
+  if (error.message.includes('re-authorize') || error.message.includes('refresh token')) {
+    const authUrl = measurementService.getHoverAuthorizationUrl();
+    return res.status(401).json({
+      success: false,
+      error: {
+        code: 'HOVER_NOT_AUTHORIZED',
+        message: 'Hover integration requires authorization. Please authorize the app first.',
+        authUrl,
+      },
+    });
+  }
+  return null; // Not a Hover auth error
+}
+
 // ==========================================
 // EagleView Routes
 // ==========================================
@@ -347,6 +363,7 @@ router.post('/hover/capture', authMiddleware, async (req, res, next) => {
 
     res.status(201).json({ success: true, data: result });
   } catch (error) {
+    if (handleHoverAuthError(error, res)) return;
     next(error);
   }
 });
@@ -359,6 +376,7 @@ router.get('/hover/job/:jobId', authMiddleware, async (req, res, next) => {
     const job = await measurementService.getHoverJob(req.params.jobId);
     res.json({ success: true, data: job });
   } catch (error) {
+    if (handleHoverAuthError(error, res)) return;
     next(error);
   }
 });
@@ -371,6 +389,7 @@ router.get('/hover/capture/:captureRequestId/jobs', authMiddleware, async (req, 
     const jobs = await measurementService.getHoverJobsForCaptureRequest(req.params.captureRequestId);
     res.json({ success: true, data: jobs });
   } catch (error) {
+    if (handleHoverAuthError(error, res)) return;
     next(error);
   }
 });
@@ -384,6 +403,7 @@ router.get('/hover/job/:jobId/deliverables', authMiddleware, async (req, res, ne
     const deliverables = await measurementService.getHoverDeliverables(req.params.jobId, type);
     res.json({ success: true, data: deliverables });
   } catch (error) {
+    if (handleHoverAuthError(error, res)) return;
     next(error);
   }
 });
@@ -406,6 +426,7 @@ router.get('/hover/deliverable/:deliverableId/download', authMiddleware, async (
     const buffer = await response.arrayBuffer();
     res.send(Buffer.from(buffer));
   } catch (error) {
+    if (handleHoverAuthError(error, res)) return;
     next(error);
   }
 });
@@ -418,6 +439,7 @@ router.get('/hover/job/:jobId/3d-model', authMiddleware, async (req, res, next) 
     const viewerUrl = await measurementService.getHover3DModelUrl(req.params.jobId);
     res.json({ success: true, data: { viewerUrl } });
   } catch (error) {
+    if (handleHoverAuthError(error, res)) return;
     next(error);
   }
 });
@@ -430,6 +452,7 @@ router.get('/hover/job/:jobId/design-options', authMiddleware, async (req, res, 
     const options = await measurementService.getHoverDesignOptions(req.params.jobId);
     res.json({ success: true, data: options });
   } catch (error) {
+    if (handleHoverAuthError(error, res)) return;
     next(error);
   }
 });
@@ -443,6 +466,7 @@ router.post('/hover/job/:jobId/design', authMiddleware, async (req, res, next) =
     const result = await measurementService.applyHoverDesign(req.params.jobId, req.body);
     res.json({ success: true, data: result });
   } catch (error) {
+    if (handleHoverAuthError(error, res)) return;
     next(error);
   }
 });
