@@ -364,12 +364,14 @@ router.post('/:id/appointments/:appointmentId/cancel', async (req, res, next) =>
 /**
  * POST /:id/messages
  * Add a job message/note to an opportunity
+ * Supports @mentions for notifying team members
  */
 router.post('/:id/messages', async (req, res, next) => {
   try {
-    const { message } = req.body;
+    const { message, mentionedUsers } = req.body;
     const result = await opportunityService.addJobMessage(req.params.id, {
       message,
+      mentionedUsers,
       createdBy: req.user?.id,
     });
     res.json({ success: true, data: result });

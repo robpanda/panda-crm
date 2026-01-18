@@ -2041,9 +2041,10 @@ class OpportunityService {
   /**
    * Add a job message/note to an opportunity
    * Used by: Call Center to document calls and status updates
+   * Enhanced to support @mentions and notifications
    */
   async addJobMessage(opportunityId, data) {
-    const { message, createdBy } = data;
+    const { message, createdBy, mentionedUsers = [] } = data;
 
     // Verify opportunity exists
     const opportunity = await prisma.opportunity.findUnique({
@@ -2056,6 +2057,12 @@ class OpportunityService {
       error.name = 'NotFoundError';
       throw error;
     }
+
+    // Get creator details for notification
+    const creator = await prisma.user.findUnique({
+      where: { id: createdBy },
+      select: { id: true, firstName: true, lastName: true },
+    });
 
     // Create the note
     const note = await prisma.note.create({
@@ -2071,6 +2078,33 @@ class OpportunityService {
         },
       },
     });
+
+    // Create notifications for @mentioned users (fire-and-forget)
+    if (mentionedUsers && mentionedUsers.length > 0) {
+      const creatorName = creator ? `${creator.firstName} ${creator.lastName}` : 'Someone';
+      const messagePreview = message.length > 100 ? message.substring(0, 100) + '...' : message;
+
+      const notifications = mentionedUsers.map(userId => ({
+        userId: userId,
+        type: 'MENTION',
+        title: `${creatorName} mentioned you`,
+        message: `${creatorName} mentioned you in ${opportunity.name}: "${messagePreview}"`,
+        priority: 'NORMAL',
+        actionUrl: `/jobs/${opportunityId}?tab=activity`,
+        actionLabel: 'View Update',
+        opportunityId: opportunityId,
+        sourceType: 'mention',
+        sourceId: note.id,
+        status: 'UNREAD',
+      }));
+
+      // Create notifications in background (don't await)
+      prisma.notification.createMany({ data: notifications }).catch(error => {
+        logger.warn('Failed to create mention notifications:', error.message);
+      });
+
+      logger.info(`Created ${notifications.length} mention notifications for note ${note.id}`);
+    }
 
     logger.info(`Job message added to opportunity ${opportunityId}`);
 

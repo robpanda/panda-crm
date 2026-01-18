@@ -14,6 +14,7 @@ import abcSupplyRoutes from './routes/abcSupply.js';
 import schedulingRoutes from './routes/scheduling.js';
 import mobileRoutes from './routes/mobile.js';
 import fieldServiceRoutes from './routes/fieldService.js';
+import aiRoutes from './routes/ai.js';
 import { logger } from './middleware/logger.js';
 import { measurementService } from './services/measurementService.js';
 
@@ -97,6 +98,7 @@ app.get('/health', (req, res) => {
       'scheduling',
       'mobile',
       'field-service',
+      'ai-assistant',
     ],
   });
 });
@@ -239,6 +241,9 @@ app.use('/api/integrations/measurements', measurementRoutes);
 app.use('/api/integrations/abc-supply', abcSupplyRoutes);
 app.use('/api/integrations/scheduling', schedulingRoutes);
 app.use('/api/integrations/mobile', mobileRoutes);
+
+// AI Assistant Routes
+app.use('/api/integrations/ai', aiRoutes);
 
 // Field Service Routes (stub endpoints)
 app.use('/api/field-service', fieldServiceRoutes);

@@ -3018,4 +3018,27 @@ export const documentsApi = {
   },
 };
 
+// ==========================================
+// INTEGRATIONS API - AI & OpenAI
+// ==========================================
+export const integrationsApi = {
+  // AI Activity Summary
+  async generateActivitySummary(data) {
+    const response = await api.post('/api/integrations/ai/activity-summary', data);
+    return response.data;
+  },
+
+  // AI Next Steps Suggestions
+  async generateNextSteps(data) {
+    const response = await api.post('/api/integrations/ai/next-steps', data);
+    return response.data;
+  },
+
+  // AI Draft Message
+  async generateDraftMessage(data) {
+    const response = await api.post('/api/integrations/ai/draft-message', data);
+    return response.data;
+  },
+};
+
 export default api;

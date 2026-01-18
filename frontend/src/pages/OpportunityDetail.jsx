@@ -5,6 +5,7 @@ import { opportunitiesApi, companyCamApi, scheduleApi, casesApi, emailsApi, noti
 import PhotoGallery from '../components/PhotoGallery';
 import ApprovalQueue, { CreateApprovalForm } from '../components/ApprovalQueue';
 import DraggableMap from '../components/DraggableMap';
+import ActivityFeed from '../components/ActivityFeed';
 import {
   Target,
   ArrowLeft,
@@ -2845,44 +2846,14 @@ export default function OpportunityDetail() {
                 )}
 
                 {activeTab === 'activity' && (
-                  <div className="space-y-4">
-                    {activityData?.items && activityData.items.length > 0 ? activityData.items.map((item, index) => (
-                      <div key={item.id || index} className="flex items-start space-x-3 py-3 border-b border-gray-100 last:border-0">
-                        <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
-                          item.type === 'note' ? 'bg-blue-100' :
-                          item.type === 'task' ? 'bg-yellow-100' :
-                          item.type === 'event' ? 'bg-purple-100' :
-                          'bg-gray-100'
-                        }`}>
-                          {item.type === 'note' && <MessageSquare className="w-4 h-4 text-blue-600" />}
-                          {item.type === 'task' && <CheckSquare className="w-4 h-4 text-yellow-600" />}
-                          {item.type === 'event' && <Calendar className="w-4 h-4 text-purple-600" />}
-                          {!['note', 'task', 'event'].includes(item.type) && <Activity className="w-4 h-4 text-gray-600" />}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between">
-                            <p className="font-medium text-gray-900 truncate">{item.subject || item.title}</p>
-                            <span className="text-xs text-gray-500 flex-shrink-0 ml-2">
-                              {item.createdAt ? new Date(item.createdAt).toLocaleDateString() : '-'}
-                            </span>
-                          </div>
-                          {item.body && (
-                            <p className="text-sm text-gray-500 mt-1 line-clamp-2">{item.body}</p>
-                          )}
-                          {item.user && (
-                            <p className="text-xs text-gray-400 mt-1">
-                              by {item.user.firstName} {item.user.lastName}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                    )) : (
-                      <div className="text-center py-8 text-gray-500">
-                        <Activity className="w-12 h-12 mx-auto text-gray-300 mb-2" />
-                        <p>No activity yet</p>
-                      </div>
-                    )}
-                  </div>
+                  <ActivityFeed
+                    opportunityId={id}
+                    opportunity={opportunity}
+                    onActivityAdded={() => {
+                      // Optionally refresh opportunity data when activity is added
+                      refetch();
+                    }}
+                  />
                 )}
 
                 {activeTab === 'communications' && (
