@@ -9,7 +9,8 @@ ECR_REGISTRY="679128292059.dkr.ecr.us-east-2.amazonaws.com"
 SERVICE_NAME="opportunities"
 IMAGE_NAME="$ECR_REGISTRY/panda-crm/$SERVICE_NAME"
 CLUSTER_NAME="panda-crm-cluster"
-ECS_SERVICE="$SERVICE_NAME-service"
+ECS_SERVICE="panda-crm-$SERVICE_NAME"
+TASK_DEFINITION="panda-crm-$SERVICE_NAME"
 
 echo "=========================================="
 echo "Deploying Opportunities Service with @Mentions"
@@ -41,7 +42,7 @@ echo ""
 # Step 4: Get current task definition
 echo "Step 4: Creating new task definition..."
 TASK_DEF=$(aws ecs describe-task-definition \
-  --task-definition $SERVICE_NAME \
+  --task-definition $TASK_DEFINITION \
   --region $REGION \
   --query 'taskDefinition' \
   --output json)
