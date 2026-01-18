@@ -6,8 +6,12 @@ set -e
 
 REGION="us-east-2"
 SECRET_NAME="panda-crm/openai"
-API_KEY="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"
-PROJECT_ID="proj_rmR3DUh00G2TZJG0qhJNWXJe"
+
+# Prompt for API key (never store in code!)
+read -sp "Enter OpenAI API Key: " API_KEY
+echo ""
+read -p "Enter OpenAI Project ID [proj_rmR3DUh00G2TZJG0qhJNWXJe]: " PROJECT_ID
+PROJECT_ID=${PROJECT_ID:-proj_rmR3DUh00G2TZJG0qhJNWXJe}
 
 echo "Setting up OpenAI API secret in AWS Secrets Manager..."
 echo "Region: $REGION"
