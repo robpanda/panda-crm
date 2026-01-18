@@ -99,6 +99,42 @@ async function getNotificationService() {
   return notificationService;
 }
 
+// Lazy-load onboarding triggers service
+let onboardingTriggersService = null;
+async function getOnboardingTriggers() {
+  if (!onboardingTriggersService) {
+    try {
+      const WORKFLOWS_SERVICE_URL = process.env.WORKFLOWS_SERVICE_URL || 'http://localhost:3008';
+      onboardingTriggersService = {
+        async evaluate(opportunityId, previousState, currentState) {
+          try {
+            const response = await fetch(`${WORKFLOWS_SERVICE_URL}/api/workflows/triggers/onboarding/evaluate`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ opportunityId, previousState, currentState }),
+            });
+            if (!response.ok) {
+              logger.warn(`Onboarding triggers service returned ${response.status}`);
+              return null;
+            }
+            const data = await response.json();
+            return data.data;
+          } catch (error) {
+            logger.warn('Onboarding triggers service unavailable:', error.message);
+            return null;
+          }
+        },
+      };
+    } catch (error) {
+      logger.warn('Failed to initialize onboarding triggers service:', error.message);
+      onboardingTriggersService = {
+        evaluate: async () => null,
+      };
+    }
+  }
+  return onboardingTriggersService;
+}
+
 class OpportunityService {
   /**
    * Get opportunities with filtering and pagination
@@ -1120,6 +1156,21 @@ class OpportunityService {
    * Update opportunity
    */
   async updateOpportunity(id, data) {
+    // Capture previous state for trigger evaluation
+    const previousState = await prisma.opportunity.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        stage: true,
+        status: true,
+        type: true,
+        isPandaClaims: true,
+        isApproved: true,
+        serviceRequired: true,
+        serviceComplete: true,
+      },
+    });
+
     // Handle line items separately if provided
     if (data.lineItems !== undefined) {
       // Delete existing line items and recreate
@@ -1177,6 +1228,9 @@ class OpportunityService {
         accountId: data.accountId,
         contactId: data.contactId,
         ownerId: data.ownerId,
+        // Checklist fields
+        serviceRequired: data.serviceRequired,
+        serviceComplete: data.serviceComplete,
       },
       include: {
         account: { select: { id: true, name: true } },
@@ -1185,6 +1239,30 @@ class OpportunityService {
         lineItems: { include: { product: true } },
       },
     });
+
+    // Evaluate onboarding triggers if relevant fields changed
+    if (previousState) {
+      try {
+        const triggersService = await getOnboardingTriggers();
+        const currentState = {
+          id: opportunity.id,
+          stage: opportunity.stage,
+          status: opportunity.status,
+          type: opportunity.type,
+          isPandaClaims: opportunity.isPandaClaims,
+          isApproved: opportunity.isApproved,
+          serviceRequired: opportunity.serviceRequired,
+          serviceComplete: opportunity.serviceComplete,
+        };
+
+        // Fire and forget - don't wait for triggers
+        triggersService.evaluate(opportunity.id, previousState, currentState).catch(error => {
+          logger.warn('Failed to evaluate onboarding triggers:', error.message);
+        });
+      } catch (error) {
+        logger.warn('Failed to call onboarding triggers service:', error.message);
+      }
+    }
 
     logger.info(`Opportunity updated: ${id}`);
     return this.createOpportunityWrapper(opportunity, true);

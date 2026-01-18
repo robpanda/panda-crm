@@ -11,6 +11,7 @@ import workflowRoutes from './routes/workflows.js';
 import commissionRoutes from './routes/commissions.js';
 import templateRoutes from './routes/templates.js';
 import approvalRoutes from './routes/approvals.js';
+import triggerRoutes from './routes/triggers.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { logger } from './middleware/logger.js';
 import { messagingService } from './services/messagingService.js';
@@ -50,6 +51,7 @@ app.use('/api/workflows', workflowRoutes);
 app.use('/api/workflows/commissions', commissionRoutes);
 app.use('/api/workflows/templates', templateRoutes);
 app.use('/api/workflows/approvals', approvalRoutes);
+app.use('/api/workflows/triggers', triggerRoutes);
 
 // Webhook endpoints for external services
 app.post('/api/workflows/webhooks/twilio/status', async (req, res) => {
