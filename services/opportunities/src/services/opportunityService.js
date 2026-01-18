@@ -241,9 +241,6 @@ class OpportunityService {
         measurementReports: {
           orderBy: { createdAt: 'desc' },
           take: 5,
-          include: {
-            orderedBy: { select: { firstName: true, lastName: true } },
-          },
         },
       },
     });
