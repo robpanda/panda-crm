@@ -1,0 +1,745 @@
+import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import {
+  Mail,
+  MessageSquare,
+  Plus,
+  Search,
+  Play,
+  Pause,
+  Trash2,
+  Eye,
+  Copy,
+  Users,
+  CheckCircle,
+  Clock,
+  XCircle,
+  Send,
+  BarChart3,
+  Calendar,
+  Target,
+  AlertCircle,
+  Edit,
+  RefreshCw,
+  FileText,
+} from 'lucide-react';
+import { campaignsApi } from '../services/api';
+import CampaignWizard from '../components/CampaignWizard';
+import TemplateManager from '../components/TemplateManager';
+
+const statusColors = {
+  DRAFT: 'bg-gray-100 text-gray-700',
+  SCHEDULED: 'bg-blue-100 text-blue-700',
+  SENDING: 'bg-yellow-100 text-yellow-700',
+  ACTIVE: 'bg-green-100 text-green-700',
+  PAUSED: 'bg-orange-100 text-orange-700',
+  COMPLETED: 'bg-emerald-100 text-emerald-700',
+  FAILED: 'bg-red-100 text-red-700',
+  CANCELLED: 'bg-gray-100 text-gray-600',
+};
+
+const statusIcons = {
+  DRAFT: Clock,
+  SCHEDULED: Calendar,
+  SENDING: Send,
+  ACTIVE: Play,
+  PAUSED: Pause,
+  COMPLETED: CheckCircle,
+  FAILED: XCircle,
+  CANCELLED: XCircle,
+};
+
+export default function Campaigns() {
+  const queryClient = useQueryClient();
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedType, setSelectedType] = useState('all');
+  const [selectedStatus, setSelectedStatus] = useState('all');
+  const [showWizard, setShowWizard] = useState(false);
+  const [wizardInitialType, setWizardInitialType] = useState(null);
+  const [editingCampaign, setEditingCampaign] = useState(null);
+  const [viewingCampaign, setViewingCampaign] = useState(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [showTemplateManager, setShowTemplateManager] = useState(false);
+
+  // Fetch campaigns
+  const { data: campaignsData, isLoading, error, refetch } = useQuery({
+    queryKey: ['campaigns', { page: currentPage, type: selectedType, status: selectedStatus, search: searchQuery }],
+    queryFn: () => campaignsApi.getCampaigns({
+      page: currentPage,
+      limit: 25,
+      type: selectedType !== 'all' ? selectedType.toUpperCase() : undefined,
+      status: selectedStatus !== 'all' ? selectedStatus.toUpperCase() : undefined,
+      search: searchQuery || undefined,
+    }),
+  });
+
+  // Fetch stats
+  const { data: statsData } = useQuery({
+    queryKey: ['campaign-stats'],
+    queryFn: () => campaignsApi.getStats(),
+  });
+
+  // Mutations
+  const sendMutation = useMutation({
+    mutationFn: (id) => campaignsApi.sendCampaign(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['campaigns']);
+      queryClient.invalidateQueries(['campaign-stats']);
+    },
+  });
+
+  const pauseMutation = useMutation({
+    mutationFn: (id) => campaignsApi.pauseCampaign(id),
+    onSuccess: () => queryClient.invalidateQueries(['campaigns']),
+  });
+
+  const resumeMutation = useMutation({
+    mutationFn: (id) => campaignsApi.resumeCampaign(id),
+    onSuccess: () => queryClient.invalidateQueries(['campaigns']),
+  });
+
+  const duplicateMutation = useMutation({
+    mutationFn: (id) => campaignsApi.duplicateCampaign(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['campaigns']);
+      queryClient.invalidateQueries(['campaign-stats']);
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id) => campaignsApi.deleteCampaign(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['campaigns']);
+      queryClient.invalidateQueries(['campaign-stats']);
+    },
+  });
+
+  const campaigns = campaignsData?.data || [];
+  const pagination = campaignsData?.pagination || {};
+  const stats = statsData?.data || { total: 0, active: 0, totalSent: 0, avgOpenRate: 0 };
+
+  const formatDate = (dateStr) => {
+    if (!dateStr) return '-';
+    return new Date(dateStr).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
+  };
+
+  const calculateOpenRate = (campaign) => {
+    if (!campaign.delivered || campaign.delivered === 0) return 0;
+    return Math.round((campaign.opened / campaign.delivered) * 100);
+  };
+
+  const calculateClickRate = (campaign) => {
+    if (!campaign.opened || campaign.opened === 0) return 0;
+    return Math.round((campaign.clicked / campaign.opened) * 100);
+  };
+
+  const handleNewCampaign = (type = null) => {
+    setWizardInitialType(type);
+    setEditingCampaign(null);
+    setShowWizard(true);
+  };
+
+  const handleEditCampaign = (campaign) => {
+    setEditingCampaign(campaign);
+    setWizardInitialType(null);
+    setShowWizard(true);
+  };
+
+  const handleWizardClose = () => {
+    setShowWizard(false);
+    setEditingCampaign(null);
+    setWizardInitialType(null);
+    queryClient.invalidateQueries(['campaigns']);
+    queryClient.invalidateQueries(['campaign-stats']);
+  };
+
+  const handleSendCampaign = async (campaign) => {
+    if (confirm(`Are you sure you want to send "${campaign.name}" to ${campaign.estimatedRecipients || 0} recipients?`)) {
+      sendMutation.mutate(campaign.id);
+    }
+  };
+
+  const handleDeleteCampaign = async (campaign) => {
+    if (confirm(`Are you sure you want to delete "${campaign.name}"? This action cannot be undone.`)) {
+      deleteMutation.mutate(campaign.id);
+    }
+  };
+
+  const getAudienceDescription = (campaign) => {
+    if (!campaign.audienceRules) return 'All Contacts';
+    const rules = campaign.audienceRules;
+    const parts = [];
+    if (rules.states?.length) parts.push(`${rules.states.length} states`);
+    if (rules.opportunityStages?.length) parts.push(`${rules.opportunityStages.length} stages`);
+    if (rules.leadSources?.length) parts.push(`${rules.leadSources.length} sources`);
+    if (rules.dateRange?.field) parts.push('date filter');
+    return parts.length ? parts.join(', ') : 'All Contacts';
+  };
+
+  if (error) {
+    return (
+      <div className="p-8 text-center">
+        <AlertCircle className="w-12 h-12 mx-auto text-red-400 mb-3" />
+        <p className="text-red-600">Failed to load campaigns</p>
+        <button onClick={() => refetch()} className="mt-4 px-4 py-2 bg-panda-primary text-white rounded-lg">
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Campaigns</h1>
+          <p className="text-gray-600 mt-1">Manage email and SMS marketing campaigns</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => refetch()}
+            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+            title="Refresh"
+          >
+            <RefreshCw className={`w-5 h-5 text-gray-500 ${isLoading ? 'animate-spin' : ''}`} />
+          </button>
+          <button
+            onClick={() => setShowTemplateManager(true)}
+            className="inline-flex items-center px-4 py-2 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors"
+          >
+            <FileText className="w-5 h-5 mr-2" />
+            Templates
+          </button>
+          <button
+            onClick={() => handleNewCampaign()}
+            className="inline-flex items-center px-4 py-2 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg font-medium hover:opacity-90 transition-opacity"
+          >
+            <Plus className="w-5 h-5 mr-2" />
+            New Campaign
+          </button>
+        </div>
+      </div>
+
+      {/* Stats Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-500">Total Campaigns</p>
+              <p className="text-2xl font-bold text-gray-900 mt-1">{stats.total}</p>
+            </div>
+            <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
+              <Target className="w-5 h-5 text-blue-600" />
+            </div>
+          </div>
+        </div>
+        <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-500">Active</p>
+              <p className="text-2xl font-bold text-green-600 mt-1">{stats.active}</p>
+            </div>
+            <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
+              <Play className="w-5 h-5 text-green-600" />
+            </div>
+          </div>
+        </div>
+        <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-500">Total Sent</p>
+              <p className="text-2xl font-bold text-gray-900 mt-1">{(stats.totalSent || 0).toLocaleString()}</p>
+            </div>
+            <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
+              <Send className="w-5 h-5 text-purple-600" />
+            </div>
+          </div>
+        </div>
+        <div className="bg-white rounded-xl border border-gray-200 p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-500">Avg Open Rate</p>
+              <p className="text-2xl font-bold text-gray-900 mt-1">{stats.avgOpenRate || 0}%</p>
+            </div>
+            <div className="w-10 h-10 bg-yellow-100 rounded-lg flex items-center justify-center">
+              <BarChart3 className="w-5 h-5 text-yellow-600" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div className="bg-white rounded-xl border border-gray-200 p-4">
+        <div className="flex flex-col md:flex-row md:items-center gap-4">
+          {/* Search */}
+          <div className="relative flex-1 max-w-md">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Search campaigns..."
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+            />
+          </div>
+
+          {/* Type Filter */}
+          <select
+            value={selectedType}
+            onChange={(e) => {
+              setSelectedType(e.target.value);
+              setCurrentPage(1);
+            }}
+            className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+          >
+            <option value="all">All Types</option>
+            <option value="email">Email</option>
+            <option value="sms">SMS</option>
+          </select>
+
+          {/* Status Filter */}
+          <select
+            value={selectedStatus}
+            onChange={(e) => {
+              setSelectedStatus(e.target.value);
+              setCurrentPage(1);
+            }}
+            className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+          >
+            <option value="all">All Status</option>
+            <option value="draft">Draft</option>
+            <option value="scheduled">Scheduled</option>
+            <option value="active">Active</option>
+            <option value="sending">Sending</option>
+            <option value="paused">Paused</option>
+            <option value="completed">Completed</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Campaigns List */}
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        {isLoading ? (
+          <div className="p-8 text-center">
+            <RefreshCw className="w-8 h-8 mx-auto text-gray-400 animate-spin mb-3" />
+            <p className="text-gray-500">Loading campaigns...</p>
+          </div>
+        ) : (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-gray-50 border-b border-gray-200">
+                  <tr>
+                    <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Campaign
+                    </th>
+                    <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider hidden sm:table-cell">
+                      Status
+                    </th>
+                    <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider hidden md:table-cell">
+                      Audience
+                    </th>
+                    <th className="text-right px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider hidden lg:table-cell">
+                      Sent
+                    </th>
+                    <th className="text-right px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider hidden lg:table-cell">
+                      Open Rate
+                    </th>
+                    <th className="text-right px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider hidden xl:table-cell">
+                      Click Rate
+                    </th>
+                    <th className="text-right px-6 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Actions
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                  {campaigns.map((campaign) => {
+                    const StatusIcon = statusIcons[campaign.status] || Clock;
+                    const statusColor = statusColors[campaign.status] || statusColors.DRAFT;
+                    return (
+                      <tr key={campaign.id} className="hover:bg-gray-50 transition-colors">
+                        <td className="px-6 py-4">
+                          <div className="flex items-center space-x-3">
+                            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                              campaign.type === 'EMAIL' ? 'bg-blue-100' : 'bg-green-100'
+                            }`}>
+                              {campaign.type === 'EMAIL' ? (
+                                <Mail className="w-5 h-5 text-blue-600" />
+                              ) : (
+                                <MessageSquare className="w-5 h-5 text-green-600" />
+                              )}
+                            </div>
+                            <div>
+                              <div className="font-medium text-gray-900">{campaign.name}</div>
+                              <div className="text-sm text-gray-500 flex items-center mt-0.5">
+                                <Calendar className="w-3 h-3 mr-1" />
+                                {formatDate(campaign.scheduledAt || campaign.createdAt)}
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 hidden sm:table-cell">
+                          <span className={`inline-flex items-center px-2.5 py-1 text-xs font-medium rounded-full ${statusColor}`}>
+                            <StatusIcon className="w-3 h-3 mr-1" />
+                            {campaign.status}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 hidden md:table-cell">
+                          <div className="flex items-center text-sm text-gray-600">
+                            <Users className="w-4 h-4 mr-1 text-gray-400" />
+                            <span className="truncate max-w-[150px]" title={getAudienceDescription(campaign)}>
+                              {campaign.estimatedRecipients?.toLocaleString() || '0'} recipients
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-right text-sm text-gray-900 hidden lg:table-cell">
+                          {(campaign.totalSent || 0).toLocaleString()}
+                        </td>
+                        <td className="px-6 py-4 text-right hidden lg:table-cell">
+                          <span className={`text-sm font-medium ${
+                            calculateOpenRate(campaign) > 30 ? 'text-green-600' :
+                            calculateOpenRate(campaign) > 15 ? 'text-yellow-600' : 'text-gray-600'
+                          }`}>
+                            {calculateOpenRate(campaign)}%
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-right hidden xl:table-cell">
+                          <span className={`text-sm font-medium ${
+                            calculateClickRate(campaign) > 10 ? 'text-green-600' :
+                            calculateClickRate(campaign) > 5 ? 'text-yellow-600' : 'text-gray-600'
+                          }`}>
+                            {calculateClickRate(campaign)}%
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 text-right">
+                          <div className="flex items-center justify-end space-x-1">
+                            {/* View */}
+                            <button
+                              onClick={() => setViewingCampaign(campaign)}
+                              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                              title="View Details"
+                            >
+                              <Eye className="w-4 h-4 text-gray-500" />
+                            </button>
+
+                            {/* Edit (only for DRAFT) */}
+                            {campaign.status === 'DRAFT' && (
+                              <button
+                                onClick={() => handleEditCampaign(campaign)}
+                                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                                title="Edit"
+                              >
+                                <Edit className="w-4 h-4 text-blue-500" />
+                              </button>
+                            )}
+
+                            {/* Send (only for DRAFT) */}
+                            {campaign.status === 'DRAFT' && (
+                              <button
+                                onClick={() => handleSendCampaign(campaign)}
+                                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                                title="Send Now"
+                                disabled={sendMutation.isPending}
+                              >
+                                <Send className="w-4 h-4 text-green-500" />
+                              </button>
+                            )}
+
+                            {/* Duplicate */}
+                            <button
+                              onClick={() => duplicateMutation.mutate(campaign.id)}
+                              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                              title="Duplicate"
+                              disabled={duplicateMutation.isPending}
+                            >
+                              <Copy className="w-4 h-4 text-gray-500" />
+                            </button>
+
+                            {/* Pause/Resume */}
+                            {campaign.status === 'ACTIVE' || campaign.status === 'SENDING' ? (
+                              <button
+                                onClick={() => pauseMutation.mutate(campaign.id)}
+                                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                                title="Pause"
+                                disabled={pauseMutation.isPending}
+                              >
+                                <Pause className="w-4 h-4 text-yellow-500" />
+                              </button>
+                            ) : campaign.status === 'PAUSED' ? (
+                              <button
+                                onClick={() => resumeMutation.mutate(campaign.id)}
+                                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                                title="Resume"
+                                disabled={resumeMutation.isPending}
+                              >
+                                <Play className="w-4 h-4 text-green-500" />
+                              </button>
+                            ) : null}
+
+                            {/* Delete (only for DRAFT, COMPLETED, CANCELLED) */}
+                            {['DRAFT', 'COMPLETED', 'CANCELLED', 'FAILED'].includes(campaign.status) && (
+                              <button
+                                onClick={() => handleDeleteCampaign(campaign)}
+                                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                                title="Delete"
+                                disabled={deleteMutation.isPending}
+                              >
+                                <Trash2 className="w-4 h-4 text-red-500" />
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Empty State */}
+            {campaigns.length === 0 && (
+              <div className="p-8 text-center text-gray-500">
+                <Mail className="w-12 h-12 mx-auto text-gray-300 mb-3" />
+                <p>No campaigns found</p>
+                <button
+                  onClick={() => handleNewCampaign()}
+                  className="mt-4 px-4 py-2 bg-panda-primary text-white rounded-lg"
+                >
+                  Create your first campaign
+                </button>
+              </div>
+            )}
+
+            {/* Pagination */}
+            {pagination.totalPages > 1 && (
+              <div className="px-6 py-4 border-t border-gray-200 flex items-center justify-between">
+                <p className="text-sm text-gray-600">
+                  Page {pagination.page} of {pagination.totalPages} ({pagination.total} campaigns)
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                    disabled={currentPage === 1}
+                    className="px-3 py-1 border rounded-lg disabled:opacity-50"
+                  >
+                    Previous
+                  </button>
+                  <button
+                    onClick={() => setCurrentPage(p => Math.min(pagination.totalPages, p + 1))}
+                    disabled={currentPage === pagination.totalPages}
+                    className="px-3 py-1 border rounded-lg disabled:opacity-50"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Quick Actions */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="bg-gradient-to-r from-blue-500 to-blue-600 rounded-xl p-6 text-white">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-semibold">Create Email Campaign</h3>
+              <p className="text-blue-100 mt-1 text-sm">Send newsletters, promotions, or updates</p>
+            </div>
+            <Mail className="w-10 h-10 text-blue-200" />
+          </div>
+          <button
+            onClick={() => handleNewCampaign('EMAIL')}
+            className="mt-4 px-4 py-2 bg-white text-blue-600 rounded-lg font-medium hover:bg-blue-50 transition-colors"
+          >
+            Get Started
+          </button>
+        </div>
+        <div className="bg-gradient-to-r from-green-500 to-green-600 rounded-xl p-6 text-white">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-semibold">Create SMS Campaign</h3>
+              <p className="text-green-100 mt-1 text-sm">Quick updates and appointment reminders</p>
+            </div>
+            <MessageSquare className="w-10 h-10 text-green-200" />
+          </div>
+          <button
+            onClick={() => handleNewCampaign('SMS')}
+            className="mt-4 px-4 py-2 bg-white text-green-600 rounded-lg font-medium hover:bg-green-50 transition-colors"
+          >
+            Get Started
+          </button>
+        </div>
+      </div>
+
+      {/* Campaign Wizard Modal */}
+      <CampaignWizard
+        isOpen={showWizard}
+        onClose={handleWizardClose}
+        editCampaign={editingCampaign}
+        initialType={wizardInitialType}
+      />
+
+      {/* Campaign Detail Modal */}
+      {viewingCampaign && (
+        <CampaignDetailModal
+          campaign={viewingCampaign}
+          onClose={() => setViewingCampaign(null)}
+        />
+      )}
+
+      {/* Template Manager Modal */}
+      <TemplateManager
+        isOpen={showTemplateManager}
+        onClose={() => setShowTemplateManager(false)}
+      />
+    </div>
+  );
+}
+
+// Campaign Detail Modal Component
+function CampaignDetailModal({ campaign, onClose }) {
+  const { data: sendsData, isLoading } = useQuery({
+    queryKey: ['campaign-sends', campaign.id],
+    queryFn: () => campaignsApi.getCampaignSends(campaign.id, { limit: 50 }),
+  });
+
+  const sends = sendsData?.data || [];
+
+  const formatDate = (dateStr) => {
+    if (!dateStr) return '-';
+    return new Date(dateStr).toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+              campaign.type === 'EMAIL' ? 'bg-blue-100' : 'bg-green-100'
+            }`}>
+              {campaign.type === 'EMAIL' ? (
+                <Mail className="w-5 h-5 text-blue-600" />
+              ) : (
+                <MessageSquare className="w-5 h-5 text-green-600" />
+              )}
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">{campaign.name}</h2>
+              <p className="text-sm text-gray-500">{campaign.description || 'No description'}</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg">
+            <XCircle className="w-5 h-5 text-gray-500" />
+          </button>
+        </div>
+
+        {/* Stats */}
+        <div className="px-6 py-4 bg-gray-50 grid grid-cols-2 md:grid-cols-5 gap-4">
+          <div>
+            <p className="text-xs text-gray-500 uppercase">Status</p>
+            <p className="font-semibold text-gray-900">{campaign.status}</p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-500 uppercase">Sent</p>
+            <p className="font-semibold text-gray-900">{(campaign.totalSent || 0).toLocaleString()}</p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-500 uppercase">Delivered</p>
+            <p className="font-semibold text-gray-900">{(campaign.delivered || 0).toLocaleString()}</p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-500 uppercase">Opened</p>
+            <p className="font-semibold text-gray-900">{(campaign.opened || 0).toLocaleString()}</p>
+          </div>
+          <div>
+            <p className="text-xs text-gray-500 uppercase">Clicked</p>
+            <p className="font-semibold text-gray-900">{(campaign.clicked || 0).toLocaleString()}</p>
+          </div>
+        </div>
+
+        {/* Content Preview */}
+        <div className="px-6 py-4 border-b border-gray-200">
+          <h3 className="text-sm font-medium text-gray-700 mb-2">Message Content</h3>
+          {campaign.subject && (
+            <p className="text-sm text-gray-600 mb-2">
+              <span className="font-medium">Subject:</span> {campaign.subject}
+            </p>
+          )}
+          <div className="bg-gray-50 rounded-lg p-3 text-sm text-gray-700 max-h-40 overflow-y-auto">
+            {campaign.type === 'EMAIL' ? (
+              <div dangerouslySetInnerHTML={{ __html: campaign.body || 'No content' }} />
+            ) : (
+              <p className="whitespace-pre-wrap">{campaign.body || 'No content'}</p>
+            )}
+          </div>
+        </div>
+
+        {/* Sends List */}
+        <div className="flex-1 overflow-y-auto px-6 py-4">
+          <h3 className="text-sm font-medium text-gray-700 mb-3">Recent Sends</h3>
+          {isLoading ? (
+            <div className="text-center py-4">
+              <RefreshCw className="w-5 h-5 animate-spin mx-auto text-gray-400" />
+            </div>
+          ) : sends.length === 0 ? (
+            <p className="text-sm text-gray-500 text-center py-4">No sends yet</p>
+          ) : (
+            <div className="space-y-2">
+              {sends.map((send) => (
+                <div key={send.id} className="flex items-center justify-between py-2 border-b border-gray-100">
+                  <div>
+                    <p className="text-sm font-medium text-gray-900">
+                      {send.contact?.firstName} {send.contact?.lastName || send.email || send.phone}
+                    </p>
+                    <p className="text-xs text-gray-500">{send.email || send.phone}</p>
+                  </div>
+                  <div className="text-right">
+                    <span className={`inline-flex items-center px-2 py-0.5 text-xs rounded-full ${
+                      send.status === 'DELIVERED' ? 'bg-green-100 text-green-700' :
+                      send.status === 'OPENED' ? 'bg-blue-100 text-blue-700' :
+                      send.status === 'CLICKED' ? 'bg-purple-100 text-purple-700' :
+                      send.status === 'FAILED' ? 'bg-red-100 text-red-700' :
+                      send.status === 'BOUNCED' ? 'bg-orange-100 text-orange-700' :
+                      'bg-gray-100 text-gray-700'
+                    }`}>
+                      {send.status}
+                    </span>
+                    <p className="text-xs text-gray-500 mt-1">{formatDate(send.sentAt)}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-gray-200 flex justify-end">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
