@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
-import { X, Camera, Paperclip, AlertCircle, Loader } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { X, Camera, Paperclip, AlertCircle, Loader, Sparkles, Lightbulb, Search } from 'lucide-react';
 import html2canvas from 'html2canvas';
+import { debounce } from 'lodash';
 
 const CATEGORIES = [
   'Technical Issue',
@@ -20,6 +21,20 @@ const PRIORITIES = [
   { value: 'URGENT', label: 'Urgent', description: 'Critical, blocking work' },
 ];
 
+// Page context mapping for auto-fill suggestions
+const PAGE_CONTEXT_MAP = {
+  '/leads': { category: 'Data Issue', contextHint: 'Lead Management' },
+  '/opportunities': { category: 'Data Issue', contextHint: 'Opportunities/Jobs' },
+  '/accounts': { category: 'Account Question', contextHint: 'Account Management' },
+  '/contacts': { category: 'Data Issue', contextHint: 'Contact Management' },
+  '/work-orders': { category: 'Data Issue', contextHint: 'Work Orders' },
+  '/integrations': { category: 'Integration Problem', contextHint: 'Integrations' },
+  '/admin': { category: 'Technical Issue', contextHint: 'Admin Settings' },
+  '/reports': { category: 'Data Issue', contextHint: 'Reports & Analytics' },
+  '/dashboard': { category: 'Performance Issue', contextHint: 'Dashboard' },
+  '/bamboogli': { category: 'Integration Problem', contextHint: 'Bamboogli Messaging' },
+};
+
 export default function CreateTicketModal({ onClose, onSubmit }) {
   const [formData, setFormData] = useState({
     subject: '',
@@ -33,9 +48,22 @@ export default function CreateTicketModal({ onClose, onSubmit }) {
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState({});
 
+  // AI Enhancement states
+  const [aiSuggestions, setAiSuggestions] = useState({
+    category: null,
+    priority: null,
+    reasoning: null,
+  });
+  const [aiLoading, setAiLoading] = useState(false);
+  const [similarTickets, setSimilarTickets] = useState([]);
+  const [searchingTickets, setSearchingTickets] = useState(false);
+  const [pageContext, setPageContext] = useState(null);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+
   useEffect(() => {
-    // Capture page info
+    // Capture page info and determine context
     const pageUrl = window.location.href;
+    const pathname = window.location.pathname;
     const browserInfo = {
       userAgent: navigator.userAgent,
       platform: navigator.platform,
@@ -43,12 +71,140 @@ export default function CreateTicketModal({ onClose, onSubmit }) {
       screenSize: `${window.screen.width}x${window.screen.height}`,
     };
 
+    // Find matching page context
+    let context = null;
+    for (const [path, ctx] of Object.entries(PAGE_CONTEXT_MAP)) {
+      if (pathname.startsWith(path)) {
+        context = ctx;
+        break;
+      }
+    }
+    setPageContext(context);
+
+    // Auto-fill category from page context if available
+    if (context?.category && !formData.category) {
+      setFormData(prev => ({
+        ...prev,
+        pageUrl,
+        browserInfo: JSON.stringify(browserInfo),
+        category: context.category,
+      }));
+    } else {
+      setFormData(prev => ({
+        ...prev,
+        pageUrl,
+        browserInfo: JSON.stringify(browserInfo),
+      }));
+    }
+  }, []);
+
+  // AI-powered suggestion using GPT-4o-mini
+  const getAiSuggestions = useCallback(
+    debounce(async (text) => {
+      if (!text || text.length < 20) {
+        setAiSuggestions({ category: null, priority: null, reasoning: null });
+        return;
+      }
+
+      setAiLoading(true);
+      try {
+        const response = await fetch(`${import.meta.env.VITE_API_BASE || ''}/api/support/ai/suggestions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
+          },
+          body: JSON.stringify({
+            subject: formData.subject,
+            description: text,
+            categories: CATEGORIES,
+            priorities: PRIORITIES.map(p => p.value),
+          }),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          setAiSuggestions({
+            category: data.suggestedCategory,
+            priority: data.suggestedPriority,
+            reasoning: data.reasoning,
+          });
+          setShowSuggestions(true);
+        }
+      } catch (error) {
+        console.error('Failed to get AI suggestions:', error);
+      } finally {
+        setAiLoading(false);
+      }
+    }, 1000),
+    [formData.subject]
+  );
+
+  // Search for similar tickets
+  const searchSimilarTickets = useCallback(
+    debounce(async (text) => {
+      if (!text || text.length < 10) {
+        setSimilarTickets([]);
+        return;
+      }
+
+      setSearchingTickets(true);
+      try {
+        const response = await fetch(
+          `${import.meta.env.VITE_API_BASE || ''}/api/support/tickets/similar?q=${encodeURIComponent(text)}`,
+          {
+            headers: {
+              'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
+            },
+          }
+        );
+
+        if (response.ok) {
+          const data = await response.json();
+          setSimilarTickets(data.tickets || []);
+        }
+      } catch (error) {
+        console.error('Failed to search similar tickets:', error);
+      } finally {
+        setSearchingTickets(false);
+      }
+    }, 800),
+    []
+  );
+
+  // Handle description change with AI suggestions
+  const handleDescriptionChange = (e) => {
+    const value = e.target.value;
+    setFormData({ ...formData, description: value });
+
+    // Trigger AI suggestions and similar ticket search
+    const combinedText = `${formData.subject} ${value}`;
+    getAiSuggestions(combinedText);
+    searchSimilarTickets(combinedText);
+  };
+
+  // Handle subject change
+  const handleSubjectChange = (e) => {
+    const value = e.target.value;
+    setFormData({ ...formData, subject: value });
+
+    // Trigger searches if we have enough text
+    const combinedText = `${value} ${formData.description}`;
+    if (combinedText.length > 15) {
+      getAiSuggestions(combinedText);
+      searchSimilarTickets(combinedText);
+    }
+  };
+
+  // Apply AI suggestions
+  const applyAiSuggestions = () => {
     setFormData(prev => ({
       ...prev,
-      pageUrl,
-      browserInfo: JSON.stringify(browserInfo),
+      category: aiSuggestions.category || prev.category,
+      priority: aiSuggestions.priority || prev.priority,
     }));
-  }, []);
+    setShowSuggestions(false);
+  };
 
   const captureScreenshot = async () => {
     try {
@@ -170,7 +326,14 @@ export default function CreateTicketModal({ onClose, onSubmit }) {
       >
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-100">
-          <h2 className="text-2xl font-bold text-gray-900">Create Support Ticket</h2>
+          <div>
+            <h2 className="text-2xl font-bold text-gray-900">Create Support Ticket</h2>
+            {pageContext && (
+              <p className="text-sm text-gray-500 mt-1">
+                Context: <span className="font-medium text-panda-primary">{pageContext.contextHint}</span>
+              </p>
+            )}
+          </div>
           <button
             onClick={onClose}
             className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
@@ -189,7 +352,7 @@ export default function CreateTicketModal({ onClose, onSubmit }) {
             <input
               type="text"
               value={formData.subject}
-              onChange={(e) => setFormData({ ...formData, subject: e.target.value })}
+              onChange={handleSubjectChange}
               placeholder="Brief description of your issue"
               className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-panda-primary/20 ${
                 errors.subject ? 'border-red-300' : 'border-gray-200'
@@ -209,6 +372,11 @@ export default function CreateTicketModal({ onClose, onSubmit }) {
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Category
+                {aiSuggestions.category && formData.category !== aiSuggestions.category && (
+                  <span className="ml-2 text-xs text-purple-600 font-normal">
+                    AI suggests: {aiSuggestions.category}
+                  </span>
+                )}
               </label>
               <select
                 value={formData.category}
@@ -225,6 +393,11 @@ export default function CreateTicketModal({ onClose, onSubmit }) {
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Priority <span className="text-red-500">*</span>
+                {aiSuggestions.priority && formData.priority !== aiSuggestions.priority && (
+                  <span className="ml-2 text-xs text-purple-600 font-normal">
+                    AI suggests: {aiSuggestions.priority}
+                  </span>
+                )}
               </label>
               <select
                 value={formData.priority}
@@ -240,14 +413,49 @@ export default function CreateTicketModal({ onClose, onSubmit }) {
             </div>
           </div>
 
+          {/* AI Suggestions Banner */}
+          {showSuggestions && aiSuggestions.category && (
+            <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
+              <div className="flex items-start gap-3">
+                <Sparkles className="w-5 h-5 text-purple-600 flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-purple-900">AI Suggestions</p>
+                  <p className="text-sm text-purple-700 mt-1">{aiSuggestions.reasoning}</p>
+                  <div className="flex items-center gap-2 mt-3">
+                    <button
+                      type="button"
+                      onClick={applyAiSuggestions}
+                      className="px-3 py-1.5 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700 transition-colors"
+                    >
+                      Apply Suggestions
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowSuggestions(false)}
+                      className="px-3 py-1.5 text-purple-600 text-sm hover:bg-purple-100 rounded-lg transition-colors"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Description */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Description <span className="text-red-500">*</span>
+              {aiLoading && (
+                <span className="ml-2 text-xs text-gray-400 inline-flex items-center gap-1">
+                  <Loader className="w-3 h-3 animate-spin" />
+                  Analyzing...
+                </span>
+              )}
             </label>
             <textarea
               value={formData.description}
-              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+              onChange={handleDescriptionChange}
               placeholder="Please provide detailed information about your issue..."
               rows={6}
               className={`w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-panda-primary/20 resize-none ${
@@ -261,6 +469,45 @@ export default function CreateTicketModal({ onClose, onSubmit }) {
               </p>
             )}
           </div>
+
+          {/* Similar Tickets */}
+          {similarTickets.length > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+              <div className="flex items-start gap-3">
+                <Search className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-amber-900">Similar Tickets Found</p>
+                  <p className="text-xs text-amber-700 mt-1">
+                    These existing tickets might be related to your issue:
+                  </p>
+                  <ul className="mt-2 space-y-2">
+                    {similarTickets.slice(0, 3).map(ticket => (
+                      <li key={ticket.id} className="text-sm">
+                        <a
+                          href={`/support/${ticket.id}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-amber-800 hover:text-amber-900 hover:underline"
+                        >
+                          <span className="font-mono text-xs bg-amber-100 px-1 rounded mr-2">
+                            {ticket.ticket_number}
+                          </span>
+                          {ticket.subject}
+                        </a>
+                        <span className={`ml-2 text-xs px-2 py-0.5 rounded-full ${
+                          ticket.status === 'RESOLVED' ? 'bg-green-100 text-green-700' :
+                          ticket.status === 'IN_PROGRESS' ? 'bg-blue-100 text-blue-700' :
+                          'bg-gray-100 text-gray-700'
+                        }`}>
+                          {ticket.status}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Screenshot */}
           <div>

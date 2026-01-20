@@ -25,6 +25,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { LeadRankBadge } from '../components/LeadRankBadge';
+import LoadingSpinner from '../components/LoadingSpinner';
 
 // Column definitions for the leads list
 const COLUMN_DEFINITIONS = [
@@ -366,9 +367,14 @@ export default function LeadList() {
                     className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent bg-white"
                   >
                     <option value="">All Work Types</option>
+                    <option value="Commercial">Commercial</option>
                     <option value="Inspection">Inspection</option>
                     <option value="Insurance">Insurance</option>
+                    <option value="Insurance Program">Insurance Program</option>
+                    <option value="Interior">Interior</option>
                     <option value="Retail">Retail</option>
+                    <option value="Service/Repair">Service/Repair</option>
+                    <option value="Subcontractor">Subcontractor</option>
                   </select>
                 </div>
 
@@ -505,7 +511,7 @@ export default function LeadList() {
         <div className="overflow-x-auto">
           {isLoading ? (
             <div className="flex items-center justify-center h-64">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-panda-primary"></div>
+              <LoadingSpinner size="lg" message="Loading leads..." />
             </div>
           ) : leads.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-64 text-gray-500">

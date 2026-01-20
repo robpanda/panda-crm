@@ -25,7 +25,7 @@ import {
 // Setup categories with their routes - alphabetized
 const SETUP_CATEGORIES = [
   { id: 'audit', name: 'Audit Logs', icon: ClipboardList, description: 'System activity and change tracking', path: '/admin/audit' },
-  { id: 'automation', name: 'Automation', icon: Workflow, description: 'Workflows and process automation', path: '/admin/workflows' },
+  { id: 'workflows', name: 'Workflows', icon: Workflow, description: 'Automated business processes and triggers', path: '/admin/workflows' },
   { id: 'bamboogli', name: 'Bamboogli', icon: MessageSquare, description: 'SMS and email messaging', path: '/admin/bamboogli' },
   { id: 'callcenter', name: 'Call Center', icon: Phone, description: 'Call center configuration', path: '/admin/call-center' },
   { id: 'commissions', name: 'Commission Engine', icon: DollarSign, description: 'Commission rules and calculations', path: '/admin/commissions' },

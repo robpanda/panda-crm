@@ -353,9 +353,11 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
 
           {/* Logo */}
           <Link to="/" className="flex items-center mr-6">
-            <span className="text-xl font-bold bg-gradient-to-r from-blue-600 to-orange-500 bg-clip-text text-transparent">
-              Bamboo 2.0
-            </span>
+            <img
+              src="/logo-gradient.png"
+              alt="Panda CRM"
+              className="h-8 w-auto"
+            />
           </Link>
 
           {/* Main Navigation - Desktop */}

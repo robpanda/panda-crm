@@ -18,6 +18,7 @@ import {
 const TOUR_STORAGE_KEY = 'panda-crm-onboarding-complete';
 const TOUR_VIEW_COUNT_KEY = 'panda-crm-tour-view-count';
 const MAX_TOUR_VIEWS = 2; // Only show tour the first 2 times user logs in
+const TOUR_ELIGIBLE_DAYS = 14; // Only show tour within first 14 days of user creation
 const API_URL = import.meta.env.VITE_API_URL || 'https://7paaginnvg.execute-api.us-east-2.amazonaws.com/prod';
 
 // Tour steps with positioning and content
@@ -98,6 +99,19 @@ export default function OnboardingTour() {
         } catch {
           // Invalid data, reset
           localStorage.removeItem(TOUR_STORAGE_KEY);
+        }
+      }
+
+      // Check if user is within the eligible window (first 14 days since account creation)
+      const userCreatedAt = user?.createdAt;
+      if (userCreatedAt) {
+        const createdDate = new Date(userCreatedAt);
+        const now = new Date();
+        const daysSinceCreation = (now - createdDate) / (1000 * 60 * 60 * 24);
+
+        // If user was created more than 14 days ago, don't show the tour
+        if (daysSinceCreation > TOUR_ELIGIBLE_DAYS) {
+          return;
         }
       }
 

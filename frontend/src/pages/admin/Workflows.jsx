@@ -27,6 +27,9 @@ import {
   MessageSquare,
   RefreshCw,
   Info,
+  Wrench,
+  Home,
+  Phone,
 } from 'lucide-react';
 
 // All workflows extracted from the trigger files
@@ -562,6 +565,66 @@ const ALL_WORKFLOWS = [
     isActive: true,
     isSystem: true,
   },
+
+  // ============ PROJECT EXPEDITING WORKFLOWS ============
+  {
+    id: 'exp-flat-roof',
+    name: 'Flat Roof Case Creation',
+    description: 'Creates a case for Trevor Johnson when a job is identified as having a flat roof',
+    category: 'Project Expediting',
+    triggerObject: 'Opportunity',
+    triggerEvent: 'FIELD_CHANGE',
+    triggerCondition: 'flatRoof = true',
+    triggerFile: 'expeditingTriggers.js',
+    triggerFunction: 'onFlatRoofDetected',
+    actions: [
+      'Create HIGH priority case assigned to Trevor Johnson',
+      'Subject: "Flat Roof Review Required"',
+      'Link case to opportunity and account',
+      'Create attention item for Trevor',
+      'Log activity on opportunity',
+    ],
+    isActive: true,
+    isSystem: true,
+  },
+  {
+    id: 'exp-line-drop',
+    name: 'Line Drop Case + SMS',
+    description: 'Creates a case for Kevin Flores and sends SMS to homeowner explaining the line drop process',
+    category: 'Project Expediting',
+    triggerObject: 'Opportunity',
+    triggerEvent: 'FIELD_CHANGE',
+    triggerCondition: 'lineDrop = true',
+    triggerFile: 'expeditingTriggers.js',
+    triggerFunction: 'onLineDropRequired',
+    actions: [
+      'Create HIGH priority case assigned to Kevin Flores',
+      'Subject: "Line Drop Coordination Required"',
+      'Send SMS to homeowner with line drop instructions',
+      'Create attention item for Kevin',
+      'Log activity on opportunity',
+    ],
+    isActive: true,
+    isSystem: true,
+  },
+  {
+    id: 'exp-supplement-hold',
+    name: 'Supplement Holds Job',
+    description: 'Automatically sets job to Not Install Ready when supplement is required and holds job',
+    category: 'Project Expediting',
+    triggerObject: 'Opportunity',
+    triggerEvent: 'FIELD_CHANGE',
+    triggerCondition: 'supplementRequired = true AND supplementHoldsJob = true',
+    triggerFile: 'expeditingTriggers.js',
+    triggerFunction: 'onSupplementHoldsJob',
+    actions: [
+      'Set notInstallReady = true',
+      'Add note: "Supplement required - job on hold pending supplement approval"',
+      'Log activity on opportunity',
+    ],
+    isActive: true,
+    isSystem: true,
+  },
 ];
 
 // Category configuration with icons and colors
@@ -636,6 +699,13 @@ const CATEGORY_CONFIG = {
     textColor: 'text-teal-700',
     borderColor: 'border-teal-200',
   },
+  'Project Expediting': {
+    icon: Wrench,
+    color: 'amber',
+    bgColor: 'bg-amber-100',
+    textColor: 'text-amber-700',
+    borderColor: 'border-amber-200',
+  },
 };
 
 const triggerEventLabels = {
@@ -650,7 +720,7 @@ export default function Workflows() {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
-  const [expandedCategories, setExpandedCategories] = useState(new Set(['Commission', 'Insurance']));
+  const [expandedCategories, setExpandedCategories] = useState(new Set());
   const [expandedWorkflow, setExpandedWorkflow] = useState(null);
   const [workflows, setWorkflows] = useState(ALL_WORKFLOWS);
 

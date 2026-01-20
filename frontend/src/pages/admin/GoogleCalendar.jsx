@@ -19,6 +19,9 @@ import {
   Clock,
   Mail,
   FileSpreadsheet,
+  Zap,
+  Settings,
+  Link,
 } from 'lucide-react';
 import api from '../../services/api';
 import AdminLayout from '../../components/AdminLayout';
@@ -40,6 +43,8 @@ export default function GoogleCalendar() {
   const [bulkImportPreview, setBulkImportPreview] = useState([]);
   const [importingBulk, setImportingBulk] = useState(false);
   const [importResults, setImportResults] = useState(null);
+  const [autoLinking, setAutoLinking] = useState(false);
+  const [autoLinkResults, setAutoLinkResults] = useState(null);
 
   useEffect(() => {
     loadUsers();
@@ -128,6 +133,43 @@ export default function GoogleCalendar() {
     } finally {
       setSyncing(false);
     }
+  };
+
+  // Auto-link all users whose CRM email matches @pandaexteriors.com domain
+  const handleAutoLinkAll = async () => {
+    const unlinkedUsers = users.filter(u =>
+      !u.googleCalendarEmail &&
+      u.email?.endsWith('@pandaexteriors.com')
+    );
+
+    if (unlinkedUsers.length === 0) {
+      alert('No unlinked users with @pandaexteriors.com emails found');
+      return;
+    }
+
+    if (!confirm(`This will auto-link ${unlinkedUsers.length} users whose CRM email ends with @pandaexteriors.com to their Google Calendar. Continue?`)) {
+      return;
+    }
+
+    setAutoLinking(true);
+    const results = { success: 0, failed: 0, errors: [] };
+
+    for (const user of unlinkedUsers) {
+      try {
+        await api.post(`/api/integrations/google/users/${user.id}/link`, {
+          googleCalendarEmail: user.email,
+          enableSync: true,
+        });
+        results.success++;
+      } catch (error) {
+        results.failed++;
+        results.errors.push(`${user.email}: ${error.response?.data?.error?.message || error.message}`);
+      }
+    }
+
+    setAutoLinkResults(results);
+    setAutoLinking(false);
+    await loadUsers();
   };
 
   const handleFileUpload = (event) => {
@@ -327,6 +369,82 @@ export default function GoogleCalendar() {
           </div>
         </div>
       </div>
+
+      {/* Quick Setup Section */}
+      {linkedCount === 0 && (
+        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-6 border border-blue-200">
+          <div className="flex items-start gap-4">
+            <div className="p-3 rounded-xl bg-blue-100">
+              <Zap className="w-6 h-6 text-blue-600" />
+            </div>
+            <div className="flex-1">
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">Quick Setup</h3>
+              <p className="text-gray-600 mb-4">
+                No calendars are linked yet. Auto-link all users with @pandaexteriors.com emails to their Google Calendars.
+                This uses Domain-Wide Delegation to access calendars without requiring individual OAuth.
+              </p>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  onClick={handleAutoLinkAll}
+                  disabled={autoLinking}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center space-x-2"
+                >
+                  {autoLinking ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Linking...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Link className="w-4 h-4" />
+                      <span>Auto-Link All @pandaexteriors.com Users</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="px-4 py-2 border border-blue-300 text-blue-700 rounded-lg hover:bg-blue-50 flex items-center space-x-2"
+                >
+                  <Upload className="w-4 h-4" />
+                  <span>Import from CSV</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Auto-Link Results */}
+      {autoLinkResults && (
+        <div className={`rounded-xl p-4 border ${autoLinkResults.failed === 0 ? 'bg-green-50 border-green-200' : 'bg-yellow-50 border-yellow-200'}`}>
+          <div className="flex items-center gap-3 mb-2">
+            {autoLinkResults.failed === 0 ? (
+              <CheckCircle className="w-5 h-5 text-green-600" />
+            ) : (
+              <AlertCircle className="w-5 h-5 text-yellow-600" />
+            )}
+            <span className="font-medium">
+              Auto-link complete: {autoLinkResults.success} succeeded, {autoLinkResults.failed} failed
+            </span>
+            <button
+              onClick={() => setAutoLinkResults(null)}
+              className="ml-auto p-1 hover:bg-white rounded"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          {autoLinkResults.errors.length > 0 && (
+            <ul className="text-sm text-red-600 list-disc list-inside ml-8">
+              {autoLinkResults.errors.slice(0, 10).map((err, i) => (
+                <li key={i}>{err}</li>
+              ))}
+              {autoLinkResults.errors.length > 10 && (
+                <li>... and {autoLinkResults.errors.length - 10} more errors</li>
+              )}
+            </ul>
+          )}
+        </div>
+      )}
 
       {/* Actions Bar */}
       <div className="bg-white rounded-xl p-4 border border-gray-100 shadow-sm">

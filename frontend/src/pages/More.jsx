@@ -117,7 +117,7 @@ export default function More() {
             </h2>
             <p className="text-sm text-gray-500">{user?.email}</p>
             <span className="inline-block mt-1 px-2 py-0.5 bg-panda-primary/10 text-panda-primary text-xs font-medium rounded">
-              {user?.role?.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase()) || 'User'}
+              {(roleName || 'User').replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())}
             </span>
           </div>
         </div>

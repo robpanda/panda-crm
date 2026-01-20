@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { useAuth, ROLE_TYPES } from '../context/AuthContext';
-import { opportunitiesApi, leadsApi, accountsApi, contactsApi, workOrdersApi, usersApi } from '../services/api';
-import { formatDistanceToNow, format, parseISO } from 'date-fns';
+import { opportunitiesApi, leadsApi, accountsApi, contactsApi, workOrdersApi, usersApi, attentionApi, googleCalendarApi } from '../services/api';
+import { formatDistanceToNow, format, parseISO, startOfDay, endOfDay } from 'date-fns';
 import { formatNumber } from '../utils/formatters';
 import {
   Target,
@@ -123,15 +123,31 @@ export default function Dashboard() {
     })),
   });
 
-  // Fetch jobs needing attention
-  const { data: attentionItems } = useQuery({
-    queryKey: ['attentionItems', ownerFilter, user?.id],
-    queryFn: () => opportunitiesApi.getOpportunities(buildFilterParams({
+  // Fetch real attention items from attention queue API
+  const { data: attentionItemsData } = useQuery({
+    queryKey: ['attentionItems', user?.id],
+    queryFn: () => attentionApi.getItems({
+      userId: user?.id,
+      status: 'PENDING',
       limit: 5,
-      attentionNeeded: true,
-      sortBy: 'closeDate',
-      sortOrder: 'asc',
-    })),
+      sortBy: 'urgency',
+      sortOrder: 'desc',
+    }),
+    enabled: !!user?.id,
+  });
+
+  // Fetch user's Google Calendar events for today
+  const today = new Date();
+  const { data: calendarEventsData, isError: calendarError } = useQuery({
+    queryKey: ['my-calendar-events', user?.id, format(today, 'yyyy-MM-dd')],
+    queryFn: () => googleCalendarApi.getUserEvents(
+      user?.id,
+      startOfDay(today).toISOString(),
+      endOfDay(today).toISOString()
+    ),
+    enabled: !!user?.id,
+    retry: false, // Don't retry if calendar not connected
+    staleTime: 5 * 60 * 1000, // Cache for 5 minutes
   });
 
   // Get display labels based on view scope
@@ -188,14 +204,15 @@ export default function Dashboard() {
     { stage: 'In Production', count: stageCounts?.IN_PRODUCTION?.count || 0, color: 'bg-yellow-400' },
   ];
 
-  // Attention queue
-  const attentionQueue = (attentionItems?.data || []).map(opp => ({
-    id: opp.id,
-    title: opp.name || 'Untitled Job',
-    type: opp.stageName || opp.stage || 'Job',
-    urgency: opp.closeDate && new Date(opp.closeDate) < new Date() ? 'high' :
-             opp.daysInStage > 14 ? 'medium' : 'low',
-    link: `/jobs/${opp.id}`,
+  // Attention queue - use real attention items from API
+  const attentionQueue = (attentionItemsData?.data || []).map(item => ({
+    id: item.id,
+    title: item.title || 'Action Required',
+    type: item.type?.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, l => l.toUpperCase()) || 'Task',
+    urgency: item.urgency === 'CRITICAL' || item.urgency === 'HIGH' ? 'high' :
+             item.urgency === 'MEDIUM' ? 'medium' : 'low',
+    link: item.actionUrl || (item.opportunityId ? `/jobs/${item.opportunityId}` : '/attention'),
+    category: item.category,
   }));
 
   // Recent activity
@@ -214,8 +231,8 @@ export default function Dashboard() {
     };
   });
 
-  // Today's schedule - use startDate from work order or scheduledStart from first appointment
-  const todaysSchedule = (workOrders?.data || []).map(wo => {
+  // Today's schedule - combine work orders with Google Calendar events
+  const workOrderSchedule = (workOrders?.data || []).map(wo => {
     // Get scheduled time from first service appointment or work order start date
     const appointmentTime = wo.serviceAppointments?.[0]?.scheduledStart;
     const workOrderTime = wo.startDate;
@@ -224,12 +241,37 @@ export default function Dashboard() {
     return {
       id: wo.id,
       time: scheduledTime ? format(parseISO(scheduledTime), 'h:mm a') : 'All Day',
+      sortTime: scheduledTime ? new Date(scheduledTime).getTime() : Number.MAX_SAFE_INTEGER,
       title: wo.subject || wo.workType?.name || wo.workType || 'Work Order',
       type: wo.workType?.name || wo.workType || 'Service',
       address: wo.account?.name || wo.address || '',
       link: `/workorders/${wo.id}`,
+      source: 'workorder',
     };
   });
+
+  // Convert Google Calendar events to schedule items
+  const calendarSchedule = (calendarEventsData || []).map(event => {
+    const startTime = event.start?.dateTime || event.start?.date;
+    const isAllDay = !event.start?.dateTime;
+    return {
+      id: event.id,
+      time: isAllDay ? 'All Day' : (startTime ? format(parseISO(startTime), 'h:mm a') : 'TBD'),
+      sortTime: startTime ? new Date(startTime).getTime() : Number.MAX_SAFE_INTEGER,
+      title: event.summary || 'Calendar Event',
+      type: 'Calendar',
+      address: event.location || '',
+      link: event.htmlLink || null,
+      source: 'calendar',
+    };
+  });
+
+  // Combine and sort by time
+  const todaysSchedule = [...workOrderSchedule, ...calendarSchedule]
+    .sort((a, b) => a.sortTime - b.sortTime);
+
+  // Check if calendar is connected (no error and we got data or empty array)
+  const isCalendarConnected = !calendarError;
 
   const attentionCount = attentionQueue.length;
 
@@ -428,30 +470,59 @@ export default function Dashboard() {
               </Link>
             </div>
           </div>
-          <div className="p-2">
-            {todaysSchedule.length > 0 ? todaysSchedule.map((event, index) => (
-              <Link
-                key={event.id || index}
-                to={event.link}
-                className="flex items-start space-x-3 p-3 hover:bg-gray-50 rounded-lg"
-              >
-                <div className="w-16 text-sm font-medium text-panda-primary">{event.time}</div>
-                <div className="flex-1">
-                  <p className="text-sm font-medium text-gray-900">{event.title}</p>
-                  <p className="text-xs text-gray-500">{event.type}</p>
-                  {event.address && (
-                    <p className="text-xs text-gray-400 flex items-center mt-1">
-                      <MapPin className="w-3 h-3 mr-1" />
-                      {event.address}
-                    </p>
-                  )}
-                </div>
-                <Clock className="w-4 h-4 text-gray-400" />
-              </Link>
-            )) : (
+          <div className="p-2 max-h-80 overflow-y-auto">
+            {todaysSchedule.length > 0 ? todaysSchedule.map((event, index) => {
+              // Calendar events with external links open in new tab
+              const isExternal = event.source === 'calendar' && event.link?.startsWith('http');
+              const EventWrapper = event.link ? (isExternal ? 'a' : Link) : 'div';
+              const wrapperProps = event.link
+                ? isExternal
+                  ? { href: event.link, target: '_blank', rel: 'noopener noreferrer' }
+                  : { to: event.link }
+                : {};
+
+              return (
+                <EventWrapper
+                  key={event.id || index}
+                  {...wrapperProps}
+                  className="flex items-start space-x-3 p-3 hover:bg-gray-50 rounded-lg cursor-pointer"
+                >
+                  <div className="w-14 text-sm font-medium text-panda-primary">{event.time}</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm font-medium text-gray-900 truncate">{event.title}</p>
+                      {event.source === 'calendar' && (
+                        <span className="px-1.5 py-0.5 text-xs rounded bg-blue-100 text-blue-700">Cal</span>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-500">{event.type}</p>
+                    {event.address && (
+                      <p className="text-xs text-gray-400 flex items-center mt-1">
+                        <MapPin className="w-3 h-3 mr-1" />
+                        {event.address}
+                      </p>
+                    )}
+                  </div>
+                  <Clock className="w-4 h-4 text-gray-400" />
+                </EventWrapper>
+              );
+            }) : (
               <div className="p-4 text-center text-gray-500 text-sm">
                 <Calendar className="w-8 h-8 text-gray-300 mx-auto mb-2" />
-                No appointments scheduled for today
+                {!isCalendarConnected ? (
+                  <>
+                    <p className="mb-3">Connect your Google Calendar to see your schedule</p>
+                    <Link
+                      to="/settings/integrations"
+                      className="inline-flex items-center px-4 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90 transition-colors text-sm font-medium"
+                    >
+                      <Calendar className="w-4 h-4 mr-2" />
+                      Connect Calendar
+                    </Link>
+                  </>
+                ) : (
+                  'No appointments scheduled for today'
+                )}
               </div>
             )}
           </div>

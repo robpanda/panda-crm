@@ -36,6 +36,8 @@ import { useAuth } from '../context/AuthContext';
 import { useRingCentral } from '../context/RingCentralContext';
 import { useMutation } from '@tanstack/react-query';
 import AddressAutocomplete from '../components/AddressAutocomplete';
+import MentionTextarea from '../components/MentionTextarea';
+import LoadingSpinner from '../components/LoadingSpinner';
 
 const US_STATES = [
   { value: 'AL', label: 'Alabama' }, { value: 'AK', label: 'Alaska' },
@@ -66,6 +68,21 @@ const US_STATES = [
   { value: 'WY', label: 'Wyoming' },
 ];
 
+// Call Center statuses (used during initial lead intake)
+const CALL_CENTER_STATUSES = [
+  { value: 'New', label: 'New', color: 'bg-blue-100 text-blue-800' },
+  { value: 'Confirmed', label: 'Confirmed', color: 'bg-green-100 text-green-800' },
+  { value: 'No Inspection', label: 'No Inspection', color: 'bg-orange-100 text-orange-800' },
+];
+
+// Call Center dispositions
+const CALL_CENTER_DISPOSITIONS = [
+  { value: '', label: 'Select disposition...' },
+  { value: 'No Show', label: 'No Show' },
+  { value: 'Out of Scope', label: 'Out of Scope' },
+];
+
+// Legacy statuses (for backwards compatibility)
 const LEAD_STATUSES = [
   { value: 'New', label: 'New', color: 'bg-blue-100 text-blue-800' },
   { value: 'Lead Not Set', label: 'Lead Not Set', color: 'bg-gray-100 text-gray-800' },
@@ -75,6 +92,7 @@ const LEAD_STATUSES = [
   { value: 'Completed', label: 'Completed', color: 'bg-purple-100 text-purple-800' },
 ];
 
+// Legacy dispositions (for backwards compatibility)
 const LEAD_DISPOSITIONS = [
   { value: '', label: 'Select disposition...' },
   { value: 'Unconfirmed', label: 'Unconfirmed' },
@@ -94,6 +112,79 @@ const LEAD_DISPOSITIONS = [
   { value: 'Not Called In', label: 'Not Called In' },
   { value: 'No Answer', label: 'No Answer' },
 ];
+
+// ============================================================================
+// SALES REP WORKFLOW: Dynamic Stage/Status/Disposition based on Work Type
+// ============================================================================
+
+// Stages available for sales reps
+const SALES_REP_STAGES = [
+  { value: 'Lead Assigned', label: 'Lead Assigned' },
+  { value: 'Prospect', label: 'Prospect' },
+];
+
+// Insurance Work Type - Status options by Stage
+const INSURANCE_STATUSES_BY_STAGE = {
+  'Lead Assigned': [
+    { value: '3 Day Follow Up', label: '3 Day Follow Up', color: 'bg-yellow-100 text-yellow-800' },
+    { value: 'Not Moving Forward', label: 'Not Moving Forward', color: 'bg-red-100 text-red-800' },
+  ],
+  'Prospect': [
+    { value: 'Claim Filed', label: 'Claim Filed', color: 'bg-blue-100 text-blue-800' },
+  ],
+};
+
+// Insurance Work Type - Disposition options by Status
+const INSURANCE_DISPOSITIONS_BY_STATUS = {
+  '3 Day Follow Up': [
+    { value: '', label: 'Select disposition...' },
+    { value: 'Scheduled', label: 'Scheduled' },
+    { value: 'Not Able to Schedule', label: 'Not Able to Schedule' },
+  ],
+  'Not Moving Forward': [
+    { value: '', label: 'Select disposition...' },
+    { value: 'Not Enough Damage', label: 'Not Enough Damage' },
+    { value: 'Damage Found - Customer Decline', label: 'Damage Found - Customer Decline' },
+  ],
+  'Claim Filed': [
+    { value: '', label: 'Select disposition...' },
+    { value: 'SA Signed', label: 'SA Signed' },
+    { value: 'SA Not Signed', label: 'SA Not Signed' },
+  ],
+};
+
+// Retail Work Type - Status options by Stage
+const RETAIL_STATUSES_BY_STAGE = {
+  'Lead Assigned': [
+    { value: 'Second Visit Needed', label: 'Second Visit Needed', color: 'bg-orange-100 text-orange-800' },
+  ],
+  'Prospect': [
+    { value: 'Pitch Miss', label: 'Pitch Miss', color: 'bg-red-100 text-red-800' },
+    { value: '3 Day Follow Up', label: '3 Day Follow Up', color: 'bg-yellow-100 text-yellow-800' },
+  ],
+};
+
+// Retail Work Type - Disposition options by Status
+const RETAIL_DISPOSITIONS_BY_STATUS = {
+  'Second Visit Needed': [
+    { value: '', label: 'Select disposition...' },
+    { value: 'Scheduled', label: 'Scheduled' },
+    { value: 'Not Able to Schedule', label: 'Not Able to Schedule' },
+  ],
+  'Pitch Miss': [
+    { value: '', label: 'Select disposition...' },
+    { value: 'Price', label: 'Price' },
+    { value: 'Timing', label: 'Timing' },
+    { value: 'Competition', label: 'Competition' },
+    { value: 'No Decision Made', label: 'No Decision Made' },
+    { value: 'Other', label: 'Other' },
+  ],
+  '3 Day Follow Up': [
+    { value: '', label: 'Select disposition...' },
+    { value: 'Scheduled', label: 'Scheduled' },
+    { value: 'Not Able to Schedule', label: 'Not Able to Schedule' },
+  ],
+};
 
 const LEAD_SOURCES = [
   { value: 'Bath Lead', label: 'Bath Lead' },
@@ -136,12 +227,6 @@ const ALL_WORK_TYPES = [
 // Call center only sees Inspection work type
 const CALL_CENTER_WORK_TYPES = [
   { value: 'Inspection', label: 'Inspection' },
-];
-
-const RATINGS = [
-  { value: 'Hot', label: 'Hot', color: 'bg-red-100 text-red-700' },
-  { value: 'Warm', label: 'Warm', color: 'bg-orange-100 text-orange-700' },
-  { value: 'Cold', label: 'Cold', color: 'bg-blue-100 text-blue-700' },
 ];
 
 const steps = [
@@ -219,13 +304,18 @@ export default function LeadWizard() {
       .replace(/\{\{state\}\}/gi, formData.state || '');
   };
 
+  // Get templates array (API returns array directly, not { templates: [...] })
+  const smsTemplates = Array.isArray(smsTemplatesData) ? smsTemplatesData : smsTemplatesData?.templates || [];
+  const emailTemplates = Array.isArray(emailTemplatesData) ? emailTemplatesData : emailTemplatesData?.templates || [];
+
   // Handle SMS template selection
   const handleSmsTemplateSelect = (templateId) => {
     setSelectedSmsTemplate(templateId);
     if (templateId) {
-      const template = smsTemplatesData?.templates?.find(t => t.id === templateId);
+      const template = smsTemplates.find(t => t.id === templateId);
       if (template) {
-        setSmsMessage(replaceMergeFields(template.content));
+        // Template content is in 'body' field
+        setSmsMessage(replaceMergeFields(template.body || template.content || ''));
       }
     }
   };
@@ -234,10 +324,11 @@ export default function LeadWizard() {
   const handleEmailTemplateSelect = (templateId) => {
     setSelectedEmailTemplate(templateId);
     if (templateId) {
-      const template = emailTemplatesData?.templates?.find(t => t.id === templateId);
+      const template = emailTemplates.find(t => t.id === templateId);
       if (template) {
         setEmailSubject(replaceMergeFields(template.subject || template.name));
-        setEmailBody(replaceMergeFields(template.content));
+        // Template content is in 'body' field
+        setEmailBody(replaceMergeFields(template.body || template.content || ''));
       }
     }
   };
@@ -301,13 +392,49 @@ export default function LeadWizard() {
     propertyType: '',
     workType: '',
     leadNotes: '',
+    jobNotes: '',
     // Call Center ONLY fields
     tentativeAppointmentDate: '',
     tentativeAppointmentTime: '',
     leadSetById: '',
     leadSetByName: '',
     leadDisposition: '',
+    // Sales Rep workflow fields
+    stage: '',
   });
+
+  // Helper functions for dynamic Sales Rep workflow
+  const getStagesForWorkType = (workType) => {
+    if (workType === 'Insurance' || workType === 'Retail') {
+      return SALES_REP_STAGES;
+    }
+    return [];
+  };
+
+  const getStatusesForStage = (workType, stage) => {
+    if (!workType || !stage) return [];
+    if (workType === 'Insurance') {
+      return INSURANCE_STATUSES_BY_STAGE[stage] || [];
+    }
+    if (workType === 'Retail') {
+      return RETAIL_STATUSES_BY_STAGE[stage] || [];
+    }
+    return [];
+  };
+
+  const getDispositionsForStatus = (workType, status) => {
+    if (!workType || !status) return [{ value: '', label: 'Select disposition...' }];
+    if (workType === 'Insurance') {
+      return INSURANCE_DISPOSITIONS_BY_STATUS[status] || [{ value: '', label: 'Select disposition...' }];
+    }
+    if (workType === 'Retail') {
+      return RETAIL_DISPOSITIONS_BY_STATUS[status] || [{ value: '', label: 'Select disposition...' }];
+    }
+    return [{ value: '', label: 'Select disposition...' }];
+  };
+
+  // Check if sales rep workflow applies (Insurance or Retail work type, non-call-center user)
+  const showSalesRepWorkflow = !isCallCenter && (formData.workType === 'Insurance' || formData.workType === 'Retail');
 
   const [lead, setLead] = useState(null);
 
@@ -373,6 +500,7 @@ export default function LeadWizard() {
         propertyType: leadData.propertyType || '',
         workType: leadData.workType || '',
         leadNotes: leadData.leadNotes || '',
+        jobNotes: leadData.jobNotes || '',
         // Call Center ONLY fields - preserve defaults
         tentativeAppointmentDate: leadData.tentativeAppointmentDate || '',
         tentativeAppointmentTime: leadData.tentativeAppointmentTime || '',
@@ -444,6 +572,7 @@ export default function LeadWizard() {
         propertyType: formData.propertyType,
         workType: formData.workType,
         leadNotes: formData.leadNotes,
+        jobNotes: formData.jobNotes,
         // Call Center tracking - who entered/set this lead
         leadSetById: formData.leadSetById,
         tentativeAppointmentDate: formData.tentativeAppointmentDate || null,
@@ -586,10 +715,6 @@ export default function LeadWizard() {
     return found ? found.color : 'bg-gray-100 text-gray-800';
   };
 
-  const getRatingStyle = (rating) => {
-    const found = RATINGS.find(r => r.value === rating);
-    return found ? found.color : 'bg-gray-100 text-gray-800';
-  };
 
   if (isLoading) {
     return (
@@ -717,7 +842,7 @@ export default function LeadWizard() {
               Contact Information
             </h2>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
               {/* ========== CONTACT DETAILS SECTION (TOP) ========== */}
 
               {/* First Name */}
@@ -831,9 +956,9 @@ export default function LeadWizard() {
               Property Address
             </h2>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
               {/* Street - with Google Places Autocomplete */}
-              <div className="md:col-span-2">
+              <div className="lg:col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-1">Street Address</label>
                 <AddressAutocomplete
                   value={formData.street}
@@ -934,13 +1059,14 @@ export default function LeadWizard() {
               Lead Qualification
             </h2>
 
-            {/* Call Center ONLY Section */}
-            <div className="bg-orange-50 border border-orange-200 rounded-xl p-4">
+            {/* Call Center ONLY Section - Only visible to call center users */}
+            {isCallCenter && (
+            <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 sm:p-6">
               <h3 className="text-sm font-semibold text-orange-800 mb-4 flex items-center">
                 <Phone className="w-4 h-4 mr-2" />
                 Call Center ONLY
               </h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
                 {/* Tentative Appointment Date */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -1032,7 +1158,7 @@ export default function LeadWizard() {
                   )}
                 </div>
 
-                {/* Lead Status */}
+                {/* Lead Status - Call Center uses specific statuses */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Lead Status <span className="text-red-500">*</span>
@@ -1043,7 +1169,7 @@ export default function LeadWizard() {
                     onChange={handleInputChange}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent text-sm"
                   >
-                    {LEAD_STATUSES.map(status => (
+                    {CALL_CENTER_STATUSES.map(status => (
                       <option key={status.value} value={status.value}>{status.label}</option>
                     ))}
                   </select>
@@ -1054,7 +1180,7 @@ export default function LeadWizard() {
                   )}
                 </div>
 
-                {/* Lead Disposition */}
+                {/* Lead Disposition - Call Center uses specific dispositions */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Lead Disposition
@@ -1065,17 +1191,18 @@ export default function LeadWizard() {
                     onChange={handleInputChange}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent text-sm"
                   >
-                    {LEAD_DISPOSITIONS.map(disp => (
+                    {CALL_CENTER_DISPOSITIONS.map(disp => (
                       <option key={disp.value} value={disp.value}>{disp.label}</option>
                     ))}
                   </select>
                 </div>
               </div>
             </div>
+            )}
 
             {/* Call Center: Lead Source, Property Type, Work Type */}
             {isCallCenter && (
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
                 {/* Lead Source */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -1143,7 +1270,8 @@ export default function LeadWizard() {
 
             {/* Lead Details Section - Hidden for Call Center users */}
             {!isCallCenter && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
               {/* Lead Owner (read-only, shows logged in user) */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -1265,7 +1393,17 @@ export default function LeadWizard() {
                   <select
                     name="workType"
                     value={formData.workType}
-                    onChange={handleInputChange}
+                    onChange={(e) => {
+                      // Reset stage, status, disposition when work type changes
+                      handleInputChange(e);
+                      setFormData(prev => ({
+                        ...prev,
+                        workType: e.target.value,
+                        stage: '',
+                        status: 'New',
+                        leadDisposition: '',
+                      }));
+                    }}
                     className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent appearance-none"
                   >
                     <option value="">Select work type...</option>
@@ -1290,61 +1428,150 @@ export default function LeadWizard() {
                   className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
                 />
               </div>
+            </div>
 
-              {/* Rating - on same row as SalesRabbit */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Rating</label>
-                <div className="flex space-x-2">
-                  {RATINGS.map(rating => (
-                    <button
-                      key={rating.value}
-                      type="button"
-                      onClick={() => setFormData(prev => ({ ...prev, rating: rating.value }))}
-                      className={`flex-1 px-3 py-2.5 rounded-lg text-sm font-medium transition-all border-2 ${
-                        formData.rating === rating.value
-                          ? `${rating.color} border-current`
-                          : 'bg-gray-50 text-gray-600 border-gray-200 hover:border-gray-300'
-                      }`}
+            {/* Sales Rep Workflow - Dynamic Stage/Status/Disposition for Insurance and Retail */}
+            {showSalesRepWorkflow && (
+              <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 sm:p-6 mt-6">
+                <h3 className="text-sm font-semibold text-blue-800 mb-4 flex items-center">
+                  <Target className="w-4 h-4 mr-2" />
+                  {formData.workType} Lead Workflow
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  {/* Stage */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Stage <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      name="stage"
+                      value={formData.stage}
+                      onChange={(e) => {
+                        // Reset status and disposition when stage changes
+                        setFormData(prev => ({
+                          ...prev,
+                          stage: e.target.value,
+                          status: 'New',
+                          leadDisposition: '',
+                        }));
+                      }}
+                      className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
                     >
-                      {rating.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
+                      <option value="">Select stage...</option>
+                      {getStagesForWorkType(formData.workType).map(stage => (
+                        <option key={stage.value} value={stage.value}>{stage.label}</option>
+                      ))}
+                    </select>
+                  </div>
 
+                  {/* Status - Dynamic based on Stage */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Status <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      name="status"
+                      value={formData.status}
+                      onChange={(e) => {
+                        // Reset disposition when status changes
+                        setFormData(prev => ({
+                          ...prev,
+                          status: e.target.value,
+                          leadDisposition: '',
+                        }));
+                      }}
+                      disabled={!formData.stage}
+                      className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
+                    >
+                      <option value="New">Select status...</option>
+                      {getStatusesForStage(formData.workType, formData.stage).map(status => (
+                        <option key={status.value} value={status.value}>{status.label}</option>
+                      ))}
+                    </select>
+                    {formData.status && formData.status !== 'New' && (
+                      <span className={`inline-block mt-2 px-3 py-1 rounded-full text-xs font-medium ${getStatusStyle(formData.status)}`}>
+                        {formData.status}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Disposition - Dynamic based on Status */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      Disposition <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      name="leadDisposition"
+                      value={formData.leadDisposition}
+                      onChange={handleInputChange}
+                      disabled={!formData.status || formData.status === 'New'}
+                      className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
+                    >
+                      {getDispositionsForStatus(formData.workType, formData.status).map(disp => (
+                        <option key={disp.value} value={disp.value}>{disp.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Workflow Help Text */}
+                <p className="text-xs text-blue-600 mt-3">
+                  {formData.workType === 'Insurance' && 'Insurance leads follow: Lead Assigned → Prospect with claim filing workflow.'}
+                  {formData.workType === 'Retail' && 'Retail leads follow: Lead Assigned → Prospect with scheduling workflow.'}
+                </p>
+              </div>
+            )}
+
+            {/* Notes Section - Sales Rep Only */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mt-6">
               {/* Call Center Notes */}
-              <div className="md:col-span-2">
+              <div className="lg:col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Call Center Notes
+                  <span className="text-xs text-gray-400 ml-2">Use @ to mention users</span>
                 </label>
-                <textarea
-                  name="leadNotes"
+                <MentionTextarea
                   value={formData.leadNotes}
-                  onChange={handleInputChange}
+                  onChange={(val) => setFormData(prev => ({ ...prev, leadNotes: val }))}
                   rows={3}
-                  placeholder="Add call center notes..."
+                  placeholder="Add call center notes... Use @name to mention users"
                   className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
                 />
               </div>
 
-              {/* Job Notes - visible on account */}
-              <div className="md:col-span-2">
+              {/* Job Notes - visible on Job */}
+              <div className="lg:col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Job Notes
-                  <span className="text-xs text-gray-400 ml-2">(visible on account)</span>
+                  <span className="text-xs text-gray-400 ml-2">(visible on Job) Use @ to mention users</span>
                 </label>
-                <textarea
-                  name="description"
-                  value={formData.description}
-                  onChange={handleInputChange}
-                  rows={4}
-                  maxLength={5000}
-                  placeholder="Add job notes that will be visible on the account..."
+                <MentionTextarea
+                  value={formData.jobNotes}
+                  onChange={(val) => setFormData(prev => ({ ...prev, jobNotes: val }))}
+                  rows={3}
+                  placeholder="Add job notes that will be visible on the job... Use @name to mention users"
                   className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
                 />
-                <p className="text-xs text-gray-400 mt-1">{formData.description.length}/5000</p>
+                <p className="text-xs text-gray-400 mt-1">{(formData.jobNotes || '').length}/5000</p>
+              </div>
+
+              {/* Additional Information */}
+              <div className="lg:col-span-2">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Additional Information
+                  <span className="text-xs text-gray-400 ml-2">Use @ to mention users</span>
+                </label>
+                <MentionTextarea
+                  value={formData.description}
+                  onChange={(val) => setFormData(prev => ({ ...prev, description: val }))}
+                  rows={3}
+                  placeholder="Any additional information... Use @name to mention users"
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+                />
+                <p className="text-xs text-gray-400 mt-1">{(formData.description || '').length}/5000</p>
               </div>
             </div>
+            </>
             )}
 
             {/* Validation Warning for Qualify Step */}
@@ -1447,7 +1674,7 @@ export default function LeadWizard() {
             ) : (
               <>
                 {/* Summary Cards */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
                   {/* Contact Summary */}
                   <div className="bg-gray-50 rounded-lg p-4">
                     <h3 className="font-semibold text-gray-900 mb-3 flex items-center">
@@ -1871,7 +2098,7 @@ export default function LeadWizard() {
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
                   >
                     <option value="">Select a template (optional)</option>
-                    {smsTemplatesData?.templates?.map(template => (
+                    {smsTemplates.map(template => (
                       <option key={template.id} value={template.id}>{template.name}</option>
                     ))}
                   </select>
@@ -1947,7 +2174,7 @@ export default function LeadWizard() {
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white"
                   >
                     <option value="">Select a template (optional)</option>
-                    {emailTemplatesData?.templates?.map(template => (
+                    {emailTemplates.map(template => (
                       <option key={template.id} value={template.id}>{template.name}</option>
                     ))}
                   </select>

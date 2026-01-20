@@ -1,4 +1,6 @@
 import { NavLink, useLocation } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { attentionApi } from '../services/api';
 import {
   LayoutDashboard,
   Building2,
@@ -12,11 +14,21 @@ const mobileNavItems = [
   { path: '/', icon: LayoutDashboard, label: 'Home' },
   { path: '/leads', icon: UserPlus, label: 'Leads' },
   { path: '/jobs', icon: Briefcase, label: 'Jobs' },
-  { path: '/attention', icon: AlertCircle, label: 'Attention', badge: true },
+  { path: '/attention', icon: AlertCircle, label: 'Attention', showAttentionBadge: true },
 ];
 
-export default function MobileNav() {
+export default function MobileNav({ onMoreClick }) {
   const location = useLocation();
+
+  // Fetch attention queue count
+  const { data: attentionStats } = useQuery({
+    queryKey: ['attentionStats'],
+    queryFn: () => attentionApi.getStats(),
+    staleTime: 30000, // 30 seconds
+    refetchInterval: 60000, // Refresh every minute
+  });
+
+  const attentionCount = attentionStats?.total || attentionStats?.count || 0;
 
   const isActive = (path) => {
     if (path === '/') return location.pathname === '/';
@@ -40,9 +52,9 @@ export default function MobileNav() {
             >
               <div className="relative">
                 <Icon className="w-6 h-6" />
-                {item.badge && (
-                  <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold w-4 h-4 rounded-full flex items-center justify-center">
-                    3
+                {item.showAttentionBadge && attentionCount > 0 && (
+                  <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold min-w-[16px] h-4 px-1 rounded-full flex items-center justify-center">
+                    {attentionCount > 99 ? '99+' : attentionCount}
                   </span>
                 )}
               </div>
@@ -55,8 +67,8 @@ export default function MobileNav() {
         })}
 
         {/* More button that triggers sidebar */}
-        <NavLink
-          to="/more"
+        <button
+          onClick={onMoreClick}
           className={`flex flex-col items-center justify-center w-full h-full ${
             location.pathname.startsWith('/more') ||
             location.pathname.startsWith('/admin') ||
@@ -67,7 +79,7 @@ export default function MobileNav() {
         >
           <MoreHorizontal className="w-6 h-6" />
           <span className="text-xs mt-1 font-medium">More</span>
-        </NavLink>
+        </button>
       </div>
     </nav>
   );

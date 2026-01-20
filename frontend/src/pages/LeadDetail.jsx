@@ -10,6 +10,8 @@ import {
   PhoneIncoming, PhoneOutgoing, PhoneMissed, MailOpen, MessageCircle, Sparkles, Trophy
 } from 'lucide-react';
 import { LeadRankBadge, LeadScoreCard } from '../components/LeadRankBadge';
+import LoadingSpinner from '../components/LoadingSpinner';
+import MentionTextarea from '../components/MentionTextarea';
 
 // SMS Modal Component with Canned Responses
 function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {} }) {
@@ -1028,6 +1030,7 @@ export default function LeadDetail() {
           propertyType: data.propertyType || '',
           workType: data.workType || '',
           leadNotes: data.leadNotes || '',
+          jobNotes: data.jobNotes || '',
           salesRabbitUser: data.salesRabbitUser || '',
           tentativeAppointmentDate: data.tentativeAppointmentDate ? data.tentativeAppointmentDate.split('T')[0] : '',
           tentativeAppointmentTime: data.tentativeAppointmentTime || '',
@@ -1096,6 +1099,7 @@ export default function LeadDetail() {
       propertyType: lead.propertyType || '',
       workType: lead.workType || '',
       leadNotes: lead.leadNotes || '',
+      jobNotes: lead.jobNotes || '',
       salesRabbitUser: lead.salesRabbitUser || '',
       tentativeAppointmentDate: lead.tentativeAppointmentDate ? lead.tentativeAppointmentDate.split('T')[0] : '',
       tentativeAppointmentTime: lead.tentativeAppointmentTime || '',
@@ -1125,6 +1129,7 @@ export default function LeadDetail() {
       propertyType: lead.propertyType || '',
       workType: lead.workType || '',
       leadNotes: lead.leadNotes || '',
+      jobNotes: lead.jobNotes || '',
       salesRabbitUser: lead.salesRabbitUser || '',
       tentativeAppointmentDate: lead.tentativeAppointmentDate ? lead.tentativeAppointmentDate.split('T')[0] : '',
       tentativeAppointmentTime: lead.tentativeAppointmentTime || '',
@@ -1138,7 +1143,7 @@ export default function LeadDetail() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-panda-primary"></div>
+        <LoadingSpinner size="lg" message="Loading lead..." />
       </div>
     );
   }
@@ -1876,43 +1881,64 @@ export default function LeadDetail() {
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
           <FileText className="w-5 h-5 mr-2 text-panda-primary" />
-          Notes & Description
+          Notes
         </h2>
 
         {isEditing ? (
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
-              <textarea
-                name="description"
-                value={formData.description}
-                onChange={handleInputChange}
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Call Center Notes
+                <span className="text-xs text-gray-400 ml-2">Use @ to mention users</span>
+              </label>
+              <MentionTextarea
+                value={formData.leadNotes}
+                onChange={(val) => setFormData(prev => ({ ...prev, leadNotes: val }))}
                 rows={3}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
-                placeholder="General description of the lead..."
+                placeholder="Call center notes... Use @name to mention users"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Lead Notes</label>
-              <textarea
-                name="leadNotes"
-                value={formData.leadNotes}
-                onChange={handleInputChange}
-                rows={4}
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Job Notes
+                <span className="text-xs text-gray-400 ml-2">(visible on Job) Use @ to mention users</span>
+              </label>
+              <MentionTextarea
+                value={formData.jobNotes}
+                onChange={(val) => setFormData(prev => ({ ...prev, jobNotes: val }))}
+                rows={3}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
-                placeholder="Additional notes about this lead..."
+                placeholder="Job notes visible on the job... Use @name to mention users"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Additional Information
+                <span className="text-xs text-gray-400 ml-2">Use @ to mention users</span>
+              </label>
+              <MentionTextarea
+                value={formData.description}
+                onChange={(val) => setFormData(prev => ({ ...prev, description: val }))}
+                rows={3}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+                placeholder="Additional information... Use @name to mention users"
               />
             </div>
           </div>
         ) : (
           <div className="space-y-4">
             <div>
-              <h3 className="text-sm font-medium text-gray-500 mb-1">Description</h3>
-              <p className="text-gray-900 whitespace-pre-wrap">{lead.description || 'No description provided.'}</p>
+              <h3 className="text-sm font-medium text-gray-500 mb-1">Call Center Notes</h3>
+              <p className="text-gray-900 whitespace-pre-wrap">{lead.leadNotes || 'No call center notes.'}</p>
             </div>
             <div>
-              <h3 className="text-sm font-medium text-gray-500 mb-1">Lead Notes</h3>
-              <p className="text-gray-900 whitespace-pre-wrap">{lead.leadNotes || 'No notes available.'}</p>
+              <h3 className="text-sm font-medium text-gray-500 mb-1">Job Notes <span className="text-xs text-gray-400">(visible on Job)</span></h3>
+              <p className="text-gray-900 whitespace-pre-wrap">{lead.jobNotes || 'No job notes.'}</p>
+            </div>
+            <div>
+              <h3 className="text-sm font-medium text-gray-500 mb-1">Additional Information</h3>
+              <p className="text-gray-900 whitespace-pre-wrap">{lead.description || 'No additional information.'}</p>
             </div>
           </div>
         )}
