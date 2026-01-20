@@ -29,7 +29,7 @@ const SETUP_CATEGORIES = [
   { id: 'bamboogli', name: 'Bamboogli', icon: MessageSquare, description: 'SMS and email messaging', path: '/admin/bamboogli' },
   { id: 'callcenter', name: 'Call Center', icon: Phone, description: 'Call center configuration', path: '/admin/call-center' },
   { id: 'commissions', name: 'Commission Engine', icon: DollarSign, description: 'Commission rules and calculations', path: '/admin/commissions' },
-  { id: 'deleted', name: 'Deleted Records', icon: Trash2, description: 'Restore deleted records', path: '/admin/deleted' },
+  { id: 'deleted', name: 'Deleted Records', icon: Trash2, description: 'Restore deleted records', path: '/admin/deleted-records' },
   { id: 'help', name: 'Help Admin', icon: HelpCircle, description: 'Help articles and documentation', path: '/admin/help' },
   { id: 'integrations', name: 'Integrations', icon: Link2, description: 'Third-party integrations', path: '/admin/integrations' },
   { id: 'modules', name: 'Module Manager', icon: Layers, description: 'Configure system modules', path: '/admin/setup' },
