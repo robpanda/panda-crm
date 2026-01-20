@@ -1,0 +1,28 @@
+{
+  "name": "@panda-crm/accounts-service",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test",
+    "docker:build": "docker build -t panda-crm-accounts .",
+    "docker:run": "docker run -p 3001:3001 panda-crm-accounts"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.7.0",
+    "aws-jwt-verify": "^4.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "express-validator": "^7.0.1",
+    "helmet": "^7.1.0",
+    "morgan": "^1.10.0",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "pg": "^8.16.3",
+    "prisma": "^5.7.0"
+  }
+}

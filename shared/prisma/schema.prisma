@@ -160,6 +160,7 @@ model Lead {
   propertyType             String?             @map("property_type")
   workType                 String?             @map("work_type")
   leadNotes                String?             @map("lead_notes")
+  jobNotes                 String?             @map("job_notes")
   description              String?
   salesRabbitUser          String?             @map("sales_rabbit_user")
   title                    String?

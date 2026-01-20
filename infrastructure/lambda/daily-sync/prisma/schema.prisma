@@ -1,0 +1,4806 @@
+// Panda CRM Database Schema
+// PostgreSQL via Prisma ORM
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// CORE OBJECTS
+// ============================================================================
+
+model Account {
+  id            String  @id @default(cuid())
+  salesforceId  String? @unique @map("salesforce_id")
+  name          String
+  accountNumber String? @unique @map("account_number")
+
+  // Address
+  billingStreet      String? @map("billing_street")
+  billingCity        String? @map("billing_city")
+  billingState       String? @map("billing_state")
+  billingPostalCode  String? @map("billing_postal_code")
+  billingCountry     String? @map("billing_country")
+  shippingStreet     String? @map("shipping_street")
+  shippingCity       String? @map("shipping_city")
+  shippingState      String? @map("shipping_state")
+  shippingPostalCode String? @map("shipping_postal_code")
+  shippingCountry    String? @map("shipping_country")
+
+  // Geolocation (for route optimization)
+  latitude      Float?    @map("latitude")
+  longitude     Float?    @map("longitude")
+  geocodedAt    DateTime? @map("geocoded_at")
+  geocodeStatus String?   @map("geocode_status") // 'success', 'partial', 'failed', 'pending'
+
+  // Contact Info
+  phone   String?
+  email   String?
+  website String?
+
+  // Classification
+  type        AccountType   @default(RESIDENTIAL)
+  status      AccountStatus @default(NEW)
+  industry    String?
+  description String?       @db.Text
+
+  // Financial - Sales & Contract Totals
+  totalSalesVolume   Decimal? @map("total_sales_volume") @db.Decimal(12, 2)
+  totalContractValue Decimal? @map("total_contract_value") @db.Decimal(12, 2)
+
+  // Financial - Invoice Rollups (calculated from invoices)
+  totalInvoiceAmount  Decimal?  @map("total_invoice_amount") @db.Decimal(12, 2)
+  totalPaidAmount     Decimal?  @map("total_paid_amount") @db.Decimal(12, 2)
+  balanceDue          Decimal?  @map("balance_due") @db.Decimal(12, 2)
+  invoiceCount        Int?      @default(0) @map("invoice_count")
+  overdueInvoiceCount Int?      @default(0) @map("overdue_invoice_count")
+  totalOverdueAmount  Decimal?  @map("total_overdue_amount") @db.Decimal(12, 2)
+  collectedPercent    Decimal?  @map("collected_percent") @db.Decimal(5, 2)
+  lastPaymentDate     DateTime? @map("last_payment_date")
+
+  // Stripe Integration
+  stripeCustomerId String? @unique @map("stripe_customer_id")
+
+  // QuickBooks Integration
+  qbCustomerId String?     @unique @map("qb_customer_id")
+  qbSyncStatus SyncStatus? @map("qb_sync_status")
+  qbLastSyncAt DateTime?   @map("qb_last_sync_at")
+
+  // Flags
+  isPandaClaims Boolean @default(false) @map("is_panda_claims")
+  isSureClaims  Boolean @default(false) @map("is_sure_claims")
+
+  // Ownership
+  ownerId String? @map("owner_id")
+  owner   User?   @relation("AccountOwner", fields: [ownerId], references: [id])
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  contacts       Contact[]
+  opportunities  Opportunity[]
+  workOrders     WorkOrder[]
+  invoices       Invoice[]
+  cases          Case[]
+  notes          Note[]          @relation("AccountNotes")
+  emails         Email[]         @relation("AccountEmails")
+  notifications  Notification[]  @relation("AccountNotifications")
+  attentionItems AttentionItem[] @relation("AccountAttentionItems")
+
+  // Phase 4 Relations
+  callLogs           CallLog[]
+  measurementReports MeasurementReport[]
+  mobileActivities   MobileActivity[]
+
+  // Event & Email Relations
+  events        Event[]        @relation("AccountEvents")
+  emailMessages EmailMessage[] @relation("AccountEmails")
+
+  // Activity Feed
+  activities Activity[] @relation("AccountActivities")
+
+  @@index([status])
+  @@index([ownerId])
+  @@index([billingState])
+  @@map("accounts")
+}
+
+model Contact {
+  id           String  @id @default(cuid())
+  salesforceId String? @unique @map("salesforce_id")
+
+  // Name
+  firstName String  @map("first_name")
+  lastName  String  @map("last_name")
+  fullName  String? @map("full_name")
+
+  // Contact Info
+  email       String?
+  phone       String?
+  mobilePhone String? @map("mobile_phone")
+  smsNumber   String? @map("sms_number") // E.164 format for SMS
+
+  // Address
+  mailingStreet     String? @map("mailing_street")
+  mailingCity       String? @map("mailing_city")
+  mailingState      String? @map("mailing_state")
+  mailingPostalCode String? @map("mailing_postal_code")
+
+  // Professional
+  title      String?
+  department String?
+
+  // Preferences
+  smsOptOut              Boolean @default(false) @map("sms_opt_out")
+  emailOptOut            Boolean @default(false) @map("email_opt_out")
+  doNotCall              Boolean @default(false) @map("do_not_call")
+  preferredContactMethod String? @map("preferred_contact_method")
+
+  // Relations
+  accountId String?  @map("account_id")
+  account   Account? @relation(fields: [accountId], references: [id])
+  isPrimary Boolean  @default(false) @map("is_primary")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  opportunities  Opportunity[]   @relation("OpportunityContact")
+  messages       Message[]
+  notes          Note[]          @relation("ContactNotes")
+  emails         Email[]         @relation("ContactEmails")
+  notifications  Notification[]  @relation("ContactNotifications")
+  attentionItems AttentionItem[] @relation("ContactAttentionItems")
+
+  // Phase 4 Relations
+  callLogs CallLog[]
+
+  // Event & Email Relations
+  events        Event[]        @relation("ContactEvents")
+  emailMessages EmailMessage[] @relation("ContactEmails")
+
+  // Activity Feed
+  activities Activity[] @relation("ContactActivities")
+
+  @@index([accountId])
+  @@index([email])
+  @@index([smsNumber])
+  @@map("contacts")
+}
+
+model Lead {
+  id           String  @id @default(cuid())
+  salesforceId String? @unique @map("salesforce_id")
+
+  // Name
+  firstName String  @map("first_name")
+  lastName  String  @map("last_name")
+  company   String?
+
+  // Contact Info
+  email       String?
+  phone       String?
+  mobilePhone String? @map("mobile_phone")
+
+  // Address
+  street     String?
+  city       String?
+  state      String?
+  postalCode String? @map("postal_code")
+  country    String?
+
+  // Lead Info
+  status   LeadStatus  @default(NEW)
+  source   String?     @map("lead_source")
+  rating   LeadRating?
+  industry String?
+
+  // Scoring
+  score Int @default(0)
+
+  // Campaign
+  campaignId String? @map("campaign_id")
+
+  // Assignment
+  ownerId String? @map("owner_id")
+  owner   User?   @relation("LeadOwner", fields: [ownerId], references: [id])
+
+  // Self-Gen
+  isSelfGen    Boolean @default(false) @map("is_self_gen")
+  selfGenRepId String? @map("self_gen_rep_id")
+
+  // Conversion
+  isConverted            Boolean   @default(false) @map("is_converted")
+  convertedDate          DateTime? @map("converted_date")
+  convertedAccountId     String?   @map("converted_account_id")
+  convertedContactId     String?   @map("converted_contact_id")
+  convertedOpportunityId String?   @map("converted_opportunity_id")
+
+  // Lead Details
+  propertyType    String? @map("property_type") // Residential, Commercial, Property Management
+  workType        String? @map("work_type") // INSURANCE, RETAIL, INSPECTION
+  leadNotes       String? @map("lead_notes") // Call center notes
+  description     String? @db.Text // Job notes visible on account
+  salesRabbitUser String? @map("sales_rabbit_user")
+  title           String? // Job title
+
+  // Assignment Tracking
+  disposition      String? // Outcome disposition
+  assignedAt       DateTime? @map("assigned_at")
+  assignedById     String?   @map("assigned_by_id")
+  assignmentRuleId String?   @map("assignment_rule_id")
+
+  // Call Center - Tentative Appointment (per Setting A Lead SOP)
+  tentativeAppointmentDate DateTime? @map("tentative_appointment_date")
+  tentativeAppointmentTime String?   @map("tentative_appointment_time") // e.g., "09:00 AM"
+  leadSetById              String?   @map("lead_set_by_id") // Call center rep who set the lead
+  leadSetBy                User?     @relation("LeadSetByUser", fields: [leadSetById], references: [id])
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  notes          Note[]              @relation("LeadNotes")
+  tasks          Task[]              @relation("LeadTasks")
+  assignmentLogs LeadAssignmentLog[]
+  emails         Email[]             @relation("LeadEmails")
+  notifications  Notification[]      @relation("LeadNotifications")
+  attentionItems AttentionItem[]     @relation("LeadAttentionItems")
+
+  // Phase 4 Relations
+  callLogs CallLog[]
+
+  // Event & Email Relations
+  events        Event[]        @relation("LeadEvents")
+  emailMessages EmailMessage[] @relation("LeadEmails")
+
+  // Activity Feed
+  activities Activity[] @relation("LeadActivities")
+
+  @@index([status])
+  @@index([ownerId])
+  @@index([source])
+  @@index([isConverted])
+  @@index([workType])
+  @@map("leads")
+}
+
+model Opportunity {
+  id           String  @id @default(cuid())
+  salesforceId String? @unique @map("salesforce_id")
+
+  // Basic Info
+  name        String
+  description String?
+
+  // Stage & Status
+  stage       OpportunityStage @default(LEAD_UNASSIGNED)
+  status      String?
+  probability Int              @default(0)
+
+  // Dates
+  closeDate       DateTime? @map("close_date")
+  appointmentDate DateTime? @map("appointment_date")
+  soldDate        DateTime? @map("sold_date")
+
+  // Financial
+  amount        Decimal? @db.Decimal(12, 2)
+  contractTotal Decimal? @map("contract_total") @db.Decimal(12, 2)
+
+  // Type
+  type     OpportunityType @default(INSURANCE)
+  workType String?         @map("work_type")
+
+  // Source
+  leadSource String? @map("lead_source")
+  isSelfGen  Boolean @default(false) @map("is_self_gen")
+
+  // Address
+  street     String?
+  city       String?
+  state      String?
+  postalCode String? @map("postal_code")
+
+  // Insurance
+  isPandaClaims    Boolean   @default(false) @map("is_panda_claims")
+  isApproved       Boolean   @default(false) @map("is_approved")
+  claimNumber      String?   @map("claim_number")
+  claimFiledDate   DateTime? @map("claim_filed_date")
+  insuranceCarrier String?   @map("insurance_carrier")
+  rcvAmount        Decimal?  @map("rcv_amount") @db.Decimal(12, 2)
+  acvAmount        Decimal?  @map("acv_amount") @db.Decimal(12, 2)
+  deductible       Decimal?  @db.Decimal(12, 2)
+  supplementsTotal Decimal?  @map("supplements_total") @db.Decimal(12, 2)
+
+  // Service Request (per Creating A Service Request SOP)
+  serviceRequired    Boolean   @default(false) @map("service_required")
+  serviceComplete    Boolean   @default(false) @map("service_complete")
+  serviceRequestDate DateTime? @map("service_request_date")
+  serviceNotes       String?   @map("service_notes") @db.Text
+
+  // Relations
+  accountId String  @map("account_id")
+  account   Account @relation(fields: [accountId], references: [id])
+
+  contactId String?  @map("contact_id")
+  contact   Contact? @relation("OpportunityContact", fields: [contactId], references: [id])
+
+  ownerId String? @map("owner_id")
+  owner   User?   @relation("OpportunityOwner", fields: [ownerId], references: [id])
+
+  projectManagerId String? @map("project_manager_id")
+  projectManager   User?   @relation("OpportunityProjectManager", fields: [projectManagerId], references: [id])
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  quotes           Quote[]
+  orders           Order[]
+  workOrders       WorkOrder[]
+  materialOrders   MaterialOrder[]
+  serviceContract  ServiceContract?
+  commissions      Commission[]
+  notes            Note[]                @relation("OpportunityNotes")
+  tasks            Task[]                @relation("OpportunityTasks")
+  lineItems        OpportunityLineItem[]
+  emails           Email[]               @relation("OpportunityEmails")
+  notifications    Notification[]        @relation("OpportunityNotifications")
+  approvalRequests ApprovalRequest[]
+  attentionItems   AttentionItem[]       @relation("OpportunityAttentionItems")
+
+  // Phase 4 Relations
+  callLogs           CallLog[]
+  measurementReports MeasurementReport[]
+  mobileActivities   MobileActivity[]
+
+  // Event & Email Relations
+  events        Event[]        @relation("OpportunityEvents")
+  emailMessages EmailMessage[] @relation("OpportunityEmails")
+
+  // Activity Feed
+  activities Activity[] @relation("OpportunityActivities")
+
+  @@index([accountId])
+  @@index([ownerId])
+  @@index([stage])
+  @@index([closeDate])
+  @@index([projectManagerId])
+  @@map("opportunities")
+}
+
+model OpportunityLineItem {
+  id String @id @default(cuid())
+
+  // Product Info
+  name        String
+  description String?
+  productCode String? @map("product_code")
+
+  // Pricing
+  quantity   Int      @default(1)
+  unitPrice  Decimal  @map("unit_price") @db.Decimal(12, 2)
+  totalPrice Decimal  @map("total_price") @db.Decimal(12, 2)
+  discount   Decimal? @db.Decimal(12, 2)
+
+  // Sorting
+  sortOrder Int @default(0) @map("sort_order")
+
+  // Relations
+  opportunityId String      @map("opportunity_id")
+  opportunity   Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+
+  productId String?  @map("product_id")
+  product   Product? @relation(fields: [productId], references: [id])
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([opportunityId])
+  @@map("opportunity_line_items")
+}
+
+// ============================================================================
+// FIELD SERVICE
+// ============================================================================
+
+model WorkOrder {
+  id           String  @id @default(cuid())
+  salesforceId String? @unique @map("salesforce_id")
+
+  workOrderNumber String          @unique @map("work_order_number")
+  subject         String?
+  description     String?
+  status          WorkOrderStatus @default(NEW)
+  priority        Priority        @default(NORMAL)
+
+  // Relations
+  accountId String  @map("account_id")
+  account   Account @relation(fields: [accountId], references: [id])
+
+  opportunityId String?      @map("opportunity_id")
+  opportunity   Opportunity? @relation(fields: [opportunityId], references: [id])
+
+  workTypeId String?   @map("work_type_id")
+  workType   WorkType? @relation(fields: [workTypeId], references: [id])
+
+  territoryId String?           @map("territory_id")
+  territory   ServiceTerritory? @relation(fields: [territoryId], references: [id])
+
+  // Timestamps
+  startDate DateTime? @map("start_date")
+  endDate   DateTime? @map("end_date")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  serviceAppointments ServiceAppointment[]
+  materialOrders      MaterialOrder[]
+  notifications       Notification[]       @relation("WorkOrderNotifications")
+  attentionItems      AttentionItem[]      @relation("WorkOrderAttentionItems")
+
+  @@index([accountId])
+  @@index([opportunityId])
+  @@index([status])
+  @@map("work_orders")
+}
+
+model ServiceAppointment {
+  id           String  @id @default(cuid())
+  salesforceId String? @unique @map("salesforce_id")
+
+  appointmentNumber String            @unique @map("appointment_number")
+  subject           String?
+  description       String?
+  status            AppointmentStatus @default(NONE)
+
+  // Address (can differ from account)
+  street     String?
+  city       String?
+  state      String?
+  postalCode String? @map("postal_code")
+
+  // Geolocation (for route optimization)
+  latitude   Float?    @map("latitude")
+  longitude  Float?    @map("longitude")
+  geocodedAt DateTime? @map("geocoded_at")
+
+  // Travel time (from previous appointment in route)
+  travelTimeMinutes   Int?   @map("travel_time_minutes")
+  travelDistanceMiles Float? @map("travel_distance_miles")
+
+  // Scheduling
+  earliestStart  DateTime? @map("earliest_start")
+  dueDate        DateTime? @map("due_date")
+  scheduledStart DateTime? @map("scheduled_start")
+  scheduledEnd   DateTime? @map("scheduled_end")
+  actualStart    DateTime? @map("actual_start")
+  actualEnd      DateTime? @map("actual_end")
+  duration       Int? // minutes
+
+  // Google Calendar Integration
+  googleCalendarEventId String? @map("google_calendar_event_id")
+
+  // Relations
+  workOrderId String    @map("work_order_id")
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id])
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  assignedResources AssignedResource[]
+
+  @@index([workOrderId])
+  @@index([status])
+  @@index([scheduledStart])
+  @@map("service_appointments")
+}
+
+model ServiceResource {
+  id           String  @id @default(cuid())
+  salesforceId String? @unique @map("salesforce_id")
+
+  name         String
+  resourceType ResourceType @default(TECHNICIAN)
+  isActive     Boolean      @default(true) @map("is_active")
+
+  // Contact info
+  email String?
+  phone String?
+
+  // Google Calendar Integration
+  googleCalendarId          String?   @map("google_calendar_id")
+  googleCalendarSyncEnabled Boolean   @default(false) @map("google_calendar_sync_enabled")
+  googleCalendarConnected   Boolean   @default(false) @map("google_calendar_connected")
+  googleAccessToken         String?   @map("google_access_token")
+  googleRefreshToken        String?   @map("google_refresh_token")
+  googleTokenExpiry         DateTime? @map("google_token_expiry")
+
+  // User link (if internal employee)
+  userId String? @unique @map("user_id")
+  user   User?   @relation(fields: [userId], references: [id])
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  assignments      AssignedResource[]
+  territoryMembers ServiceTerritoryMember[]
+  absences         ResourceAbsence[]
+
+  // Phase 4 Relations
+  capacities    ResourceCapacity[]
+  skills        ResourceSkill[]
+  capacityPlans ResourceCapacityPlan[]
+
+  @@index([resourceType])
+  @@index([isActive])
+  @@map("service_resources")
+}
+
+model AssignedResource {
+  id String @id @default(cuid())
+
+  serviceAppointmentId String             @map("service_appointment_id")
+  serviceAppointment   ServiceAppointment @relation(fields: [serviceAppointmentId], references: [id])
+
+  serviceResourceId String          @map("service_resource_id")
+  serviceResource   ServiceResource @relation(fields: [serviceResourceId], references: [id])
+
+  isPrimaryResource Boolean @default(false) @map("is_primary_resource")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([serviceAppointmentId, serviceResourceId])
+  @@map("assigned_resources")
+}
+
+model ServiceTerritory {
+  id           String  @id @default(cuid())
+  salesforceId String? @unique @map("salesforce_id")
+
+  name        String
+  description String?
+  isActive    Boolean @default(true) @map("is_active")
+
+  // Geographic
+  state       String?
+  city        String?
+  postalCodes String[] @map("postal_codes")
+
+  // Operating Hours
+  operatingHoursId String?         @map("operating_hours_id")
+  operatingHours   OperatingHours? @relation(fields: [operatingHoursId], references: [id])
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  members    ServiceTerritoryMember[]
+  workOrders WorkOrder[]
+
+  // Phase 4 Relations
+  scheduleOptimizations ScheduleOptimization[]
+
+  @@map("service_territories")
+}
+
+model ServiceTerritoryMember {
+  id String @id @default(cuid())
+
+  territoryId String           @map("territory_id")
+  territory   ServiceTerritory @relation(fields: [territoryId], references: [id])
+
+  resourceId String          @map("resource_id")
+  resource   ServiceResource @relation(fields: [resourceId], references: [id])
+
+  isPrimary          Boolean   @default(false) @map("is_primary")
+  effectiveStartDate DateTime? @map("effective_start_date")
+  effectiveEndDate   DateTime? @map("effective_end_date")
+
+  @@unique([territoryId, resourceId])
+  @@map("service_territory_members")
+}
+
+model WorkType {
+  id           String  @id @default(cuid())
+  salesforceId String? @unique @map("salesforce_id")
+
+  name              String
+  description       String?
+  estimatedDuration Int?    @map("estimated_duration") // minutes
+
+  // Relations
+  workOrders WorkOrder[]
+
+  @@map("work_types")
+}
+
+model OperatingHours {
+  id       String @id @default(cuid())
+  name     String
+  timeZone String @default("America/New_York") @map("time_zone")
+
+  // Relations
+  timeSlots   TimeSlot[]
+  territories ServiceTerritory[]
+
+  @@map("operating_hours")
+}
+
+model TimeSlot {
+  id String @id @default(cuid())
+
+  operatingHoursId String         @map("operating_hours_id")
+  operatingHours   OperatingHours @relation(fields: [operatingHoursId], references: [id])
+
+  dayOfWeek Int    @map("day_of_week") // 0=Sunday, 6=Saturday
+  startTime String @map("start_time") // "08:00"
+  endTime   String @map("end_time") // "18:00"
+
+  @@map("time_slots")
+}
+
+model ResourceAbsence {
+  id String @id @default(cuid())
+
+  resourceId String          @map("resource_id")
+  resource   ServiceResource @relation(fields: [resourceId], references: [id])
+
+  type        AbsenceType @default(VACATION)
+  start       DateTime
+  end         DateTime
+  description String?
+
+  @@map("resource_absences")
+}
+
+model Skill {
+  id          String  @id @default(cuid())
+  name        String  @unique
+  description String?
+
+  // Relations
+  resources ResourceSkill[]
+
+  @@map("skills")
+}
+
+model ResourceSkill {
+  id String @id @default(cuid())
+
+  resourceId String          @map("resource_id")
+  resource   ServiceResource @relation(fields: [resourceId], references: [id])
+
+  skillId String @map("skill_id")
+  skill   Skill  @relation(fields: [skillId], references: [id])
+
+  level SkillLevel @default(INTERMEDIATE)
+
+  @@unique([resourceId, skillId])
+  @@map("resource_skills")
+}
+
+// ============================================================================
+// ROUTE OPTIMIZATION
+// ============================================================================
+
+model DistanceCache {
+  id String @id @default(cuid())
+
+  // Origin and destination as lat/lon pairs (rounded to 4 decimals for clustering)
+  originLat Float @map("origin_lat")
+  originLon Float @map("origin_lon")
+  destLat   Float @map("dest_lat")
+  destLon   Float @map("dest_lon")
+
+  // Cached results
+  distanceMeters  Int @map("distance_meters")
+  durationSeconds Int @map("duration_seconds")
+
+  // Cache metadata
+  provider  String   @default("google") // 'google', 'osrm', 'mapbox'
+  createdAt DateTime @default(now()) @map("created_at")
+  expiresAt DateTime @map("expires_at") // Refresh cache periodically
+
+  @@unique([originLat, originLon, destLat, destLon, provider])
+  @@index([originLat, originLon])
+  @@index([destLat, destLon])
+  @@map("distance_cache")
+}
+
+model SchedulingPolicy {
+  id String @id @default(cuid())
+
+  name        String  @unique
+  description String?
+  isDefault   Boolean @default(false) @map("is_default")
+  isActive    Boolean @default(true) @map("is_active")
+
+  // Constraint weights (0-100, higher = more important)
+  weightCustomerPreference  Int @default(80) @map("weight_customer_preference")
+  weightSkillMatch          Int @default(90) @map("weight_skill_match")
+  weightTravelDistance      Int @default(70) @map("weight_travel_distance")
+  weightResourceUtilization Int @default(60) @map("weight_resource_utilization")
+  weightSameDayCompletion   Int @default(50) @map("weight_same_day_completion")
+  weightPriority            Int @default(85) @map("weight_priority")
+
+  // Hard constraints
+  requireExactSkillMatch  Boolean @default(false) @map("require_exact_skill_match")
+  requireSameTerritory    Boolean @default(true) @map("require_same_territory")
+  allowOvertimeScheduling Boolean @default(false) @map("allow_overtime_scheduling")
+
+  // Limits
+  maxTravelTimeMinutes  Int @default(60) @map("max_travel_time_minutes")
+  maxAppointmentsPerDay Int @default(8) @map("max_appointments_per_day")
+  minBufferMinutes      Int @default(15) @map("min_buffer_minutes") // Between appointments
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("scheduling_policies")
+}
+
+model ResourceCapacityPlan {
+  id String @id @default(cuid())
+
+  resourceId String          @map("resource_id")
+  resource   ServiceResource @relation(fields: [resourceId], references: [id])
+
+  date DateTime @db.Date
+
+  // Capacity in minutes
+  plannedCapacity  Int @default(480) @map("planned_capacity") // 8 hours default
+  scheduledMinutes Int @default(0) @map("scheduled_minutes")
+  travelMinutes    Int @default(0) @map("travel_minutes")
+  availableMinutes Int @default(480) @map("available_minutes")
+
+  // Utilization metrics
+  targetUtilization Float @default(0.75) @map("target_utilization") // 75%
+  actualUtilization Float @default(0) @map("actual_utilization")
+
+  // Appointment counts
+  appointmentCount Int @default(0) @map("appointment_count")
+  completedCount   Int @default(0) @map("completed_count")
+
+  // Timestamps
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([resourceId, date])
+  @@index([date])
+  @@map("resource_capacity_plans")
+}
+
+// ============================================================================
+// FINANCIAL
+// ============================================================================
+
+model Quote {
+  id           String  @id @default(cuid())
+  salesforceId String? @unique @map("salesforce_id")
+
+  quoteNumber String      @unique @map("quote_number")
+  name        String
+  status      QuoteStatus @default(DRAFT)
+
+  // Dates
+  expirationDate DateTime? @map("expiration_date")
+
+  // Totals
+  subtotal Decimal @default(0) @db.Decimal(12, 2)
+  discount Decimal @default(0) @db.Decimal(12, 2)
+  tax      Decimal @default(0) @db.Decimal(12, 2)
+  total    Decimal @default(0) @db.Decimal(12, 2)
+
+  // Type
+  isPmQuote Boolean @default(false) @map("is_pm_quote")
+
+  // Relations
+  opportunityId String      @map("opportunity_id")
+  opportunity   Opportunity @relation(fields: [opportunityId], references: [id])
+
+  pricebookId String?    @map("pricebook_id")
+  pricebook   Pricebook? @relation("QuotePricebook", fields: [pricebookId], references: [id])
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  lineItems        QuoteLineItem[]
+  approvalRequests ApprovalRequest[]
+  attentionItems   AttentionItem[]   @relation("QuoteAttentionItems")
+
+  @@index([opportunityId])
+  @@index([status])
+  @@map("quotes")
+}
+
+model QuoteLineItem {
+  id String @id @default(cuid())
+
+  quoteId String @map("quote_id")
+  quote   Quote  @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+
+  productId String?  @map("product_id")
+  product   Product? @relation(fields: [productId], references: [id])
+
+  description String?
+  quantity    Decimal @default(1) @db.Decimal(10, 2)
+  unitPrice   Decimal @map("unit_price") @db.Decimal(12, 2)
+  discount    Decimal @default(0) @db.Decimal(12, 2)
+  totalPrice  Decimal @map("total_price") @db.Decimal(12, 2)
+
+  sortOrder Int @default(0) @map("sort_order")
+
+  @@index([quoteId])
+  @@map("quote_line_items")
+}
+
+model Order {
+  id           String  @id @default(cuid())
+  salesforceId String? @unique @map("salesforce_id")
+
+  orderNumber String      @unique @map("order_number")
+  status      OrderStatus @default(DRAFT)
+  type        OrderType   @default(STANDARD)
+
+  // Dates
+  effectiveDate DateTime? @map("effective_date")
+
+  // Totals
+  subtotal Decimal @default(0) @db.Decimal(12, 2)
+  tax      Decimal @default(0) @db.Decimal(12, 2)
+  total    Decimal @default(0) @db.Decimal(12, 2)
+
+  // Delivery
+  deliveryDate DateTime? @map("delivery_date")
+
+  // ABC Supply
+  abcConfirmationNumber String?   @map("abc_confirmation_number")
+  abcOrderNumber        String?   @map("abc_order_number")
+  abcStatus             String?   @map("abc_status")
+  abcShipmentNumber     String?   @map("abc_shipment_number")
+  abcShipmentStatus     String?   @map("abc_shipment_status")
+  abcTrackingId         String?   @map("abc_tracking_id")
+  abcProofOfDeliveryUrl String?   @map("abc_proof_of_delivery_url")
+  abcLastUpdate         DateTime? @map("abc_last_update")
+
+  // Relations
+  opportunityId String?      @map("opportunity_id")
+  opportunity   Opportunity? @relation(fields: [opportunityId], references: [id])
+
+  accountId String @map("account_id")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  lineItems        OrderLineItem[]
+  materialOrders   MaterialOrder[]
+  approvalRequests ApprovalRequest[]
+
+  @@index([opportunityId])
+  @@index([status])
+  @@map("orders")
+}
+
+model OrderLineItem {
+  id String @id @default(cuid())
+
+  orderId String @map("order_id")
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  productId String?  @map("product_id")
+  product   Product? @relation(fields: [productId], references: [id])
+
+  productName String? @map("product_name")
+  description String?
+  quantity    Decimal @default(1) @db.Decimal(10, 2)
+  unitPrice   Decimal @map("unit_price") @db.Decimal(12, 2)
+  totalPrice  Decimal @map("total_price") @db.Decimal(12, 2)
+  uom         String? // Unit of measure (EA, SQ, LF, etc.)
+
+  // ABC Supply
+  abcItemNumber String? @map("abc_item_number")
+
+  @@index([orderId])
+  @@map("order_line_items")
+}
+
+// ============================================================================
+// MATERIAL ORDERS (AccuLynx-style W/O/D tracking)
+// ============================================================================
+
+model MaterialOrder {
+  id                  String @id @default(cuid())
+  materialOrderNumber String @unique @map("material_order_number")
+
+  // Status tracking (W/O/D)
+  materialStatus MaterialStatus @default(WAITING) @map("material_status")
+
+  // Supplier info
+  supplierId          String?   @map("supplier_id")
+  supplier            Supplier? @relation(fields: [supplierId], references: [id])
+  supplierOrderNumber String?   @map("supplier_order_number") // Their PO/order number
+
+  // Delivery scheduling
+  deliveryType       DeliveryType        @default(DELIVERY) @map("delivery_type")
+  deliveryDate       DateTime?           @map("delivery_date")
+  deliveryTimeWindow DeliveryTimeWindow? @map("delivery_time_window")
+  actualDeliveryDate DateTime?           @map("actual_delivery_date")
+  deliveryNotes      String?             @map("delivery_notes")
+
+  // Address (delivery location - usually job site)
+  deliveryStreet     String? @map("delivery_street")
+  deliveryCity       String? @map("delivery_city")
+  deliveryState      String? @map("delivery_state")
+  deliveryPostalCode String? @map("delivery_postal_code")
+
+  // Financial
+  estimatedCost Decimal? @map("estimated_cost") @db.Decimal(12, 2)
+  actualCost    Decimal? @map("actual_cost") @db.Decimal(12, 2)
+
+  // ABC Supply Integration
+  abcConfirmationNumber String?   @map("abc_confirmation_number")
+  abcOrderNumber        String?   @map("abc_order_number")
+  abcStatus             String?   @map("abc_status")
+  abcShipmentNumber     String?   @map("abc_shipment_number")
+  abcTrackingId         String?   @map("abc_tracking_id")
+  abcProofOfDeliveryUrl String?   @map("abc_proof_of_delivery_url")
+  abcLastUpdate         DateTime? @map("abc_last_update")
+
+  // Relations to core objects
+  workOrderId String    @map("work_order_id")
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id])
+
+  opportunityId String?      @map("opportunity_id")
+  opportunity   Opportunity? @relation(fields: [opportunityId], references: [id])
+
+  accountId String? @map("account_id")
+
+  // Link to sales order (if created from quote/order)
+  orderId String? @map("order_id")
+  order   Order?  @relation(fields: [orderId], references: [id])
+
+  // Person who placed order
+  orderedById String?   @map("ordered_by_id")
+  orderedBy   User?     @relation("MaterialOrdersPlaced", fields: [orderedById], references: [id])
+  orderedAt   DateTime? @map("ordered_at")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  lineItems MaterialOrderLineItem[]
+
+  @@index([workOrderId])
+  @@index([opportunityId])
+  @@index([materialStatus])
+  @@index([deliveryDate])
+  @@index([supplierId])
+  @@map("material_orders")
+}
+
+model MaterialOrderLineItem {
+  id String @id @default(cuid())
+
+  materialOrderId String        @map("material_order_id")
+  materialOrder   MaterialOrder @relation(fields: [materialOrderId], references: [id], onDelete: Cascade)
+
+  productId String?  @map("product_id")
+  product   Product? @relation(fields: [productId], references: [id])
+
+  // Item details
+  description String
+  sku         String? // Supplier SKU
+  quantity    Decimal  @default(1) @db.Decimal(10, 2)
+  unit        String? // SQ, LF, EA, etc.
+  unitPrice   Decimal? @map("unit_price") @db.Decimal(12, 2)
+  totalPrice  Decimal? @map("total_price") @db.Decimal(12, 2)
+
+  // Status for individual item
+  itemStatus       MaterialStatus @default(WAITING) @map("item_status")
+  receivedQuantity Decimal?       @map("received_quantity") @db.Decimal(10, 2)
+  receivedAt       DateTime?      @map("received_at")
+
+  @@index([materialOrderId])
+  @@map("material_order_line_items")
+}
+
+model Supplier {
+  id String @id @default(cuid())
+
+  name String
+  code String? @unique // Short code like ABC, SRS
+
+  // Contact info
+  phone   String?
+  email   String?
+  website String?
+
+  // Address
+  street     String?
+  city       String?
+  state      String?
+  postalCode String? @map("postal_code")
+
+  // Account info for ordering
+  accountNumber String? @map("account_number") // Our account number with them
+  shipToAccount String? @map("ship_to_account") // e.g., ABC ship-to: 2097770-2
+
+  // Integration flags
+  isAbcSupply       Boolean @default(false) @map("is_abc_supply")
+  isSrsDistribution Boolean @default(false) @map("is_srs_distribution")
+  isActive          Boolean @default(true) @map("is_active")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  materialOrders MaterialOrder[]
+
+  @@index([isActive])
+  @@map("suppliers")
+}
+
+model Product {
+  id           String  @id @default(cuid())
+  salesforceId String? @unique @map("salesforce_id")
+
+  name        String
+  productCode String? @unique @map("product_code")
+  description String?
+  family      String? // Product Family: Roofing, Siding, Labor, etc.
+  category    String?
+
+  unitPrice Decimal? @map("unit_price") @db.Decimal(12, 2)
+  isActive  Boolean  @default(true) @map("is_active")
+
+  // QuickBooks
+  qbProductId String? @map("qb_product_id")
+
+  // ABC Supply
+  abcProductId String? @map("abc_product_id")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  quoteLineItems         QuoteLineItem[]
+  orderLineItems         OrderLineItem[]
+  materialOrderLineItems MaterialOrderLineItem[]
+  pricebookEntries       PricebookEntry[]
+  opportunityLineItems   OpportunityLineItem[]
+
+  @@index([family])
+  @@index([isActive])
+  @@map("products")
+}
+
+model Pricebook {
+  id           String  @id @default(cuid())
+  salesforceId String? @unique @map("salesforce_id")
+
+  name        String
+  description String?
+  isActive    Boolean @default(true) @map("is_active")
+  isStandard  Boolean @default(false) @map("is_standard") // Standard Price Book
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  entries PricebookEntry[]
+  quotes  Quote[]          @relation("QuotePricebook")
+
+  @@index([isActive])
+  @@map("pricebooks")
+}
+
+model PricebookEntry {
+  id           String  @id @default(cuid())
+  salesforceId String? @unique @map("salesforce_id")
+
+  // Relations
+  pricebookId String    @map("pricebook_id")
+  pricebook   Pricebook @relation(fields: [pricebookId], references: [id], onDelete: Cascade)
+
+  productId String  @map("product_id")
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  // Pricing
+  unitPrice        Decimal @map("unit_price") @db.Decimal(12, 2)
+  useStandardPrice Boolean @default(false) @map("use_standard_price")
+  isActive         Boolean @default(true) @map("is_active")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([pricebookId, productId])
+  @@index([pricebookId])
+  @@index([productId])
+  @@map("pricebook_entries")
+}
+
+model Invoice {
+  id           String  @id @default(cuid())
+  salesforceId String? @unique @map("salesforce_id")
+
+  invoiceNumber String        @unique @map("invoice_number")
+  status        InvoiceStatus @default(DRAFT)
+
+  // Dates
+  invoiceDate DateTime? @map("invoice_date")
+  dueDate     DateTime? @map("due_date")
+  terms       Int       @default(30) // days
+
+  // Amounts
+  subtotal   Decimal @default(0) @db.Decimal(12, 2)
+  tax        Decimal @default(0) @db.Decimal(12, 2)
+  total      Decimal @default(0) @db.Decimal(12, 2)
+  amountPaid Decimal @default(0) @map("amount_paid") @db.Decimal(12, 2)
+  balanceDue Decimal @default(0) @map("balance_due") @db.Decimal(12, 2)
+
+  // Stripe Integration
+  stripeInvoiceId        String? @unique @map("stripe_invoice_id")
+  stripePaymentLinkId    String? @map("stripe_payment_link_id")
+  stripePaymentLinkUrl   String? @map("stripe_payment_link_url")
+  stripeHostedInvoiceUrl String? @map("stripe_hosted_invoice_url")
+
+  // QuickBooks
+  qbInvoiceId  String?     @map("qb_invoice_id")
+  qbDocNumber  String?     @map("qb_doc_number")
+  qbSyncStatus SyncStatus? @map("qb_sync_status")
+  qbLastSyncAt DateTime?   @map("qb_last_sync_at")
+  qbSyncError  String?     @map("qb_sync_error")
+
+  // Relations
+  accountId String  @map("account_id")
+  account   Account @relation(fields: [accountId], references: [id])
+
+  // Link to Service Contract (for contract-based invoices)
+  serviceContractId String?          @map("service_contract_id")
+  serviceContract   ServiceContract? @relation(fields: [serviceContractId], references: [id])
+
+  // Link to Opportunity (for direct opportunity invoices)
+  opportunityId String? @map("opportunity_id")
+
+  // PM Quote flag (for separating commission calculations)
+  isPmInvoice Boolean @default(false) @map("is_pm_invoice")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  payments       Payment[]
+  lineItems      InvoiceLineItem[]
+  attentionItems AttentionItem[]   @relation("InvoiceAttentionItems")
+
+  @@index([accountId])
+  @@index([serviceContractId])
+  @@index([opportunityId])
+  @@index([status])
+  @@index([dueDate])
+  @@index([stripeInvoiceId])
+  @@map("invoices")
+}
+
+model InvoiceLineItem {
+  id String @id @default(cuid())
+
+  invoiceId String  @map("invoice_id")
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  description String
+  quantity    Decimal @default(1) @db.Decimal(10, 2)
+  unitPrice   Decimal @map("unit_price") @db.Decimal(12, 2)
+  totalPrice  Decimal @map("total_price") @db.Decimal(12, 2)
+
+  @@map("invoice_line_items")
+}
+
+model Payment {
+  id           String  @id @default(cuid())
+  salesforceId String? @unique @map("salesforce_id")
+
+  paymentNumber String        @unique @map("payment_number")
+  amount        Decimal       @db.Decimal(12, 2)
+  paymentDate   DateTime      @map("payment_date")
+  paymentMethod PaymentMethod @default(CHECK) @map("payment_method")
+  status        PaymentStatus @default(PENDING)
+
+  referenceNumber String? @map("reference_number")
+  notes           String?
+
+  // Stripe Integration
+  stripePaymentIntentId String? @unique @map("stripe_payment_intent_id")
+  stripeChargeId        String? @map("stripe_charge_id")
+  stripeReceiptUrl      String? @map("stripe_receipt_url")
+  stripePaymentMethodId String? @map("stripe_payment_method_id")
+  stripeRefundId        String? @map("stripe_refund_id")
+  stripeFailureCode     String? @map("stripe_failure_code")
+  stripeFailureMessage  String? @map("stripe_failure_message")
+
+  // QuickBooks
+  qbPaymentId  String?     @map("qb_payment_id")
+  qbSyncStatus SyncStatus? @map("qb_sync_status")
+  qbLastSyncAt DateTime?   @map("qb_last_sync_at")
+  qbSyncError  String?     @map("qb_sync_error")
+
+  // Relations
+  invoiceId String  @map("invoice_id")
+  invoice   Invoice @relation(fields: [invoiceId], references: [id])
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([invoiceId])
+  @@index([stripePaymentIntentId])
+  @@index([status])
+  @@map("payments")
+}
+
+// Payment Link - For sharing pay links with customers
+model PaymentLink {
+  id String @id @default(cuid())
+
+  stripePaymentLinkId String @unique @map("stripe_payment_link_id")
+  url                 String
+
+  amount      Decimal @db.Decimal(12, 2)
+  description String?
+
+  status PaymentLinkStatus @default(ACTIVE)
+
+  // Metadata
+  expiresAt DateTime? @map("expires_at")
+  maxUses   Int?      @map("max_uses")
+  timesUsed Int       @default(0) @map("times_used")
+
+  // Relations
+  accountId String? @map("account_id")
+  invoiceId String? @map("invoice_id")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([accountId])
+  @@index([status])
+  @@map("payment_links")
+}
+
+// Payment Schedule - For recurring/scheduled payments
+model PaymentSchedule {
+  id String @id @default(cuid())
+
+  // Stripe Subscription
+  stripeSubscriptionId String? @unique @map("stripe_subscription_id")
+
+  name      String
+  amount    Decimal          @db.Decimal(12, 2)
+  frequency PaymentFrequency @default(MONTHLY)
+
+  status ScheduleStatus @default(PENDING)
+
+  // Dates
+  startDate       DateTime  @map("start_date")
+  endDate         DateTime? @map("end_date")
+  nextPaymentDate DateTime? @map("next_payment_date")
+  lastPaymentDate DateTime? @map("last_payment_date")
+
+  // Payment Count
+  totalPayments     Int? @map("total_payments") // null = indefinite
+  completedPayments Int  @default(0) @map("completed_payments")
+
+  // Relations
+  accountId String  @map("account_id")
+  invoiceId String? @map("invoice_id")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([accountId])
+  @@index([status])
+  @@index([nextPaymentDate])
+  @@map("payment_schedules")
+}
+
+model ServiceContract {
+  id           String  @id @default(cuid())
+  salesforceId String? @unique @map("salesforce_id")
+
+  contractNumber String         @unique @map("contract_number")
+  name           String
+  status         ContractStatus @default(DRAFT)
+
+  // Dates
+  startDate DateTime? @map("start_date")
+  endDate   DateTime? @map("end_date")
+
+  // Totals
+  contractTotal             Decimal  @map("contract_total") @db.Decimal(12, 2)
+  salesTotalPrice           Decimal? @map("sales_total_price") @db.Decimal(12, 2)
+  supplementsClosedTotal    Decimal? @map("supplements_closed_total") @db.Decimal(12, 2)
+  supplementsCommissionable Boolean  @default(false) @map("supplements_commissionable")
+
+  // Collection Tracking
+  collectedPercent Decimal? @map("collected_percent") @db.Decimal(5, 2) // For 30% trigger
+  paidAmount       Decimal? @map("paid_amount") @db.Decimal(12, 2)
+  balanceDue       Decimal? @map("balance_due") @db.Decimal(12, 2)
+
+  // Owner Commission Rates (copied from User on creation)
+  preCommissionRate Decimal? @map("pre_commission_rate") @db.Decimal(5, 2)
+  companyLeadRate   Decimal? @map("company_lead_rate") @db.Decimal(5, 2)
+  selfGenRate       Decimal? @map("self_gen_rate") @db.Decimal(5, 2)
+  commissionRate    Decimal? @map("commission_rate") @db.Decimal(5, 2)
+  x5050Split        Boolean  @default(false) @map("x50_50_split")
+
+  // Management Hierarchy (User IDs)
+  managerId         String? @map("manager_id")
+  regionalManagerId String? @map("regional_manager_id")
+  directorId        String? @map("director_id")
+  executiveId       String? @map("executive_id")
+
+  // Override Rates (copied from hierarchy users)
+  managerOverride   Decimal? @map("manager_override") @db.Decimal(5, 2)
+  regionalOverride  Decimal? @map("regional_override") @db.Decimal(5, 2)
+  directorOverride  Decimal? @map("director_override") @db.Decimal(5, 2)
+  executiveOverride Decimal? @map("executive_override") @db.Decimal(5, 2)
+
+  // PM
+  isPmContract Boolean @default(false) @map("is_pm_contract")
+
+  // Owner
+  ownerId String? @map("owner_id")
+
+  // Flags
+  backEndCommissionReady   Boolean   @default(false) @map("back_end_commission_ready")
+  pandaClaimsOnboardedDate DateTime? @map("panda_claims_onboarded_date")
+
+  // Relations
+  opportunityId String      @unique @map("opportunity_id")
+  opportunity   Opportunity @relation(fields: [opportunityId], references: [id])
+
+  accountId String @map("account_id")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  commissions Commission[]
+  invoices    Invoice[]
+
+  @@index([ownerId])
+  @@index([managerId])
+  @@index([accountId])
+  @@map("service_contracts")
+}
+
+model Commission {
+  id           String  @id @default(cuid())
+  salesforceId String? @unique @map("salesforce_id")
+  name         String? // Commission name/reference
+
+  type   CommissionType   @map("commission_type")
+  status CommissionStatus @default(NEW)
+
+  commissionValue     Decimal  @map("commission_value") @db.Decimal(12, 2)
+  commissionRate      Decimal  @map("commission_rate") @db.Decimal(5, 2)
+  commissionAmount    Decimal  @map("commission_amount") @db.Decimal(12, 2)
+  requestedAmount     Decimal? @map("requested_amount") @db.Decimal(12, 2) // = (Value * Rate) - PreCommission
+  preCommissionAmount Decimal? @map("pre_commission_amount") @db.Decimal(12, 2)
+  paidAmount          Decimal? @map("paid_amount") @db.Decimal(12, 2)
+
+  notes        String? // Admin notes for status changes
+  holdReason   String? @map("hold_reason") // Reason for HOLD status
+  deniedReason String? @map("denied_reason") // Reason for DENIED status
+
+  // Lead Type Tracking
+  isCompanyLead Boolean @default(false) @map("is_company_lead")
+  isSelfGen     Boolean @default(false) @map("is_self_gen")
+
+  // Parent Commission (for Payroll Adjustments)
+  parentCommissionId String?      @map("parent_commission_id")
+  parentCommission   Commission?  @relation("PayrollAdjustments", fields: [parentCommissionId], references: [id])
+  payrollAdjustments Commission[] @relation("PayrollAdjustments")
+
+  // Relations
+  ownerId String @map("owner_id")
+  owner   User   @relation(fields: [ownerId], references: [id])
+
+  opportunityId String?      @map("opportunity_id")
+  opportunity   Opportunity? @relation(fields: [opportunityId], references: [id])
+
+  serviceContractId String?          @map("service_contract_id")
+  serviceContract   ServiceContract? @relation(fields: [serviceContractId], references: [id])
+
+  // Timestamps
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  requestedDate DateTime? @map("requested_date")
+  approvedDate  DateTime? @map("approved_date")
+  paidDate      DateTime? @map("paid_date")
+  holdDate      DateTime? @map("hold_date")
+  deniedDate    DateTime? @map("denied_date")
+
+  // Approval Relations
+  approvalRequests ApprovalRequest[]
+
+  @@index([ownerId])
+  @@index([status])
+  @@index([type])
+  @@index([createdAt])
+  @@index([serviceContractId])
+  @@index([parentCommissionId])
+  @@map("commissions")
+}
+
+// ============================================================================
+// MESSAGING
+// ============================================================================
+
+// ============================================================================
+// BAMBOOGLI - UNIFIED MESSAGING (SMS + EMAIL)
+// ============================================================================
+
+model Message {
+  id String @id @default(cuid())
+
+  direction MessageDirection
+  channel   MessageChannel
+
+  // Content
+  body      String // Text body for SMS, plain text for email
+  bodyHtml  String?  @map("body_html") // HTML body for email
+  subject   String? // Email subject
+  mediaUrls String[] @map("media_urls") // MMS attachments or email attachments
+
+  // Status
+  status       MessageStatus @default(QUEUED)
+  errorCode    String?       @map("error_code")
+  errorMessage String?       @map("error_message")
+
+  // Provider References
+  twilioSid    String? @unique @map("twilio_sid") // SMS
+  providerId   String? @map("provider_id") // Email provider message ID
+  providerName String? @map("provider_name") // sendgrid, ses, twilio
+
+  // Email-specific
+  fromAddress String?  @map("from_address")
+  fromName    String?  @map("from_name")
+  toAddresses String[] @map("to_addresses")
+  ccAddresses String[] @map("cc_addresses")
+  replyTo     String?  @map("reply_to")
+
+  // Email Threading
+  emailMessageId String? @unique @map("email_message_id") // RFC 5322 Message-ID
+  inReplyTo      String? @map("in_reply_to")
+  threadId       String? @map("thread_id")
+
+  // Email Tracking
+  openedAt     DateTime? @map("opened_at")
+  clickedAt    DateTime? @map("clicked_at")
+  bouncedAt    DateTime? @map("bounced_at")
+  bounceType   String?   @map("bounce_type")
+  bounceReason String?   @map("bounce_reason")
+
+  // Relations
+  contactId String?  @map("contact_id")
+  contact   Contact? @relation(fields: [contactId], references: [id])
+
+  conversationId String       @map("conversation_id")
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+
+  // Sent by (for outbound)
+  sentById String? @map("sent_by_id")
+
+  // Timestamps
+  createdAt   DateTime  @default(now()) @map("created_at")
+  sentAt      DateTime? @map("sent_at")
+  deliveredAt DateTime? @map("delivered_at")
+  readAt      DateTime? @map("read_at")
+
+  @@index([conversationId])
+  @@index([contactId])
+  @@index([createdAt])
+  @@index([threadId])
+  @@index([channel])
+  @@map("messages")
+}
+
+model Conversation {
+  id String @id @default(cuid())
+
+  // Identifier (phone or email - used for routing)
+  phoneNumber String? @map("phone_number") // E.164 for SMS
+  email       String? // Email address for email threads
+
+  // Unified identifier for the contact
+  identifier String @unique // phone or email, normalized
+
+  // Channels used in this conversation
+  channels MessageChannel[] @default([])
+
+  status             ConversationStatus @default(OPEN)
+  lastMessageAt      DateTime?          @map("last_message_at")
+  lastMessagePreview String?            @map("last_message_preview") // First 100 chars
+  lastChannel        MessageChannel?    @map("last_channel")
+  unreadCount        Int                @default(0) @map("unread_count")
+
+  // Priority & AI
+  priority        ConversationPriority @default(NORMAL)
+  sentiment       String? // positive, neutral, negative
+  aiSummary       String?              @map("ai_summary")
+  needsAttention  Boolean              @default(false) @map("needs_attention")
+  attentionReason String?              @map("attention_reason")
+
+  // Assignment
+  assignedUserId String? @map("assigned_user_id")
+
+  // Link to Contact (unified across channels)
+  contactId String? @map("contact_id")
+
+  // Link to Opportunity for project context
+  opportunityId String? @map("opportunity_id")
+  accountId     String? @map("account_id")
+
+  // Auto-response settings
+  autoResponseEnabled Boolean   @default(true) @map("auto_response_enabled")
+  lastAutoResponseAt  DateTime? @map("last_auto_response_at")
+
+  // Tags for organization
+  tags String[] @default([])
+
+  // Relations
+  messages Message[]
+
+  // Timestamps
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
+  closedAt   DateTime? @map("closed_at")
+  archivedAt DateTime? @map("archived_at")
+
+  @@index([contactId])
+  @@index([opportunityId])
+  @@index([status])
+  @@index([assignedUserId])
+  @@index([needsAttention])
+  @@index([lastMessageAt])
+  @@map("conversations")
+}
+
+enum ConversationPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+// ============================================================================
+// SYSTEM SETTINGS
+// ============================================================================
+
+model SystemSetting {
+  id          String  @id @default(cuid())
+  key         String  @unique
+  value       String
+  description String?
+  category    String? // lead_assignment, notifications, etc.
+
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdById String?  @map("created_by_id")
+  updatedById String?  @map("updated_by_id")
+
+  @@index([category])
+  @@map("system_settings")
+}
+
+// ============================================================================
+// USERS & AUTH
+// ============================================================================
+
+model User {
+  id           String  @id @default(cuid())
+  salesforceId String? @unique @map("salesforce_id")
+  cognitoId    String? @unique @map("cognito_id")
+
+  email     String  @unique
+  firstName String  @map("first_name")
+  lastName  String  @map("last_name")
+  fullName  String? @map("full_name")
+
+  phone       String?
+  mobilePhone String? @map("mobile_phone")
+
+  isActive Boolean @default(true) @map("is_active")
+  status   String? // ACTIVE, INACTIVE, etc.
+
+  // Role
+  roleId String? @map("role_id")
+  role   Role?   @relation(fields: [roleId], references: [id])
+
+  // Department & Organization
+  department       String?
+  division         String?
+  title            String?
+  employeeNumber   String?   @map("employee_number")
+  officeAssignment String?   @map("office_assignment")
+  startDate        DateTime? @map("start_date")
+
+  // Address
+  street     String?
+  city       String?
+  state      String?
+  postalCode String? @map("postal_code")
+  country    String?
+
+  // Hierarchy - Manager Chain
+  managerId     String? @map("manager_id")
+  manager       User?   @relation("UserManager", fields: [managerId], references: [id])
+  directReports User[]  @relation("UserManager")
+
+  // Hierarchy - Director
+  directorId      String? @map("director_id")
+  director        User?   @relation("UserDirector", fields: [directorId], references: [id])
+  directorReports User[]  @relation("UserDirector")
+
+  // Hierarchy - Regional Manager
+  regionalManagerId String? @map("regional_manager_id")
+  regionalManager   User?   @relation("UserRegionalManager", fields: [regionalManagerId], references: [id])
+  regionalReports   User[]  @relation("UserRegionalManager")
+
+  // Hierarchy - Executive
+  executiveId      String? @map("executive_id")
+  executive        User?   @relation("UserExecutive", fields: [executiveId], references: [id])
+  executiveReports User[]  @relation("UserExecutive")
+
+  // Commission Rates
+  companyLeadRate           Decimal? @map("company_lead_rate") @db.Decimal(5, 2)
+  preCommissionRate         Decimal? @map("pre_commission_rate") @db.Decimal(5, 2)
+  selfGenRate               Decimal? @map("self_gen_rate") @db.Decimal(5, 2)
+  commissionRate            Decimal? @map("commission_rate") @db.Decimal(5, 2)
+  overridePercent           Decimal? @map("override_percent") @db.Decimal(5, 2)
+  supplementsCommissionable Boolean  @default(false) @map("supplements_commissionable")
+  x5050CommissionSplit      Boolean  @default(false) @map("x50_50_commission_split") // 50/50 split for commission calculation
+
+  // Lead Assignment
+  lastLeadAssignedAt DateTime? @map("last_lead_assigned_at") // For round-robin tracking
+
+  // Subcontractor Link
+  subcontractorAccountId String? @map("subcontractor_account_id")
+
+  // Timestamps
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  lastLoginAt DateTime? @map("last_login_at")
+
+  // Relations
+  ownedAccounts      Account[]        @relation("AccountOwner")
+  ownedLeads         Lead[]           @relation("LeadOwner")
+  ownedOpportunities Opportunity[]    @relation("OpportunityOwner")
+  commissions        Commission[]
+  serviceResource    ServiceResource?
+  createdNotes       Note[]           @relation("NoteCreator")
+  assignedTasks      Task[]           @relation("TaskAssignee")
+  createdReports     SavedReport[]    @relation("ReportCreator")
+
+  // Lead Assignment Relations
+  assignmentRulesAssignedTo LeadAssignmentRule[]    @relation("RuleAssignToUser")
+  assignmentRulesCreated    LeadAssignmentRule[]    @relation("RuleCreatedBy")
+  leadsAssignedTo           LeadAssignmentLog[]     @relation("AssignedToUser")
+  leadsAssignedBy           LeadAssignmentLog[]     @relation("AssignedByUser")
+  teamsLed                  Team[]                  @relation("TeamLeader")
+  territoriesOwned          Territory[]             @relation("TerritoryOwner")
+  teamMemberships           TeamMember[]
+  emailsSent                Email[]                 @relation("EmailsSent")
+  notifications             Notification[]          @relation("UserNotifications")
+  notificationPreferences   NotificationPreference? @relation("UserNotificationPreferences")
+
+  // Approval Workflow Relations
+  approvalRequestsSubmitted ApprovalRequest[] @relation("ApprovalRequester")
+  approvalRequestsToApprove ApprovalRequest[] @relation("ApprovalApprover")
+  approvalRequestsDecided   ApprovalRequest[] @relation("ApprovalDecider")
+  approvalRequestsEscalated ApprovalRequest[] @relation("EscalatedApprovals")
+  approvalStepsAssigned     ApprovalStep[]
+  approvalComments          ApprovalComment[]
+
+  // Attention Queue Relations
+  assignedAttentionItems  AttentionItem[] @relation("AssignedAttentionItems")
+  dismissedAttentionItems AttentionItem[] @relation("DismissedAttentionItems")
+
+  // Phase 4 Relations
+  callLogs                      CallLog[]
+  measurementReportsOrdered     MeasurementReport[]
+  scheduleOptimizationsApproved ScheduleOptimization[]
+  mobileSessions                MobileSession[]
+  mobileActivities              MobileActivity[]
+
+  // Event & Email Relations
+  ownedEvents         Event[]         @relation("EventOwner")
+  sentEmailMessages   EmailMessage[]  @relation("EmailSender")
+  ownedEmailTemplates EmailTemplate[] @relation("EmailTemplateOwner")
+
+  // Material Order Relations
+  materialOrdersPlaced MaterialOrder[] @relation("MaterialOrdersPlaced")
+
+  // Activity Feed
+  activities Activity[] @relation("UserActivities")
+
+  // Call Center - Leads set by this user
+  leadsSetBy Lead[] @relation("LeadSetByUser")
+
+  // Service Request - Opportunities where this user is Project Manager
+  projectManagedOpportunities Opportunity[] @relation("OpportunityProjectManager")
+
+  @@index([managerId])
+  @@index([directorId])
+  @@index([officeAssignment])
+  @@index([department])
+  @@map("users")
+}
+
+model Role {
+  id           String  @id @default(cuid())
+  salesforceId String? @unique @map("salesforce_id")
+  name         String  @unique
+  description  String?
+
+  // Role Type (maps to AuthContext ROLE_TYPES)
+  roleType String? @map("role_type") // admin, executive, office_manager, sales_manager, sales_rep, etc.
+
+  // Role Hierarchy
+  parentId String? @map("parent_id")
+  parent   Role?   @relation("RoleHierarchy", fields: [parentId], references: [id])
+  children Role[]  @relation("RoleHierarchy")
+
+  // Legacy permissions (JSON for backwards compatibility)
+  permissionsJson Json @default("{}") @map("permissions")
+
+  isActive Boolean @default(true) @map("is_active")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  users           User[]
+  rolePermissions RolePermission[]
+
+  @@index([roleType])
+  @@index([parentId])
+  @@map("roles")
+}
+
+// ============================================================================
+// SUPPORTING OBJECTS
+// ============================================================================
+
+model Case {
+  id           String  @id @default(cuid())
+  salesforceId String? @unique @map("salesforce_id")
+
+  caseNumber  String     @unique @map("case_number")
+  subject     String
+  description String?
+  status      CaseStatus @default(NEW)
+  priority    Priority   @default(NORMAL)
+  type        String?
+
+  // Relations
+  accountId String?  @map("account_id")
+  account   Account? @relation(fields: [accountId], references: [id])
+
+  // Timestamps
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  closedAt  DateTime? @map("closed_at")
+
+  // Relations
+  notifications  Notification[]  @relation("CaseNotifications")
+  attentionItems AttentionItem[] @relation("CaseAttentionItems")
+
+  @@index([accountId])
+  @@index([status])
+  @@map("cases")
+}
+
+model Email {
+  id String @id @default(cuid())
+
+  // Email Headers
+  fromAddress  String   @map("from_address")
+  fromName     String?  @map("from_name")
+  toAddresses  String[] @map("to_addresses")
+  ccAddresses  String[] @map("cc_addresses")
+  bccAddresses String[] @map("bcc_addresses")
+  replyTo      String?  @map("reply_to")
+
+  // Content
+  subject  String
+  bodyText String? @map("body_text")
+  bodyHtml String? @map("body_html")
+
+  // Status & Tracking
+  status    EmailStatus      @default(DRAFT)
+  direction MessageDirection @default(OUTBOUND)
+
+  // Provider Info
+  providerId   String? @map("provider_id") // SendGrid/SES message ID
+  providerName String? @map("provider_name") // sendgrid, ses, etc.
+
+  // Tracking Events
+  sentAt         DateTime? @map("sent_at")
+  deliveredAt    DateTime? @map("delivered_at")
+  openedAt       DateTime? @map("opened_at")
+  clickedAt      DateTime? @map("clicked_at")
+  bouncedAt      DateTime? @map("bounced_at")
+  complainedAt   DateTime? @map("complained_at")
+  unsubscribedAt DateTime? @map("unsubscribed_at")
+
+  // Bounce Info
+  bounceType   String? @map("bounce_type")
+  bounceReason String? @map("bounce_reason")
+
+  // Thread Support
+  messageId String? @unique @map("message_id") // Email Message-ID header
+  inReplyTo String? @map("in_reply_to") // Parent Message-ID
+  threadId  String? @map("thread_id") // Thread grouping
+
+  // Attachments
+  attachmentUrls  String[] @map("attachment_urls")
+  attachmentCount Int      @default(0) @map("attachment_count")
+
+  // Relations - Contact (primary relationship)
+  contactId String?  @map("contact_id")
+  contact   Contact? @relation("ContactEmails", fields: [contactId], references: [id])
+
+  // Relations - Opportunity (activity context)
+  opportunityId String?      @map("opportunity_id")
+  opportunity   Opportunity? @relation("OpportunityEmails", fields: [opportunityId], references: [id])
+
+  // Relations - Account
+  accountId String?  @map("account_id")
+  account   Account? @relation("AccountEmails", fields: [accountId], references: [id])
+
+  // Relations - Lead (if email is to a lead)
+  leadId String? @map("lead_id")
+  lead   Lead?   @relation("LeadEmails", fields: [leadId], references: [id])
+
+  // Relations - Sent By User
+  sentById String? @map("sent_by_id")
+  sentBy   User?   @relation("EmailsSent", fields: [sentById], references: [id])
+
+  // Scheduling
+  scheduledAt DateTime? @map("scheduled_at")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([contactId])
+  @@index([opportunityId])
+  @@index([accountId])
+  @@index([leadId])
+  @@index([status])
+  @@index([threadId])
+  @@index([createdAt])
+  @@map("emails")
+}
+
+model Note {
+  id String @id @default(cuid())
+
+  title String?
+  body  String
+
+  // Polymorphic relation
+  accountId String?  @map("account_id")
+  account   Account? @relation("AccountNotes", fields: [accountId], references: [id])
+
+  contactId String?  @map("contact_id")
+  contact   Contact? @relation("ContactNotes", fields: [contactId], references: [id])
+
+  leadId String? @map("lead_id")
+  lead   Lead?   @relation("LeadNotes", fields: [leadId], references: [id])
+
+  opportunityId String?      @map("opportunity_id")
+  opportunity   Opportunity? @relation("OpportunityNotes", fields: [opportunityId], references: [id])
+
+  // Creator
+  createdById String @map("created_by_id")
+  createdBy   User   @relation("NoteCreator", fields: [createdById], references: [id])
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("notes")
+}
+
+model Task {
+  id           String  @id @default(cuid())
+  salesforceId String? @unique @map("salesforce_id")
+
+  subject     String
+  description String?
+  status      TaskStatus @default(NOT_STARTED)
+  priority    Priority   @default(NORMAL)
+
+  dueDate       DateTime? @map("due_date")
+  completedDate DateTime? @map("completed_date")
+
+  // Assignment
+  assignedToId String? @map("assigned_to_id")
+  assignedTo   User?   @relation("TaskAssignee", fields: [assignedToId], references: [id])
+
+  // Polymorphic relation
+  leadId String? @map("lead_id")
+  lead   Lead?   @relation("LeadTasks", fields: [leadId], references: [id])
+
+  opportunityId String?      @map("opportunity_id")
+  opportunity   Opportunity? @relation("OpportunityTasks", fields: [opportunityId], references: [id])
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([assignedToId])
+  @@index([status])
+  @@index([dueDate])
+  @@map("tasks")
+}
+
+model Event {
+  id            String  @id @default(cuid())
+  salesforceId  String? @unique @map("salesforce_id")
+  googleEventId String? @unique @map("google_event_id")
+
+  subject     String
+  description String? @db.Text
+  location    String?
+
+  // Timing
+  startDateTime DateTime @map("start_date_time")
+  endDateTime   DateTime @map("end_date_time")
+  isAllDay      Boolean  @default(false) @map("is_all_day")
+  timeZone      String?  @map("time_zone")
+
+  // Recurrence
+  isRecurring       Boolean   @default(false) @map("is_recurring")
+  recurrenceRule    String?   @map("recurrence_rule") // iCal RRULE format
+  recurrenceEndDate DateTime? @map("recurrence_end_date")
+
+  // Video conferencing
+  videoConferenceUrl  String? @map("video_conference_url")
+  videoConferenceType String? @map("video_conference_type") // Zoom, Teams, Meet, etc.
+
+  // Assignment
+  ownerId String @map("owner_id")
+  owner   User   @relation("EventOwner", fields: [ownerId], references: [id])
+
+  // Related Records (Opportunity Hub)
+  leadId String? @map("lead_id")
+  lead   Lead?   @relation("LeadEvents", fields: [leadId], references: [id])
+
+  opportunityId String?      @map("opportunity_id")
+  opportunity   Opportunity? @relation("OpportunityEvents", fields: [opportunityId], references: [id])
+
+  accountId String?  @map("account_id")
+  account   Account? @relation("AccountEvents", fields: [accountId], references: [id])
+
+  contactId String?  @map("contact_id")
+  contact   Contact? @relation("ContactEvents", fields: [contactId], references: [id])
+
+  // Status
+  status EventStatus @default(SCHEDULED)
+  showAs EventShowAs @default(BUSY)
+
+  // Reminders
+  reminderMinutes Int?    @map("reminder_minutes")
+  reminderSent    Boolean @default(false) @map("reminder_sent")
+
+  // Attendees stored as JSON
+  attendees Json? // [{email, name, status, required}]
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([ownerId])
+  @@index([startDateTime])
+  @@index([opportunityId])
+  @@index([accountId])
+  @@map("events")
+}
+
+model EmailMessage {
+  id           String  @id @default(cuid())
+  salesforceId String? @unique @map("salesforce_id")
+  messageId    String? @unique @map("message_id") // Email Message-ID header
+
+  // Email details
+  subject  String?
+  textBody String? @map("text_body") @db.Text
+  htmlBody String? @map("html_body") @db.Text
+
+  // Addresses
+  fromAddress    String   @map("from_address")
+  fromName       String?  @map("from_name")
+  toAddresses    String[] @map("to_addresses")
+  ccAddresses    String[] @map("cc_addresses")
+  bccAddresses   String[] @map("bcc_addresses")
+  replyToAddress String?  @map("reply_to_address")
+
+  // Threading
+  threadId  String?        @map("thread_id")
+  inReplyTo String?        @map("in_reply_to") // Message-ID of parent
+  parentId  String?        @map("parent_id")
+  parent    EmailMessage?  @relation("EmailThread", fields: [parentId], references: [id])
+  replies   EmailMessage[] @relation("EmailThread")
+
+  // Direction & Status
+  direction    EmailDirection @default(OUTBOUND)
+  status       EmailStatus    @default(SENT)
+  sentAt       DateTime?      @map("sent_at")
+  receivedAt   DateTime?      @map("received_at")
+  openedAt     DateTime?      @map("opened_at")
+  clickedAt    DateTime?      @map("clicked_at")
+  bouncedAt    DateTime?      @map("bounced_at")
+  bounceReason String?        @map("bounce_reason")
+
+  // Tracking
+  openCount      Int     @default(0) @map("open_count")
+  clickCount     Int     @default(0) @map("click_count")
+  hasAttachments Boolean @default(false) @map("has_attachments")
+
+  // Related Records (Opportunity Hub)
+  leadId String? @map("lead_id")
+  lead   Lead?   @relation("LeadEmails", fields: [leadId], references: [id])
+
+  opportunityId String?      @map("opportunity_id")
+  opportunity   Opportunity? @relation("OpportunityEmails", fields: [opportunityId], references: [id])
+
+  accountId String?  @map("account_id")
+  account   Account? @relation("AccountEmails", fields: [accountId], references: [id])
+
+  contactId String?  @map("contact_id")
+  contact   Contact? @relation("ContactEmails", fields: [contactId], references: [id])
+
+  // Sender (if outbound)
+  senderId String? @map("sender_id")
+  sender   User?   @relation("EmailSender", fields: [senderId], references: [id])
+
+  // Template reference
+  templateId String?        @map("template_id")
+  template   EmailTemplate? @relation(fields: [templateId], references: [id])
+
+  // Attachments stored as JSON
+  attachments Json? // [{name, size, contentType, url}]
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([fromAddress])
+  @@index([threadId])
+  @@index([opportunityId])
+  @@index([accountId])
+  @@index([contactId])
+  @@index([sentAt])
+  @@map("email_messages")
+}
+
+model EmailTemplate {
+  id           String  @id @default(cuid())
+  salesforceId String? @unique @map("salesforce_id")
+
+  name     String
+  subject  String
+  htmlBody String  @map("html_body") @db.Text
+  textBody String? @map("text_body") @db.Text
+
+  // Categorization
+  category String?
+  isActive Boolean @default(true) @map("is_active")
+  isPublic Boolean @default(false) @map("is_public")
+
+  // Merge fields
+  mergeFields String[] @map("merge_fields") // List of {{field}} names used
+
+  // Owner
+  ownerId String? @map("owner_id")
+  owner   User?   @relation("EmailTemplateOwner", fields: [ownerId], references: [id])
+
+  // Usage tracking
+  usageCount Int       @default(0) @map("usage_count")
+  lastUsedAt DateTime? @map("last_used_at")
+
+  // Related emails
+  emails EmailMessage[]
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([category])
+  @@index([isActive])
+  @@map("email_templates")
+}
+
+// ============================================================================
+// ENUMS
+// ============================================================================
+
+enum AccountType {
+  RESIDENTIAL
+  COMMERCIAL
+  INSURANCE
+}
+
+enum AccountStatus {
+  NEW
+  ACTIVE
+  ONBOARDING
+  IN_PRODUCTION
+  COMPLETED
+  INACTIVE
+}
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  UNQUALIFIED
+  NURTURING
+  CONVERTED
+}
+
+enum LeadRating {
+  HOT
+  WARM
+  COLD
+}
+
+enum OpportunityStage {
+  LEAD_UNASSIGNED
+  LEAD_ASSIGNED
+  SCHEDULED
+  INSPECTED
+  CLAIM_FILED
+  ADJUSTER_MEETING_COMPLETE
+  APPROVED
+  CONTRACT_SIGNED
+  IN_PRODUCTION
+  COMPLETED
+  CLOSED_WON
+  CLOSED_LOST
+}
+
+enum OpportunityType {
+  INSURANCE
+  RETAIL
+  COMMERCIAL
+}
+
+enum WorkOrderStatus {
+  NEW
+  READY_TO_SCHEDULE
+  SCHEDULED
+  IN_PROGRESS
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+  CANCELED
+}
+
+enum AppointmentStatus {
+  NONE
+  SCHEDULED
+  DISPATCHED
+  IN_PROGRESS
+  COMPLETED
+  CANNOT_COMPLETE
+  CANCELED
+}
+
+enum ResourceType {
+  TECHNICIAN
+  CREW
+  DISPATCHER
+  AGENT
+}
+
+enum AbsenceType {
+  VACATION
+  SICK
+  TRAINING
+  UNAVAILABLE
+}
+
+enum SkillLevel {
+  BEGINNER
+  INTERMEDIATE
+  EXPERT
+}
+
+enum QuoteStatus {
+  DRAFT
+  NEEDS_REVIEW
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  ACCEPTED
+  EXPIRED
+}
+
+enum OrderStatus {
+  DRAFT
+  ACTIVATED
+  SUBMITTED
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELED
+}
+
+enum OrderType {
+  STANDARD
+  CHANGE_ORDER
+  SUPPLEMENT
+}
+
+// Material Order Enums (AccuLynx W/O/D)
+enum MaterialStatus {
+  WAITING // W - Waiting to Order
+  ORDERED // O - Order placed with supplier
+  DELIVERED // D - Materials delivered to job site
+  CANCELLED // Order cancelled
+}
+
+enum DeliveryType {
+  DELIVERY // Supplier delivers to job site
+  PICKUP // Crew picks up from supplier
+  ROOF_LOAD // Supplier roof-loads materials
+  GROUND_DROP // Supplier ground-drops materials
+}
+
+enum DeliveryTimeWindow {
+  AM // Morning delivery (before 12pm)
+  PM // Afternoon delivery (after 12pm)
+  ALL_DAY // Anytime during business hours
+  FIRST_LOAD // First delivery of the day
+}
+
+enum InvoiceStatus {
+  DRAFT
+  PENDING
+  SENT
+  PARTIAL
+  PAID
+  OVERDUE
+  VOID
+}
+
+enum PaymentMethod {
+  CHECK
+  CREDIT_CARD
+  ACH
+  WIRE
+  CASH
+  INSURANCE_CHECK
+  FINANCING
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  SETTLED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum SyncStatus {
+  PENDING
+  SYNCED
+  FAILED
+  SKIPPED
+}
+
+enum PaymentLinkStatus {
+  ACTIVE
+  INACTIVE
+  EXPIRED
+  COMPLETED
+}
+
+enum PaymentFrequency {
+  WEEKLY
+  BIWEEKLY
+  MONTHLY
+  QUARTERLY
+  ANNUALLY
+  CUSTOM
+}
+
+enum ScheduleStatus {
+  PENDING
+  ACTIVE
+  PAUSED
+  COMPLETED
+  CANCELLED
+}
+
+enum ContractStatus {
+  DRAFT
+  ACTIVATED
+  COMPLETED
+  TERMINATED
+}
+
+enum CommissionType {
+  PRE_COMMISSION
+  BACK_END
+  SALES_OP
+  SUPPLEMENT_OVERRIDE
+  PM_COMMISSION
+  // Management Override Commissions (hierarchy)
+  MANAGER_OVERRIDE
+  REGIONAL_MANAGER_OVERRIDE
+  DIRECTOR_OVERRIDE
+  EXECUTIVE_OVERRIDE
+  // Additional Types from Salesforce
+  SALES_FLIP // PandaClaims - created on onboarding, requested at 30% collected
+  PAYROLL_ADJUSTMENT // Auto-created when Paid Amount changes
+  COMPANY_LEAD // Company-generated lead commission
+  SELF_GEN // Self-generated lead commission
+}
+
+enum CommissionStatus {
+  NEW
+  REQUESTED
+  APPROVED
+  HOLD
+  PAID
+  DENIED
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum MessageChannel {
+  SMS
+  EMAIL
+  CHAT
+}
+
+enum MessageStatus {
+  QUEUED
+  SENDING
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+enum ConversationStatus {
+  OPEN
+  PENDING
+  RESOLVED
+  CLOSED
+}
+
+enum CaseStatus {
+  NEW
+  WORKING
+  ESCALATED
+  CLOSED
+}
+
+enum TaskStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  WAITING
+  COMPLETED
+  DEFERRED
+}
+
+enum Priority {
+  LOW
+  NORMAL
+  HIGH
+  CRITICAL
+}
+
+enum EventStatus {
+  SCHEDULED
+  CONFIRMED
+  TENTATIVE
+  IN_PROGRESS
+  COMPLETED
+  CANCELED
+  NO_SHOW
+}
+
+enum EventShowAs {
+  FREE
+  BUSY
+  TENTATIVE
+  OUT_OF_OFFICE
+}
+
+enum EmailDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum EmailStatus {
+  DRAFT
+  SCHEDULED
+  QUEUED
+  SENDING
+  SENT
+  DELIVERED
+  OPENED
+  CLICKED
+  BOUNCED
+  COMPLAINED
+  UNSUBSCRIBED
+  FAILED
+}
+
+// ============================================================================
+// CAMPAIGNS & MESSAGING
+// ============================================================================
+
+model Campaign {
+  id String @id @default(cuid())
+
+  name        String
+  description String?
+  type        CampaignType   @default(SMS)
+  status      CampaignStatus @default(DRAFT)
+
+  // Audience
+  audienceRules       Json? @map("audience_rules") // {"includes": ["tag:VIP"], "excludes": []}
+  estimatedRecipients Int   @default(0) @map("estimated_recipients")
+
+  // Content
+  subject    String? // For email campaigns
+  body       String?
+  templateId String?          @map("template_id")
+  template   MessageTemplate? @relation(fields: [templateId], references: [id])
+
+  // Scheduling
+  sendSchedule SendSchedule @default(IMMEDIATE) @map("send_schedule")
+  scheduledAt  DateTime?    @map("scheduled_at")
+  sentAt       DateTime?    @map("sent_at")
+
+  // Stats
+  totalSent Int @default(0) @map("total_sent")
+  delivered Int @default(0)
+  failed    Int @default(0)
+  opened    Int @default(0)
+  clicked   Int @default(0)
+  optedOut  Int @default(0) @map("opted_out")
+
+  // Owner
+  createdById String @map("created_by_id")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  sends CampaignSend[]
+
+  @@index([status])
+  @@index([type])
+  @@map("campaigns")
+}
+
+model CampaignSend {
+  id String @id @default(cuid())
+
+  campaignId String   @map("campaign_id")
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  contactId String? @map("contact_id")
+  phone     String?
+  email     String?
+
+  status       MessageStatus @default(QUEUED)
+  errorCode    String?       @map("error_code")
+  errorMessage String?       @map("error_message")
+
+  // Twilio/SendGrid
+  externalId String? @map("external_id")
+
+  // Engagement
+  deliveredAt DateTime? @map("delivered_at")
+  openedAt    DateTime? @map("opened_at")
+  clickedAt   DateTime? @map("clicked_at")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([campaignId])
+  @@index([status])
+  @@map("campaign_sends")
+}
+
+model MessageTemplate {
+  id String @id @default(cuid())
+
+  name        String
+  description String?
+  type        CampaignType @default(SMS)
+  category    String?
+
+  // Content
+  subject String? // For email
+  body    String
+
+  // Variables (merge fields like {firstName}, {appointmentDate})
+  variables String[] @default([])
+
+  isActive Boolean @default(true) @map("is_active")
+  isSystem Boolean @default(false) @map("is_system") // System templates can't be deleted
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  campaigns         Campaign[]
+  scheduledMessages ScheduledMessage[]
+  workflowActions   WorkflowAction[]
+
+  @@map("message_templates")
+}
+
+model ScheduledMessage {
+  id String @id @default(cuid())
+
+  // Target
+  contactId String? @map("contact_id")
+  phone     String?
+  email     String?
+
+  // Related record (polymorphic)
+  opportunityId String? @map("opportunity_id")
+  accountId     String? @map("account_id")
+  workOrderId   String? @map("work_order_id")
+
+  // Content
+  templateId String?          @map("template_id")
+  template   MessageTemplate? @relation(fields: [templateId], references: [id])
+  customBody String?          @map("custom_body")
+
+  channel MessageChannel @default(SMS)
+
+  // Scheduling
+  scheduledFor DateTime               @map("scheduled_for")
+  status       ScheduledMessageStatus @default(PENDING)
+
+  // Result
+  sentAt       DateTime? @map("sent_at")
+  messageId    String?   @map("message_id") // Reference to actual Message
+  errorMessage String?   @map("error_message")
+
+  // Workflow trigger
+  workflowTriggerId String? @map("workflow_trigger_id")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([scheduledFor])
+  @@index([status])
+  @@map("scheduled_messages")
+}
+
+// ============================================================================
+// DOCUMENTS & E-SIGNATURE (PandaSign Integration)
+// ============================================================================
+
+model Agreement {
+  id String @id @default(cuid())
+
+  agreementNumber String          @unique @map("agreement_number")
+  name            String
+  status          AgreementStatus @default(DRAFT)
+
+  // Template
+  templateId String?            @map("template_id")
+  template   AgreementTemplate? @relation(fields: [templateId], references: [id])
+
+  // Related record
+  opportunityId String? @map("opportunity_id")
+  accountId     String? @map("account_id")
+  contactId     String? @map("contact_id")
+
+  // Document
+  documentUrl       String? @map("document_url")
+  signedDocumentUrl String? @map("signed_document_url")
+
+  // Signing
+  expiresAt     DateTime? @map("expires_at")
+  sentAt        DateTime? @map("sent_at")
+  viewedAt      DateTime? @map("viewed_at")
+  signedAt      DateTime? @map("signed_at")
+  declinedAt    DateTime? @map("declined_at")
+  declineReason String?   @map("decline_reason")
+
+  // PandaSign
+  pandaSignId  String? @unique @map("pandasign_id")
+  signingToken String? @unique @map("signing_token")
+  signingUrl   String? @map("signing_url")
+  mergeData    Json?   @map("merge_data")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  signatures Signature[]
+
+  @@index([status])
+  @@index([opportunityId])
+  @@map("agreements")
+}
+
+model AgreementTemplate {
+  id String @id @default(cuid())
+
+  name        String
+  description String?
+  category    String?
+
+  // Template document
+  documentUrl String? @map("document_url")
+  content     String? @db.Text // HTML content for PDF generation
+
+  // Signature fields configuration
+  signatureFields Json? @map("signature_fields") // [{page: 1, x: 100, y: 200, type: "signature"}]
+
+  // Merge fields
+  mergeFields String[] @default([]) @map("merge_fields")
+
+  isActive Boolean @default(true) @map("is_active")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  agreements Agreement[]
+
+  @@map("agreement_templates")
+}
+
+model Signature {
+  id String @id @default(cuid())
+
+  agreementId String    @map("agreement_id")
+  agreement   Agreement @relation(fields: [agreementId], references: [id], onDelete: Cascade)
+
+  signerName  String     @map("signer_name")
+  signerEmail String     @map("signer_email")
+  signerRole  SignerRole @default(CUSTOMER) @map("signer_role")
+
+  status SignatureStatus @default(PENDING)
+
+  // Signature data
+  signatureImageUrl String? @map("signature_image_url")
+  ipAddress         String? @map("ip_address")
+  userAgent         String? @map("user_agent")
+
+  // Timestamps
+  sentAt   DateTime? @map("sent_at")
+  viewedAt DateTime? @map("viewed_at")
+  signedAt DateTime? @map("signed_at")
+
+  @@index([agreementId])
+  @@map("signatures")
+}
+
+model File {
+  id String @id @default(cuid())
+
+  name         String
+  originalName String @map("original_name")
+  mimeType     String @map("mime_type")
+  size         Int // bytes
+
+  // Storage
+  storageKey   String  @unique @map("storage_key") // S3 key
+  url          String? // CloudFront URL
+  thumbnailUrl String? @map("thumbnail_url")
+
+  // Related record (polymorphic)
+  accountId     String?  @map("account_id")
+  opportunityId String?  @map("opportunity_id")
+  workOrderId   String?  @map("work_order_id")
+  galleryId     String?  @map("gallery_id")
+  gallery       Gallery? @relation(fields: [galleryId], references: [id])
+
+  // Metadata
+  category    FileCategory?
+  description String?
+
+  // Upload info
+  uploadedById String @map("uploaded_by_id")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([accountId])
+  @@index([opportunityId])
+  @@index([galleryId])
+  @@map("files")
+}
+
+model Gallery {
+  id String @id @default(cuid())
+
+  name        String?
+  description String?
+
+  // Related record
+  opportunityId String? @map("opportunity_id")
+  accountId     String? @map("account_id")
+  workOrderId   String? @map("work_order_id")
+
+  // Public sharing
+  publicToken String?   @unique @map("public_token")
+  isPublic    Boolean   @default(false) @map("is_public")
+  expiresAt   DateTime? @map("expires_at")
+
+  // CompanyCam integration
+  companyCamProjectId String?   @map("companycam_project_id")
+  lastSyncedAt        DateTime? @map("last_synced_at")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  files File[]
+
+  @@index([opportunityId])
+  @@index([publicToken])
+  @@map("galleries")
+}
+
+// ============================================================================
+// WORKFLOW AUTOMATION (Replaces Salesforce Flows)
+// ============================================================================
+
+model Workflow {
+  id String @id @default(cuid())
+
+  name        String
+  description String?
+
+  // Trigger
+  triggerObject     String       @map("trigger_object") // "Opportunity", "Account", etc.
+  triggerEvent      TriggerEvent @map("trigger_event")
+  triggerConditions Json?        @map("trigger_conditions") // {"field": "stage", "operator": "equals", "value": "APPROVED"}
+
+  // Status
+  isActive Boolean @default(false) @map("is_active")
+  version  Int     @default(1)
+
+  // Execution
+  lastExecutedAt DateTime? @map("last_executed_at")
+  executionCount Int       @default(0) @map("execution_count")
+  errorCount     Int       @default(0) @map("error_count")
+
+  // Timestamps
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdById String   @map("created_by_id")
+
+  // Relations
+  actions    WorkflowAction[]
+  executions WorkflowExecution[]
+
+  @@index([triggerObject])
+  @@index([isActive])
+  @@map("workflows")
+}
+
+model WorkflowAction {
+  id String @id @default(cuid())
+
+  workflowId String   @map("workflow_id")
+  workflow   Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  // Action configuration
+  actionType  WorkflowActionType @map("action_type")
+  actionOrder Int                @map("action_order")
+
+  // Field update action
+  updateField String? @map("update_field")
+  updateValue String? @map("update_value")
+
+  // Message action
+  messageTemplateId String?          @map("message_template_id")
+  messageTemplate   MessageTemplate? @relation(fields: [messageTemplateId], references: [id])
+  messageChannel    MessageChannel?  @map("message_channel")
+  delayMinutes      Int?             @map("delay_minutes") // Delay before sending
+
+  // Create record action
+  createRecordType String? @map("create_record_type")
+  createRecordData Json?   @map("create_record_data")
+
+  // Webhook action
+  webhookUrl     String? @map("webhook_url")
+  webhookMethod  String? @map("webhook_method")
+  webhookHeaders Json?   @map("webhook_headers")
+  webhookBody    Json?   @map("webhook_body")
+
+  // Condition (optional - for conditional actions)
+  condition Json? // {"field": "amount", "operator": "greaterThan", "value": 10000}
+
+  @@index([workflowId])
+  @@map("workflow_actions")
+}
+
+model WorkflowExecution {
+  id String @id @default(cuid())
+
+  workflowId String   @map("workflow_id")
+  workflow   Workflow @relation(fields: [workflowId], references: [id])
+
+  // Trigger context
+  triggerRecordId   String @map("trigger_record_id")
+  triggerRecordType String @map("trigger_record_type")
+  triggerData       Json?  @map("trigger_data")
+
+  // Status
+  status      WorkflowExecutionStatus @default(PENDING)
+  startedAt   DateTime?               @map("started_at")
+  completedAt DateTime?               @map("completed_at")
+
+  // Result
+  actionsExecuted Int     @default(0) @map("actions_executed")
+  errorMessage    String? @map("error_message")
+  executionLog    Json?   @map("execution_log") // Detailed log of each action
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([workflowId])
+  @@index([status])
+  @@index([triggerRecordId])
+  @@map("workflow_executions")
+}
+
+// ============================================================================
+// AUDIT & PERMISSIONS
+// ============================================================================
+
+model AuditLog {
+  id String @id @default(cuid())
+
+  // What changed
+  tableName String      @map("table_name")
+  recordId  String      @map("record_id")
+  action    AuditAction
+
+  // Changes
+  oldValues     Json?    @map("old_values")
+  newValues     Json?    @map("new_values")
+  changedFields String[] @default([]) @map("changed_fields")
+
+  // Who made the change
+  userId    String? @map("user_id")
+  userEmail String? @map("user_email")
+  ipAddress String? @map("ip_address")
+  userAgent String? @map("user_agent")
+
+  // Context
+  source     String? // "web", "api", "workflow", "system"
+  workflowId String? @map("workflow_id")
+
+  // Timestamp
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([tableName, recordId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model Permission {
+  id String @id @default(cuid())
+
+  name        String  @unique
+  description String?
+
+  // Resource and action
+  resource String // "accounts", "opportunities", "commissions", etc.
+  action   PermissionAction
+
+  // Conditions (optional field-level or record-level restrictions)
+  conditions Json? // {"ownerId": "$currentUser"} - only own records
+
+  // Relations
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  id String @id @default(cuid())
+
+  roleId String @map("role_id")
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  permissionId String     @map("permission_id")
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  // Override conditions for this role
+  conditions Json?
+
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+// ============================================================================
+// COMMISSION ENGINE
+// ============================================================================
+
+// CommissionRule - Editable commission rules displayed in admin UI
+model CommissionRule {
+  id String @id @default(cuid())
+
+  name        String // "Standard Sales Commission", "Self-Gen Bonus", etc.
+  description String?
+
+  // Rule Type
+  ruleType CommissionRuleType @default(PERCENTAGE) @map("rule_type")
+
+  // Rate/Amount
+  rate       Decimal? @db.Decimal(5, 2) // e.g., 8.00 for 8%
+  flatAmount Decimal? @map("flat_amount") @db.Decimal(12, 2) // e.g., 200.00 for flat $200
+
+  // Applicability
+  commissionType CommissionType? @map("commission_type") // Which commission type this rule applies to
+  isActive       Boolean         @default(true) @map("is_active")
+  priority       Int             @default(0) // Higher priority rules evaluated first
+
+  // Conditions (optional JSON for complex conditions)
+  conditions Json? // {"leadSource": "Insurance", "minAmount": 10000}
+
+  // Target (who this rule applies to)
+  appliesToRole       String? @map("applies_to_role")
+  appliesToDepartment String? @map("applies_to_department")
+  appliesToUserId     String? @map("applies_to_user_id")
+
+  // Timestamps
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+  createdById String?  @map("created_by_id")
+
+  @@index([isActive])
+  @@index([commissionType])
+  @@index([ruleType])
+  @@map("commission_rules")
+}
+
+model CommissionPlan {
+  id String @id @default(cuid())
+
+  name        String
+  description String?
+
+  // Applicability
+  isActive       Boolean   @default(true) @map("is_active")
+  effectiveDate  DateTime  @map("effective_date")
+  expirationDate DateTime? @map("expiration_date")
+
+  // Target (who this plan applies to)
+  appliesToRole       String? @map("applies_to_role")
+  appliesToDepartment String? @map("applies_to_department")
+  appliesToUserId     String? @map("applies_to_user_id")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  tiers CommissionTier[]
+
+  @@map("commission_plans")
+}
+
+model CommissionTier {
+  id String @id @default(cuid())
+
+  planId String         @map("plan_id")
+  plan   CommissionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  name String
+
+  // Tier conditions
+  minAmount Decimal? @map("min_amount") @db.Decimal(12, 2)
+  maxAmount Decimal? @map("max_amount") @db.Decimal(12, 2)
+
+  // Commission calculation
+  commissionType CommissionCalcType @map("commission_type")
+  rate           Decimal            @db.Decimal(5, 4) // 0.08 = 8%
+  flatAmount     Decimal?           @map("flat_amount") @db.Decimal(12, 2)
+
+  // Trigger
+  triggerEvent      CommissionTrigger @map("trigger_event")
+  triggerConditions Json?             @map("trigger_conditions")
+
+  // Order
+  tierOrder Int @map("tier_order")
+
+  @@index([planId])
+  @@map("commission_tiers")
+}
+
+// ============================================================================
+// COMPANYCAM INTEGRATION
+// ============================================================================
+
+model CompanyCamProject {
+  id String @id @default(cuid())
+
+  companyCamId String @unique @map("companycam_id")
+  name         String
+
+  // Linked records
+  opportunityId String? @unique @map("opportunity_id")
+  accountId     String? @map("account_id")
+
+  // Address
+  address   String?
+  latitude  Float?
+  longitude Float?
+
+  // Stats
+  photoCount  Int       @default(0) @map("photo_count")
+  lastPhotoAt DateTime? @map("last_photo_at")
+
+  // Sync
+  lastSyncedAt DateTime?  @map("last_synced_at")
+  syncStatus   SyncStatus @default(PENDING) @map("sync_status")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("companycam_projects")
+}
+
+model CompanyCamPhoto {
+  id String @id @default(cuid())
+
+  companyCamId String @unique @map("companycam_id")
+  projectId    String @map("project_id")
+
+  // Photo details
+  photoUrl     String  @map("photo_url")
+  thumbnailUrl String? @map("thumbnail_url")
+  caption      String?
+
+  // Metadata
+  takenAt   DateTime? @map("taken_at")
+  latitude  Float?
+  longitude Float?
+
+  // Tags from CompanyCam
+  tags String[] @default([])
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([projectId])
+  @@map("companycam_photos")
+}
+
+// ============================================================================
+// GOOGLE CALENDAR INTEGRATION
+// ============================================================================
+
+model GoogleCalendarSync {
+  id String @id @default(cuid())
+
+  // Service Resource link
+  serviceResourceId String @unique @map("service_resource_id")
+
+  // OAuth tokens
+  accessToken  String   @map("access_token")
+  refreshToken String   @map("refresh_token")
+  tokenExpiry  DateTime @map("token_expiry")
+
+  // Calendar settings
+  calendarId  String  @map("calendar_id") // Usually "primary" or specific calendar ID
+  syncEnabled Boolean @default(true) @map("sync_enabled")
+
+  // Sync state
+  lastSyncToken String?    @map("last_sync_token") // For incremental sync
+  lastSyncedAt  DateTime?  @map("last_synced_at")
+  syncStatus    SyncStatus @default(PENDING) @map("sync_status")
+  syncError     String?    @map("sync_error")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("google_calendar_syncs")
+}
+
+// ============================================================================
+// ADDITIONAL ENUMS
+// ============================================================================
+
+enum CampaignType {
+  SMS
+  EMAIL
+  VOICE
+}
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  SENT
+  PAUSED
+  CANCELED
+}
+
+enum SendSchedule {
+  IMMEDIATE
+  SCHEDULED
+  RECURRING
+}
+
+enum ScheduledMessageStatus {
+  PENDING
+  SENT
+  FAILED
+  CANCELED
+}
+
+enum AgreementStatus {
+  DRAFT
+  SENT
+  VIEWED
+  SIGNED
+  DECLINED
+  EXPIRED
+  VOIDED
+}
+
+enum SignerRole {
+  CUSTOMER
+  SALES_REP
+  PM
+  WITNESS
+  CO_SIGNER
+}
+
+enum SignatureStatus {
+  PENDING
+  SENT
+  VIEWED
+  SIGNED
+  DECLINED
+}
+
+enum FileCategory {
+  PHOTO
+  DOCUMENT
+  CONTRACT
+  INVOICE
+  PERMIT
+  INSPECTION
+  OTHER
+}
+
+enum TriggerEvent {
+  CREATE
+  UPDATE
+  DELETE
+  FIELD_CHANGE
+  SCHEDULED
+}
+
+enum WorkflowActionType {
+  UPDATE_FIELD
+  SEND_SMS
+  SEND_EMAIL
+  CREATE_RECORD
+  CREATE_TASK
+  CALL_WEBHOOK
+  DELAY
+  CREATE_COMMISSION
+  SCHEDULE_APPOINTMENT
+  SEND_AGREEMENT
+}
+
+enum WorkflowExecutionStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELED
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  EXPORT
+  VIEW
+}
+
+enum PermissionAction {
+  CREATE
+  READ
+  UPDATE
+  DELETE
+  EXPORT
+  APPROVE
+  ASSIGN
+}
+
+enum CommissionCalcType {
+  PERCENTAGE
+  FLAT
+  TIERED
+}
+
+enum CommissionRuleType {
+  PERCENTAGE // Rate-based (e.g., 8% of contract value)
+  FLAT // Fixed amount (e.g., $200 per job)
+  BONUS // Additional bonus on top of base commission
+}
+
+enum CommissionTrigger {
+  CONTRACT_CREATED
+  ONBOARDING_COMPLETE
+  DOWNPAYMENT_RECEIVED
+  BALANCE_PAID
+  JOB_COMPLETED
+  SUPPLEMENT_APPROVED
+}
+
+// ============================================================================
+// REPORTS & DASHBOARDS
+// ============================================================================
+
+model SavedReport {
+  id String @id @default(cuid())
+
+  name        String
+  description String?
+  category    ReportCategory @default(CUSTOM)
+
+  // Report Configuration
+  reportType String    @map("report_type") // "pipeline", "revenue", "performance", etc.
+  chartType  ChartType @default(TABLE) @map("chart_type")
+
+  // Data Configuration
+  baseObject     String   @map("base_object") // "Opportunity", "Lead", "Account", etc.
+  selectedFields String[] @default([]) @map("selected_fields")
+  groupByFields  String[] @default([]) @map("group_by_fields")
+  sortBy         String?  @map("sort_by")
+  sortDirection  String?  @map("sort_direction") // "asc" or "desc"
+
+  // Filters
+  filters          Json? // [{field: "stage", operator: "equals", value: "APPROVED"}]
+  dateRangeField   String? @map("date_range_field") // Which date field to filter on
+  defaultDateRange String? @map("default_date_range") // "thisMonth", "last30Days", etc.
+
+  // Aggregations
+  aggregations Json? // [{field: "amount", function: "SUM", alias: "totalAmount"}]
+
+  // Sharing
+  isPublic        Boolean  @default(false) @map("is_public")
+  sharedWithRoles String[] @default([]) @map("shared_with_roles")
+
+  // Owner
+  createdById String @map("created_by_id")
+  createdBy   User   @relation("ReportCreator", fields: [createdById], references: [id])
+
+  // Timestamps
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  lastRunAt DateTime? @map("last_run_at")
+
+  // Relations
+  favorites        ReportFavorite[]
+  dashboardWidgets DashboardWidget[]
+
+  @@index([createdById])
+  @@index([category])
+  @@index([isPublic])
+  @@map("saved_reports")
+}
+
+model ReportFavorite {
+  id String @id @default(cuid())
+
+  reportId String      @map("report_id")
+  report   SavedReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  userId String @map("user_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([reportId, userId])
+  @@map("report_favorites")
+}
+
+model Dashboard {
+  id String @id @default(cuid())
+
+  name        String
+  description String?
+
+  // Layout
+  layout  DashboardLayout @default(GRID)
+  columns Int             @default(2)
+
+  // Default date range for all widgets
+  defaultDateRange String? @map("default_date_range")
+
+  // Sharing
+  isDefault       Boolean  @default(false) @map("is_default") // System default dashboard
+  isPublic        Boolean  @default(false) @map("is_public")
+  sharedWithRoles String[] @default([]) @map("shared_with_roles")
+
+  // Owner
+  createdById String @map("created_by_id")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  widgets DashboardWidget[]
+
+  @@index([createdById])
+  @@index([isDefault])
+  @@map("dashboards")
+}
+
+model DashboardWidget {
+  id String @id @default(cuid())
+
+  dashboardId String    @map("dashboard_id")
+  dashboard   Dashboard @relation(fields: [dashboardId], references: [id], onDelete: Cascade)
+
+  // Widget Type
+  widgetType WidgetType @map("widget_type")
+  title      String
+  subtitle   String?
+
+  // Position & Size
+  positionX Int @default(0) @map("position_x")
+  positionY Int @default(0) @map("position_y")
+  width     Int @default(1) // Number of columns
+  height    Int @default(1) // Number of rows
+
+  // Data Source (either a saved report or inline config)
+  savedReportId String?      @map("saved_report_id")
+  savedReport   SavedReport? @relation(fields: [savedReportId], references: [id])
+
+  // Inline Configuration (if not using saved report)
+  dataSource     String? @map("data_source") // "opportunities", "leads", etc.
+  metricField    String? @map("metric_field") // Field to aggregate
+  metricFunction String? @map("metric_function") // "count", "sum", "avg"
+  groupByField   String? @map("group_by_field")
+  filters        Json?
+
+  // KPI Widget Specific
+  comparisonEnabled Boolean @default(false) @map("comparison_enabled")
+  comparisonType    String? @map("comparison_type") // "previousPeriod", "sameLastYear"
+  formatType        String? @map("format_type") // "number", "currency", "percent"
+  iconName          String? @map("icon_name") // Lucide icon name
+  iconColor         String? @map("icon_color") // Tailwind gradient
+
+  // Chart Widget Specific
+  chartConfig Json? @map("chart_config") // Colors, legend, etc.
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([dashboardId])
+  @@map("dashboard_widgets")
+}
+
+// Report & Dashboard Enums
+enum ReportCategory {
+  SALES
+  FINANCIAL
+  MARKETING
+  ACTIVITY
+  OPERATIONS
+  CUSTOM
+}
+
+enum ChartType {
+  BAR
+  LINE
+  AREA
+  PIE
+  DONUT
+  TABLE
+  KPI
+}
+
+enum WidgetType {
+  KPI_CARD
+  BAR_CHART
+  LINE_CHART
+  AREA_CHART
+  PIE_CHART
+  DONUT_CHART
+  TABLE
+  STAT_LIST
+}
+
+enum DashboardLayout {
+  GRID
+  FREEFORM
+}
+
+// ============================================================================
+// LEAD ASSIGNMENT
+// ============================================================================
+
+model LeadAssignmentRule {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+
+  // Rule Status
+  isActive Boolean @default(true) @map("is_active")
+  priority Int     @default(0) // Higher = evaluated first
+
+  // Matching Criteria
+  workType   String? @map("work_type") // INSURANCE, RETAIL, INSPECTION
+  stage      String? // LEAD_ASSIGNED, PROSPECT
+  status     String? // CONFIRMED, THREE_DAY_FOLLOW_UP, etc.
+  leadSource String? @map("lead_source")
+  state      String? // Geographic state
+  conditions Json? // Complex conditions array
+
+  // Assignment Target
+  assignmentType  AssignmentType @default(ROUND_ROBIN) @map("assignment_type")
+  assignToUserId  String?        @map("assign_to_user_id")
+  assignToUser    User?          @relation("RuleAssignToUser", fields: [assignToUserId], references: [id])
+  assignToTeamId  String?        @map("assign_to_team_id")
+  assignToTeam    Team?          @relation("RuleAssignToTeam", fields: [assignToTeamId], references: [id])
+  roundRobinGroup String?        @map("round_robin_group")
+
+  // Actions
+  autoCreateOpportunity   Boolean @default(false) @map("auto_create_opportunity")
+  defaultOpportunityStage String? @map("default_opportunity_stage")
+  notifyAssignee          Boolean @default(true) @map("notify_assignee")
+  notificationTemplate    String? @map("notification_template")
+
+  // Audit
+  createdById String?  @map("created_by_id")
+  createdBy   User?    @relation("RuleCreatedBy", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  assignmentLogs LeadAssignmentLog[]
+
+  @@index([isActive])
+  @@index([priority])
+  @@index([workType])
+  @@map("lead_assignment_rules")
+}
+
+model LeadAssignmentLog {
+  id String @id @default(cuid())
+
+  // Lead Reference
+  leadId String @map("lead_id")
+  lead   Lead   @relation(fields: [leadId], references: [id])
+
+  // Rule Reference (null for manual assignments)
+  ruleId String?             @map("rule_id")
+  rule   LeadAssignmentRule? @relation(fields: [ruleId], references: [id])
+
+  // Assignment Details
+  assignedToId    String  @map("assigned_to_id")
+  assignedTo      User    @relation("AssignedToUser", fields: [assignedToId], references: [id])
+  assignedById    String? @map("assigned_by_id")
+  assignedBy      User?   @relation("AssignedByUser", fields: [assignedById], references: [id])
+  previousOwnerId String? @map("previous_owner_id")
+
+  // Type & Metadata
+  assignmentType AssignmentType @map("assignment_type")
+  notes          String?
+  metadata       Json?
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([leadId])
+  @@index([assignedToId])
+  @@index([createdAt])
+  @@map("lead_assignment_logs")
+}
+
+model Team {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+  isActive    Boolean @default(true) @map("is_active")
+
+  // Team Lead
+  leaderId String? @map("leader_id")
+  leader   User?   @relation("TeamLeader", fields: [leaderId], references: [id])
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  members         TeamMember[]
+  assignmentRules LeadAssignmentRule[] @relation("RuleAssignToTeam")
+
+  @@map("teams")
+}
+
+model TeamMember {
+  id       String   @id @default(cuid())
+  teamId   String   @map("team_id")
+  team     Team     @relation(fields: [teamId], references: [id])
+  userId   String   @map("user_id")
+  user     User     @relation(fields: [userId], references: [id])
+  role     TeamRole @default(MEMBER)
+  joinedAt DateTime @default(now()) @map("joined_at")
+
+  @@unique([teamId, userId])
+  @@map("team_members")
+}
+
+model Territory {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  states      String[] // Array of state codes
+  isActive    Boolean  @default(true) @map("is_active")
+
+  // Owner
+  ownerId String? @map("owner_id")
+  owner   User?   @relation("TerritoryOwner", fields: [ownerId], references: [id])
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("territories")
+}
+
+// Lead Assignment Enums
+enum AssignmentType {
+  SPECIFIC_USER
+  ROUND_ROBIN
+  TEAM
+  QUEUE
+  TERRITORY
+  MANUAL
+}
+
+enum TeamRole {
+  LEADER
+  MEMBER
+}
+
+// ============================================================================
+// NOTIFICATION SYSTEM
+// ============================================================================
+
+model Notification {
+  id String @id @default(cuid())
+
+  // Recipient
+  userId String @map("user_id")
+  user   User   @relation("UserNotifications", fields: [userId], references: [id], onDelete: Cascade)
+
+  // Notification Content
+  type     NotificationType
+  title    String
+  message  String
+  priority NotificationPriority @default(NORMAL)
+
+  // Action/Link
+  actionUrl   String? @map("action_url")
+  actionLabel String? @map("action_label")
+
+  // Related Records (for navigation context)
+  opportunityId String?      @map("opportunity_id")
+  opportunity   Opportunity? @relation("OpportunityNotifications", fields: [opportunityId], references: [id], onDelete: SetNull)
+  accountId     String?      @map("account_id")
+  account       Account?     @relation("AccountNotifications", fields: [accountId], references: [id], onDelete: SetNull)
+  contactId     String?      @map("contact_id")
+  contact       Contact?     @relation("ContactNotifications", fields: [contactId], references: [id], onDelete: SetNull)
+  leadId        String?      @map("lead_id")
+  lead          Lead?        @relation("LeadNotifications", fields: [leadId], references: [id], onDelete: SetNull)
+  workOrderId   String?      @map("work_order_id")
+  workOrder     WorkOrder?   @relation("WorkOrderNotifications", fields: [workOrderId], references: [id], onDelete: SetNull)
+  caseId        String?      @map("case_id")
+  case          Case?        @relation("CaseNotifications", fields: [caseId], references: [id], onDelete: SetNull)
+
+  // Status
+  status     NotificationStatus @default(UNREAD)
+  readAt     DateTime?          @map("read_at")
+  archivedAt DateTime?          @map("archived_at")
+
+  // Source (what triggered this notification)
+  sourceType String? @map("source_type") // e.g., "stage_change", "assignment", "mention"
+  sourceId   String? @map("source_id")
+
+  // Delivery Channels
+  emailSent   Boolean   @default(false) @map("email_sent")
+  emailSentAt DateTime? @map("email_sent_at")
+  smsSent     Boolean   @default(false) @map("sms_sent")
+  smsSentAt   DateTime? @map("sms_sent_at")
+  pushSent    Boolean   @default(false) @map("push_sent")
+  pushSentAt  DateTime? @map("push_sent_at")
+
+  // Timestamps
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  expiresAt DateTime? @map("expires_at")
+
+  @@index([userId, status])
+  @@index([userId, createdAt])
+  @@index([opportunityId])
+  @@index([accountId])
+  @@index([type])
+  @@index([status])
+  @@map("notifications")
+}
+
+model NotificationPreference {
+  id String @id @default(cuid())
+
+  userId String @unique @map("user_id")
+  user   User   @relation("UserNotificationPreferences", fields: [userId], references: [id], onDelete: Cascade)
+
+  // Global Settings
+  emailEnabled Boolean @default(true) @map("email_enabled")
+  smsEnabled   Boolean @default(false) @map("sms_enabled")
+  pushEnabled  Boolean @default(true) @map("push_enabled")
+
+  // Quiet Hours
+  quietHoursEnabled  Boolean @default(false) @map("quiet_hours_enabled")
+  quietHoursStart    String? @map("quiet_hours_start") // "22:00"
+  quietHoursEnd      String? @map("quiet_hours_end") // "08:00"
+  quietHoursTimezone String? @map("quiet_hours_timezone") // "America/New_York"
+
+  // Type-specific preferences (JSON for flexibility)
+  typePreferences Json @default("{}") @map("type_preferences")
+  // Example: { "STAGE_CHANGE": { "email": true, "push": true }, "ASSIGNMENT": { "email": false } }
+
+  // Digest Settings
+  digestEnabled    Boolean          @default(false) @map("digest_enabled")
+  digestFrequency  DigestFrequency? @map("digest_frequency")
+  digestTime       String?          @map("digest_time") // "09:00"
+  lastDigestSentAt DateTime?        @map("last_digest_sent_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("notification_preferences")
+}
+
+model NotificationTemplate {
+  id String @id @default(cuid())
+
+  type        NotificationType @unique
+  name        String
+  description String?
+
+  // Templates
+  titleTemplate        String  @map("title_template")
+  messageTemplate      String  @map("message_template")
+  emailSubjectTemplate String? @map("email_subject_template")
+  emailBodyTemplate    String? @map("email_body_template")
+  smsTemplate          String? @map("sms_template")
+
+  // Default Priority
+  defaultPriority NotificationPriority @default(NORMAL) @map("default_priority")
+
+  // Is this notification enabled by default?
+  enabledByDefault Boolean @default(true) @map("enabled_by_default")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("notification_templates")
+}
+
+enum NotificationType {
+  // Opportunity Events
+  STAGE_CHANGE
+  ASSIGNMENT
+  OPPORTUNITY_WON
+  OPPORTUNITY_LOST
+  OPPORTUNITY_CREATED
+
+  // Work Order Events
+  WORK_ORDER_CREATED
+  WORK_ORDER_STATUS_CHANGE
+  WORK_ORDER_COMPLETED
+
+  // Appointment Events
+  APPOINTMENT_SCHEDULED
+  APPOINTMENT_REMINDER
+  APPOINTMENT_COMPLETED
+  APPOINTMENT_CANCELLED
+
+  // Case Events
+  CASE_CREATED
+  CASE_ESCALATED
+  CASE_RESOLVED
+  CASE_COMMENT
+
+  // Task Events
+  TASK_ASSIGNED
+  TASK_DUE_SOON
+  TASK_OVERDUE
+  TASK_COMPLETED
+
+  // Quote/Order Events
+  QUOTE_CREATED
+  QUOTE_APPROVED
+  QUOTE_REJECTED
+  ORDER_CREATED
+  ORDER_STATUS_CHANGE
+
+  // Commission Events
+  COMMISSION_CREATED
+  COMMISSION_APPROVED
+  COMMISSION_PAID
+
+  // Email Events
+  EMAIL_RECEIVED
+  EMAIL_OPENED
+  EMAIL_BOUNCED
+
+  // Approval Events
+  APPROVAL_REQUESTED
+  APPROVAL_APPROVED
+  APPROVAL_REJECTED
+
+  // System Events
+  MENTION
+  COMMENT
+  DOCUMENT_UPLOADED
+  SYSTEM_ALERT
+}
+
+enum NotificationStatus {
+  UNREAD
+  READ
+  ARCHIVED
+  DELETED
+}
+
+enum NotificationPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum DigestFrequency {
+  DAILY
+  WEEKLY
+}
+
+// ============================================================================
+// APPROVAL WORKFLOWS
+// ============================================================================
+
+model ApprovalRequest {
+  id String @id @default(cuid())
+
+  // Request Details
+  type     ApprovalType
+  status   ApprovalStatus @default(PENDING)
+  priority Priority       @default(NORMAL)
+
+  // What is being approved
+  subject     String // Brief description of what's being approved
+  description String? // Detailed description
+
+  // Approval Values (for discount/commission approvals)
+  requestedValue Decimal? @map("requested_value") @db.Decimal(12, 2)
+  originalValue  Decimal? @map("original_value") @db.Decimal(12, 2)
+
+  // For discount approvals
+  discountType    DiscountType? @map("discount_type")
+  discountPercent Decimal?      @map("discount_percent") @db.Decimal(5, 2)
+  discountAmount  Decimal?      @map("discount_amount") @db.Decimal(12, 2)
+
+  // Workflow tracking
+  currentStep Int @default(1) @map("current_step")
+  totalSteps  Int @default(1) @map("total_steps")
+
+  // Decision
+  decision       ApprovalDecision?
+  decisionReason String?           @map("decision_reason")
+  decisionNotes  String?           @map("decision_notes")
+
+  // Timestamps
+  submittedAt DateTime  @default(now()) @map("submitted_at")
+  dueDate     DateTime? @map("due_date")
+  decidedAt   DateTime? @map("decided_at")
+  expiresAt   DateTime? @map("expires_at")
+
+  // Escalation
+  escalatedAt      DateTime? @map("escalated_at")
+  escalatedToId    String?   @map("escalated_to_id")
+  escalatedTo      User?     @relation("EscalatedApprovals", fields: [escalatedToId], references: [id])
+  escalationReason String?   @map("escalation_reason")
+
+  // Requester
+  requesterId String @map("requester_id")
+  requester   User   @relation("ApprovalRequester", fields: [requesterId], references: [id])
+
+  // Current Approver(s)
+  approverId String? @map("approver_id")
+  approver   User?   @relation("ApprovalApprover", fields: [approverId], references: [id])
+
+  // Decided By (final decision maker)
+  decidedById String? @map("decided_by_id")
+  decidedBy   User?   @relation("ApprovalDecider", fields: [decidedById], references: [id])
+
+  // Related Records (Opportunity Hub)
+  opportunityId String?      @map("opportunity_id")
+  opportunity   Opportunity? @relation(fields: [opportunityId], references: [id])
+
+  quoteId String? @map("quote_id")
+  quote   Quote?  @relation(fields: [quoteId], references: [id])
+
+  commissionId String?     @map("commission_id")
+  commission   Commission? @relation(fields: [commissionId], references: [id])
+
+  orderId String? @map("order_id")
+  order   Order?  @relation(fields: [orderId], references: [id])
+
+  // Metadata
+  metadata Json? // Additional data specific to approval type
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  steps          ApprovalStep[]
+  comments       ApprovalComment[]
+  attentionItems AttentionItem[]   @relation("ApprovalAttentionItems")
+
+  @@index([status])
+  @@index([type])
+  @@index([requesterId])
+  @@index([approverId])
+  @@index([opportunityId])
+  @@index([submittedAt])
+  @@map("approval_requests")
+}
+
+model ApprovalStep {
+  id String @id @default(cuid())
+
+  stepNumber Int            @map("step_number")
+  name       String // e.g., "Manager Approval", "VP Approval"
+  status     ApprovalStatus @default(PENDING)
+
+  // Approver for this step
+  approverId String? @map("approver_id")
+  approver   User?   @relation(fields: [approverId], references: [id])
+
+  // Decision for this step
+  decision       ApprovalDecision?
+  decisionReason String?           @map("decision_reason")
+  decidedAt      DateTime?         @map("decided_at")
+
+  // Parent
+  approvalRequestId String          @map("approval_request_id")
+  approvalRequest   ApprovalRequest @relation(fields: [approvalRequestId], references: [id], onDelete: Cascade)
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([approvalRequestId, stepNumber])
+  @@index([approvalRequestId])
+  @@index([status])
+  @@map("approval_steps")
+}
+
+model ApprovalComment {
+  id String @id @default(cuid())
+
+  content    String
+  isInternal Boolean @default(false) @map("is_internal") // Internal notes vs visible to requester
+
+  // Author
+  authorId String @map("author_id")
+  author   User   @relation(fields: [authorId], references: [id])
+
+  // Parent
+  approvalRequestId String          @map("approval_request_id")
+  approvalRequest   ApprovalRequest @relation(fields: [approvalRequestId], references: [id], onDelete: Cascade)
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([approvalRequestId])
+  @@map("approval_comments")
+}
+
+model ApprovalRule {
+  id String @id @default(cuid())
+
+  name        String
+  description String?
+  isActive    Boolean @default(true) @map("is_active")
+
+  // What type of approval this rule applies to
+  type ApprovalType
+
+  // Conditions (when this rule applies)
+  minAmount          Decimal? @map("min_amount") @db.Decimal(12, 2) // Trigger when value >= minAmount
+  maxAmount          Decimal? @map("max_amount") @db.Decimal(12, 2) // And value <= maxAmount (if set)
+  minDiscountPercent Decimal? @map("min_discount_percent") @db.Decimal(5, 2)
+
+  // Who can approve
+  approverRoles       String[] @map("approver_roles") // Roles that can approve
+  approverIds         String[] @map("approver_ids") // Specific user IDs
+  requireAllApprovers Boolean  @default(false) @map("require_all_approvers")
+
+  // Escalation
+  escalationHours Int?    @map("escalation_hours") // Auto-escalate after X hours
+  escalateToId    String? @map("escalate_to_id")
+
+  // Priority
+  priority  Int @default(0) // Higher priority rules are evaluated first
+  sortOrder Int @default(0) @map("sort_order")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([type])
+  @@index([isActive])
+  @@map("approval_rules")
+}
+
+// Approval Enums
+enum ApprovalType {
+  DISCOUNT // Discount approval on quote/order
+  COMMISSION // Commission approval (pre-commission, backend, etc.)
+  PRICE_OVERRIDE // Overriding price book prices
+  CREDIT // Credit/refund approval
+  SUPPLEMENT // Insurance supplement approval
+  CHANGE_ORDER // Change order approval
+  EXCEPTION // General exception approval
+}
+
+enum ApprovalStatus {
+  PENDING // Awaiting decision
+  IN_REVIEW // Being reviewed
+  APPROVED // Fully approved
+  REJECTED // Rejected
+  EXPIRED // Timed out without decision
+  CANCELLED // Cancelled by requester
+  ESCALATED // Escalated to higher authority
+}
+
+enum ApprovalDecision {
+  APPROVE
+  REJECT
+  REQUEST_CHANGES // Request changes before approval
+  DELEGATE // Delegate to another approver
+}
+
+enum DiscountType {
+  PERCENTAGE
+  FIXED_AMOUNT
+  CUSTOM
+}
+
+// ============================================================================
+// ATTENTION QUEUE
+// ============================================================================
+
+model AttentionItem {
+  id String @id @default(cuid())
+
+  // Item details
+  title       String
+  description String?
+  type        AttentionType
+  category    AttentionCategory @default(TASK)
+  priority    Priority          @default(NORMAL)
+  urgency     AttentionUrgency  @default(MEDIUM)
+  status      AttentionStatus   @default(PENDING)
+
+  // Source tracking - what triggered this item
+  sourceType AttentionSourceType
+  sourceId   String?             @map("source_id") // ID of the source record
+  sourceData Json?               @map("source_data") // Additional context
+
+  // Computed fields for display
+  dueDate     DateTime? @map("due_date")
+  daysOverdue Int?      @map("days_overdue")
+  amount      Decimal?  @db.Decimal(12, 2) // For financial items
+
+  // Assignment
+  assignedToId String? @map("assigned_to_id")
+  assignedTo   User?   @relation("AssignedAttentionItems", fields: [assignedToId], references: [id])
+  teamId       String? @map("team_id")
+
+  // Relations to parent records
+  opportunityId     String?          @map("opportunity_id")
+  opportunity       Opportunity?     @relation("OpportunityAttentionItems", fields: [opportunityId], references: [id])
+  accountId         String?          @map("account_id")
+  account           Account?         @relation("AccountAttentionItems", fields: [accountId], references: [id])
+  contactId         String?          @map("contact_id")
+  contact           Contact?         @relation("ContactAttentionItems", fields: [contactId], references: [id])
+  leadId            String?          @map("lead_id")
+  lead              Lead?            @relation("LeadAttentionItems", fields: [leadId], references: [id])
+  workOrderId       String?          @map("work_order_id")
+  workOrder         WorkOrder?       @relation("WorkOrderAttentionItems", fields: [workOrderId], references: [id])
+  quoteId           String?          @map("quote_id")
+  quote             Quote?           @relation("QuoteAttentionItems", fields: [quoteId], references: [id])
+  invoiceId         String?          @map("invoice_id")
+  invoice           Invoice?         @relation("InvoiceAttentionItems", fields: [invoiceId], references: [id])
+  caseId            String?          @map("case_id")
+  case              Case?            @relation("CaseAttentionItems", fields: [caseId], references: [id])
+  approvalRequestId String?          @map("approval_request_id")
+  approvalRequest   ApprovalRequest? @relation("ApprovalAttentionItems", fields: [approvalRequestId], references: [id])
+  conversationId    String?          @map("conversation_id")
+
+  // Action tracking
+  actionType          String?   @map("action_type") // What action to take
+  actionUrl           String?   @map("action_url") // Deep link
+  actionCompleted     Boolean   @default(false) @map("action_completed")
+  actionCompletedAt   DateTime? @map("action_completed_at")
+  actionCompletedById String?   @map("action_completed_by_id")
+
+  // Dismissal tracking
+  dismissedAt   DateTime? @map("dismissed_at")
+  dismissedById String?   @map("dismissed_by_id")
+  dismissedBy   User?     @relation("DismissedAttentionItems", fields: [dismissedById], references: [id])
+  dismissReason String?   @map("dismiss_reason")
+  snoozedUntil  DateTime? @map("snoozed_until")
+
+  // AI-generated insights
+  aiSummary         String? @map("ai_summary")
+  aiSuggestedAction String? @map("ai_suggested_action")
+  aiConfidence      Float?  @map("ai_confidence")
+
+  // Timestamps
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  expiresAt DateTime? @map("expires_at")
+
+  @@index([assignedToId])
+  @@index([status])
+  @@index([priority])
+  @@index([urgency])
+  @@index([type])
+  @@index([category])
+  @@index([sourceType])
+  @@index([opportunityId])
+  @@index([accountId])
+  @@index([dueDate])
+  @@index([createdAt])
+  @@map("attention_items")
+}
+
+// Attention item types - what kind of attention is needed
+enum AttentionType {
+  FOLLOW_UP // Follow up with customer
+  CALLBACK_REQUEST // Customer requested callback
+  OVERDUE_TASK // Task past due date
+  OVERDUE_INVOICE // Invoice past due
+  APPROVAL_NEEDED // Approval waiting
+  SCHEDULE_CONFLICT // Scheduling issue
+  UNREAD_MESSAGE // Unread SMS/Email
+  STALLED_DEAL // Opportunity not progressing
+  MISSING_INFO // Missing required information
+  CUSTOMER_COMPLAINT // Complaint or escalation
+  INSPECTION_DUE // Inspection needs scheduling
+  SUPPLEMENT_PENDING // Supplement awaiting action
+  PAYMENT_ISSUE // Payment problem
+  DOCUMENT_NEEDED // Document needs signing
+  WORK_ORDER_ISSUE // Work order problem
+  CASE_ESCALATION // Case needs attention
+  LEAD_AGING // Lead not contacted
+  QUOTE_EXPIRING // Quote about to expire
+  CONTRACT_ISSUE // Contract problem
+  GENERAL // General attention item
+}
+
+// Category for grouping
+enum AttentionCategory {
+  TASK // To-do items
+  COMMUNICATION // Messages, calls
+  FINANCIAL // Invoices, payments
+  APPROVAL // Approvals needed
+  SCHEDULING // Calendar/scheduling
+  DOCUMENT // Documents/signatures
+  ESCALATION // Issues/complaints
+}
+
+// Urgency levels
+enum AttentionUrgency {
+  CRITICAL // Needs immediate action
+  HIGH // Needs action today
+  MEDIUM // Needs action this week
+  LOW // Can wait
+}
+
+// Status of the attention item
+enum AttentionStatus {
+  PENDING // Needs action
+  IN_PROGRESS // Being worked on
+  COMPLETED // Action taken
+  DISMISSED // Dismissed without action
+  SNOOZED // Snoozed for later
+  EXPIRED // Past expiration
+}
+
+// Source types - where the item came from
+enum AttentionSourceType {
+  OPPORTUNITY // From opportunity
+  ACCOUNT // From account
+  CONTACT // From contact
+  LEAD // From lead
+  WORK_ORDER // From work order
+  SERVICE_APPOINTMENT // From service appointment
+  QUOTE // From quote
+  INVOICE // From invoice
+  PAYMENT // From payment
+  CASE // From case
+  CONVERSATION // From messaging
+  APPROVAL // From approval workflow
+  TASK // From task
+  CALENDAR // From calendar
+  WORKFLOW // From automated workflow
+  MANUAL // Manually created
+  AI // AI-generated
+}
+
+// ===========================================
+// PHASE 4: INTEGRATIONS & ADVANCED FEATURES
+// ===========================================
+
+// RingCentral Call Log - Linked to Opportunity Hub
+model CallLog {
+  id String @id @default(cuid())
+
+  // RingCentral identifiers (replaces Five9)
+  ringCentralCallId     String? @unique @map("ringcentral_call_id")
+  ringCentralSessionId  String? @map("ringcentral_session_id")
+  ringCentralTelephonyId String? @map("ringcentral_telephony_id")
+  extensionId           String? @map("extension_id")
+  extensionName         String? @map("extension_name")
+  recordingId           String? @map("recording_id")
+
+  // Call details
+  direction      CallDirection @default(OUTBOUND)
+  callType       CallType      @default(VOICE)
+  phoneNumber    String        @map("phone_number")
+  formattedPhone String?       @map("formatted_phone")
+
+  // Timing
+  startTime DateTime  @map("start_time")
+  endTime   DateTime? @map("end_time")
+  duration  Int? // Duration in seconds
+  ringTime  Int?      @map("ring_time") // Seconds until answered
+  holdTime  Int?      @map("hold_time") // Time on hold
+  talkTime  Int?      @map("talk_time") // Actual talk time
+
+  // Disposition
+  disposition      String? // Call result/disposition code
+  dispositionName  String? @map("disposition_name")
+  dispositionNotes String? @map("disposition_notes") @db.Text
+
+  // Recording
+  recordingUrl        String?              @map("recording_url")
+  recordingDuration   Int?                 @map("recording_duration")
+  transcription       String?              @db.Text
+  transcriptionStatus TranscriptionStatus? @map("transcription_status")
+
+  // AI Analysis
+  sentiment    CallSentiment?
+  summary      String?        @db.Text
+  keyPoints    Json?          @map("key_points") // Array of key discussion points
+  nextActions  Json?          @map("next_actions") // Suggested follow-ups
+  aiAnalyzedAt DateTime?      @map("ai_analyzed_at")
+
+  // Hub Links - Every call links to Opportunity
+  opportunityId String?      @map("opportunity_id")
+  opportunity   Opportunity? @relation(fields: [opportunityId], references: [id])
+  accountId     String?      @map("account_id")
+  account       Account?     @relation(fields: [accountId], references: [id])
+  contactId     String?      @map("contact_id")
+  contact       Contact?     @relation(fields: [contactId], references: [id])
+  leadId        String?      @map("lead_id")
+  lead          Lead?        @relation(fields: [leadId], references: [id])
+
+  // User who made/received call
+  userId String? @map("user_id")
+  user   User?   @relation(fields: [userId], references: [id])
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([ringCentralCallId])
+  @@index([opportunityId])
+  @@index([accountId])
+  @@index([contactId])
+  @@index([leadId])
+  @@index([userId])
+  @@index([startTime])
+  @@index([disposition])
+  @@map("call_logs")
+}
+
+enum CallDirection {
+  INBOUND
+  OUTBOUND
+  INTERNAL
+  TRANSFER
+}
+
+enum CallType {
+  VOICE
+  VOICEMAIL
+  CALLBACK
+  PREVIEW
+  PREDICTIVE
+  MANUAL
+}
+
+enum TranscriptionStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  NOT_AVAILABLE
+}
+
+enum CallSentiment {
+  VERY_POSITIVE
+  POSITIVE
+  NEUTRAL
+  NEGATIVE
+  VERY_NEGATIVE
+}
+
+// EagleView/GAF Measurement Report
+model MeasurementReport {
+  id String @id @default(cuid())
+
+  // External identifiers
+  externalId  String?             @unique @map("external_id") // EagleView/GAF report ID
+  provider    MeasurementProvider @default(EAGLEVIEW)
+  orderNumber String?             @map("order_number")
+  orderStatus String?             @map("order_status")
+
+  // Report details
+  reportType    ReportType @default(PREMIUM)
+  reportUrl     String?    @map("report_url")
+  reportPdfUrl  String?    @map("report_pdf_url")
+  reportXmlUrl  String?    @map("report_xml_url")
+  reportJsonUrl String?    @map("report_json_url")
+
+  // Property info
+  propertyAddress String  @map("property_address")
+  propertyCity    String? @map("property_city")
+  propertyState   String? @map("property_state")
+  propertyZip     String? @map("property_zip")
+  latitude        Float?
+  longitude       Float?
+
+  // Roof measurements
+  totalRoofArea      Float?  @map("total_roof_area") // Square feet
+  totalRoofSquares   Float?  @map("total_roof_squares") // Roofing squares
+  predominantPitch   String? @map("predominant_pitch")
+  pitches            Json? // Array of pitch values and areas
+  facets             Int? // Number of roof facets
+  ridgeLength        Float?  @map("ridge_length")
+  hipLength          Float?  @map("hip_length")
+  valleyLength       Float?  @map("valley_length")
+  rakeLength         Float?  @map("rake_length")
+  eaveLength         Float?  @map("eave_length")
+  flashingLength     Float?  @map("flashing_length")
+  stepFlashingLength Float?  @map("step_flashing_length")
+  dripEdgeLength     Float?  @map("drip_edge_length")
+
+  // Structure data
+  structureType  String?         @map("structure_type")
+  stories        Int?
+  buildingHeight Float?          @map("building_height")
+  roofComplexity RoofComplexity? @map("roof_complexity")
+
+  // Siding measurements (if applicable)
+  totalSidingArea Float? @map("total_siding_area")
+  sidingWalls     Json?  @map("siding_walls") // Wall-by-wall measurements
+
+  // Gutter measurements
+  totalGutterLength Float? @map("total_gutter_length")
+  downspoutCount    Int?   @map("downspout_count")
+
+  // Window/door counts
+  windowCount   Int? @map("window_count")
+  doorCount     Int? @map("door_count")
+  skylightCount Int? @map("skylight_count")
+
+  // Waste factors
+  suggestedWasteFactor Float? @map("suggested_waste_factor") // Percentage
+
+  // Notes and comments
+  notes String? @db.Text
+
+  // Hover-specific fields
+  captureLink     String? @map("capture_link") // Link to share for photo capture
+  modelViewerUrl  String? @map("model_viewer_url") // 3D model viewer URL
+  designViewerUrl String? @map("design_viewer_url") // Design visualization URL
+
+  // Raw data storage
+  rawData Json? @map("raw_data") // Full provider response
+
+  // Hub Links
+  opportunityId String      @map("opportunity_id")
+  opportunity   Opportunity @relation(fields: [opportunityId], references: [id])
+  accountId     String?     @map("account_id")
+  account       Account?    @relation(fields: [accountId], references: [id])
+
+  // Ordered by
+  orderedById String? @map("ordered_by_id")
+  orderedBy   User?   @relation(fields: [orderedById], references: [id])
+
+  // Timestamps
+  orderedAt   DateTime? @map("ordered_at")
+  deliveredAt DateTime? @map("delivered_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  @@index([externalId])
+  @@index([opportunityId])
+  @@index([accountId])
+  @@index([provider])
+  @@index([orderStatus])
+  @@map("measurement_reports")
+}
+
+enum MeasurementProvider {
+  EAGLEVIEW
+  GAF_QUICKMEASURE
+  ROOFSNAP
+  HOVER
+  MANUAL
+}
+
+enum ReportType {
+  BASIC
+  PREMIUM
+  ULTRA_PREMIUM
+  COMMERCIAL
+  WALLS_ONLY
+  ROOF_AND_WALLS
+}
+
+enum RoofComplexity {
+  SIMPLE // 1-10 facets, simple shapes
+  MODERATE // 11-25 facets, some complexity
+  COMPLEX // 26-50 facets, significant complexity
+  VERY_COMPLEX // 50+ facets, dormers, valleys, etc.
+}
+
+// Integration OAuth Credentials Storage
+// Stores refresh tokens and other credentials for third-party integrations
+model IntegrationCredential {
+  id String @id @default(cuid())
+
+  // Provider identifier (unique per provider)
+  provider String @unique // e.g., 'HOVER', 'COMPANYCAM', etc.
+
+  // OAuth tokens
+  accessToken    String?   @map("access_token") @db.Text
+  refreshToken   String?   @map("refresh_token") @db.Text
+  tokenExpiresAt DateTime? @map("token_expires_at")
+
+  // Additional credentials (API keys, etc.)
+  apiKey       String? @map("api_key") @db.Text
+  clientId     String? @map("client_id")
+  clientSecret String? @map("client_secret") @db.Text
+
+  // Webhook configuration
+  webhookSecret String? @map("webhook_secret") @db.Text
+  webhookUrl    String? @map("webhook_url")
+
+  // Status and metadata
+  isActive   Boolean   @default(true) @map("is_active")
+  lastUsedAt DateTime? @map("last_used_at")
+  metadata   Json? // Additional provider-specific data
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([provider])
+  @@index([isActive])
+  @@map("integration_credentials")
+}
+
+// Advanced Scheduling Engine
+model ScheduleOptimization {
+  id String @id @default(cuid())
+
+  // Optimization run details
+  runDate DateTime            @map("run_date")
+  runType OptimizationRunType @map("run_type")
+  status  OptimizationStatus  @default(PENDING)
+
+  // Scope
+  territoryId String?           @map("territory_id")
+  territory   ServiceTerritory? @relation(fields: [territoryId], references: [id])
+  startDate   DateTime          @map("start_date")
+  endDate     DateTime          @map("end_date")
+  resourceIds String[]          @map("resource_ids") // Service resources included
+
+  // Input metrics
+  appointmentsConsidered Int?  @map("appointments_considered")
+  resourcesConsidered    Int?  @map("resources_considered")
+  constraints            Json? // Travel time, skills, availability, etc.
+
+  // Results
+  appointmentsOptimized   Int?   @map("appointments_optimized")
+  appointmentsRescheduled Int?   @map("appointments_rescheduled")
+  travelTimeReduced       Int?   @map("travel_time_reduced") // Minutes saved
+  utilizationImproved     Float? @map("utilization_improved") // Percentage points
+
+  // Changes made
+  changes          Json? // Array of appointment changes
+  suggestedChanges Json? @map("suggested_changes") // For manual review
+
+  // Performance
+  executionTimeMs  Int?    @map("execution_time_ms")
+  algorithmVersion String? @map("algorithm_version")
+
+  // Approval
+  autoApproved Boolean   @default(false) @map("auto_approved")
+  approvedById String?   @map("approved_by_id")
+  approvedBy   User?     @relation(fields: [approvedById], references: [id])
+  approvedAt   DateTime? @map("approved_at")
+
+  // Timestamps
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  completedAt DateTime? @map("completed_at")
+
+  @@index([territoryId])
+  @@index([runDate])
+  @@index([status])
+  @@map("schedule_optimizations")
+}
+
+// Resource Capacity & Skills for Scheduling
+model ResourceCapacity {
+  id String @id @default(cuid())
+
+  serviceResourceId String          @map("service_resource_id")
+  serviceResource   ServiceResource @relation(fields: [serviceResourceId], references: [id])
+
+  // Date-specific capacity
+  date      DateTime @db.Date
+  dayOfWeek Int      @map("day_of_week") // 0-6, Sunday = 0
+
+  // Time windows
+  availableFrom DateTime  @map("available_from")
+  availableTo   DateTime  @map("available_to")
+  breakStart    DateTime? @map("break_start")
+  breakEnd      DateTime? @map("break_end")
+
+  // Capacity
+  maxAppointments    Int?   @map("max_appointments")
+  maxTravelMinutes   Int?   @map("max_travel_minutes")
+  currentUtilization Float? @map("current_utilization") // Percentage booked
+
+  // Location preferences
+  preferredZipCodes String[] @map("preferred_zip_codes")
+  maxTravelRadius   Float?   @map("max_travel_radius") // Miles
+
+  // Override reason
+  isOverride     Boolean @default(false) @map("is_override")
+  overrideReason String? @map("override_reason")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([serviceResourceId, date])
+  @@index([serviceResourceId])
+  @@index([date])
+  @@map("resource_capacities")
+}
+
+enum OptimizationRunType {
+  DAILY_AUTO // Automatic daily optimization
+  WEEKLY_AUTO // Weekly optimization
+  MANUAL // Manually triggered
+  EMERGENCY // Emergency rescheduling
+  RESOURCE_CHANGE // Resource availability changed
+  NEW_APPOINTMENTS // Batch of new appointments
+}
+
+enum OptimizationStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  PARTIALLY_APPLIED
+  AWAITING_APPROVAL
+  CANCELLED
+}
+
+// Mobile App Session Tracking
+model MobileSession {
+  id String @id @default(cuid())
+
+  userId String @map("user_id")
+  user   User   @relation(fields: [userId], references: [id])
+
+  // Device info
+  deviceId    String     @map("device_id")
+  deviceType  DeviceType @map("device_type")
+  deviceModel String?    @map("device_model")
+  osVersion   String?    @map("os_version")
+  appVersion  String     @map("app_version")
+
+  // Session details
+  sessionToken String   @unique @map("session_token")
+  pushToken    String?  @map("push_token") // For push notifications
+  lastActiveAt DateTime @map("last_active_at")
+  lastLocation Json?    @map("last_location") // {lat, lng, accuracy}
+
+  // Session status
+  isActive     Boolean   @default(true) @map("is_active")
+  loggedOutAt  DateTime? @map("logged_out_at")
+  logoutReason String?   @map("logout_reason")
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([userId])
+  @@index([deviceId])
+  @@index([sessionToken])
+  @@index([isActive])
+  @@map("mobile_sessions")
+}
+
+model MobileActivity {
+  id String @id @default(cuid())
+
+  userId    String  @map("user_id")
+  user      User    @relation(fields: [userId], references: [id])
+  sessionId String? @map("session_id")
+
+  // Activity details
+  activityType MobileActivityType @map("activity_type")
+  screenName   String?            @map("screen_name")
+  action       String? // Specific action taken
+
+  // Context - linked to Opportunity Hub
+  opportunityId String?      @map("opportunity_id")
+  opportunity   Opportunity? @relation(fields: [opportunityId], references: [id])
+  accountId     String?      @map("account_id")
+  account       Account?     @relation(fields: [accountId], references: [id])
+  entityType    String?      @map("entity_type")
+  entityId      String?      @map("entity_id")
+
+  // Location
+  latitude  Float?
+  longitude Float?
+  accuracy  Float?
+
+  // Metadata
+  metadata Json? // Additional context data
+  duration Int? // Time spent in seconds
+
+  // Timestamps
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([opportunityId])
+  @@index([activityType])
+  @@index([createdAt])
+  @@map("mobile_activities")
+}
+
+enum DeviceType {
+  IOS
+  ANDROID
+  TABLET_IOS
+  TABLET_ANDROID
+  WEB_MOBILE
+}
+
+enum MobileActivityType {
+  APP_OPEN
+  APP_CLOSE
+  APP_BACKGROUND
+  SCREEN_VIEW
+  OPPORTUNITY_VIEW
+  OPPORTUNITY_UPDATE
+  PHOTO_CAPTURE
+  PHOTO_UPLOAD
+  SIGNATURE_CAPTURE
+  FORM_SUBMIT
+  CALL_INITIATED
+  CALL_LOGGED
+  CHECKIN
+  CHECKOUT
+  GPS_UPDATE
+  PUSH_RECEIVED
+  PUSH_OPENED
+  OFFLINE_SYNC
+  ERROR
+}
+
+// ============================================================================
+// ACTIVITY FEED - Unified activity log for all communications and actions
+// ============================================================================
+
+model Activity {
+  id String @id @default(cuid())
+
+  // Activity Type
+  type    ActivityType
+  subType String?      @map("sub_type") // e.g., INBOUND, OUTBOUND for messages
+
+  // Subject/Title for display
+  subject     String?
+  description String? @db.Text
+
+  // Content for messages
+  body     String? @db.Text
+  bodyHtml String? @map("body_html") @db.Text
+
+  // Status
+  status String? // SENT, DELIVERED, READ, FAILED, COMPLETED, etc.
+
+  // Link to source record
+  sourceId   String? @map("source_id") // ID of the related Message, Email, Call, etc.
+  sourceType String? @map("source_type") // MESSAGE, EMAIL, CALL, TASK, EVENT, NOTE
+
+  // Related Records (Opportunity Hub pattern)
+  accountId String?  @map("account_id")
+  account   Account? @relation("AccountActivities", fields: [accountId], references: [id])
+
+  contactId String?  @map("contact_id")
+  contact   Contact? @relation("ContactActivities", fields: [contactId], references: [id])
+
+  opportunityId String?      @map("opportunity_id")
+  opportunity   Opportunity? @relation("OpportunityActivities", fields: [opportunityId], references: [id])
+
+  leadId String? @map("lead_id")
+  lead   Lead?   @relation("LeadActivities", fields: [leadId], references: [id])
+
+  // User who performed the activity
+  userId String? @map("user_id")
+  user   User?   @relation("UserActivities", fields: [userId], references: [id])
+
+  // External parties (for messages/calls)
+  externalPhone String? @map("external_phone")
+  externalEmail String? @map("external_email")
+  externalName  String? @map("external_name")
+
+  // Metadata
+  metadata Json? // Additional context data
+
+  // Timestamps
+  occurredAt DateTime @default(now()) @map("occurred_at") // When the activity happened
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([accountId])
+  @@index([contactId])
+  @@index([opportunityId])
+  @@index([leadId])
+  @@index([userId])
+  @@index([type])
+  @@index([occurredAt])
+  @@map("activities")
+}
+
+enum ActivityType {
+  // Communication
+  SMS_SENT
+  SMS_RECEIVED
+  EMAIL_SENT
+  EMAIL_RECEIVED
+  CALL_OUTBOUND
+  CALL_INBOUND
+  CALL_MISSED
+  VOICEMAIL
+
+  // Tasks & Events
+  TASK_CREATED
+  TASK_COMPLETED
+  EVENT_CREATED
+  EVENT_COMPLETED
+
+  // Record Changes
+  RECORD_CREATED
+  RECORD_UPDATED
+  STATUS_CHANGED
+  STAGE_CHANGED
+  OWNER_CHANGED
+
+  // Documents
+  DOCUMENT_UPLOADED
+  DOCUMENT_SIGNED
+  QUOTE_SENT
+  CONTRACT_SIGNED
+
+  // Notes
+  NOTE_ADDED
+  COMMENT_ADDED
+
+  // System
+  SYSTEM_NOTIFICATION
+  WORKFLOW_TRIGGERED
+}

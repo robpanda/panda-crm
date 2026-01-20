@@ -1,0 +1,17 @@
+{
+  "name": "pandacam-ai-analyzer",
+  "version": "1.0.0",
+  "description": "Lambda function for AI-powered photo analysis using AWS Rekognition",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "build": "npm install && zip -r function.zip .",
+    "deploy": "aws lambda update-function-code --function-name pandacam-ai-analyzer --zip-file fileb://function.zip"
+  },
+  "dependencies": {
+    "@aws-sdk/client-rekognition": "^3.450.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

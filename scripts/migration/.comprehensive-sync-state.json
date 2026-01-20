@@ -1,0 +1,10 @@
+{
+  "lastSync": "2026-01-16T14:03:00.141Z",
+  "results": {
+    "payments": {
+      "synced": 25935,
+      "errors": 4023,
+      "created": 0
+    }
+  }
+}

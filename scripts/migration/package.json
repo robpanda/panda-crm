@@ -1,0 +1,32 @@
+{
+  "name": "panda-crm-migration",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Salesforce to Panda CRM data migration scripts",
+  "main": "salesforce-sync.js",
+  "scripts": {
+    "sync": "node salesforce-sync.js",
+    "sync:users": "node salesforce-sync.js --entity users",
+    "sync:accounts": "node salesforce-sync.js --entity accounts",
+    "sync:contacts": "node salesforce-sync.js --entity contacts",
+    "sync:opportunities": "node salesforce-sync.js --entity opportunities",
+    "sync:workorders": "node salesforce-sync.js --entity workorders",
+    "sync:full": "node salesforce-sync.js --full",
+    "daily-sync": "node comprehensive-daily-sync.js",
+    "daily-sync:full": "node comprehensive-daily-sync.js --force",
+    "daily-sync:dry": "node comprehensive-daily-sync.js --dry-run"
+  },
+  "dependencies": {
+    "@aws-sdk/client-cognito-identity-provider": "^3.958.0",
+    "@aws-sdk/client-s3": "^3.962.0",
+    "@aws-sdk/client-secrets-manager": "^3.0.0",
+    "@prisma/client": "^5.22.0",
+    "csv-parse": "^6.1.0",
+    "dotenv": "^16.0.0",
+    "jsforce": "^2.0.0-beta.29",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "prisma": "^5.22.0"
+  }
+}

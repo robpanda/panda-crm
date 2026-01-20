@@ -1,0 +1,146 @@
+name: Build and Deploy to ECS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      service:
+        description: 'Service to deploy (or "all" for all services)'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - accounts
+          - contacts
+          - leads
+          - opportunities
+          - workorders
+          - quotes
+          - invoices
+          - auth
+          - workflows
+          - documents
+          - integrations
+          - bamboogli
+
+env:
+  AWS_REGION: us-east-2
+  ECR_REGISTRY: 679128292059.dkr.ecr.us-east-2.amazonaws.com
+  ECS_CLUSTER: panda-crm-cluster
+
+jobs:
+  build-and-push:
+    name: Build and Push Docker Images
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - name: accounts
+            port: 3001
+          - name: contacts
+            port: 3002
+          - name: leads
+            port: 3003
+          - name: opportunities
+            port: 3004
+          - name: workorders
+            port: 3005
+          - name: quotes
+            port: 3006
+          - name: invoices
+            port: 3007
+          - name: auth
+            port: 3000
+          - name: workflows
+            port: 3008
+          - name: documents
+            port: 3009
+          - name: integrations
+            port: 3010
+          - name: bamboogli
+            port: 3012
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check if service should be deployed
+        id: check
+        run: |
+          if [ "${{ github.event.inputs.service }}" = "all" ] || [ "${{ github.event.inputs.service }}" = "${{ matrix.service.name }}" ] || [ "${{ github.event_name }}" = "push" ]; then
+            echo "should_deploy=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_deploy=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check AWS credentials are configured
+        if: steps.check.outputs.should_deploy == 'true'
+        run: |
+          if [ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ] || [ -z "${{ secrets.AWS_SECRET_ACCESS_KEY }}" ]; then
+            echo "::error::AWS credentials not configured. Please add AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY to repository secrets."
+            exit 1
+          fi
+          echo "AWS credentials are configured"
+
+      - name: Configure AWS credentials
+        if: steps.check.outputs.should_deploy == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        if: steps.check.outputs.should_deploy == 'true'
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push Docker image
+        if: steps.check.outputs.should_deploy == 'true'
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+          SERVICE_NAME: ${{ matrix.service.name }}
+        run: |
+          # Build Docker image
+          docker build \
+            -t $ECR_REGISTRY/panda-crm/$SERVICE_NAME:$IMAGE_TAG \
+            -t $ECR_REGISTRY/panda-crm/$SERVICE_NAME:latest \
+            -f services/$SERVICE_NAME/Dockerfile \
+            .
+
+          # Push to ECR
+          docker push $ECR_REGISTRY/panda-crm/$SERVICE_NAME:$IMAGE_TAG
+          docker push $ECR_REGISTRY/panda-crm/$SERVICE_NAME:latest
+
+      - name: Update ECS Service
+        if: steps.check.outputs.should_deploy == 'true'
+        env:
+          SERVICE_NAME: ${{ matrix.service.name }}
+        run: |
+          # Force new deployment
+          aws ecs update-service \
+            --cluster $ECS_CLUSTER \
+            --service $SERVICE_NAME-service \
+            --force-new-deployment \
+            --region $AWS_REGION || echo "Service may not exist yet, skipping update"
+
+  notify:
+    name: Deployment Notification
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: always()
+
+    steps:
+      - name: Notify success
+        if: needs.build-and-push.result == 'success'
+        run: echo "✅ Deployment completed successfully!"
+
+      - name: Notify failure
+        if: needs.build-and-push.result == 'failure'
+        run: |
+          echo "❌ Deployment failed!"
+          exit 1

@@ -1,7 +1,19 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { X, Camera, Paperclip, AlertCircle, Loader, Sparkles, Lightbulb, Search } from 'lucide-react';
 import html2canvas from 'html2canvas';
-import { debounce } from 'lodash';
+
+// Simple debounce implementation to avoid lodash dependency
+function debounce(func, wait) {
+  let timeout;
+  return function executedFunction(...args) {
+    const later = () => {
+      clearTimeout(timeout);
+      func(...args);
+    };
+    clearTimeout(timeout);
+    timeout = setTimeout(later, wait);
+  };
+}
 
 const CATEGORIES = [
   'Technical Issue',

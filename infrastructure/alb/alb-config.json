@@ -1,0 +1,273 @@
+{
+  "loadBalancer": {
+    "name": "panda-crm-alb",
+    "scheme": "internet-facing",
+    "type": "application",
+    "ipAddressType": "ipv4",
+    "securityGroups": ["sg-alb"],
+    "subnets": ["subnet-public-1a", "subnet-public-1b"],
+    "tags": [
+      {
+        "key": "Project",
+        "value": "panda-crm"
+      }
+    ]
+  },
+  "targetGroups": [
+    {
+      "name": "accounts-tg",
+      "protocol": "HTTP",
+      "port": 3001,
+      "targetType": "ip",
+      "vpcId": "vpc-panda-crm",
+      "healthCheck": {
+        "protocol": "HTTP",
+        "path": "/health",
+        "port": "traffic-port",
+        "healthyThreshold": 2,
+        "unhealthyThreshold": 5,
+        "timeout": 5,
+        "interval": 30,
+        "matcher": {
+          "httpCode": "200"
+        }
+      }
+    },
+    {
+      "name": "contacts-tg",
+      "protocol": "HTTP",
+      "port": 3002,
+      "targetType": "ip",
+      "vpcId": "vpc-panda-crm",
+      "healthCheck": {
+        "protocol": "HTTP",
+        "path": "/health",
+        "port": "traffic-port",
+        "healthyThreshold": 2,
+        "unhealthyThreshold": 5,
+        "timeout": 5,
+        "interval": 30,
+        "matcher": {
+          "httpCode": "200"
+        }
+      }
+    },
+    {
+      "name": "leads-tg",
+      "protocol": "HTTP",
+      "port": 3003,
+      "targetType": "ip",
+      "vpcId": "vpc-panda-crm",
+      "healthCheck": {
+        "protocol": "HTTP",
+        "path": "/health",
+        "port": "traffic-port",
+        "healthyThreshold": 2,
+        "unhealthyThreshold": 5,
+        "timeout": 5,
+        "interval": 30,
+        "matcher": {
+          "httpCode": "200"
+        }
+      }
+    },
+    {
+      "name": "opportunities-tg",
+      "protocol": "HTTP",
+      "port": 3004,
+      "targetType": "ip",
+      "vpcId": "vpc-panda-crm",
+      "healthCheck": {
+        "protocol": "HTTP",
+        "path": "/health",
+        "port": "traffic-port",
+        "healthyThreshold": 2,
+        "unhealthyThreshold": 5,
+        "timeout": 5,
+        "interval": 30,
+        "matcher": {
+          "httpCode": "200"
+        }
+      }
+    },
+    {
+      "name": "workorders-tg",
+      "protocol": "HTTP",
+      "port": 3005,
+      "targetType": "ip",
+      "vpcId": "vpc-panda-crm",
+      "healthCheck": {
+        "protocol": "HTTP",
+        "path": "/health",
+        "port": "traffic-port",
+        "healthyThreshold": 2,
+        "unhealthyThreshold": 5,
+        "timeout": 5,
+        "interval": 30,
+        "matcher": {
+          "httpCode": "200"
+        }
+      }
+    },
+    {
+      "name": "quotes-tg",
+      "protocol": "HTTP",
+      "port": 3006,
+      "targetType": "ip",
+      "vpcId": "vpc-panda-crm",
+      "healthCheck": {
+        "protocol": "HTTP",
+        "path": "/health",
+        "port": "traffic-port",
+        "healthyThreshold": 2,
+        "unhealthyThreshold": 5,
+        "timeout": 5,
+        "interval": 30,
+        "matcher": {
+          "httpCode": "200"
+        }
+      }
+    },
+    {
+      "name": "invoices-tg",
+      "protocol": "HTTP",
+      "port": 3007,
+      "targetType": "ip",
+      "vpcId": "vpc-panda-crm",
+      "healthCheck": {
+        "protocol": "HTTP",
+        "path": "/health",
+        "port": "traffic-port",
+        "healthyThreshold": 2,
+        "unhealthyThreshold": 5,
+        "timeout": 5,
+        "interval": 30,
+        "matcher": {
+          "httpCode": "200"
+        }
+      }
+    }
+  ],
+  "listener": {
+    "port": 443,
+    "protocol": "HTTPS",
+    "sslPolicy": "ELBSecurityPolicy-TLS13-1-2-2021-06",
+    "defaultActions": [
+      {
+        "type": "fixed-response",
+        "fixedResponseConfig": {
+          "contentType": "application/json",
+          "messageBody": "{\"error\": \"Not found\"}",
+          "statusCode": "404"
+        }
+      }
+    ],
+    "rules": [
+      {
+        "priority": 10,
+        "conditions": [
+          {
+            "field": "path-pattern",
+            "values": ["/api/accounts*"]
+          }
+        ],
+        "actions": [
+          {
+            "type": "forward",
+            "targetGroupArn": "accounts-tg"
+          }
+        ]
+      },
+      {
+        "priority": 20,
+        "conditions": [
+          {
+            "field": "path-pattern",
+            "values": ["/api/contacts*"]
+          }
+        ],
+        "actions": [
+          {
+            "type": "forward",
+            "targetGroupArn": "contacts-tg"
+          }
+        ]
+      },
+      {
+        "priority": 30,
+        "conditions": [
+          {
+            "field": "path-pattern",
+            "values": ["/api/leads*"]
+          }
+        ],
+        "actions": [
+          {
+            "type": "forward",
+            "targetGroupArn": "leads-tg"
+          }
+        ]
+      },
+      {
+        "priority": 40,
+        "conditions": [
+          {
+            "field": "path-pattern",
+            "values": ["/api/opportunities*"]
+          }
+        ],
+        "actions": [
+          {
+            "type": "forward",
+            "targetGroupArn": "opportunities-tg"
+          }
+        ]
+      },
+      {
+        "priority": 50,
+        "conditions": [
+          {
+            "field": "path-pattern",
+            "values": ["/api/work-orders*", "/api/service-appointments*", "/api/resources*", "/api/scheduling*"]
+          }
+        ],
+        "actions": [
+          {
+            "type": "forward",
+            "targetGroupArn": "workorders-tg"
+          }
+        ]
+      },
+      {
+        "priority": 60,
+        "conditions": [
+          {
+            "field": "path-pattern",
+            "values": ["/api/quotes*", "/api/products*"]
+          }
+        ],
+        "actions": [
+          {
+            "type": "forward",
+            "targetGroupArn": "quotes-tg"
+          }
+        ]
+      },
+      {
+        "priority": 70,
+        "conditions": [
+          {
+            "field": "path-pattern",
+            "values": ["/api/invoices*", "/api/payments*"]
+          }
+        ],
+        "actions": [
+          {
+            "type": "forward",
+            "targetGroupArn": "invoices-tg"
+          }
+        ]
+      }
+    ]
+  }
+}

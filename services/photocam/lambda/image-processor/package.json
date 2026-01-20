@@ -1,0 +1,21 @@
+{
+  "name": "pandacam-image-processor",
+  "version": "1.0.0",
+  "description": "Lambda function for processing uploaded photos - creates display and thumbnail versions",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "build": "npm install && zip -r function.zip .",
+    "deploy": "aws lambda update-function-code --function-name pandacam-image-processor --zip-file fileb://function.zip"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.450.0",
+    "@aws-sdk/client-dynamodb": "^3.450.0",
+    "@aws-sdk/lib-dynamodb": "^3.450.0",
+    "sharp": "^0.33.2",
+    "exifr": "^7.1.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

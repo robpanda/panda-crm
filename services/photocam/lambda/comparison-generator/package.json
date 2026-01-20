@@ -1,0 +1,18 @@
+{
+  "name": "pandacam-comparison-generator",
+  "version": "1.0.0",
+  "description": "Lambda function for generating before/after comparison images",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "build": "npm install && zip -r function.zip .",
+    "deploy": "aws lambda update-function-code --function-name pandacam-comparison-generator --zip-file fileb://function.zip"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.450.0",
+    "sharp": "^0.33.2"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

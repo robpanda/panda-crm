@@ -1,0 +1,12 @@
+# Panda Roof ML Analyzer Lambda Dependencies
+# ============================================
+
+# Core
+boto3>=1.34.0
+numpy==1.26.4
+pillow>=10.0.0
+
+# For production ML model (uncomment when model is ready)
+# torch>=2.0.0
+# torchvision>=0.15.0
+# opencv-python-headless>=4.8.0

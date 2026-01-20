@@ -1,0 +1,18 @@
+# Roof Measurement Pipeline Lambda Dependencies
+# ==============================================
+
+# AWS SDK
+boto3>=1.28.0
+
+# Image processing - pinned to versions compatible with Lambda Python 3.11 base image (GCC 7.3)
+# Using pre-built binary wheels to avoid compilation issues
+numpy>=1.24.0,<2.0.0
+Pillow>=10.0.0
+scipy>=1.11.0,<1.14.0
+opencv-python-headless>=4.8.0  # Headless version for server/Lambda environments (no GUI dependencies)
+
+# HTTP requests (for NAIP fetching)
+requests>=2.31.0
+
+# Report generation
+reportlab>=4.0.0

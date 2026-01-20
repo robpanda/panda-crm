@@ -1,0 +1,36 @@
+════════════════════════════════════════════════════════════════════════════
+AWS CLOUDSHELL DEPLOYMENT COMMANDS
+════════════════════════════════════════════════════════════════════════════
+
+Copy and paste these commands into AWS CloudShell one at a time:
+
+────────────────────────────────────────────────────────────────────────────
+Step 1: Download frontend files from S3
+────────────────────────────────────────────────────────────────────────────
+
+rm -rf frontend-deploy && mkdir frontend-deploy && cd frontend-deploy
+aws s3 sync s3://panda-crm-support/temp/frontend-src/ . --region us-east-2
+
+────────────────────────────────────────────────────────────────────────────
+Step 2: Install dependencies and build
+────────────────────────────────────────────────────────────────────────────
+
+npm install
+npm run build
+
+────────────────────────────────────────────────────────────────────────────
+Step 3: Deploy to S3
+────────────────────────────────────────────────────────────────────────────
+
+aws s3 sync dist/ s3://panda-crm-frontend-prod/ --delete --region us-east-2
+
+────────────────────────────────────────────────────────────────────────────
+Step 4: Invalidate CloudFront cache
+────────────────────────────────────────────────────────────────────────────
+
+aws cloudfront create-invalidation --distribution-id EDKIMD3LRK2M8 --paths "/*" --region us-east-2
+
+════════════════════════════════════════════════════════════════════════════
+DONE! The support system will be live at:
+https://crm.pandaadmin.com/support
+════════════════════════════════════════════════════════════════════════════
