@@ -140,24 +140,11 @@ router.get('/filter/:resource', async (req, res, next) => {
 /**
  * Get all roles
  * GET /permissions/roles
+ * Note: All authenticated users can view the role list for dropdown menus.
+ * This is read-only and doesn't expose sensitive permission details.
  */
 router.get('/roles', async (req, res, next) => {
   try {
-    const context = getUserContext(req);
-
-    // Check if user has permission to view roles
-    // Allow if user can read roles OR if they have users.read permission (admin access)
-    const canViewRoles = await permissionService.hasPermission(context.userId, 'roles', 'read');
-    const canViewUsers = await permissionService.hasPermission(context.userId, 'users', 'read');
-    const canViewAudit = await permissionService.hasPermission(context.userId, 'audit_logs', 'read');
-
-    if (!canViewRoles && !canViewUsers && !canViewAudit) {
-      return res.status(403).json({
-        success: false,
-        error: 'Permission denied - requires roles.read, users.read, or audit_logs.read permission',
-      });
-    }
-
     const roles = await permissionService.getAllRoles();
 
     res.json({
