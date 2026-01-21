@@ -437,27 +437,66 @@ Panda Exteriors
     // Generate signed document with signature embedded
     const signedDocumentUrl = await this.embedSignature(agreement, signatureData);
 
+    // Determine if agreement is now complete (change orders have agent signature already)
+    const hasAgentSignature = agreement.agentSignedAt || agreement.agentSignerName;
+    const finalStatus = hasAgentSignature ? 'COMPLETED' : 'SIGNED';
+
     // Update agreement status
     const updated = await prisma.agreement.update({
       where: { id: agreement.id },
       data: {
-        status: 'SIGNED',
+        status: finalStatus,
         signedAt: new Date(),
         signedDocumentUrl,
+        ...(hasAgentSignature && { completedAt: new Date() }),
       },
     });
 
     // Create audit log
-    await this.createAuditLog(agreement.id, 'SIGNED', {
+    await this.createAuditLog(agreement.id, finalStatus === 'COMPLETED' ? 'COMPLETED' : 'SIGNED', {
       status: 'VIEWED',
     }, {
-      status: 'SIGNED',
+      status: finalStatus,
       signerName: signature.signerName,
       ipAddress,
     }, null);
 
     // Send confirmation emails
     await this.sendCompletionEmails(updated, signature);
+
+    // If this is a change order that is now fully signed, trigger completion workflow
+    if (finalStatus === 'COMPLETED' && agreement.mergeData?.changeDescription) {
+      const WORKFLOWS_SERVICE_URL = process.env.WORKFLOWS_SERVICE_URL || 'http://workflows-service:3009';
+      try {
+        logger.info(`Triggering change order completed workflow for agreement ${agreement.id}`);
+
+        // Find the associated case for this change order
+        const associatedCase = await prisma.case.findFirst({
+          where: {
+            opportunityId: agreement.opportunityId,
+            type: 'Change Order',
+            status: { not: 'CLOSED' },
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+
+        await fetch(`${WORKFLOWS_SERVICE_URL}/api/triggers/change-order-completed`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agreementId: agreement.id,
+            caseId: associatedCase?.id,
+            opportunityId: agreement.opportunityId,
+            amendmentAmount: agreement.mergeData?.amendmentAmount,
+            newTotal: agreement.mergeData?.newTotal,
+            userId: null, // Customer signed, no user ID
+          }),
+        });
+      } catch (triggerErr) {
+        logger.warn('Failed to trigger change order completed workflow:', triggerErr.message);
+        // Non-fatal - continue without triggering
+      }
+    }
 
     logger.info(`Agreement signed: ${agreement.id}`);
 

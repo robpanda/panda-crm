@@ -370,18 +370,26 @@ router.get('/expediting-stats', async (req, res, next) => {
 // List opportunities
 router.get('/', validatePagination, handleValidation, async (req, res, next) => {
   try {
+    // Parse ownerIds from comma-separated string for team/multi-owner filtering
+    const ownerIds = req.query.ownerIds
+      ? req.query.ownerIds.split(',').filter(id => id.trim())
+      : [];
+
     const result = await opportunityService.getOpportunities({
       page: parseInt(req.query.page) || 1,
       limit: parseInt(req.query.limit) || 50,
       stage: req.query.stage,
       type: req.query.type,
       ownerId: req.query.ownerId,
+      ownerIds, // Support multiple owner IDs for team filtering
       ownerFilter: req.query.ownerFilter,
       accountId: req.query.accountId,
       search: req.query.search,
       sortBy: req.query.sortBy || 'createdAt',
       sortOrder: req.query.sortOrder || 'desc',
       currentUserId: req.user?.id,
+      closeDateFrom: req.query.closeDateFrom, // Date filtering for dashboard
+      closeDateTo: req.query.closeDateTo,     // Date filtering for dashboard
       invoiceStatus: req.query.invoiceStatus, // Filter for Finance team "Invoice Ready" view
     });
     res.json({ success: true, ...result });

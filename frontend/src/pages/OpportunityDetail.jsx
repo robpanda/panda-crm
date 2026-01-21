@@ -3,6 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { opportunitiesApi, companyCamApi, scheduleApi, casesApi, emailsApi, notificationsApi, bamboogliApi, approvalsApi, measurementsApi, contactsApi, ringCentralApi, usersApi, quotesApi, invoicesApi, tasksApi, documentsApi } from '../services/api';
 import { useRingCentral } from '../context/RingCentralContext';
+import { useAuth } from '../context/AuthContext';
 import PhotoGallery from '../components/PhotoGallery';
 import CrewAccessManager from '../components/CrewAccessManager';
 import InspectionChecklist from '../components/InspectionChecklist';
@@ -1602,6 +1603,7 @@ export default function OpportunityDetail() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { loadWidget, initiateCall, rcLoggedIn } = useRingCentral();
+  const { user: currentUser } = useAuth();
 
   // Category-based navigation (replaces flat 16-tab system)
   const {
@@ -10322,18 +10324,20 @@ export default function OpportunityDetail() {
         }}
       />
 
-      {/* Change Order Modal */}
+      {/* Change Order Modal - Mobile-first with touch-friendly signing */}
       <ChangeOrderModal
         isOpen={showChangeOrderModal}
         onClose={() => setShowChangeOrderModal(false)}
         opportunity={opportunity}
         contact={contacts?.[0] || opportunity?.contact}
         account={opportunity?.account}
+        currentUser={currentUser}
         onSuccess={(changeOrder) => {
           setShowChangeOrderModal(false);
-          setActionSuccess(`Change order sent successfully to ${changeOrder?.recipientEmail || 'recipient'}`);
+          setActionSuccess(`Change order signed and sent to ${changeOrder?.data?.agreement?.recipientEmail || 'customer'}`);
           queryClient.invalidateQueries(['opportunityDocuments', id]);
           queryClient.invalidateQueries(['opportunity', id]);
+          queryClient.invalidateQueries(['cases']);
           setTimeout(() => setActionSuccess(null), 5000);
         }}
       />

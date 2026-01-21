@@ -750,11 +750,20 @@ router.post('/signable/generate-and-send', authMiddleware, async (req, res, next
   }
 });
 
+// Workflows service URL for trigger execution
+const WORKFLOWS_SERVICE_URL = process.env.WORKFLOWS_SERVICE_URL || 'http://workflows-service:3009';
+
 /**
  * POST /agreements/change-order - Create and send change order for price changes/upgrades
  *
  * This endpoint creates a change order document with line items showing
  * upgrade products, original contract amount, amendment amount, and new total.
+ *
+ * Enhanced workflow (based on Scribe documentation):
+ * 1. Agent signs as "Authorized Agent" (in-person)
+ * 2. Customer signs remotely via email
+ * 3. Case auto-created when change order is sent
+ * 4. Case auto-resolved when fully signed
  */
 router.post('/change-order', authMiddleware, async (req, res, next) => {
   try {
@@ -768,7 +777,9 @@ router.post('/change-order', authMiddleware, async (req, res, next) => {
       newTotal,
       changeDescription,
       lineItems,
+      agentSignature,
       sendImmediately = true,
+      createCase = true,
     } = req.body;
 
     // Validate required fields
@@ -879,6 +890,35 @@ router.post('/change-order', authMiddleware, async (req, res, next) => {
       type: 'CHANGE_ORDER',
     });
 
+    // Apply agent signature if provided (agent signs first as "Authorized Agent")
+    if (agentSignature && agentSignature.signatureData) {
+      logger.info(`Applying agent signature to change order ${agreement.id}`);
+
+      // Create signature record for agent
+      await prisma.signature.create({
+        data: {
+          agreementId: agreement.id,
+          signerName: agentSignature.signerName || 'Authorized Agent',
+          signerEmail: agentSignature.signerEmail || req.user.email,
+          signatureData: agentSignature.signatureData,
+          role: agentSignature.role || 'Authorized Agent',
+          signedAt: new Date(),
+          ipAddress: req.ip || req.headers['x-forwarded-for'],
+          userAgent: req.headers['user-agent'],
+        },
+      });
+
+      // Update agreement to reflect agent has signed
+      await prisma.agreement.update({
+        where: { id: agreement.id },
+        data: {
+          agentSignedAt: new Date(),
+          agentSignerName: agentSignature.signerName,
+          agentSignerEmail: agentSignature.signerEmail,
+        },
+      });
+    }
+
     // Update opportunity with change order info
     await prisma.opportunity.update({
       where: { id: opportunityId },
@@ -889,10 +929,56 @@ router.post('/change-order', authMiddleware, async (req, res, next) => {
       },
     });
 
-    // Send for signature if requested
+    // Send for signature if requested (customer still needs to sign)
     if (sendImmediately && agreement) {
       await pandaSignService.sendForSignature(agreement.id, req.user.id);
       agreement.status = 'SENT';
+    }
+
+    // Create case for tracking change order (auto-resolve when fully signed)
+    let caseRecord = null;
+    if (createCase) {
+      try {
+        logger.info(`Creating case for change order ${agreement.id}`);
+
+        // Create case via cases service or directly
+        caseRecord = await prisma.case.create({
+          data: {
+            caseNumber: `CO-${Date.now().toString(36).toUpperCase()}`,
+            subject: `Change Order - ${opportunity.name || 'Contract Amendment'}`,
+            description: `Change order created for ${recipientName}.\n\nAmendment Amount: $${parseFloat(amendmentAmount).toFixed(2)}\nNew Contract Total: $${parseFloat(newTotal).toFixed(2)}\n\nDescription: ${changeDescription}`,
+            status: 'WORKING',
+            priority: 'NORMAL',
+            type: 'Change Order',
+            accountId: accountId || opportunity.accountId,
+            opportunityId,
+            createdById: req.user.id,
+          },
+        });
+
+        logger.info(`Case created: ${caseRecord.id} for change order ${agreement.id}`);
+
+        // Trigger change order workflow (async)
+        try {
+          await fetch(`${WORKFLOWS_SERVICE_URL}/api/triggers/change-order-sent`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              agreementId: agreement.id,
+              caseId: caseRecord.id,
+              opportunityId,
+              amendmentAmount,
+              newTotal,
+              userId: req.user.id,
+            }),
+          });
+        } catch (triggerErr) {
+          logger.warn('Failed to trigger change order workflow:', triggerErr.message);
+        }
+      } catch (caseErr) {
+        logger.error('Failed to create case for change order:', caseErr);
+        // Non-fatal - continue without case
+      }
     }
 
     // Create audit log
@@ -907,6 +993,8 @@ router.post('/change-order', authMiddleware, async (req, res, next) => {
           amendmentAmount,
           newTotal,
           lineItems: lineItems.length,
+          agentSigned: !!agentSignature?.signatureData,
+          caseId: caseRecord?.id,
         },
         userId: req.user.id,
         source: 'change_order_api',
@@ -925,6 +1013,7 @@ router.post('/change-order', authMiddleware, async (req, res, next) => {
           newTotal,
           lineItems: formattedLineItems,
         },
+        case: caseRecord,
       },
     });
   } catch (error) {

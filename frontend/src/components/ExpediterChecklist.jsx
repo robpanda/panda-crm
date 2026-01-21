@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { opportunitiesApi, casesApi, usersApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
@@ -24,6 +24,13 @@ import {
   Clock,
   User,
   MessageSquare,
+  ClipboardCheck,
+  DollarSign,
+  CreditCard,
+  Receipt,
+  Hash,
+  Building,
+  Send,
 } from 'lucide-react';
 
 // Onboarding verification fields (migrated from Salesforce Project Expediting)
@@ -35,8 +42,6 @@ const ONBOARDING_VERIFICATION = [
     { value: 'unknown', label: 'Unknown' },
   ], triggerHoaCase: true },
   { id: 'hoaApproved', label: 'HOA Approved', icon: CheckCircle, type: 'checkbox', conditionalOn: 'hoaRequired', conditionalValue: 'yes' },
-  { id: 'permitRequired', label: 'Permit Required', icon: FileCheck, type: 'checkbox' },
-  { id: 'permitObtained', label: 'Permit Obtained', icon: CheckCircle, type: 'checkbox', conditionalOn: 'permitRequired', conditionalValue: true },
   { id: 'piiComplete', label: 'PII Complete', icon: UserCheck, type: 'select', options: [
     { value: '', label: 'Select...' },
     { value: 'no', label: 'No - Needs Follow-up' },
@@ -78,6 +83,26 @@ const EXPEDITOR_FIELDS = [
   { id: 'projectExpeditorNotes', label: 'Project Expeditor Notes', icon: FileText, type: 'textarea' },
 ];
 
+// Permit status options
+const PERMIT_STATUS_OPTIONS = [
+  { value: '', label: 'Select Status...', color: 'gray' },
+  { value: 'pending', label: 'Pending', color: 'gray' },
+  { value: 'submitted', label: 'Submitted', color: 'blue' },
+  { value: 'under_review', label: 'Under Review', color: 'yellow' },
+  { value: 'approved', label: 'Approved', color: 'green' },
+  { value: 'paid', label: 'Paid', color: 'purple' },
+  { value: 'received', label: 'Received', color: 'emerald' },
+];
+
+// Permit payment method options
+const PERMIT_PAYMENT_OPTIONS = [
+  { value: '', label: 'Select Payment Method...' },
+  { value: 'cash', label: 'Cash' },
+  { value: 'check', label: 'Check' },
+  { value: 'credit_card', label: 'Credit Card' },
+  { value: 'company_paid', label: 'Company Paid' },
+];
+
 // Case creation modal component
 function CreateCaseModal({ isOpen, onClose, onSubmit, caseType, opportunity, isLoading }) {
   const { user } = useAuth();
@@ -99,7 +124,7 @@ function CreateCaseModal({ isOpen, onClose, onSubmit, caseType, opportunity, isL
   const usersList = users?.data || users || [];
 
   // Set default subject based on case type
-  useState(() => {
+  useEffect(() => {
     if (caseType === 'HOA') {
       setFormData(prev => ({
         ...prev,
@@ -112,6 +137,12 @@ function CreateCaseModal({ isOpen, onClose, onSubmit, caseType, opportunity, isL
         subject: `PII Follow-up Required - ${opportunity?.name || 'Job'}`,
         description: `PII (Personal/Property Insurance Information) follow-up is required for this project.\n\nJob: ${opportunity?.name || ''}\nAddress: ${opportunity?.projectAddress || opportunity?.address || ''}\n\nPlease schedule an appointment with the homeowner to complete the PII information.`,
       }));
+    } else if (caseType === 'Permit') {
+      setFormData(prev => ({
+        ...prev,
+        subject: `Permit Required - ${opportunity?.name || 'Job'}`,
+        description: `A permit is required for this project.\n\nJob: ${opportunity?.name || ''}\nAddress: ${opportunity?.projectAddress || opportunity?.address || ''}\n\nPlease submit the permit application and track through approval.`,
+      }));
     }
   }, [caseType, opportunity]);
 
@@ -121,7 +152,7 @@ function CreateCaseModal({ isOpen, onClose, onSubmit, caseType, opportunity, isL
     e.preventDefault();
     onSubmit({
       ...formData,
-      caseType: caseType,
+      type: caseType,
       opportunityId: opportunity?.id,
       accountId: opportunity?.accountId,
       contactId: opportunity?.contactId,
@@ -256,14 +287,18 @@ function CreateCaseModal({ isOpen, onClose, onSubmit, caseType, opportunity, isL
   );
 }
 
-// HOA Case Card component (shows existing HOA cases)
-function HoaCaseCard({ caseData, onViewCase }) {
+// Case Card component (reusable for HOA, PII, Permit cases)
+function CaseCard({ caseData, onViewCase }) {
   const statusColors = {
     'New': 'bg-blue-100 text-blue-700',
+    'NEW': 'bg-blue-100 text-blue-700',
     'In Progress': 'bg-yellow-100 text-yellow-700',
+    'WORKING': 'bg-yellow-100 text-yellow-700',
     'On Hold': 'bg-gray-100 text-gray-700',
     'Escalated': 'bg-red-100 text-red-700',
+    'ESCALATED': 'bg-red-100 text-red-700',
     'Closed': 'bg-green-100 text-green-700',
+    'CLOSED': 'bg-green-100 text-green-700',
   };
 
   return (
@@ -292,12 +327,287 @@ function HoaCaseCard({ caseData, onViewCase }) {
   );
 }
 
+// Permit Status Badge component
+function PermitStatusBadge({ status }) {
+  const statusConfig = PERMIT_STATUS_OPTIONS.find(s => s.value === status) || PERMIT_STATUS_OPTIONS[0];
+  const colorClasses = {
+    gray: 'bg-gray-100 text-gray-700',
+    blue: 'bg-blue-100 text-blue-700',
+    yellow: 'bg-yellow-100 text-yellow-700',
+    green: 'bg-green-100 text-green-700',
+    purple: 'bg-purple-100 text-purple-700',
+    emerald: 'bg-emerald-100 text-emerald-700',
+  };
+
+  return (
+    <span className={`px-2.5 py-1 text-xs font-medium rounded-full ${colorClasses[statusConfig.color] || colorClasses.gray}`}>
+      {statusConfig.label}
+    </span>
+  );
+}
+
+// Permitting Section Component (comprehensive permit tracking)
+function PermittingSection({ opportunity, getValue, handleChange, handlePermitFieldChange, isLoading, onCreatePermitCase, permitCases }) {
+  const permitRequired = getValue('permitRequired');
+  const permitStatus = getValue('permitStatus');
+
+  // Calculate permit workflow progress
+  const getPermitProgress = () => {
+    const steps = [
+      { key: 'required', label: 'Required', complete: permitRequired },
+      { key: 'submitted', label: 'Submitted', complete: !!getValue('permitSubmittedDate') },
+      { key: 'approved', label: 'Approved', complete: !!getValue('permitApprovedDate') },
+      { key: 'paid', label: 'Paid', complete: !!getValue('permitPaidDate') },
+      { key: 'received', label: 'Received', complete: !!getValue('permitReceivedDate') },
+    ];
+    return steps;
+  };
+
+  const progressSteps = getPermitProgress();
+  const completedSteps = progressSteps.filter(s => s.complete).length;
+
+  return (
+    <div className="space-y-4">
+      {/* Permit Required Toggle */}
+      <div className="flex items-center justify-between p-3 bg-white rounded-lg border border-gray-100">
+        <div className="flex items-center gap-2">
+          <FileCheck className="w-4 h-4 text-gray-400" />
+          <span className="text-sm font-medium text-gray-700">Permit Required</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => handleChange('permitRequired', false)}
+            disabled={isLoading}
+            className={`px-3 py-1.5 text-xs font-medium rounded-l-lg transition-colors ${
+              !permitRequired ? 'bg-gray-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            No
+          </button>
+          <button
+            onClick={() => {
+              handleChange('permitRequired', true);
+              // When set to yes, create permit case
+              if (!permitRequired) {
+                onCreatePermitCase();
+              }
+            }}
+            disabled={isLoading}
+            className={`px-3 py-1.5 text-xs font-medium rounded-r-lg transition-colors ${
+              permitRequired ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            Yes
+          </button>
+        </div>
+      </div>
+
+      {/* Permit Details (shown when permit is required) */}
+      {permitRequired && (
+        <>
+          {/* Progress Indicator */}
+          <div className="p-3 bg-blue-50 rounded-lg border border-blue-100">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-medium text-blue-700">Permit Progress</span>
+              <span className="text-xs text-blue-600">{completedSteps}/{progressSteps.length} Complete</span>
+            </div>
+            <div className="flex gap-1">
+              {progressSteps.map((step, idx) => (
+                <div key={step.key} className="flex-1">
+                  <div className={`h-1.5 rounded-full ${step.complete ? 'bg-blue-500' : 'bg-blue-200'}`} />
+                  <p className={`text-[10px] mt-1 text-center ${step.complete ? 'text-blue-700' : 'text-blue-400'}`}>
+                    {step.label}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Permit Status */}
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 p-3 bg-white rounded-lg border border-gray-100">
+            <div className="flex items-center gap-2 flex-1">
+              <ClipboardCheck className="w-4 h-4 text-gray-400" />
+              <span className="text-sm text-gray-700">Permit Status</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <PermitStatusBadge status={permitStatus} />
+              <select
+                value={permitStatus || ''}
+                onChange={(e) => handlePermitFieldChange('permitStatus', e.target.value || null)}
+                disabled={isLoading}
+                className="text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-panda-primary"
+              >
+                {PERMIT_STATUS_OPTIONS.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Permit Number */}
+          <div className="p-3 bg-white rounded-lg border border-gray-100">
+            <div className="flex items-center gap-2 mb-2">
+              <Hash className="w-4 h-4 text-gray-400" />
+              <span className="text-sm text-gray-700">Permit Number</span>
+            </div>
+            <input
+              type="text"
+              value={getValue('permitNumber') || ''}
+              onChange={(e) => handlePermitFieldChange('permitNumber', e.target.value)}
+              disabled={isLoading}
+              className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-panda-primary"
+              placeholder="Enter permit number..."
+            />
+          </div>
+
+          {/* Date Fields Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {/* Submitted Date */}
+            <div className="p-3 bg-white rounded-lg border border-gray-100">
+              <div className="flex items-center gap-2 mb-2">
+                <Send className="w-4 h-4 text-gray-400" />
+                <span className="text-sm text-gray-700">Submitted Date</span>
+              </div>
+              <input
+                type="date"
+                value={getValue('permitSubmittedDate') ? new Date(getValue('permitSubmittedDate')).toISOString().split('T')[0] : ''}
+                onChange={(e) => handlePermitFieldChange('permitSubmittedDate', e.target.value ? new Date(e.target.value).toISOString() : null)}
+                disabled={isLoading}
+                className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-panda-primary"
+              />
+            </div>
+
+            {/* Approved Date */}
+            <div className="p-3 bg-white rounded-lg border border-gray-100">
+              <div className="flex items-center gap-2 mb-2">
+                <CheckCircle className="w-4 h-4 text-gray-400" />
+                <span className="text-sm text-gray-700">Approved Date</span>
+              </div>
+              <input
+                type="date"
+                value={getValue('permitApprovedDate') ? new Date(getValue('permitApprovedDate')).toISOString().split('T')[0] : ''}
+                onChange={(e) => handlePermitFieldChange('permitApprovedDate', e.target.value ? new Date(e.target.value).toISOString() : null)}
+                disabled={isLoading}
+                className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-panda-primary"
+              />
+            </div>
+          </div>
+
+          {/* Permit Cost & Payment */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {/* Permit Cost */}
+            <div className="p-3 bg-white rounded-lg border border-gray-100">
+              <div className="flex items-center gap-2 mb-2">
+                <DollarSign className="w-4 h-4 text-gray-400" />
+                <span className="text-sm text-gray-700">Permit Cost</span>
+              </div>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={getValue('permitCost') || ''}
+                  onChange={(e) => handlePermitFieldChange('permitCost', e.target.value ? parseFloat(e.target.value) : null)}
+                  disabled={isLoading}
+                  className="w-full text-sm border border-gray-200 rounded-lg pl-7 pr-3 py-2 focus:ring-2 focus:ring-panda-primary"
+                  placeholder="0.00"
+                />
+              </div>
+            </div>
+
+            {/* Payment Method */}
+            <div className="p-3 bg-white rounded-lg border border-gray-100">
+              <div className="flex items-center gap-2 mb-2">
+                <CreditCard className="w-4 h-4 text-gray-400" />
+                <span className="text-sm text-gray-700">Payment Method</span>
+              </div>
+              <select
+                value={getValue('permitPaymentMethod') || ''}
+                onChange={(e) => handlePermitFieldChange('permitPaymentMethod', e.target.value || null)}
+                disabled={isLoading}
+                className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-panda-primary"
+              >
+                {PERMIT_PAYMENT_OPTIONS.map(opt => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Paid & Received Dates */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {/* Paid Date */}
+            <div className="p-3 bg-white rounded-lg border border-gray-100">
+              <div className="flex items-center gap-2 mb-2">
+                <Receipt className="w-4 h-4 text-gray-400" />
+                <span className="text-sm text-gray-700">Paid Date</span>
+              </div>
+              <input
+                type="date"
+                value={getValue('permitPaidDate') ? new Date(getValue('permitPaidDate')).toISOString().split('T')[0] : ''}
+                onChange={(e) => handlePermitFieldChange('permitPaidDate', e.target.value ? new Date(e.target.value).toISOString() : null)}
+                disabled={isLoading}
+                className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-panda-primary"
+              />
+            </div>
+
+            {/* Received Date */}
+            <div className="p-3 bg-white rounded-lg border border-gray-100">
+              <div className="flex items-center gap-2 mb-2">
+                <FileCheck className="w-4 h-4 text-green-500" />
+                <span className="text-sm text-gray-700">Received Date</span>
+              </div>
+              <input
+                type="date"
+                value={getValue('permitReceivedDate') ? new Date(getValue('permitReceivedDate')).toISOString().split('T')[0] : ''}
+                onChange={(e) => handlePermitFieldChange('permitReceivedDate', e.target.value ? new Date(e.target.value).toISOString() : null)}
+                disabled={isLoading}
+                className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-panda-primary"
+              />
+            </div>
+          </div>
+
+          {/* Permit Notes */}
+          <div className="p-3 bg-white rounded-lg border border-gray-100">
+            <div className="flex items-center gap-2 mb-2">
+              <FileText className="w-4 h-4 text-gray-400" />
+              <span className="text-sm text-gray-700">Permit Notes</span>
+            </div>
+            <textarea
+              value={getValue('permitNotes') || ''}
+              onChange={(e) => handlePermitFieldChange('permitNotes', e.target.value)}
+              disabled={isLoading}
+              rows={3}
+              className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-panda-primary resize-none"
+              placeholder="Enter permit notes..."
+            />
+          </div>
+
+          {/* Permit Cases */}
+          {permitCases && permitCases.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Permit Cases</span>
+              </div>
+              {permitCases.map((c) => (
+                <CaseCard key={c.id} caseData={c} />
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function ExpediterChecklist({ opportunity, onUpdate, users = [] }) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [expandedSections, setExpandedSections] = useState({
     expeditor: true,
     onboarding: true,
+    permitting: false,
     complexity: false,
     supplement: false,
     installReady: false,
@@ -307,7 +617,7 @@ export default function ExpediterChecklist({ opportunity, onUpdate, users = [] }
   const [confirmTrigger, setConfirmTrigger] = useState(null);
   const [showCaseModal, setShowCaseModal] = useState(false);
   const [caseModalType, setCaseModalType] = useState('');
-  const [pendingFieldChange, setPendingFieldChange] = useState(null); // For HOA and PII changes
+  const [pendingFieldChange, setPendingFieldChange] = useState(null);
 
   // Fetch HOA cases for this opportunity
   const { data: hoaCases, refetch: refetchHoaCases } = useQuery({
@@ -329,15 +639,27 @@ export default function ExpediterChecklist({ opportunity, onUpdate, users = [] }
     enabled: !!opportunity?.id,
   });
 
+  // Fetch Permit cases for this opportunity
+  const { data: permitCases, refetch: refetchPermitCases } = useQuery({
+    queryKey: ['cases', opportunity?.id, 'Permit'],
+    queryFn: async () => {
+      const result = await casesApi.getCases({ opportunityId: opportunity?.id, type: 'Permit' });
+      return result?.data || result || [];
+    },
+    enabled: !!opportunity?.id,
+  });
+
   const refetchCases = () => {
     refetchHoaCases();
     refetchPiiCases();
+    refetchPermitCases();
   };
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }) => opportunitiesApi.updateOpportunity(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries(['opportunities']);
+      queryClient.invalidateQueries(['opportunity', opportunity?.id]);
       setLocalValues({});
       if (onUpdate) onUpdate();
     },
@@ -349,7 +671,7 @@ export default function ExpediterChecklist({ opportunity, onUpdate, users = [] }
       queryClient.invalidateQueries(['cases']);
       refetchCases();
       setShowCaseModal(false);
-      // If we had a pending field change (HOA or PII), now apply it
+      // If we had a pending field change (HOA, PII, or Permit), now apply it
       if (pendingFieldChange) {
         updateMutation.mutate({
           id: opportunity.id,
@@ -397,6 +719,26 @@ export default function ExpediterChecklist({ opportunity, onUpdate, users = [] }
     });
   };
 
+  // Handle permit field changes with auto-status updates
+  const handlePermitFieldChange = (fieldId, value) => {
+    const updates = { [fieldId]: value };
+
+    // Auto-update permit status based on field changes
+    if (fieldId === 'permitSubmittedDate' && value) {
+      updates.permitStatus = 'under_review';
+    } else if (fieldId === 'permitApprovedDate' && value) {
+      updates.permitStatus = 'approved';
+    } else if (fieldId === 'permitPaidDate' && value) {
+      updates.permitStatus = 'paid';
+    } else if (fieldId === 'permitReceivedDate' && value) {
+      updates.permitStatus = 'received';
+      updates.permitObtained = true; // Mark permit as obtained
+    }
+
+    setLocalValues(prev => ({ ...prev, ...updates }));
+    updateMutation.mutate({ id: opportunity.id, data: updates });
+  };
+
   const handleConfirmTrigger = () => {
     if (!confirmTrigger) return;
     const { fieldId, value, field } = confirmTrigger;
@@ -441,6 +783,11 @@ export default function ExpediterChecklist({ opportunity, onUpdate, users = [] }
         projectExpeditorId: user?.id,
       },
     });
+  };
+
+  const handleCreatePermitCase = () => {
+    setCaseModalType('Permit');
+    setShowCaseModal(true);
   };
 
   const shouldShowField = (field) => {
@@ -623,7 +970,7 @@ export default function ExpediterChecklist({ opportunity, onUpdate, users = [] }
       {hoaCases && hoaCases.length > 0 ? (
         <div className="space-y-2">
           {hoaCases.map((c) => (
-            <HoaCaseCard key={c.id} caseData={c} />
+            <CaseCard key={c.id} caseData={c} />
           ))}
         </div>
       ) : (
@@ -687,6 +1034,41 @@ export default function ExpediterChecklist({ opportunity, onUpdate, users = [] }
 
       {/* Checklist Sections */}
       {renderSection('Onboarding Verification', 'onboarding', ONBOARDING_VERIFICATION, CheckCircle, hoaCasesContent)}
+
+      {/* Permitting Section - Custom rendering */}
+      <div className="border border-gray-200 rounded-lg overflow-hidden">
+        <button
+          onClick={() => toggleSection('permitting')}
+          className="w-full flex items-center justify-between p-3 bg-blue-50 hover:bg-blue-100 transition-colors"
+        >
+          <div className="flex items-center gap-2">
+            <Building className="w-4 h-4 text-blue-600" />
+            <span className="font-medium text-blue-800 text-sm">Permitting</span>
+            {getValue('permitRequired') && (
+              <PermitStatusBadge status={getValue('permitStatus')} />
+            )}
+          </div>
+          {expandedSections.permitting ? (
+            <ChevronUp className="w-4 h-4 text-blue-500" />
+          ) : (
+            <ChevronDown className="w-4 h-4 text-blue-500" />
+          )}
+        </button>
+        {expandedSections.permitting && (
+          <div className="p-3 space-y-2 bg-gray-50/50">
+            <PermittingSection
+              opportunity={opportunity}
+              getValue={getValue}
+              handleChange={handleChange}
+              handlePermitFieldChange={handlePermitFieldChange}
+              isLoading={updateMutation.isPending}
+              onCreatePermitCase={handleCreatePermitCase}
+              permitCases={permitCases}
+            />
+          </div>
+        )}
+      </div>
+
       {renderSection('Job Complexity Review', 'complexity', JOB_COMPLEXITY, Camera)}
       {renderSection('Supplement Handling', 'supplement', SUPPLEMENT_FIELDS, FileText)}
       {renderSection('Install Ready Status', 'installReady', INSTALL_READY_FIELDS, AlertCircle)}
@@ -744,7 +1126,7 @@ export default function ExpediterChecklist({ opportunity, onUpdate, users = [] }
         isOpen={showCaseModal}
         onClose={() => {
           setShowCaseModal(false);
-          setPendingHoaChange(null);
+          setPendingFieldChange(null);
         }}
         onSubmit={handleCaseCreate}
         caseType={caseModalType}

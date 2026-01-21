@@ -104,29 +104,35 @@ class LeadScoringService {
     ].sort((a, b) => Math.abs(b.impact) - Math.abs(a.impact));
 
     // Update lead with score
+    // Note: Using underscore field names from schema (lead_rank, lead_score, etc.)
     await prisma.lead.update({
       where: { id: leadId },
       data: {
         score: combinedScore,
-        leadScore: combinedScore,
-        leadRank: rank,
-        scoreFactors: allFactors,
-        scoredAt: new Date(),
-        scoreVersion: 1,
+        lead_score: combinedScore,
+        lead_rank: rank,
+        score_factors: allFactors,
+        scored_at: new Date(),
+        score_version: 1,
       },
     });
 
-    // Record score history
-    await prisma.leadScoreHistory.create({
-      data: {
+    // Record score history (wrapped in try-catch in case table doesn't exist yet)
+    try {
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO lead_score_history (id, lead_id, score, rank, score_factors, score_version, scored_by, created_at)
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, NOW())`,
+        `score_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         leadId,
-        score: combinedScore,
+        combinedScore,
         rank,
-        scoreFactors: allFactors,
-        scoreVersion: 1,
-        scoredBy: 'system',
-      },
-    });
+        JSON.stringify(allFactors),
+        1,
+        'system'
+      );
+    } catch (historyError) {
+      logger.warn(`Could not record score history for lead ${leadId}: ${historyError.message}`);
+    }
 
     logger.info(`Lead ${leadId} scored: ${combinedScore} (${rank})`);
 
@@ -189,11 +195,12 @@ class LeadScoringService {
    * Score all unscored leads
    */
   async scoreUnscoredLeads(limit = 100) {
+    // Using underscore field names from schema
     const unscoredLeads = await prisma.lead.findMany({
       where: {
         OR: [
-          { scoredAt: null },
-          { leadScore: null },
+          { scored_at: null },
+          { lead_score: null },
         ],
         isConverted: false,
       },

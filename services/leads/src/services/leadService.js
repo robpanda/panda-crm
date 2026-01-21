@@ -527,15 +527,16 @@ class LeadService {
       const rank = score >= 80 ? 'A' : score >= 60 ? 'B' : score >= 40 ? 'C' : score >= 20 ? 'D' : 'F';
 
       // Update lead with score
+      // Note: Using underscore field names from schema (lead_rank, lead_score, etc.)
       await prisma.lead.update({
         where: { id: leadId },
         data: {
           score: score,
-          leadScore: score,
-          leadRank: rank,
-          scoreFactors: factors,
-          scoredAt: new Date(),
-          scoreVersion: 1,
+          lead_score: score,
+          lead_rank: rank,
+          score_factors: factors,
+          scored_at: new Date(),
+          score_version: 1,
         },
       });
 
@@ -759,7 +760,7 @@ class LeadService {
         opportunity = await tx.opportunity.create({
           data: {
             name: options.opportunityName || `${lead.firstName} ${lead.lastName} - ${new Date().toLocaleDateString()}`,
-            jobId, // Auto-assigned Job ID
+            job_id: jobId, // Auto-assigned Job ID (using underscore field name from schema)
             accountId: account.id,
             contactId: contact.id,
             stage: 'LEAD_ASSIGNED',

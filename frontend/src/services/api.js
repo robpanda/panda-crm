@@ -4363,7 +4363,7 @@ export const agreementsApi = {
     return response.data;
   },
 
-  // Create change order for opportunity
+  // Create change order for opportunity (with agent signature for mobile-first workflow)
   async createChangeOrder(opportunityId, data) {
     const response = await api.post(`/api/documents/agreements/change-order`, {
       opportunityId,
@@ -4375,7 +4375,9 @@ export const agreementsApi = {
       newTotal: data.newTotal,
       changeDescription: data.changeDescription,
       lineItems: data.lineItems,
-      sendImmediately: data.sendImmediately || true,
+      agentSignature: data.agentSignature, // Agent signs first as "Authorized Agent"
+      sendImmediately: data.sendImmediately !== false,
+      createCase: data.createCase !== false, // Auto-create case for tracking
     });
     return response.data;
   },

@@ -35,6 +35,8 @@ import {
   onHoaRequired,
   onHoaCaseClosed,
   onPiiCaseClosed,
+  onPermitRequired,
+  onPermitCaseClosed,
 } from '../triggers/expeditingTriggers.js';
 
 const router = Router();
@@ -1406,6 +1408,173 @@ router.post('/pii-case-closed', async (req, res, next) => {
     });
   } catch (error) {
     logger.error('Error in PII case closed trigger:', error);
+    next(error);
+  }
+});
+
+/**
+ * POST /triggers/permit-required
+ * Called when permitRequired is set to true
+ * Creates a permit case and sets permit status to pending
+ */
+router.post('/permit-required', async (req, res, next) => {
+  try {
+    const { opportunityId, userId, autoCreateCase = true } = req.body;
+
+    if (!opportunityId) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'opportunityId is required' },
+      });
+    }
+
+    logger.info(`Trigger: Permit Required for ${opportunityId}`);
+
+    const result = await onPermitRequired(opportunityId, userId, autoCreateCase);
+
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    logger.error('Error in permit required trigger:', error);
+    next(error);
+  }
+});
+
+/**
+ * POST /triggers/permit-case-closed
+ * Called when a Permit case is closed
+ * Auto-sets permitObtained=true and permitStatus='approved' on the related opportunity
+ */
+router.post('/permit-case-closed', async (req, res, next) => {
+  try {
+    const { caseId, userId } = req.body;
+
+    if (!caseId) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'caseId is required' },
+      });
+    }
+
+    logger.info(`Trigger: Permit Case Closed ${caseId}`);
+
+    const result = await onPermitCaseClosed(caseId, userId);
+
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    logger.error('Error in permit case closed trigger:', error);
+    next(error);
+  }
+});
+
+/**
+ * POST /triggers/change-order-sent
+ * Called when a change order is created and sent for signature
+ * Logs activity and tracks the change order
+ */
+router.post('/change-order-sent', async (req, res, next) => {
+  try {
+    const { agreementId, caseId, opportunityId, amendmentAmount, newTotal, userId } = req.body;
+
+    logger.info(`Trigger: Change Order Sent - Agreement ${agreementId}, Case ${caseId}`);
+
+    // Create activity log
+    await prisma.activity.create({
+      data: {
+        type: 'change_order_sent',
+        description: `Change order sent for signature. Amendment: $${parseFloat(amendmentAmount || 0).toFixed(2)}, New Total: $${parseFloat(newTotal || 0).toFixed(2)}`,
+        opportunityId,
+        userId,
+        metadata: {
+          agreementId,
+          caseId,
+          amendmentAmount,
+          newTotal,
+        },
+      },
+    });
+
+    res.json({
+      success: true,
+      data: { message: 'Change order sent trigger processed' },
+    });
+  } catch (error) {
+    logger.error('Error in change order sent trigger:', error);
+    next(error);
+  }
+});
+
+/**
+ * POST /triggers/change-order-completed
+ * Called when a change order is fully signed (customer has signed)
+ * Auto-closes the associated case and updates opportunity
+ */
+router.post('/change-order-completed', async (req, res, next) => {
+  try {
+    const { agreementId, caseId, opportunityId, amendmentAmount, newTotal, userId } = req.body;
+
+    logger.info(`Trigger: Change Order Completed - Agreement ${agreementId}`);
+
+    // Close the associated case
+    if (caseId) {
+      await prisma.case.update({
+        where: { id: caseId },
+        data: {
+          status: 'CLOSED',
+          closedAt: new Date(),
+          resolution: 'Change order signed by all parties',
+        },
+      });
+
+      logger.info(`Case ${caseId} closed - change order completed`);
+    }
+
+    // Update opportunity - change order is no longer pending
+    if (opportunityId) {
+      await prisma.opportunity.update({
+        where: { id: opportunityId },
+        data: {
+          changeOrderPending: false,
+          changeOrderCompletedAt: new Date(),
+          // Update contract total with amendment
+          contractTotal: parseFloat(newTotal),
+        },
+      });
+
+      logger.info(`Opportunity ${opportunityId} updated with new contract total: $${newTotal}`);
+    }
+
+    // Create activity log
+    await prisma.activity.create({
+      data: {
+        type: 'change_order_completed',
+        description: `Change order fully signed. New contract total: $${parseFloat(newTotal || 0).toFixed(2)}`,
+        opportunityId,
+        userId,
+        metadata: {
+          agreementId,
+          caseId,
+          amendmentAmount,
+          newTotal,
+        },
+      },
+    });
+
+    res.json({
+      success: true,
+      data: {
+        message: 'Change order completed trigger processed',
+        caseClosed: !!caseId,
+        opportunityUpdated: !!opportunityId,
+      },
+    });
+  } catch (error) {
+    logger.error('Error in change order completed trigger:', error);
     next(error);
   }
 });

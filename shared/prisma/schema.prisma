@@ -360,6 +360,15 @@ model Opportunity {
   hoaApproved            Boolean                 @default(false) @map("hoa_approved")
   permitRequired         Boolean                 @default(false) @map("permit_required")
   permitObtained         Boolean                 @default(false) @map("permit_obtained")
+  permitStatus           String?                 @map("permit_status") // 'pending', 'submitted', 'under_review', 'approved', 'paid', 'received'
+  permitSubmittedDate    DateTime?               @map("permit_submitted_date")
+  permitApprovedDate     DateTime?               @map("permit_approved_date")
+  permitCost             Decimal?                @map("permit_cost") @db.Decimal(10, 2)
+  permitPaymentMethod    String?                 @map("permit_payment_method") // 'cash', 'check', 'credit_card', 'company_paid'
+  permitPaidDate         DateTime?               @map("permit_paid_date")
+  permitReceivedDate     DateTime?               @map("permit_received_date")
+  permitNumber           String?                 @map("permit_number")
+  permitNotes            String?                 @map("permit_notes") @db.Text
   solarDnrRequired       Boolean                 @default(false) @map("solar_dnr_required")
   piiComplete            String?                 @map("pii_complete") // 'yes', 'no', 'not_required'
   notInstallReady        Boolean                 @default(false) @map("not_install_ready")
