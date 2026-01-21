@@ -1391,13 +1391,13 @@ export const usersApi = {
 
   async getUsersForDropdown(params = {}) {
     const response = await api.get('/api/users/dropdown', { params });
-    return response.data;
+    return response.data.data || response.data || [];
   },
 
   // Alias for backwards compatibility
   async getDropdownUsers(params = {}) {
     const response = await api.get('/api/users/dropdown', { params });
-    return response.data;
+    return response.data.data || response.data || [];
   },
 
   async getUserStats() {
