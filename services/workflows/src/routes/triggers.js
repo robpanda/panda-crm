@@ -32,6 +32,8 @@ import {
   onFlatRoofDetected,
   onLineDropRequired,
   onSupplementHoldsJob,
+  onHoaRequired,
+  onHoaCaseClosed,
 } from '../triggers/expeditingTriggers.js';
 
 const router = Router();
@@ -1313,6 +1315,66 @@ router.post('/expediting/supplement-hold', async (req, res, next) => {
     });
   } catch (error) {
     logger.error('Error in supplement hold trigger:', error);
+    next(error);
+  }
+});
+
+/**
+ * POST /triggers/expediting/hoa-required
+ * Manually trigger HOA required workflow
+ * Creates an HOA approval case (optional, usually done via frontend modal)
+ */
+router.post('/expediting/hoa-required', async (req, res, next) => {
+  try {
+    const { opportunityId, userId, autoCreateCase } = req.body;
+
+    if (!opportunityId) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'opportunityId is required' },
+      });
+    }
+
+    logger.info(`Manual trigger: HOA Required for ${opportunityId}`);
+
+    const result = await onHoaRequired(opportunityId, userId, autoCreateCase);
+
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    logger.error('Error in HOA required trigger:', error);
+    next(error);
+  }
+});
+
+/**
+ * POST /triggers/hoa-case-closed
+ * Called when an HOA case is closed
+ * Auto-sets hoaApproved=true on the related opportunity
+ */
+router.post('/hoa-case-closed', async (req, res, next) => {
+  try {
+    const { caseId, userId } = req.body;
+
+    if (!caseId) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'caseId is required' },
+      });
+    }
+
+    logger.info(`Trigger: HOA Case Closed ${caseId}`);
+
+    const result = await onHoaCaseClosed(caseId, userId);
+
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    logger.error('Error in HOA case closed trigger:', error);
     next(error);
   }
 });

@@ -23,6 +23,7 @@ import useJobCategories from '../hooks/useJobCategories';
 import WorkflowSidebar from '../components/WorkflowSidebar';
 import NotesSidebar from '../components/NotesSidebar';
 import AddressAutocomplete from '../components/AddressAutocomplete';
+import ExpediterChecklist from '../components/ExpediterChecklist';
 import {
   Target,
   ArrowLeft,
@@ -7166,6 +7167,13 @@ export default function OpportunityDetail() {
                         </div>
                       </div>
                     </div>
+
+                    {/* Project Expediting Checklist - Mobile-first with HOA case creation */}
+                    <ExpediterChecklist
+                      opportunity={opportunity}
+                      onUpdate={(data) => updateMutation.mutateAsync(data)}
+                      users={usersForDropdown?.data || usersForDropdown || []}
+                    />
 
                     {/* HOA & Permits */}
                     <div>

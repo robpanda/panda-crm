@@ -2,6 +2,57 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
+// Workflows service URL for trigger execution
+const WORKFLOWS_SERVICE_URL = process.env.WORKFLOWS_SERVICE_URL || 'http://workflows-service:3009';
+
+// Helper: Trigger HOA case closed workflow
+async function triggerHoaCaseClosedWorkflow(caseId, userId) {
+  try {
+    // Check if this case is HOA-related before calling workflow service
+    const caseRecord = await prisma.case.findUnique({
+      where: { id: caseId },
+      select: {
+        type: true,
+        subject: true,
+        description: true,
+      },
+    });
+
+    if (!caseRecord) return;
+
+    // Check if HOA-related
+    const isHoaCase =
+      caseRecord.type?.toLowerCase().includes('hoa') ||
+      caseRecord.subject?.toLowerCase().includes('hoa') ||
+      caseRecord.description?.toLowerCase().includes('hoa approval');
+
+    if (!isHoaCase) {
+      console.log(`[Case Controller] Case ${caseId} is not HOA-related, skipping workflow trigger`);
+      return;
+    }
+
+    console.log(`[Case Controller] Triggering HOA case closed workflow for case ${caseId}`);
+
+    const response = await fetch(`${WORKFLOWS_SERVICE_URL}/api/triggers/hoa-case-closed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ caseId, userId }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Workflow service error: ${errorText}`);
+    }
+
+    const result = await response.json();
+    console.log(`[Case Controller] HOA case closed workflow result:`, result);
+    return result;
+  } catch (error) {
+    console.error(`[Case Controller] Error triggering HOA workflow:`, error);
+    throw error;
+  }
+}
+
 // List all cases with filtering and pagination
 export async function listCases(req, res) {
   try {
@@ -211,6 +262,13 @@ export async function updateCase(req, res) {
       },
     });
 
+    // Trigger HOA case closed workflow if status changed to CLOSED (async, don't wait)
+    if (status === 'CLOSED') {
+      triggerHoaCaseClosedWorkflow(id, req.user?.id).catch(err => {
+        console.error('Failed to trigger HOA case closed workflow:', err);
+      });
+    }
+
     res.json(updatedCase);
   } catch (error) {
     console.error('Error updating case:', error);
@@ -377,6 +435,11 @@ export async function closeCase(req, res) {
         status: 'CLOSED',
         closedAt: new Date(),
       },
+    });
+
+    // Trigger HOA case closed workflow (async, don't wait)
+    triggerHoaCaseClosedWorkflow(id, req.user?.id).catch(err => {
+      console.error('Failed to trigger HOA case closed workflow:', err);
     });
 
     res.json(updatedCase);

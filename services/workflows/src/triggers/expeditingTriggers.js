@@ -20,17 +20,20 @@ const BAMBOOGLI_SERVICE_URL = process.env.BAMBOOGLI_SERVICE_URL || 'http://bambo
 const EXPEDITING_USERS = {
   FLAT_ROOF: 'trevorjohnson@pandaexteriors.com',
   LINE_DROP: 'kevinflores@pandaexteriors.com',
+  HOA: null, // HOA cases are assigned by the user creating them
 };
 
 // Case types and subjects
 const CASE_TYPES = {
   FLAT_ROOF: 'Flat Roof Review',
   LINE_DROP: 'Line Drop Required',
+  HOA: 'HOA Approval',
 };
 
 const CASE_SUBJECTS = {
   FLAT_ROOF: 'Flat Roof Review Required',
   LINE_DROP: 'Line Drop Coordination Required',
+  HOA: 'HOA Approval Required',
 };
 
 // Line Drop SMS message for homeowner
@@ -479,6 +482,158 @@ export async function onSupplementHoldsJob(opportunityId, userId) {
 }
 
 // ============================================================================
+// TRIGGER 4: HOA Required
+// When hoaRequired is set to 'yes', auto-create HOA case (optional)
+// The frontend ExpediterChecklist handles manual case creation with popup
+// ============================================================================
+
+/**
+ * Trigger: HOA Required
+ * When hoaRequired is set to 'yes', optionally create an HOA case
+ * Note: The primary case creation is handled via the frontend modal,
+ * but this provides an automated fallback if no case exists
+ */
+export async function onHoaRequired(opportunityId, userId, autoCreateCase = false) {
+  console.log(`[Expediting Trigger] HOA Required for Opportunity: ${opportunityId}`);
+
+  const result = {
+    case: null,
+    error: null,
+  };
+
+  if (!autoCreateCase) {
+    // Case creation is handled by frontend modal - just log
+    console.log(`[Expediting Trigger] HOA Required detected - case creation delegated to user`);
+    return result;
+  }
+
+  try {
+    const caseResult = await createExpeditingCase(
+      opportunityId,
+      CASE_SUBJECTS.HOA,
+      'This job requires HOA approval before installation can proceed. Please obtain HOA approval documentation and upload to the job record.',
+      CASE_TYPES.HOA,
+      null, // No auto-assignment for HOA - user selects in modal
+      userId
+    );
+
+    result.case = caseResult.case;
+    result.wasExisting = caseResult.existing;
+
+    return result;
+  } catch (error) {
+    console.error('[Expediting Trigger] onHoaRequired failed:', error);
+    result.error = error.message;
+    return result;
+  }
+}
+
+// ============================================================================
+// TRIGGER 5: HOA Case Closed
+// When an HOA case is closed/resolved, auto-set hoaApproved on opportunity
+// ============================================================================
+
+/**
+ * Trigger: HOA Case Closed
+ * When an HOA-type case is closed, automatically set hoaApproved=true
+ * on the related opportunity
+ */
+export async function onHoaCaseClosed(caseId, userId) {
+  console.log(`[Expediting Trigger] HOA Case Closed: ${caseId}`);
+
+  const result = {
+    opportunityUpdated: false,
+    opportunityId: null,
+    error: null,
+  };
+
+  try {
+    // Get the case with its related opportunity
+    const closedCase = await prisma.case.findUnique({
+      where: { id: caseId },
+      include: {
+        account: {
+          include: {
+            opportunities: {
+              where: {
+                status: { not: 'CLOSED_LOST' },
+                hoaRequired: 'yes',
+                hoaApproved: false,
+              },
+              orderBy: { createdAt: 'desc' },
+              take: 1,
+            },
+          },
+        },
+      },
+    });
+
+    if (!closedCase) {
+      throw new Error(`Case not found: ${caseId}`);
+    }
+
+    // Check if this is an HOA-related case
+    const isHoaCase =
+      closedCase.type === CASE_TYPES.HOA ||
+      closedCase.subject?.toLowerCase().includes('hoa') ||
+      closedCase.description?.toLowerCase().includes('hoa approval');
+
+    if (!isHoaCase) {
+      console.log(`[Expediting Trigger] Case ${caseId} is not HOA-related, skipping`);
+      return result;
+    }
+
+    // Find related opportunity
+    const opportunity = closedCase.account?.opportunities?.[0];
+
+    if (!opportunity) {
+      console.log(`[Expediting Trigger] No eligible opportunity found for HOA approval update`);
+      return result;
+    }
+
+    // Update the opportunity's hoaApproved field
+    await prisma.opportunity.update({
+      where: { id: opportunity.id },
+      data: {
+        hoaApproved: true,
+      },
+    });
+
+    console.log(`[Expediting Trigger] Set hoaApproved=true for opportunity ${opportunity.id}`);
+
+    // Create activity log
+    await prisma.activity.create({
+      data: {
+        type: 'FIELD_CHANGE',
+        subject: 'HOA Approved (Auto-Updated)',
+        body: `HOA Approved automatically set to true when HOA case ${closedCase.caseNumber} was closed.`,
+        status: 'COMPLETED',
+        opportunityId: opportunity.id,
+        accountId: closedCase.accountId,
+        userId: userId,
+        occurredAt: new Date(),
+        metadata: {
+          triggeredBy: 'expediting_workflow',
+          autoGenerated: true,
+          reason: 'hoa_case_closed',
+          caseId: caseId,
+          caseNumber: closedCase.caseNumber,
+        },
+      },
+    });
+
+    result.opportunityUpdated = true;
+    result.opportunityId = opportunity.id;
+
+    return result;
+  } catch (error) {
+    console.error('[Expediting Trigger] onHoaCaseClosed failed:', error);
+    result.error = error.message;
+    return result;
+  }
+}
+
+// ============================================================================
 // EVALUATE ALL EXPEDITING TRIGGERS
 // Called when opportunity expediting fields change
 // ============================================================================
@@ -497,6 +652,7 @@ export async function evaluateExpeditingTriggers(opportunityId, changes, previou
     flatRoof: null,
     lineDrop: null,
     supplementHold: null,
+    hoaRequired: null,
   };
 
   // Check Flat Roof trigger
@@ -518,6 +674,11 @@ export async function evaluateExpeditingTriggers(opportunityId, changes, previou
     results.supplementHold = await onSupplementHoldsJob(opportunityId, userId);
   }
 
+  // Check HOA Required trigger (logs only, case creation via frontend modal)
+  if (changes.hoaRequired === 'yes' && previousValues?.hoaRequired !== 'yes') {
+    results.hoaRequired = await onHoaRequired(opportunityId, userId, false);
+  }
+
   return results;
 }
 
@@ -525,5 +686,7 @@ export default {
   onFlatRoofDetected,
   onLineDropRequired,
   onSupplementHoldsJob,
+  onHoaRequired,
+  onHoaCaseClosed,
   evaluateExpeditingTriggers,
 };

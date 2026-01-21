@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { opportunitiesApi } from '../services/api';
+import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
+import { opportunitiesApi, casesApi, usersApi } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 import {
   CheckCircle,
   XCircle,
@@ -17,6 +18,12 @@ import {
   ChevronUp,
   Save,
   Loader2,
+  Plus,
+  X,
+  Briefcase,
+  Clock,
+  User,
+  MessageSquare,
 } from 'lucide-react';
 
 // Onboarding verification fields (migrated from Salesforce Project Expediting)
@@ -26,7 +33,7 @@ const ONBOARDING_VERIFICATION = [
     { value: 'yes', label: 'Yes' },
     { value: 'no', label: 'No' },
     { value: 'unknown', label: 'Unknown' },
-  ]},
+  ], triggerHoaCase: true },
   { id: 'hoaApproved', label: 'HOA Approved', icon: CheckCircle, type: 'checkbox', conditionalOn: 'hoaRequired', conditionalValue: 'yes' },
   { id: 'permitRequired', label: 'Permit Required', icon: FileCheck, type: 'checkbox' },
   { id: 'permitObtained', label: 'Permit Obtained', icon: CheckCircle, type: 'checkbox', conditionalOn: 'permitRequired', conditionalValue: true },
@@ -40,9 +47,9 @@ const JOB_COMPLEXITY = [
   { id: 'jobComplexityPhotosReviewed', label: 'Job Complexity Photos Reviewed', icon: Camera, type: 'checkbox' },
   { id: 'jobComplexityNotes', label: 'Job Complexity Notes', icon: FileText, type: 'textarea' },
   { id: 'flatRoof', label: 'Flat Roof', icon: Home, type: 'toggle',
-    triggerWarning: 'Setting this to Yes will create a case for Trevor (Flat Roof Review)' },
+    triggerCase: { type: 'FLAT_ROOF_REVIEW', assignTo: 'Trevor', subject: 'Flat Roof Review Required' } },
   { id: 'lineDrop', label: 'Line Drop Required', icon: Zap, type: 'toggle',
-    triggerWarning: 'Setting this to Yes will create a case for Kevin Flores and send an SMS to the homeowner explaining the line drop process' },
+    triggerCase: { type: 'LINE_DROP', assignTo: 'Kevin Flores', subject: 'Line Drop Required', sendSms: true } },
 ];
 
 // Supplement and install ready fields
@@ -66,17 +73,240 @@ const EXPEDITOR_FIELDS = [
   { id: 'projectExpeditorNotes', label: 'Project Expeditor Notes', icon: FileText, type: 'textarea' },
 ];
 
-export default function ExpediterChecklist({ opportunity, onUpdate }) {
+// Case creation modal component
+function CreateCaseModal({ isOpen, onClose, onSubmit, caseType, opportunity, isLoading }) {
+  const { user } = useAuth();
+  const [formData, setFormData] = useState({
+    subject: '',
+    description: '',
+    priority: 'Medium',
+    status: 'New',
+    assignedToId: user?.id || '',
+  });
+
+  // Fetch users for assignment dropdown
+  const { data: users } = useQuery({
+    queryKey: ['users-active'],
+    queryFn: () => usersApi.getUsers({ isActive: true }),
+    enabled: isOpen,
+  });
+
+  const usersList = users?.data || users || [];
+
+  // Set default subject based on case type
+  useState(() => {
+    if (caseType === 'HOA') {
+      setFormData(prev => ({
+        ...prev,
+        subject: `HOA Approval Required - ${opportunity?.name || 'Job'}`,
+        description: `HOA approval is required for this project.\n\nJob: ${opportunity?.name || ''}\nAddress: ${opportunity?.projectAddress || opportunity?.address || ''}\n\nPlease submit the HOA application and track approval status.`,
+      }));
+    }
+  }, [caseType, opportunity]);
+
+  if (!isOpen) return null;
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    onSubmit({
+      ...formData,
+      caseType: caseType,
+      opportunityId: opportunity?.id,
+      accountId: opportunity?.accountId,
+      contactId: opportunity?.contactId,
+    });
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+      <div className="bg-white w-full sm:max-w-lg sm:rounded-xl rounded-t-xl max-h-[90vh] overflow-hidden flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-gray-50">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center">
+              <Briefcase className="w-5 h-5 text-orange-600" />
+            </div>
+            <div>
+              <h3 className="font-semibold text-gray-900">Create {caseType} Case</h3>
+              <p className="text-xs text-gray-500">Track and manage this requirement</p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-2 hover:bg-gray-200 rounded-full transition-colors"
+          >
+            <X className="w-5 h-5 text-gray-500" />
+          </button>
+        </div>
+
+        {/* Form */}
+        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-4 space-y-4">
+          {/* Subject */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Subject</label>
+            <input
+              type="text"
+              value={formData.subject}
+              onChange={(e) => setFormData({ ...formData, subject: e.target.value })}
+              required
+              className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary"
+              placeholder="Enter case subject"
+            />
+          </div>
+
+          {/* Description */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+            <textarea
+              value={formData.description}
+              onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+              rows={4}
+              className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary resize-none"
+              placeholder="Enter case details..."
+            />
+          </div>
+
+          {/* Priority & Status Row */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Priority</label>
+              <select
+                value={formData.priority}
+                onChange={(e) => setFormData({ ...formData, priority: e.target.value })}
+                className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary"
+              >
+                <option value="Low">Low</option>
+                <option value="Medium">Medium</option>
+                <option value="High">High</option>
+                <option value="Urgent">Urgent</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+              <select
+                value={formData.status}
+                onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+                className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary"
+              >
+                <option value="New">New</option>
+                <option value="In Progress">In Progress</option>
+                <option value="On Hold">On Hold</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Assigned To */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Assign To</label>
+            <select
+              value={formData.assignedToId}
+              onChange={(e) => setFormData({ ...formData, assignedToId: e.target.value })}
+              className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary"
+            >
+              <option value="">-- Select User --</option>
+              {usersList.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.firstName} {u.lastName}
+                </option>
+              ))}
+            </select>
+          </div>
+        </form>
+
+        {/* Footer */}
+        <div className="flex gap-3 p-4 border-t border-gray-200 bg-gray-50">
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex-1 px-4 py-2.5 text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 font-medium transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={isLoading || !formData.subject}
+            className="flex-1 px-4 py-2.5 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90 font-medium transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+          >
+            {isLoading ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Creating...
+              </>
+            ) : (
+              <>
+                <Plus className="w-4 h-4" />
+                Create Case
+              </>
+            )}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// HOA Case Card component (shows existing HOA cases)
+function HoaCaseCard({ caseData, onViewCase }) {
+  const statusColors = {
+    'New': 'bg-blue-100 text-blue-700',
+    'In Progress': 'bg-yellow-100 text-yellow-700',
+    'On Hold': 'bg-gray-100 text-gray-700',
+    'Escalated': 'bg-red-100 text-red-700',
+    'Closed': 'bg-green-100 text-green-700',
+  };
+
+  return (
+    <div
+      onClick={() => onViewCase?.(caseData)}
+      className="p-3 bg-white border border-gray-200 rounded-lg cursor-pointer hover:border-panda-primary hover:shadow-sm transition-all"
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex-1 min-w-0">
+          <p className="font-medium text-gray-900 text-sm truncate">{caseData.subject}</p>
+          <p className="text-xs text-gray-500 mt-0.5">
+            {caseData.caseNumber || `Case #${caseData.id?.slice(-6)}`}
+          </p>
+        </div>
+        <span className={`px-2 py-0.5 text-xs font-medium rounded-full whitespace-nowrap ${statusColors[caseData.status] || 'bg-gray-100 text-gray-600'}`}>
+          {caseData.status}
+        </span>
+      </div>
+      {caseData.assignedTo && (
+        <div className="flex items-center gap-1.5 mt-2 text-xs text-gray-500">
+          <User className="w-3 h-3" />
+          <span>{caseData.assignedTo.firstName} {caseData.assignedTo.lastName}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function ExpediterChecklist({ opportunity, onUpdate, users = [] }) {
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const [expandedSections, setExpandedSections] = useState({
+    expeditor: true,
     onboarding: true,
-    complexity: true,
-    supplement: true,
+    complexity: false,
+    supplement: false,
     installReady: false,
-    expeditor: false,
+    notes: false,
   });
   const [localValues, setLocalValues] = useState({});
   const [confirmTrigger, setConfirmTrigger] = useState(null);
+  const [showCaseModal, setShowCaseModal] = useState(false);
+  const [caseModalType, setCaseModalType] = useState('');
+  const [pendingHoaChange, setPendingHoaChange] = useState(null);
+
+  // Fetch HOA cases for this opportunity
+  const { data: hoaCases, refetch: refetchCases } = useQuery({
+    queryKey: ['cases', opportunity?.id, 'HOA'],
+    queryFn: async () => {
+      const result = await casesApi.getCases({ opportunityId: opportunity?.id, type: 'HOA' });
+      return result?.data || result || [];
+    },
+    enabled: !!opportunity?.id,
+  });
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }) => opportunitiesApi.updateOpportunity(id, data),
@@ -87,21 +317,46 @@ export default function ExpediterChecklist({ opportunity, onUpdate }) {
     },
   });
 
+  const createCaseMutation = useMutation({
+    mutationFn: (caseData) => casesApi.createCase(caseData),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['cases']);
+      refetchCases();
+      setShowCaseModal(false);
+      // If we had a pending HOA change, now apply it
+      if (pendingHoaChange) {
+        updateMutation.mutate({
+          id: opportunity.id,
+          data: { hoaRequired: pendingHoaChange },
+        });
+        setPendingHoaChange(null);
+      }
+    },
+  });
+
   const getValue = (fieldId) => {
     if (localValues[fieldId] !== undefined) return localValues[fieldId];
-    return opportunity[fieldId];
+    return opportunity?.[fieldId];
   };
 
-  const handleChange = (fieldId, value, triggerWarning = null) => {
-    // If this triggers an automation and value is true, show confirmation
-    if (triggerWarning && value === true) {
-      setConfirmTrigger({ fieldId, value, warning: triggerWarning });
+  const handleChange = (fieldId, value, field = null) => {
+    // Special handling for HOA Required field - create case when set to "yes"
+    if (fieldId === 'hoaRequired' && value === 'yes' && getValue('hoaRequired') !== 'yes') {
+      setPendingHoaChange(value);
+      setCaseModalType('HOA');
+      setShowCaseModal(true);
+      return;
+    }
+
+    // If this triggers a case creation automation
+    if (field?.triggerCase && value === true) {
+      setConfirmTrigger({ fieldId, value, field });
       return;
     }
 
     setLocalValues(prev => ({ ...prev, [fieldId]: value }));
 
-    // Auto-save for checkboxes and toggles
+    // Auto-save for checkboxes, toggles, and selects
     updateMutation.mutate({
       id: opportunity.id,
       data: { [fieldId]: value },
@@ -110,9 +365,23 @@ export default function ExpediterChecklist({ opportunity, onUpdate }) {
 
   const handleConfirmTrigger = () => {
     if (!confirmTrigger) return;
-    const { fieldId, value } = confirmTrigger;
+    const { fieldId, value, field } = confirmTrigger;
 
     setLocalValues(prev => ({ ...prev, [fieldId]: value }));
+
+    // Create the case first, then update the field
+    if (field?.triggerCase) {
+      createCaseMutation.mutate({
+        subject: field.triggerCase.subject,
+        description: `Triggered from expediting checklist for ${opportunity?.name || 'Job'}`,
+        type: field.triggerCase.type,
+        priority: 'Medium',
+        status: 'New',
+        opportunityId: opportunity?.id,
+        accountId: opportunity?.accountId,
+      });
+    }
+
     updateMutation.mutate({
       id: opportunity.id,
       data: { [fieldId]: value },
@@ -130,6 +399,16 @@ export default function ExpediterChecklist({ opportunity, onUpdate }) {
     });
   };
 
+  const handleStartExpediting = () => {
+    updateMutation.mutate({
+      id: opportunity.id,
+      data: {
+        projectExpeditingStartDate: new Date().toISOString(),
+        projectExpeditorId: user?.id,
+      },
+    });
+  };
+
   const shouldShowField = (field) => {
     if (!field.conditionalOn) return true;
     const dependsOnValue = getValue(field.conditionalOn);
@@ -138,6 +417,10 @@ export default function ExpediterChecklist({ opportunity, onUpdate }) {
 
   const toggleSection = (section) => {
     setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
+  };
+
+  const handleCaseCreate = (caseData) => {
+    createCaseMutation.mutate(caseData);
   };
 
   const renderField = (field) => {
@@ -152,18 +435,18 @@ export default function ExpediterChecklist({ opportunity, onUpdate }) {
         return (
           <label
             key={field.id}
-            className="flex items-center gap-3 p-3 bg-white rounded-lg border border-gray-100 hover:border-gray-200 cursor-pointer transition-colors"
+            className="flex items-center gap-3 p-3 bg-white rounded-lg border border-gray-100 hover:border-gray-200 cursor-pointer transition-colors active:bg-gray-50"
           >
             <input
               type="checkbox"
               checked={value || false}
-              onChange={(e) => handleChange(field.id, e.target.checked)}
+              onChange={(e) => handleChange(field.id, e.target.checked, field)}
               disabled={isLoading}
               className="w-5 h-5 rounded border-gray-300 text-panda-primary focus:ring-panda-primary"
             />
-            <Icon className="w-4 h-4 text-gray-400" />
+            <Icon className="w-4 h-4 text-gray-400 flex-shrink-0" />
             <span className="text-sm text-gray-700 flex-1">{field.label}</span>
-            {value && <CheckCircle className="w-4 h-4 text-green-500" />}
+            {value && <CheckCircle className="w-4 h-4 text-green-500 flex-shrink-0" />}
             {field.helpText && (
               <span className="text-xs text-gray-400" title={field.helpText}>?</span>
             )}
@@ -176,13 +459,13 @@ export default function ExpediterChecklist({ opportunity, onUpdate }) {
             key={field.id}
             className="flex items-center gap-3 p-3 bg-white rounded-lg border border-gray-100"
           >
-            <Icon className="w-4 h-4 text-gray-400" />
+            <Icon className="w-4 h-4 text-gray-400 flex-shrink-0" />
             <span className="text-sm text-gray-700 flex-1">{field.label}</span>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center">
               <button
                 onClick={() => handleChange(field.id, false)}
                 disabled={isLoading}
-                className={`px-3 py-1 text-xs rounded-l-lg transition-colors ${
+                className={`px-3 py-1.5 text-xs font-medium rounded-l-lg transition-colors ${
                   value === false || !value
                     ? 'bg-gray-600 text-white'
                     : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
@@ -191,9 +474,9 @@ export default function ExpediterChecklist({ opportunity, onUpdate }) {
                 No
               </button>
               <button
-                onClick={() => handleChange(field.id, true, field.triggerWarning)}
+                onClick={() => handleChange(field.id, true, field)}
                 disabled={isLoading}
-                className={`px-3 py-1 text-xs rounded-r-lg transition-colors ${
+                className={`px-3 py-1.5 text-xs font-medium rounded-r-lg transition-colors ${
                   value === true
                     ? 'bg-orange-600 text-white'
                     : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
@@ -202,8 +485,8 @@ export default function ExpediterChecklist({ opportunity, onUpdate }) {
                 Yes
               </button>
             </div>
-            {value && field.triggerWarning && (
-              <AlertCircle className="w-4 h-4 text-orange-500" title="Automation triggered" />
+            {value && field.triggerCase && (
+              <AlertCircle className="w-4 h-4 text-orange-500 flex-shrink-0" title="Case created" />
             )}
           </div>
         );
@@ -212,15 +495,17 @@ export default function ExpediterChecklist({ opportunity, onUpdate }) {
         return (
           <div
             key={field.id}
-            className="flex items-center gap-3 p-3 bg-white rounded-lg border border-gray-100"
+            className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 p-3 bg-white rounded-lg border border-gray-100"
           >
-            <Icon className="w-4 h-4 text-gray-400" />
-            <span className="text-sm text-gray-700 flex-1">{field.label}</span>
+            <div className="flex items-center gap-2 flex-1">
+              <Icon className="w-4 h-4 text-gray-400 flex-shrink-0" />
+              <span className="text-sm text-gray-700">{field.label}</span>
+            </div>
             <select
               value={value || ''}
-              onChange={(e) => handleChange(field.id, e.target.value || null)}
+              onChange={(e) => handleChange(field.id, e.target.value || null, field)}
               disabled={isLoading}
-              className="text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+              className="w-full sm:w-auto text-sm border border-gray-200 rounded-lg px-3 py-2 focus:ring-2 focus:ring-panda-primary focus:border-transparent"
             >
               {field.options.map(opt => (
                 <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -253,7 +538,7 @@ export default function ExpediterChecklist({ opportunity, onUpdate }) {
     }
   };
 
-  const renderSection = (title, sectionKey, fields, icon) => {
+  const renderSection = (title, sectionKey, fields, icon, extraContent = null) => {
     const SectionIcon = icon;
     const isExpanded = expandedSections[sectionKey];
     const visibleFields = fields.filter(shouldShowField);
@@ -262,12 +547,12 @@ export default function ExpediterChecklist({ opportunity, onUpdate }) {
       <div className="border border-gray-200 rounded-lg overflow-hidden">
         <button
           onClick={() => toggleSection(sectionKey)}
-          className="w-full flex items-center justify-between p-3 bg-gray-50 hover:bg-gray-100 transition-colors"
+          className="w-full flex items-center justify-between p-3 bg-gray-50 hover:bg-gray-100 transition-colors active:bg-gray-200"
         >
           <div className="flex items-center gap-2">
             <SectionIcon className="w-4 h-4 text-gray-500" />
-            <span className="font-medium text-gray-700">{title}</span>
-            <span className="text-xs text-gray-400">({visibleFields.length} items)</span>
+            <span className="font-medium text-gray-700 text-sm">{title}</span>
+            <span className="text-xs text-gray-400">({visibleFields.length})</span>
           </div>
           {isExpanded ? (
             <ChevronUp className="w-4 h-4 text-gray-400" />
@@ -278,44 +563,100 @@ export default function ExpediterChecklist({ opportunity, onUpdate }) {
         {isExpanded && (
           <div className="p-3 space-y-2 bg-gray-50/50">
             {fields.map(renderField)}
+            {extraContent}
           </div>
         )}
       </div>
     );
   };
 
-  return (
-    <div className="space-y-4">
-      {/* Expediting Start Date */}
-      <div className="flex items-center gap-4 p-3 bg-orange-50 rounded-lg border border-orange-200">
-        <Calendar className="w-5 h-5 text-orange-600" />
-        <div className="flex-1">
-          <p className="text-sm font-medium text-gray-900">Project Expediting Started</p>
-          <p className="text-xs text-gray-500">
-            {opportunity.projectExpeditingStartDate
-              ? new Date(opportunity.projectExpeditingStartDate).toLocaleDateString('en-US', {
-                  month: 'short', day: 'numeric', year: 'numeric'
-                })
-              : 'Not started yet'
-            }
-          </p>
+  // HOA Cases section content
+  const hoaCasesContent = getValue('hoaRequired') === 'yes' && (
+    <div className="mt-3 space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">HOA Cases</span>
+        <button
+          onClick={() => {
+            setCaseModalType('HOA');
+            setShowCaseModal(true);
+          }}
+          className="text-xs text-panda-primary hover:underline flex items-center gap-1"
+        >
+          <Plus className="w-3 h-3" />
+          Add Case
+        </button>
+      </div>
+      {hoaCases && hoaCases.length > 0 ? (
+        <div className="space-y-2">
+          {hoaCases.map((c) => (
+            <HoaCaseCard key={c.id} caseData={c} />
+          ))}
         </div>
-        {opportunity.projectExpeditor && (
-          <div className="text-right">
-            <p className="text-xs text-gray-500">Expeditor</p>
-            <p className="text-sm font-medium text-gray-900">
-              {opportunity.projectExpeditor.fullName || opportunity.projectExpeditor.email}
-            </p>
+      ) : (
+        <p className="text-xs text-gray-400 italic py-2">No HOA cases yet</p>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="space-y-3">
+      {/* Expediting Header - Start Date & Expeditor */}
+      <div className="bg-gradient-to-r from-orange-50 to-amber-50 rounded-xl border border-orange-200 overflow-hidden">
+        <div className="p-4">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+            <div className="flex items-center gap-3 flex-1">
+              <div className="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center flex-shrink-0">
+                <Calendar className="w-5 h-5 text-orange-600" />
+              </div>
+              <div className="min-w-0">
+                <p className="font-semibold text-gray-900">Project Expediting</p>
+                <p className="text-sm text-gray-600">
+                  {opportunity?.projectExpeditingStartDate
+                    ? `Started ${new Date(opportunity.projectExpeditingStartDate).toLocaleDateString('en-US', {
+                        month: 'short', day: 'numeric', year: 'numeric'
+                      })}`
+                    : 'Not started yet'
+                  }
+                </p>
+              </div>
+            </div>
+
+            {opportunity?.projectExpeditingStartDate ? (
+              <div className="flex items-center gap-2 bg-white/60 rounded-lg px-3 py-2">
+                <User className="w-4 h-4 text-gray-400" />
+                <div className="text-sm">
+                  <p className="text-gray-500 text-xs">Expeditor</p>
+                  <p className="font-medium text-gray-900">
+                    {opportunity?.projectExpeditor?.firstName
+                      ? `${opportunity.projectExpeditor.firstName} ${opportunity.projectExpeditor.lastName || ''}`
+                      : user?.firstName || 'Not assigned'}
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={handleStartExpediting}
+                disabled={updateMutation.isPending}
+                className="w-full sm:w-auto px-4 py-2.5 bg-orange-600 text-white rounded-lg hover:bg-orange-700 font-medium transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {updateMutation.isPending ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Clock className="w-4 h-4" />
+                )}
+                Start Expediting
+              </button>
+            )}
           </div>
-        )}
+        </div>
       </div>
 
       {/* Checklist Sections */}
-      {renderSection('Onboarding Verification', 'onboarding', ONBOARDING_VERIFICATION, CheckCircle)}
+      {renderSection('Onboarding Verification', 'onboarding', ONBOARDING_VERIFICATION, CheckCircle, hoaCasesContent)}
       {renderSection('Job Complexity Review', 'complexity', JOB_COMPLEXITY, Camera)}
       {renderSection('Supplement Handling', 'supplement', SUPPLEMENT_FIELDS, FileText)}
       {renderSection('Install Ready Status', 'installReady', INSTALL_READY_FIELDS, AlertCircle)}
-      {renderSection('Expeditor Notes', 'expeditor', EXPEDITOR_FIELDS, UserCheck)}
+      {renderSection('Expeditor Notes', 'notes', EXPEDITOR_FIELDS, MessageSquare)}
 
       {/* Loading Indicator */}
       {updateMutation.isPending && (
@@ -325,36 +666,57 @@ export default function ExpediterChecklist({ opportunity, onUpdate }) {
         </div>
       )}
 
-      {/* Confirmation Modal */}
+      {/* Confirmation Modal for Case Creation */}
       {confirmTrigger && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-xl shadow-xl p-6 max-w-md mx-4">
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4">
+          <div className="bg-white w-full sm:max-w-md sm:rounded-xl rounded-t-xl p-5">
             <div className="flex items-center gap-3 mb-4">
               <div className="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center">
                 <AlertCircle className="w-5 h-5 text-orange-600" />
               </div>
-              <h3 className="text-lg font-semibold text-gray-900">Confirm Automation</h3>
+              <h3 className="text-lg font-semibold text-gray-900">Confirm Action</h3>
             </div>
-            <p className="text-gray-600 mb-6">{confirmTrigger.warning}</p>
+            <p className="text-gray-600 mb-2">
+              Setting <strong>{confirmTrigger.field?.label}</strong> to Yes will create a case:
+            </p>
+            <div className="bg-gray-50 rounded-lg p-3 mb-4">
+              <p className="font-medium text-gray-900">{confirmTrigger.field?.triggerCase?.subject}</p>
+              {confirmTrigger.field?.triggerCase?.assignTo && (
+                <p className="text-sm text-gray-500">Assigned to: {confirmTrigger.field.triggerCase.assignTo}</p>
+              )}
+            </div>
             <p className="text-sm text-gray-500 mb-6">Are you sure you want to proceed?</p>
-            <div className="flex gap-3 justify-end">
+            <div className="flex gap-3">
               <button
                 onClick={() => setConfirmTrigger(null)}
-                className="px-4 py-2 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+                className="flex-1 px-4 py-2.5 text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 font-medium transition-colors"
               >
                 Cancel
               </button>
               <button
                 onClick={handleConfirmTrigger}
-                disabled={updateMutation.isPending}
-                className="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors disabled:opacity-50"
+                disabled={updateMutation.isPending || createCaseMutation.isPending}
+                className="flex-1 px-4 py-2.5 bg-orange-600 text-white rounded-lg hover:bg-orange-700 font-medium transition-colors disabled:opacity-50"
               >
-                {updateMutation.isPending ? 'Processing...' : 'Yes, Proceed'}
+                {(updateMutation.isPending || createCaseMutation.isPending) ? 'Processing...' : 'Yes, Create Case'}
               </button>
             </div>
           </div>
         </div>
       )}
+
+      {/* Case Creation Modal */}
+      <CreateCaseModal
+        isOpen={showCaseModal}
+        onClose={() => {
+          setShowCaseModal(false);
+          setPendingHoaChange(null);
+        }}
+        onSubmit={handleCaseCreate}
+        caseType={caseModalType}
+        opportunity={opportunity}
+        isLoading={createCaseMutation.isPending}
+      />
     </div>
   );
 }
