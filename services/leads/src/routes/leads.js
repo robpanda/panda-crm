@@ -596,12 +596,58 @@ router.get('/:id/notes', async (req, res, next) => {
 // Add a note to a lead
 router.post('/:id/notes', async (req, res, next) => {
   try {
-    const { note, title } = req.body;
+    const { body, title, isPinned } = req.body;
+    // Support both 'body' and 'note' field names for compatibility
+    const noteBody = body || req.body.note;
+
+    if (!noteBody || !noteBody.trim()) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Note body is required' },
+      });
+    }
+
     const result = await leadService.addLeadNote(req.params.id, {
-      note,
+      note: noteBody,
       title,
+      isPinned,
       createdBy: req.user?.id,
     });
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Update a note
+router.put('/:id/notes/:noteId', async (req, res, next) => {
+  try {
+    const { title, body, isPinned } = req.body;
+    const result = await leadService.updateLeadNote(req.params.id, req.params.noteId, {
+      title,
+      body,
+      isPinned,
+    });
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Delete a note
+router.delete('/:id/notes/:noteId', async (req, res, next) => {
+  try {
+    const result = await leadService.deleteLeadNote(req.params.id, req.params.noteId);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Toggle pin status of a note
+router.post('/:id/notes/:noteId/pin', async (req, res, next) => {
+  try {
+    const result = await leadService.toggleLeadNotePin(req.params.id, req.params.noteId);
     res.json({ success: true, data: result });
   } catch (error) {
     next(error);

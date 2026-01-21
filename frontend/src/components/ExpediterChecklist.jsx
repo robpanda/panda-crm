@@ -143,6 +143,12 @@ function CreateCaseModal({ isOpen, onClose, onSubmit, caseType, opportunity, isL
         subject: `Permit Required - ${opportunity?.name || 'Job'}`,
         description: `A permit is required for this project.\n\nJob: ${opportunity?.name || ''}\nAddress: ${opportunity?.projectAddress || opportunity?.address || ''}\n\nPlease submit the permit application and track through approval.`,
       }));
+    } else if (caseType === 'Ad Hoc') {
+      setFormData(prev => ({
+        ...prev,
+        subject: '',
+        description: `Job: ${opportunity?.name || ''}\nAddress: ${opportunity?.projectAddress || opportunity?.address || ''}\n\nIssue Details:\n`,
+      }));
     }
   }, [caseType, opportunity]);
 
@@ -612,6 +618,7 @@ export default function ExpediterChecklist({ opportunity, onUpdate, users = [] }
     supplement: false,
     installReady: false,
     notes: false,
+    adhoc: false,
   });
   const [localValues, setLocalValues] = useState({});
   const [confirmTrigger, setConfirmTrigger] = useState(null);
@@ -649,10 +656,21 @@ export default function ExpediterChecklist({ opportunity, onUpdate, users = [] }
     enabled: !!opportunity?.id,
   });
 
+  // Fetch Ad Hoc cases for this opportunity (type = 'Ad Hoc' or 'General' or null)
+  const { data: adhocCases, refetch: refetchAdhocCases } = useQuery({
+    queryKey: ['cases', opportunity?.id, 'AdHoc'],
+    queryFn: async () => {
+      const result = await casesApi.getCases({ opportunityId: opportunity?.id, type: 'Ad Hoc' });
+      return result?.data || result || [];
+    },
+    enabled: !!opportunity?.id,
+  });
+
   const refetchCases = () => {
     refetchHoaCases();
     refetchPiiCases();
     refetchPermitCases();
+    refetchAdhocCases();
   };
 
   const updateMutation = useMutation({
@@ -1073,6 +1091,54 @@ export default function ExpediterChecklist({ opportunity, onUpdate, users = [] }
       {renderSection('Supplement Handling', 'supplement', SUPPLEMENT_FIELDS, FileText)}
       {renderSection('Install Ready Status', 'installReady', INSTALL_READY_FIELDS, AlertCircle)}
       {renderSection('Expeditor Notes', 'notes', EXPEDITOR_FIELDS, MessageSquare)}
+
+      {/* Ad Hoc Cases Section - Create case for any issue */}
+      <div className="border border-gray-200 rounded-lg overflow-hidden">
+        <button
+          onClick={() => toggleSection('adhoc')}
+          className="w-full flex items-center justify-between p-3 bg-purple-50 hover:bg-purple-100 transition-colors"
+        >
+          <div className="flex items-center gap-2">
+            <Briefcase className="w-4 h-4 text-purple-600" />
+            <span className="font-medium text-purple-800 text-sm">Ad Hoc Cases</span>
+            <span className="text-xs text-purple-500">(Other Issues)</span>
+          </div>
+          {expandedSections.adhoc ? (
+            <ChevronUp className="w-4 h-4 text-purple-500" />
+          ) : (
+            <ChevronDown className="w-4 h-4 text-purple-500" />
+          )}
+        </button>
+        {expandedSections.adhoc && (
+          <div className="p-3 space-y-3 bg-gray-50/50">
+            <p className="text-xs text-gray-500">
+              Create a case for any issue that doesn't fit into the other categories above.
+            </p>
+            <button
+              onClick={() => {
+                setCaseModalType('Ad Hoc');
+                setShowCaseModal(true);
+              }}
+              className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 font-medium transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              Create Ad Hoc Case
+            </button>
+
+            {/* Display existing Ad Hoc cases */}
+            {adhocCases && adhocCases.length > 0 && (
+              <div className="mt-3 space-y-2">
+                <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">Existing Ad Hoc Cases</span>
+                <div className="space-y-2">
+                  {adhocCases.map((c) => (
+                    <CaseCard key={c.id} caseData={c} />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Loading Indicator */}
       {updateMutation.isPending && (

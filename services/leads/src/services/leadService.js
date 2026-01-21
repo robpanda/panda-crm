@@ -1585,7 +1585,7 @@ class LeadService {
    * Used by: Call Center to document calls and status updates
    */
   async addLeadNote(leadId, data) {
-    const { note, title, createdBy } = data;
+    const { note, title, createdBy, isPinned } = data;
 
     // Verify lead exists
     const lead = await prisma.lead.findUnique({
@@ -1599,17 +1599,27 @@ class LeadService {
       throw error;
     }
 
+    // If this note will be pinned, unpin any existing pinned notes
+    if (isPinned) {
+      await prisma.note.updateMany({
+        where: { leadId: leadId, isPinned: true },
+        data: { isPinned: false, pinnedAt: null },
+      });
+    }
+
     // Create the note
     const newNote = await prisma.note.create({
       data: {
-        title: title || 'Call Center Note',
+        title: title || null,
         body: note,
         leadId: leadId,
         createdById: createdBy,
+        isPinned: isPinned || false,
+        pinnedAt: isPinned ? new Date() : null,
       },
       include: {
         createdBy: {
-          select: { id: true, firstName: true, lastName: true },
+          select: { id: true, firstName: true, lastName: true, email: true },
         },
       },
     });
@@ -1617,20 +1627,180 @@ class LeadService {
     logger.info(`Note added to lead ${leadId}`);
 
     return {
-      success: true,
-      note: {
-        id: newNote.id,
-        title: newNote.title,
-        body: newNote.body,
-        createdAt: newNote.createdAt,
-        createdBy: newNote.createdBy
-          ? `${newNote.createdBy.firstName} ${newNote.createdBy.lastName}`
-          : 'System',
+      id: newNote.id,
+      title: newNote.title,
+      body: newNote.body,
+      isPinned: newNote.isPinned || false,
+      createdAt: newNote.createdAt,
+      updatedAt: newNote.updatedAt,
+      createdBy: newNote.createdBy,
+    };
+  }
+
+  /**
+   * Update an existing note
+   * @param {string} leadId - Lead ID
+   * @param {string} noteId - Note ID
+   * @param {object} data - { title?, body?, isPinned? }
+   */
+  async updateLeadNote(leadId, noteId, data) {
+    // Verify lead exists
+    const lead = await prisma.lead.findUnique({
+      where: { id: leadId },
+      select: { id: true },
+    });
+
+    if (!lead) {
+      const error = new Error(`Lead not found: ${leadId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    // Verify note exists and belongs to this lead
+    const existingNote = await prisma.note.findFirst({
+      where: { id: noteId, leadId: leadId },
+    });
+
+    if (!existingNote) {
+      const error = new Error(`Note not found: ${noteId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const updateData = {};
+    if (data.title !== undefined) updateData.title = data.title;
+    if (data.body !== undefined) updateData.body = data.body;
+    if (data.isPinned !== undefined) {
+      updateData.isPinned = data.isPinned;
+      updateData.pinnedAt = data.isPinned ? new Date() : null;
+    }
+
+    const updatedNote = await prisma.note.update({
+      where: { id: noteId },
+      data: updateData,
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
       },
-      lead: {
-        id: lead.id,
-        name: `${lead.firstName} ${lead.lastName}`,
+    });
+
+    logger.info(`Note ${noteId} updated for lead ${leadId}`);
+
+    return {
+      id: updatedNote.id,
+      title: updatedNote.title,
+      body: updatedNote.body,
+      isPinned: updatedNote.isPinned || false,
+      pinnedAt: updatedNote.pinnedAt,
+      createdAt: updatedNote.createdAt,
+      updatedAt: updatedNote.updatedAt,
+      createdBy: updatedNote.createdBy,
+    };
+  }
+
+  /**
+   * Delete a note from a lead
+   * @param {string} leadId - Lead ID
+   * @param {string} noteId - Note ID
+   */
+  async deleteLeadNote(leadId, noteId) {
+    // Verify lead exists
+    const lead = await prisma.lead.findUnique({
+      where: { id: leadId },
+      select: { id: true },
+    });
+
+    if (!lead) {
+      const error = new Error(`Lead not found: ${leadId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    // Verify note exists and belongs to this lead
+    const existingNote = await prisma.note.findFirst({
+      where: { id: noteId, leadId: leadId },
+    });
+
+    if (!existingNote) {
+      const error = new Error(`Note not found: ${noteId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    await prisma.note.delete({
+      where: { id: noteId },
+    });
+
+    logger.info(`Note ${noteId} deleted from lead ${leadId}`);
+
+    return { success: true, deletedId: noteId };
+  }
+
+  /**
+   * Toggle pin status of a note (only one pinned note at a time per lead)
+   * @param {string} leadId - Lead ID
+   * @param {string} noteId - Note ID
+   */
+  async toggleLeadNotePin(leadId, noteId) {
+    // Verify lead exists
+    const lead = await prisma.lead.findUnique({
+      where: { id: leadId },
+      select: { id: true },
+    });
+
+    if (!lead) {
+      const error = new Error(`Lead not found: ${leadId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    // Verify note exists and belongs to this lead
+    const existingNote = await prisma.note.findFirst({
+      where: { id: noteId, leadId: leadId },
+    });
+
+    if (!existingNote) {
+      const error = new Error(`Note not found: ${noteId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const newPinnedState = !existingNote.isPinned;
+
+    // If pinning, unpin any other pinned notes for this lead
+    if (newPinnedState) {
+      await prisma.note.updateMany({
+        where: { leadId: leadId, isPinned: true },
+        data: { isPinned: false, pinnedAt: null },
+      });
+    }
+
+    // Update the note
+    const updatedNote = await prisma.note.update({
+      where: { id: noteId },
+      data: {
+        isPinned: newPinnedState,
+        pinnedAt: newPinnedState ? new Date() : null,
       },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+    });
+
+    logger.info(`Note ${noteId} pin toggled to ${newPinnedState} for lead ${leadId}`);
+
+    return {
+      id: updatedNote.id,
+      title: updatedNote.title,
+      body: updatedNote.body,
+      isPinned: updatedNote.isPinned || false,
+      pinnedAt: updatedNote.pinnedAt,
+      createdAt: updatedNote.createdAt,
+      updatedAt: updatedNote.updatedAt,
+      createdBy: updatedNote.createdBy,
     };
   }
 

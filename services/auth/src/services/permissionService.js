@@ -20,6 +20,7 @@ const DEFAULT_ROLE_PERMISSIONS = {
     payments: ['create', 'read', 'update', 'delete'],
     workorders: ['create', 'read', 'update', 'delete', 'assign'],
     appointments: ['create', 'read', 'update', 'delete', 'assign'],
+    cases: ['create', 'read', 'update', 'delete', 'assign'],
     commissions: ['create', 'read', 'update', 'delete', 'approve'],
     workflows: ['create', 'read', 'update', 'delete'],
     templates: ['create', 'read', 'update', 'delete'],
@@ -45,6 +46,7 @@ const DEFAULT_ROLE_PERMISSIONS = {
     payments: ['create', 'read', 'update', 'delete'],
     workorders: ['create', 'read', 'update', 'delete', 'assign'],
     appointments: ['create', 'read', 'update', 'delete', 'assign'],
+    cases: ['create', 'read', 'update', 'delete', 'assign'],
     commissions: ['read', 'approve'],
     workflows: ['create', 'read', 'update', 'delete'],
     templates: ['create', 'read', 'update', 'delete'],
@@ -104,6 +106,24 @@ const DEFAULT_ROLE_PERMISSIONS = {
     commissions: ['read'],
     templates: ['read'],
     agreements: ['create', 'read', 'update'],
+    reports: ['read'],
+    cases: ['create', 'read', 'update'],
+  },
+
+  project_expeditor: {
+    // Project Expeditor - handles HOA, PII, Permits, Change Orders, Ad Hoc cases
+    accounts: ['read', 'update'],
+    contacts: ['read', 'update'],
+    opportunities: ['read', 'update'], // Update for expediting checklist fields
+    quotes: ['read'],
+    orders: ['read'],
+    invoices: ['read'],
+    workorders: ['read', 'update'],
+    appointments: ['read', 'update'],
+    commissions: ['read'],
+    templates: ['read'],
+    agreements: ['create', 'read', 'update'], // For change orders
+    cases: ['create', 'read', 'update'], // Create and manage HOA, PII, Permit, Ad Hoc cases
     reports: ['read'],
   },
 
@@ -624,6 +644,7 @@ export const permissionService = {
       payments: ['create', 'read', 'update', 'delete'],
       workorders: ['create', 'read', 'update', 'delete', 'assign'],
       appointments: ['create', 'read', 'update', 'delete', 'assign'],
+      cases: ['create', 'read', 'update', 'delete', 'assign'], // Case management
       commissions: ['create', 'read', 'update', 'delete', 'approve'],
       workflows: ['create', 'read', 'update', 'delete'],
       templates: ['create', 'read', 'update', 'delete'],
