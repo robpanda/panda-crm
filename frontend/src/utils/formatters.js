@@ -91,10 +91,54 @@ export function formatValue(value, type = 'number') {
   }
 }
 
+/**
+ * Validate phone number format
+ * Accepts common US formats: (XXX) XXX-XXXX, XXX-XXX-XXXX, XXXXXXXXXX, XXX.XXX.XXXX
+ * @param {string} phone - The phone number to validate
+ * @returns {boolean} True if valid format or empty, false otherwise
+ */
+export function isValidPhoneFormat(phone) {
+  if (!phone || phone.trim() === '') return true; // Empty is not a format error
+  const phoneRegex = /^[\+]?[(]?[0-9]{3}[)]?[-\s\.]?[0-9]{3}[-\s\.]?[0-9]{4,6}$/;
+  const cleaned = phone.replace(/\s/g, '');
+  return phoneRegex.test(cleaned) || cleaned.length === 10 || cleaned.length === 11;
+}
+
+/**
+ * Validate email format
+ * @param {string} email - The email to validate
+ * @returns {boolean} True if valid format or empty, false otherwise
+ */
+export function isValidEmailFormat(email) {
+  if (!email || email.trim() === '') return true; // Empty is not a format error
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
+}
+
+/**
+ * Format phone number to standard (XXX) XXX-XXXX format
+ * @param {string} phone - The phone number to format
+ * @returns {string} Formatted phone number or original if can't format
+ */
+export function formatPhoneNumber(phone) {
+  if (!phone) return '';
+  const cleaned = phone.replace(/\D/g, '');
+  if (cleaned.length === 10) {
+    return `(${cleaned.slice(0, 3)}) ${cleaned.slice(3, 6)}-${cleaned.slice(6)}`;
+  }
+  if (cleaned.length === 11 && cleaned.startsWith('1')) {
+    return `(${cleaned.slice(1, 4)}) ${cleaned.slice(4, 7)}-${cleaned.slice(7)}`;
+  }
+  return phone; // Return original if can't format
+}
+
 export default {
   formatNumber,
   formatCurrency,
   formatCompact,
   formatPercent,
   formatValue,
+  isValidPhoneFormat,
+  isValidEmailFormat,
+  formatPhoneNumber,
 };

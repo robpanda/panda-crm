@@ -17,7 +17,6 @@ import {
   Star,
   AlertCircle,
   Loader2,
-  Save,
   ArrowRight,
   FileText,
   CheckCircle,
@@ -38,6 +37,7 @@ import { useMutation } from '@tanstack/react-query';
 import AddressAutocomplete from '../components/AddressAutocomplete';
 import MentionTextarea from '../components/MentionTextarea';
 import LoadingSpinner from '../components/LoadingSpinner';
+import { isValidPhoneFormat, isValidEmailFormat } from '../utils/formatters';
 
 const US_STATES = [
   { value: 'AL', label: 'Alabama' }, { value: 'AK', label: 'Alaska' },
@@ -368,6 +368,13 @@ export default function LeadWizard() {
     },
   });
 
+  // Validation warnings state (non-blocking warnings for format issues)
+  const [formatWarnings, setFormatWarnings] = useState({
+    phone: false,
+    mobilePhone: false,
+    email: false,
+  });
+
   const [formData, setFormData] = useState({
     firstName: '',
     lastName: '',
@@ -545,6 +552,13 @@ export default function LeadWizard() {
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
+
+    // Check format warnings for phone and email fields
+    if (name === 'phone' || name === 'mobilePhone') {
+      setFormatWarnings(prev => ({ ...prev, [name]: !isValidPhoneFormat(value) }));
+    } else if (name === 'email') {
+      setFormatWarnings(prev => ({ ...prev, email: !isValidEmailFormat(value) }));
+    }
   };
 
   const handleSave = async () => {
@@ -901,8 +915,16 @@ export default function LeadWizard() {
                   value={formData.phone}
                   onChange={handleInputChange}
                   placeholder="(410) 555-1234"
-                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+                  className={`w-full px-4 py-2.5 border rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent ${
+                    formatWarnings.phone ? 'border-yellow-400 bg-yellow-50' : 'border-gray-300'
+                  }`}
                 />
+                {formatWarnings.phone && (
+                  <p className="mt-1 text-xs text-yellow-600 flex items-center">
+                    <AlertCircle className="w-3 h-3 mr-1" />
+                    Phone format may not be standard (e.g., (410) 555-1234)
+                  </p>
+                )}
               </div>
 
               {/* Mobile Phone */}
@@ -916,8 +938,16 @@ export default function LeadWizard() {
                   value={formData.mobilePhone}
                   onChange={handleInputChange}
                   placeholder="(410) 555-5678"
-                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+                  className={`w-full px-4 py-2.5 border rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent ${
+                    formatWarnings.mobilePhone ? 'border-yellow-400 bg-yellow-50' : 'border-gray-300'
+                  }`}
                 />
+                {formatWarnings.mobilePhone && (
+                  <p className="mt-1 text-xs text-yellow-600 flex items-center">
+                    <AlertCircle className="w-3 h-3 mr-1" />
+                    Phone format may not be standard (e.g., (410) 555-1234)
+                  </p>
+                )}
               </div>
 
               {/* Email */}
@@ -931,8 +961,16 @@ export default function LeadWizard() {
                   value={formData.email}
                   onChange={handleInputChange}
                   placeholder="email@example.com"
-                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+                  className={`w-full px-4 py-2.5 border rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent ${
+                    formatWarnings.email ? 'border-yellow-400 bg-yellow-50' : 'border-gray-300'
+                  }`}
                 />
+                {formatWarnings.email && (
+                  <p className="mt-1 text-xs text-yellow-600 flex items-center">
+                    <AlertCircle className="w-3 h-3 mr-1" />
+                    Email format may not be valid (e.g., name@example.com)
+                  </p>
+                )}
               </div>
             </div>
 
@@ -1903,22 +1941,6 @@ export default function LeadWizard() {
               className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
             >
               Cancel
-            </button>
-            <button
-              onClick={handleSave}
-              disabled={isSaving || !hasRequiredFields}
-              className={`inline-flex items-center px-4 py-2 rounded-lg transition-colors ${
-                isSaving || !hasRequiredFields
-                  ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
-                  : 'border border-gray-300 text-gray-700 hover:bg-gray-50'
-              }`}
-            >
-              {isSaving ? (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              ) : (
-                <Save className="w-4 h-4 mr-2" />
-              )}
-              Save
             </button>
             {currentStep < steps.length ? (
               <button

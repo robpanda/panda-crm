@@ -20,6 +20,7 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { useRingCentral } from '../context/RingCentralContext';
+import { isValidPhoneFormat, isValidEmailFormat } from '../utils/formatters';
 
 // Account Types
 const ACCOUNT_TYPES = [
@@ -105,6 +106,12 @@ export default function AccountWizard() {
   const [isLoading, setIsLoading] = useState(!isNew);
   const [isSaving, setIsSaving] = useState(false);
   const [account, setAccount] = useState(null);
+
+  // Format validation warnings (non-blocking)
+  const [formatWarnings, setFormatWarnings] = useState({
+    phone: false,
+    email: false,
+  });
 
   const [formData, setFormData] = useState({
     // Basic Info
@@ -223,6 +230,13 @@ export default function AccountWizard() {
       ...prev,
       [name]: type === 'checkbox' ? checked : value,
     }));
+
+    // Check format warnings for phone and email fields
+    if (name === 'phone') {
+      setFormatWarnings(prev => ({ ...prev, phone: !isValidPhoneFormat(value) }));
+    } else if (name === 'email') {
+      setFormatWarnings(prev => ({ ...prev, email: !isValidEmailFormat(value) }));
+    }
   };
 
   const handleAddContact = () => {
@@ -497,8 +511,16 @@ export default function AccountWizard() {
                   value={formData.phone}
                   onChange={handleInputChange}
                   placeholder="(410) 555-1234"
-                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+                  className={`w-full px-4 py-2.5 border rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent ${
+                    formatWarnings.phone ? 'border-yellow-400 bg-yellow-50' : 'border-gray-300'
+                  }`}
                 />
+                {formatWarnings.phone && (
+                  <p className="mt-1 text-xs text-yellow-600 flex items-center">
+                    <AlertCircle className="w-3 h-3 mr-1" />
+                    Phone format may not be standard (e.g., (410) 555-1234)
+                  </p>
+                )}
               </div>
 
               {/* Email */}
@@ -512,8 +534,16 @@ export default function AccountWizard() {
                   value={formData.email}
                   onChange={handleInputChange}
                   placeholder="email@example.com"
-                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+                  className={`w-full px-4 py-2.5 border rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent ${
+                    formatWarnings.email ? 'border-yellow-400 bg-yellow-50' : 'border-gray-300'
+                  }`}
                 />
+                {formatWarnings.email && (
+                  <p className="mt-1 text-xs text-yellow-600 flex items-center">
+                    <AlertCircle className="w-3 h-3 mr-1" />
+                    Email format may not be valid (e.g., name@example.com)
+                  </p>
+                )}
               </div>
 
               {/* Website */}
