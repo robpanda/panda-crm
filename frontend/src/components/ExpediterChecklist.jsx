@@ -37,7 +37,12 @@ const ONBOARDING_VERIFICATION = [
   { id: 'hoaApproved', label: 'HOA Approved', icon: CheckCircle, type: 'checkbox', conditionalOn: 'hoaRequired', conditionalValue: 'yes' },
   { id: 'permitRequired', label: 'Permit Required', icon: FileCheck, type: 'checkbox' },
   { id: 'permitObtained', label: 'Permit Obtained', icon: CheckCircle, type: 'checkbox', conditionalOn: 'permitRequired', conditionalValue: true },
-  { id: 'piiComplete', label: 'PII Complete', icon: UserCheck, type: 'checkbox' },
+  { id: 'piiComplete', label: 'PII Complete', icon: UserCheck, type: 'select', options: [
+    { value: '', label: 'Select...' },
+    { value: 'no', label: 'No - Needs Follow-up' },
+    { value: 'not_required', label: 'Not Required' },
+    { value: 'yes', label: 'Yes - Complete' },
+  ], triggerPiiCase: true },
   { id: 'changeOrderSigned', label: 'Change Order Signed', icon: FileText, type: 'checkbox' },
   { id: 'solarDnrRequired', label: 'Solar DNR Required', icon: Zap, type: 'checkbox' },
 ];
@@ -100,6 +105,12 @@ function CreateCaseModal({ isOpen, onClose, onSubmit, caseType, opportunity, isL
         ...prev,
         subject: `HOA Approval Required - ${opportunity?.name || 'Job'}`,
         description: `HOA approval is required for this project.\n\nJob: ${opportunity?.name || ''}\nAddress: ${opportunity?.projectAddress || opportunity?.address || ''}\n\nPlease submit the HOA application and track approval status.`,
+      }));
+    } else if (caseType === 'PII') {
+      setFormData(prev => ({
+        ...prev,
+        subject: `PII Follow-up Required - ${opportunity?.name || 'Job'}`,
+        description: `PII (Personal/Property Insurance Information) follow-up is required for this project.\n\nJob: ${opportunity?.name || ''}\nAddress: ${opportunity?.projectAddress || opportunity?.address || ''}\n\nPlease schedule an appointment with the homeowner to complete the PII information.`,
       }));
     }
   }, [caseType, opportunity]);
@@ -296,10 +307,10 @@ export default function ExpediterChecklist({ opportunity, onUpdate, users = [] }
   const [confirmTrigger, setConfirmTrigger] = useState(null);
   const [showCaseModal, setShowCaseModal] = useState(false);
   const [caseModalType, setCaseModalType] = useState('');
-  const [pendingHoaChange, setPendingHoaChange] = useState(null);
+  const [pendingFieldChange, setPendingFieldChange] = useState(null); // For HOA and PII changes
 
   // Fetch HOA cases for this opportunity
-  const { data: hoaCases, refetch: refetchCases } = useQuery({
+  const { data: hoaCases, refetch: refetchHoaCases } = useQuery({
     queryKey: ['cases', opportunity?.id, 'HOA'],
     queryFn: async () => {
       const result = await casesApi.getCases({ opportunityId: opportunity?.id, type: 'HOA' });
@@ -307,6 +318,21 @@ export default function ExpediterChecklist({ opportunity, onUpdate, users = [] }
     },
     enabled: !!opportunity?.id,
   });
+
+  // Fetch PII cases for this opportunity
+  const { data: piiCases, refetch: refetchPiiCases } = useQuery({
+    queryKey: ['cases', opportunity?.id, 'PII'],
+    queryFn: async () => {
+      const result = await casesApi.getCases({ opportunityId: opportunity?.id, type: 'PII' });
+      return result?.data || result || [];
+    },
+    enabled: !!opportunity?.id,
+  });
+
+  const refetchCases = () => {
+    refetchHoaCases();
+    refetchPiiCases();
+  };
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }) => opportunitiesApi.updateOpportunity(id, data),
@@ -323,13 +349,13 @@ export default function ExpediterChecklist({ opportunity, onUpdate, users = [] }
       queryClient.invalidateQueries(['cases']);
       refetchCases();
       setShowCaseModal(false);
-      // If we had a pending HOA change, now apply it
-      if (pendingHoaChange) {
+      // If we had a pending field change (HOA or PII), now apply it
+      if (pendingFieldChange) {
         updateMutation.mutate({
           id: opportunity.id,
-          data: { hoaRequired: pendingHoaChange },
+          data: { [pendingFieldChange.fieldId]: pendingFieldChange.value },
         });
-        setPendingHoaChange(null);
+        setPendingFieldChange(null);
       }
     },
   });
@@ -342,8 +368,16 @@ export default function ExpediterChecklist({ opportunity, onUpdate, users = [] }
   const handleChange = (fieldId, value, field = null) => {
     // Special handling for HOA Required field - create case when set to "yes"
     if (fieldId === 'hoaRequired' && value === 'yes' && getValue('hoaRequired') !== 'yes') {
-      setPendingHoaChange(value);
+      setPendingFieldChange({ fieldId, value });
       setCaseModalType('HOA');
+      setShowCaseModal(true);
+      return;
+    }
+
+    // Special handling for PII Complete field - create case when set to "no"
+    if (fieldId === 'piiComplete' && value === 'no' && getValue('piiComplete') !== 'no') {
+      setPendingFieldChange({ fieldId, value });
+      setCaseModalType('PII');
       setShowCaseModal(true);
       return;
     }

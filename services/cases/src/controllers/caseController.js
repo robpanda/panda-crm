@@ -5,10 +5,9 @@ const prisma = new PrismaClient();
 // Workflows service URL for trigger execution
 const WORKFLOWS_SERVICE_URL = process.env.WORKFLOWS_SERVICE_URL || 'http://workflows-service:3009';
 
-// Helper: Trigger HOA case closed workflow
-async function triggerHoaCaseClosedWorkflow(caseId, userId) {
+// Helper: Trigger case closed workflows (HOA and PII)
+async function triggerCaseClosedWorkflows(caseId, userId) {
   try {
-    // Check if this case is HOA-related before calling workflow service
     const caseRecord = await prisma.case.findUnique({
       where: { id: caseId },
       select: {
@@ -20,35 +19,71 @@ async function triggerHoaCaseClosedWorkflow(caseId, userId) {
 
     if (!caseRecord) return;
 
+    const typeStr = caseRecord.type?.toLowerCase() || '';
+    const subjectStr = caseRecord.subject?.toLowerCase() || '';
+    const descStr = caseRecord.description?.toLowerCase() || '';
+
     // Check if HOA-related
     const isHoaCase =
-      caseRecord.type?.toLowerCase().includes('hoa') ||
-      caseRecord.subject?.toLowerCase().includes('hoa') ||
-      caseRecord.description?.toLowerCase().includes('hoa approval');
+      typeStr.includes('hoa') ||
+      subjectStr.includes('hoa') ||
+      descStr.includes('hoa approval');
 
-    if (!isHoaCase) {
-      console.log(`[Case Controller] Case ${caseId} is not HOA-related, skipping workflow trigger`);
-      return;
+    // Check if PII-related
+    const isPiiCase =
+      typeStr.includes('pii') ||
+      subjectStr.includes('pii') ||
+      descStr.includes('pii');
+
+    const results = {};
+
+    // Trigger HOA case closed workflow
+    if (isHoaCase) {
+      console.log(`[Case Controller] Triggering HOA case closed workflow for case ${caseId}`);
+      try {
+        const response = await fetch(`${WORKFLOWS_SERVICE_URL}/api/triggers/hoa-case-closed`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ caseId, userId }),
+        });
+        if (response.ok) {
+          results.hoa = await response.json();
+          console.log(`[Case Controller] HOA case closed workflow result:`, results.hoa);
+        } else {
+          console.error(`[Case Controller] HOA workflow failed:`, await response.text());
+        }
+      } catch (err) {
+        console.error(`[Case Controller] HOA workflow error:`, err);
+      }
     }
 
-    console.log(`[Case Controller] Triggering HOA case closed workflow for case ${caseId}`);
-
-    const response = await fetch(`${WORKFLOWS_SERVICE_URL}/api/triggers/hoa-case-closed`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ caseId, userId }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Workflow service error: ${errorText}`);
+    // Trigger PII case closed workflow
+    if (isPiiCase) {
+      console.log(`[Case Controller] Triggering PII case closed workflow for case ${caseId}`);
+      try {
+        const response = await fetch(`${WORKFLOWS_SERVICE_URL}/api/triggers/pii-case-closed`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ caseId, userId }),
+        });
+        if (response.ok) {
+          results.pii = await response.json();
+          console.log(`[Case Controller] PII case closed workflow result:`, results.pii);
+        } else {
+          console.error(`[Case Controller] PII workflow failed:`, await response.text());
+        }
+      } catch (err) {
+        console.error(`[Case Controller] PII workflow error:`, err);
+      }
     }
 
-    const result = await response.json();
-    console.log(`[Case Controller] HOA case closed workflow result:`, result);
-    return result;
+    if (!isHoaCase && !isPiiCase) {
+      console.log(`[Case Controller] Case ${caseId} is not HOA or PII related, skipping workflows`);
+    }
+
+    return results;
   } catch (error) {
-    console.error(`[Case Controller] Error triggering HOA workflow:`, error);
+    console.error(`[Case Controller] Error triggering case closed workflows:`, error);
     throw error;
   }
 }
@@ -264,8 +299,8 @@ export async function updateCase(req, res) {
 
     // Trigger HOA case closed workflow if status changed to CLOSED (async, don't wait)
     if (status === 'CLOSED') {
-      triggerHoaCaseClosedWorkflow(id, req.user?.id).catch(err => {
-        console.error('Failed to trigger HOA case closed workflow:', err);
+      triggerCaseClosedWorkflows(id, req.user?.id).catch(err => {
+        console.error('Failed to trigger case closed workflows:', err);
       });
     }
 
@@ -438,8 +473,8 @@ export async function closeCase(req, res) {
     });
 
     // Trigger HOA case closed workflow (async, don't wait)
-    triggerHoaCaseClosedWorkflow(id, req.user?.id).catch(err => {
-      console.error('Failed to trigger HOA case closed workflow:', err);
+    triggerCaseClosedWorkflows(id, req.user?.id).catch(err => {
+      console.error('Failed to trigger case closed workflows:', err);
     });
 
     res.json(updatedCase);

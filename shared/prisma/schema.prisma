@@ -208,6 +208,7 @@ model Lead {
   notes                    Note[]              @relation("LeadNotes")
   notifications            Notification[]      @relation("LeadNotifications")
   tasks                    Task[]              @relation("LeadTasks")
+  scoreHistory             LeadScoreHistory[]
 
   @@index([status])
   @@index([ownerId])
@@ -222,6 +223,62 @@ model Lead {
   @@index([next_call_at])
   @@index([referred_by_champion_id])
   @@map("leads")
+}
+
+model LeadScoringRule {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  field       String   // Field to evaluate (e.g., "source", "workType", "state")
+  operator    String   // Comparison operator (equals, in, contains, exists, gte, lte, between)
+  value       Json     // Value to compare against
+  scoreImpact Int      // Points to add/subtract
+  category    String?  // Rule category (e.g., "source", "property", "contact")
+  priority    Int      @default(100) // Lower = evaluated first
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([isActive])
+  @@index([priority])
+  @@map("lead_scoring_rules")
+}
+
+model LeadScoreHistory {
+  id           String   @id @default(cuid())
+  leadId       String   @map("lead_id")
+  score        Int
+  rank         String?
+  scoreFactors Json?    @map("score_factors")
+  scoreVersion Int      @default(1) @map("score_version")
+  scoredBy     String?  @map("scored_by")
+  createdAt    DateTime @default(now()) @map("created_at")
+  lead         Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId])
+  @@index([createdAt])
+  @@map("lead_score_history")
+}
+
+model LeadScoringModel {
+  id          String    @id @default(cuid())
+  name        String
+  version     String
+  modelType   String    @map("model_type") // e.g., "xgboost", "logistic_regression"
+  features    Json?     // List of features used
+  aucRoc      Float?    @map("auc_roc")
+  precision   Float?
+  recall      Float?
+  f1Score     Float?    @map("f1_score")
+  trainedAt   DateTime? @map("trained_at")
+  deployedAt  DateTime? @map("deployed_at")
+  isActive    Boolean   @default(false) @map("is_active")
+  modelPath   String?   @map("model_path") // S3 path or Lambda ARN
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  @@index([isActive])
+  @@map("lead_scoring_models")
 }
 
 model Opportunity {
@@ -304,7 +361,7 @@ model Opportunity {
   permitRequired         Boolean                 @default(false) @map("permit_required")
   permitObtained         Boolean                 @default(false) @map("permit_obtained")
   solarDnrRequired       Boolean                 @default(false) @map("solar_dnr_required")
-  piiComplete            Boolean                 @default(false) @map("pii_complete")
+  piiComplete            String?                 @map("pii_complete") // 'yes', 'no', 'not_required'
   notInstallReady        Boolean                 @default(false) @map("not_install_ready")
   notInstallReadyNotes   String?                 @map("not_install_ready_notes")
 

@@ -34,6 +34,7 @@ import {
   onSupplementHoldsJob,
   onHoaRequired,
   onHoaCaseClosed,
+  onPiiCaseClosed,
 } from '../triggers/expeditingTriggers.js';
 
 const router = Router();
@@ -1375,6 +1376,36 @@ router.post('/hoa-case-closed', async (req, res, next) => {
     });
   } catch (error) {
     logger.error('Error in HOA case closed trigger:', error);
+    next(error);
+  }
+});
+
+/**
+ * POST /triggers/pii-case-closed
+ * Called when a PII case is closed
+ * Auto-sets piiComplete='yes' on the related opportunity
+ */
+router.post('/pii-case-closed', async (req, res, next) => {
+  try {
+    const { caseId, userId } = req.body;
+
+    if (!caseId) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'caseId is required' },
+      });
+    }
+
+    logger.info(`Trigger: PII Case Closed ${caseId}`);
+
+    const result = await onPiiCaseClosed(caseId, userId);
+
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    logger.error('Error in PII case closed trigger:', error);
     next(error);
   }
 });
