@@ -3,6 +3,7 @@
 # Run this from any Claude chat before deploying frontend changes
 
 set -e
+export PATH="/opt/homebrew/bin:$PATH"
 cd "/Users/Brian 1/Desktop/panda-crm"
 
 echo "=== Step 1: Commit any pending changes ==="
