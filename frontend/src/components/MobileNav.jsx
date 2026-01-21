@@ -1,5 +1,6 @@
 import { NavLink, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
+import { useAuth } from '../context/AuthContext';
 import { attentionApi } from '../services/api';
 import {
   LayoutDashboard,
@@ -19,13 +20,15 @@ const mobileNavItems = [
 
 export default function MobileNav({ onMoreClick }) {
   const location = useLocation();
+  const { user } = useAuth();
 
-  // Fetch attention queue count
+  // Fetch attention queue count - only when user is authenticated
   const { data: attentionStats } = useQuery({
-    queryKey: ['attentionStats'],
+    queryKey: ['attentionStats', user?.id],
     queryFn: () => attentionApi.getStats(),
     staleTime: 30000, // 30 seconds
     refetchInterval: 60000, // Refresh every minute
+    enabled: !!user?.id, // Only fetch when user is logged in
   });
 
   const attentionCount = attentionStats?.total || attentionStats?.count || 0;

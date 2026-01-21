@@ -61,7 +61,7 @@ import RolesPermissions from './pages/admin/RolesPermissions';
 import Commissions from './pages/admin/Commissions';
 import CommissionEngine from './pages/admin/CommissionEngine';
 import PaymentEngine from './pages/admin/PaymentEngine';
-import Templates from './pages/admin/Templates';
+// Templates page is now part of Bamboogli - redirect in routes
 import Integrations from './pages/admin/Integrations';
 import Users from './pages/admin/Users';
 import AuditLogs from './pages/admin/AuditLogs';
@@ -203,7 +203,7 @@ export default function App() {
         <Route path="admin/commissions" element={<Commissions />} />
         <Route path="admin/commission-engine" element={<CommissionEngine />} />
         <Route path="admin/payment-engine" element={<PaymentEngine />} />
-        <Route path="admin/templates" element={<Templates />} />
+        <Route path="admin/templates" element={<Navigate to="/admin/bamboogli?tab=templates" replace />} />
         <Route path="admin/integrations" element={<Integrations />} />
         <Route path="admin/users" element={<Users />} />
         <Route path="admin/audit" element={<AuditLogs />} />

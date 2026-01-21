@@ -12,6 +12,11 @@ const AUTOMATION_TYPES = {
   CREW_DISPATCH_NOTIFICATION: 'crew_dispatch_notification',
   APPOINTMENT_COMPLETE: 'appointment_complete',
   RESCHEDULE_CONFIRMATION: 'reschedule_confirmation',
+  // Document Signing Automations
+  DOCUMENT_SIGNING_REQUEST: 'document_signing_request',
+  DOCUMENT_SIGNING_REMINDER: 'document_signing_reminder',
+  DOCUMENT_SIGNED_CONFIRMATION: 'document_signed_confirmation',
+  DOCUMENT_COMPLETED_NOTIFICATION: 'document_completed_notification',
 };
 
 // Default templates for each automation type
@@ -118,6 +123,103 @@ We'd love to hear about your experience. Please take a moment to leave us a revi
 Your feedback helps us serve you and our community better.
 
 If you have any questions or concerns about the work completed, please don't hesitate to contact us.
+
+Best regards,
+The Panda Exteriors Team`,
+    },
+  },
+  // Document Signing Templates
+  [AUTOMATION_TYPES.DOCUMENT_SIGNING_REQUEST]: {
+    sms: {
+      body: `Hi {firstName}! You have a document ready to sign from Panda Exteriors: "{documentName}". Please sign here: {signingUrl} - Questions? Call (240) 801-6665`,
+    },
+    email: {
+      subject: 'Please Sign: {documentName} - Panda Exteriors',
+      body: `Hi {firstName},
+
+You have a document waiting for your signature:
+
+DOCUMENT: {documentName}
+PROJECT: {projectName}
+
+Please click the link below to review and sign your document:
+
+{signingUrl}
+
+This link will expire in 30 days.
+
+If you have any questions, please contact us at (240) 801-6665.
+
+Thank you for choosing Panda Exteriors!
+
+Best regards,
+The Panda Exteriors Team`,
+    },
+  },
+  [AUTOMATION_TYPES.DOCUMENT_SIGNING_REMINDER]: {
+    sms: {
+      body: `Reminder: Your document "{documentName}" from Panda Exteriors is still waiting for your signature. Sign here: {signingUrl}`,
+    },
+    email: {
+      subject: 'Reminder: Please Sign Your Document - {documentName}',
+      body: `Hi {firstName},
+
+This is a friendly reminder that your document is still waiting for your signature:
+
+DOCUMENT: {documentName}
+PROJECT: {projectName}
+SENT: {sentDate}
+
+Please sign your document to proceed:
+
+{signingUrl}
+
+If you have any questions or need to discuss the document, please call us at (240) 801-6665.
+
+Best regards,
+The Panda Exteriors Team`,
+    },
+  },
+  [AUTOMATION_TYPES.DOCUMENT_SIGNED_CONFIRMATION]: {
+    sms: {
+      body: `Thank you, {firstName}! Your signature on "{documentName}" has been recorded. You'll receive a copy of the signed document via email.`,
+    },
+    email: {
+      subject: 'Document Signed: {documentName} - Confirmation',
+      body: `Hi {firstName},
+
+Thank you for signing your document!
+
+DOCUMENT: {documentName}
+SIGNED AT: {signedAt}
+
+You can download your signed document here:
+{signedDocumentUrl}
+
+If you have any questions, please contact us at (240) 801-6665.
+
+Best regards,
+The Panda Exteriors Team`,
+    },
+  },
+  [AUTOMATION_TYPES.DOCUMENT_COMPLETED_NOTIFICATION]: {
+    sms: {
+      body: `Great news, {firstName}! Your document "{documentName}" is now fully executed. All signatures have been collected. Check your email for the completed document.`,
+    },
+    email: {
+      subject: 'Document Complete: {documentName} - All Signatures Collected',
+      body: `Hi {firstName},
+
+Great news! Your document has been fully executed with all required signatures.
+
+DOCUMENT: {documentName}
+PROJECT: {projectName}
+COMPLETED AT: {completedAt}
+
+Download your completed document:
+{signedDocumentUrl}
+
+Thank you for your business! Our team will be in touch regarding next steps.
 
 Best regards,
 The Panda Exteriors Team`,
@@ -577,6 +679,306 @@ export async function getAutomationHistory(req, res, next) {
       total,
       limit: parseInt(limit),
       offset: parseInt(offset),
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// Trigger document signing automation
+export async function triggerDocumentSigningAutomation(req, res, next) {
+  try {
+    const { automationType, agreementId, opportunityId } = req.body;
+
+    // Validate automation type is a document signing type
+    const validDocTypes = [
+      AUTOMATION_TYPES.DOCUMENT_SIGNING_REQUEST,
+      AUTOMATION_TYPES.DOCUMENT_SIGNING_REMINDER,
+      AUTOMATION_TYPES.DOCUMENT_SIGNED_CONFIRMATION,
+      AUTOMATION_TYPES.DOCUMENT_COMPLETED_NOTIFICATION,
+    ];
+
+    if (!validDocTypes.includes(automationType)) {
+      return res.status(400).json({
+        error: `Invalid document automation type. Must be one of: ${validDocTypes.join(', ')}`,
+      });
+    }
+
+    // Get automation config
+    const automation = await prisma.automationConfig.findUnique({
+      where: { type: automationType },
+    });
+
+    if (!automation?.enabled) {
+      return res.json({
+        success: false,
+        message: 'Document signing automation is not enabled',
+        sent: { sms: false, email: false },
+      });
+    }
+
+    // Get agreement and related data
+    const agreement = await prisma.agreement.findUnique({
+      where: { id: agreementId },
+      include: {
+        opportunity: {
+          include: {
+            account: true,
+            contact: true,
+          },
+        },
+        account: true,
+        contact: true,
+      },
+    });
+
+    if (!agreement) {
+      return res.status(404).json({ error: 'Agreement not found' });
+    }
+
+    // Get contact info (from agreement or opportunity)
+    const contact = agreement.contact ||
+                    agreement.opportunity?.contact ||
+                    agreement.account?.primaryContact;
+
+    const account = agreement.account || agreement.opportunity?.account;
+
+    // Build merge data for document signing
+    const mergeData = {
+      firstName: contact?.firstName || agreement.recipientName?.split(' ')[0] || 'Valued Customer',
+      lastName: contact?.lastName || '',
+      customerName: agreement.recipientName || contact?.name || 'Valued Customer',
+      customerEmail: agreement.recipientEmail,
+      documentName: agreement.name,
+      projectName: agreement.opportunity?.name || 'Your Project',
+      agreementNumber: agreement.agreementNumber,
+      signingUrl: agreement.signingUrl,
+      signedDocumentUrl: agreement.signedDocumentUrl || '',
+      sentDate: agreement.sentAt ? new Date(agreement.sentAt).toLocaleDateString('en-US', {
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+      }) : '',
+      signedAt: agreement.signedAt ? new Date(agreement.signedAt).toLocaleString('en-US') : '',
+      completedAt: agreement.completedAt ? new Date(agreement.completedAt).toLocaleString('en-US') : '',
+      expiresAt: agreement.expiresAt ? new Date(agreement.expiresAt).toLocaleDateString('en-US') : '',
+      companyName: 'Panda Exteriors',
+      company: 'Panda Exteriors',
+    };
+
+    const results = { sms: null, email: null };
+
+    // Merge template helper
+    const mergeTemplate = (template, data) => {
+      if (!template) return '';
+      return template.replace(/\{\{?(\w+)\}?\}/g, (match, key) => {
+        return data[key] !== undefined && data[key] !== null ? data[key] : match;
+      });
+    };
+
+    // Get recipient phone for SMS
+    const recipientPhone = contact?.phone || contact?.mobilePhone;
+
+    // Send SMS if enabled and phone available
+    if (automation.smsEnabled && automation.smsTemplate && recipientPhone) {
+      try {
+        const smsMessage = mergeTemplate(automation.smsTemplate, mergeData);
+        results.sms = await twilioProvider.sendSmsMessage({
+          to: recipientPhone,
+          body: smsMessage,
+        });
+
+        // Create message record
+        await prisma.message.create({
+          data: {
+            direction: 'OUTBOUND',
+            channel: 'SMS',
+            body: smsMessage,
+            fromAddress: process.env.TWILIO_PHONE_NUMBER,
+            toAddresses: [recipientPhone],
+            status: 'SENT',
+            providerId: results.sms.sid,
+            providerName: 'twilio',
+            contactId: contact?.id,
+            sentAt: new Date(),
+            metadata: { agreementId, automationType },
+          },
+        });
+
+        // Create activity record
+        await prisma.activity.create({
+          data: {
+            type: 'SMS_SENT',
+            subject: `Document Automation: ${automation.name}`,
+            body: smsMessage,
+            status: 'SENT',
+            accountId: account?.id,
+            contactId: contact?.id,
+            opportunityId: agreement.opportunityId,
+            externalPhone: recipientPhone,
+            metadata: { automationType, agreementId, documentName: agreement.name },
+            occurredAt: new Date(),
+          },
+        });
+      } catch (smsError) {
+        console.error('Document signing SMS automation failed:', smsError);
+        results.sms = { error: smsError.message };
+      }
+    }
+
+    // Send Email if enabled
+    const recipientEmail = agreement.recipientEmail;
+    const canSendEmail = automation.emailEnabled &&
+                         automation.emailTemplate &&
+                         recipientEmail &&
+                         /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail);
+
+    if (canSendEmail) {
+      try {
+        const emailSubject = mergeTemplate(automation.emailSubject, mergeData);
+        const emailBody = mergeTemplate(automation.emailTemplate, mergeData);
+
+        results.email = await emailProvider.sendEmailMessage({
+          to: recipientEmail,
+          subject: emailSubject,
+          text: emailBody,
+          html: emailBody.replace(/\n/g, '<br>'),
+        });
+
+        // Create message record
+        await prisma.message.create({
+          data: {
+            direction: 'OUTBOUND',
+            channel: 'EMAIL',
+            subject: emailSubject,
+            body: emailBody,
+            fromAddress: process.env.EMAIL_FROM_ADDRESS,
+            toAddresses: [recipientEmail],
+            status: 'SENT',
+            providerId: results.email.messageId,
+            providerName: process.env.EMAIL_PROVIDER || 'sendgrid',
+            contactId: contact?.id,
+            sentAt: new Date(),
+            metadata: { agreementId, automationType },
+          },
+        });
+
+        // Create activity record
+        await prisma.activity.create({
+          data: {
+            type: 'EMAIL_SENT',
+            subject: `Document Automation: ${automation.name}`,
+            body: emailBody,
+            status: 'SENT',
+            accountId: account?.id,
+            contactId: contact?.id,
+            opportunityId: agreement.opportunityId,
+            externalEmail: recipientEmail,
+            metadata: { automationType, agreementId, documentName: agreement.name },
+            occurredAt: new Date(),
+          },
+        });
+      } catch (emailError) {
+        console.error('Document signing Email automation failed:', emailError);
+        results.email = { error: emailError.message };
+      }
+    }
+
+    res.json({
+      success: true,
+      automationType,
+      agreementId,
+      documentName: agreement.name,
+      sent: {
+        sms: !!results.sms && !results.sms.error,
+        email: !!results.email && !results.email.error,
+      },
+      results,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// Send document for signature via SMS (quick send)
+export async function sendDocumentSigningLinkSms(req, res, next) {
+  try {
+    const { agreementId, phoneNumber } = req.body;
+
+    if (!agreementId || !phoneNumber) {
+      return res.status(400).json({ error: 'agreementId and phoneNumber are required' });
+    }
+
+    const agreement = await prisma.agreement.findUnique({
+      where: { id: agreementId },
+    });
+
+    if (!agreement) {
+      return res.status(404).json({ error: 'Agreement not found' });
+    }
+
+    if (!agreement.signingUrl) {
+      return res.status(400).json({ error: 'Agreement does not have a signing URL' });
+    }
+
+    // Get automation template or use default
+    let smsTemplate = DEFAULT_TEMPLATES[AUTOMATION_TYPES.DOCUMENT_SIGNING_REQUEST]?.sms?.body;
+    const automation = await prisma.automationConfig.findUnique({
+      where: { type: AUTOMATION_TYPES.DOCUMENT_SIGNING_REQUEST },
+    });
+    if (automation?.smsTemplate) {
+      smsTemplate = automation.smsTemplate;
+    }
+
+    const mergeData = {
+      firstName: agreement.recipientName?.split(' ')[0] || 'there',
+      documentName: agreement.name,
+      signingUrl: agreement.signingUrl,
+    };
+
+    const message = smsTemplate.replace(/\{\{?(\w+)\}?\}/g, (match, key) => {
+      return mergeData[key] !== undefined ? mergeData[key] : match;
+    });
+
+    const result = await twilioProvider.sendSmsMessage({
+      to: phoneNumber,
+      body: message,
+    });
+
+    // Create message record
+    await prisma.message.create({
+      data: {
+        direction: 'OUTBOUND',
+        channel: 'SMS',
+        body: message,
+        fromAddress: process.env.TWILIO_PHONE_NUMBER,
+        toAddresses: [phoneNumber],
+        status: 'SENT',
+        providerId: result.sid,
+        providerName: 'twilio',
+        sentAt: new Date(),
+        metadata: { agreementId, type: 'document_signing_link' },
+      },
+    });
+
+    // Update agreement to mark as sent if it was draft
+    if (agreement.status === 'DRAFT') {
+      await prisma.agreement.update({
+        where: { id: agreementId },
+        data: {
+          status: 'SENT',
+          sentAt: new Date(),
+        },
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Signing link sent via SMS',
+      agreementId,
+      phoneNumber,
+      messageSid: result.sid,
     });
   } catch (error) {
     next(error);

@@ -6,6 +6,8 @@ import {
   testAutomation,
   triggerAppointmentAutomation,
   getAutomationHistory,
+  triggerDocumentSigningAutomation,
+  sendDocumentSigningLinkSms,
 } from '../controllers/automationController.js';
 
 const router = Router();
@@ -42,6 +44,20 @@ router.post('/:type/test', testAutomation);
 // POST /api/automations/trigger
 // Body: { automationType, appointmentId?, resourceId?, opportunityId? }
 router.post('/trigger', triggerAppointmentAutomation);
+
+// ============================================
+// DOCUMENT SIGNING AUTOMATIONS
+// ============================================
+
+// Trigger document signing automation
+// POST /api/automations/document/trigger
+// Body: { automationType, agreementId, opportunityId? }
+router.post('/document/trigger', triggerDocumentSigningAutomation);
+
+// Send signing link via SMS (quick action)
+// POST /api/automations/document/send-sms
+// Body: { agreementId, phoneNumber }
+router.post('/document/send-sms', sendDocumentSigningLinkSms);
 
 // ============================================
 // AUTOMATION HISTORY

@@ -249,11 +249,16 @@ export const messagingService = {
 
   /**
    * Interpolate template variables with record data
+   * Supports both {var} and {{var}} syntax for merge fields
+   * Also supports dot notation for nested fields: {{contact.firstName}} or {contact.firstName}
    */
   interpolateTemplate(template, record) {
     if (!template) return template;
 
-    return template.replace(/\{\{([^}]+)\}\}/g, (match, fieldPath) => {
+    // Support both {var} and {{var}} syntax
+    return template.replace(/\{\{?([^}]+)\}?\}/g, (match, fieldPath) => {
+      // Skip if this looks like a JSON object or other non-merge-field syntax
+      if (fieldPath.includes(':') || fieldPath.includes('"')) return match;
       const value = this.getFieldValue(record, fieldPath.trim());
       return value !== undefined && value !== null ? value : '';
     });

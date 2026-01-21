@@ -10,9 +10,44 @@ const api = axios.create({
   },
 });
 
+// Track refresh state to prevent loops
+let isRefreshing = false;
+let refreshSubscribers = [];
+let isRedirectingToLogin = false;
+
+// Subscribe to refresh completion
+const subscribeToRefresh = (callback) => {
+  refreshSubscribers.push(callback);
+};
+
+// Notify all subscribers when refresh completes
+const onRefreshComplete = (token) => {
+  refreshSubscribers.forEach((callback) => callback(token));
+  refreshSubscribers = [];
+};
+
+// Redirect to login (only once)
+const redirectToLogin = () => {
+  // Prevent redirect loops - don't redirect if already on login page or already redirecting
+  if (window.location.pathname === '/login' || isRedirectingToLogin) {
+    return;
+  }
+  isRedirectingToLogin = true;
+  localStorage.clear();
+  window.location.href = '/login';
+};
+
 // Request interceptor to add auth token
 api.interceptors.request.use(
   (config) => {
+    // Block requests if we're redirecting to login
+    if (isRedirectingToLogin) {
+      const controller = new AbortController();
+      controller.abort();
+      config.signal = controller.signal;
+      return config;
+    }
+
     const token = localStorage.getItem('accessToken');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
@@ -28,8 +63,29 @@ api.interceptors.response.use(
   async (error) => {
     const originalRequest = error.config;
 
+    // Skip refresh logic if already on login page or redirecting
+    if (window.location.pathname === '/login' || isRedirectingToLogin) {
+      return Promise.reject(error);
+    }
+
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
+
+      // If already refreshing, wait for the refresh to complete
+      if (isRefreshing) {
+        return new Promise((resolve, reject) => {
+          subscribeToRefresh((token) => {
+            if (token) {
+              originalRequest.headers.Authorization = `Bearer ${token}`;
+              resolve(api(originalRequest));
+            } else {
+              reject(error);
+            }
+          });
+        });
+      }
+
+      isRefreshing = true;
 
       try {
         const refreshToken = localStorage.getItem('refreshToken');
@@ -61,18 +117,23 @@ api.interceptors.response.use(
           localStorage.setItem('accessToken', accessToken);
           localStorage.setItem('idToken', idToken);
 
+          isRefreshing = false;
+          onRefreshComplete(accessToken);
+
           originalRequest.headers.Authorization = `Bearer ${accessToken}`;
           return api(originalRequest);
         } else {
           // No refresh token available, redirect to login
-          localStorage.clear();
-          window.location.href = '/login';
+          isRefreshing = false;
+          onRefreshComplete(null);
+          redirectToLogin();
           return Promise.reject(error);
         }
       } catch (refreshError) {
         // Refresh failed, redirect to login
-        localStorage.clear();
-        window.location.href = '/login';
+        isRefreshing = false;
+        onRefreshComplete(null);
+        redirectToLogin();
         return Promise.reject(refreshError);
       }
     }
@@ -81,9 +142,18 @@ api.interceptors.response.use(
   }
 );
 
+// Reset redirect flag (call after successful login)
+export const resetAuthState = () => {
+  isRedirectingToLogin = false;
+  isRefreshing = false;
+  refreshSubscribers = [];
+};
+
 // Auth API
 export const authApi = {
   async login(email, password) {
+    // Reset auth state on login attempt
+    resetAuthState();
     const response = await axios.post(`${API_BASE}/api/auth/login`, { email, password });
     return response.data.data;
   },

@@ -389,14 +389,14 @@ Notes: ${appointment.notes || 'None'}
     // Get user with their Google email
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, email: true, googleCalendarEmail: true },
+      select: { id: true, email: true, google_calendar_email: true },
     });
 
     if (!user) {
       throw new Error('User not found');
     }
 
-    const calendarEmail = user.googleCalendarEmail || user.email;
+    const calendarEmail = user.google_calendar_email || user.email;
     logger.info(`Syncing appointments for user ${userId} (${calendarEmail})`);
 
     // Get all appointments assigned to this user's service resource
@@ -477,11 +477,11 @@ Notes: ${appointment.notes || 'None'}
       where: {
         isActive: true,
         OR: [
-          { googleCalendarEmail: { not: null } },
+          { google_calendar_email: { not: null } },
           { email: { endsWith: `@${GOOGLE_WORKSPACE_DOMAIN}` } },
         ],
       },
-      select: { id: true, email: true, googleCalendarEmail: true },
+      select: { id: true, email: true, google_calendar_email: true },
     });
 
     const results = [];
@@ -515,16 +515,16 @@ Notes: ${appointment.notes || 'None'}
     const user = await prisma.user.update({
       where: { id: userId },
       data: {
-        googleCalendarEmail: googleEmail,
-        googleCalendarSyncEnabled: enableSync,
+        google_calendar_email: googleEmail,
+        google_calendar_sync_enabled: enableSync,
       },
       select: {
         id: true,
         firstName: true,
         lastName: true,
         email: true,
-        googleCalendarEmail: true,
-        googleCalendarSyncEnabled: true,
+        google_calendar_email: true,
+        google_calendar_sync_enabled: true,
       },
     });
 
@@ -543,8 +543,8 @@ Notes: ${appointment.notes || 'None'}
         where: { id: userId },
         select: {
           email: true,
-          googleCalendarEmail: true,
-          googleCalendarSyncEnabled: true,
+          google_calendar_email: true,
+          google_calendar_sync_enabled: true,
           googleCalendarLastSyncAt: true,
         },
       });
@@ -553,7 +553,7 @@ Notes: ${appointment.notes || 'None'}
         return { connected: false, error: 'User not found' };
       }
 
-      const calendarEmail = user.googleCalendarEmail;
+      const calendarEmail = user.google_calendar_email;
       const isLinked = !!calendarEmail;
 
       // Only test connection if user has a linked calendar email
@@ -561,7 +561,7 @@ Notes: ${appointment.notes || 'None'}
       let connectionVerified = false;
       let connectionError = null;
 
-      if (isLinked && user.googleCalendarSyncEnabled) {
+      if (isLinked && user.google_calendar_sync_enabled) {
         try {
           const testResult = await this.testConnection(calendarEmail);
           connectionVerified = testResult.success;
@@ -575,8 +575,8 @@ Notes: ${appointment.notes || 'None'}
 
       return {
         connected: isLinked,
-        googleCalendarEmail: calendarEmail,
-        syncEnabled: user.googleCalendarSyncEnabled || false,
+        google_calendar_email: calendarEmail,
+        syncEnabled: user.google_calendar_sync_enabled || false,
         lastSyncAt: user.googleCalendarLastSyncAt,
         isLinked,
         connectionVerified,
@@ -586,7 +586,7 @@ Notes: ${appointment.notes || 'None'}
       logger.error('Error getting calendar connection status:', error);
       return {
         connected: false,
-        googleCalendarEmail: null,
+        google_calendar_email: null,
         syncEnabled: false,
         lastSyncAt: null,
         isLinked: false,
@@ -607,8 +607,8 @@ Notes: ${appointment.notes || 'None'}
         email: true,
         firstName: true,
         lastName: true,
-        googleCalendarEmail: true,
-        googleCalendarSyncEnabled: true,
+        google_calendar_email: true,
+        google_calendar_sync_enabled: true,
         googleCalendarLastSyncAt: true,
       },
       orderBy: { lastName: 'asc' },
@@ -621,8 +621,8 @@ Notes: ${appointment.notes || 'None'}
       firstName: user.firstName,
       lastName: user.lastName,
       email: user.email,
-      googleCalendarEmail: user.googleCalendarEmail,
-      googleCalendarSyncEnabled: user.googleCalendarSyncEnabled || false,
+      google_calendar_email: user.google_calendar_email,
+      google_calendar_sync_enabled: user.google_calendar_sync_enabled || false,
       googleCalendarLastSyncAt: user.googleCalendarLastSyncAt,
     }));
   },

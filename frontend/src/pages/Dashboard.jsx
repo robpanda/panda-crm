@@ -74,33 +74,39 @@ export default function Dashboard() {
   const { data: stageCounts } = useQuery({
     queryKey: ['opportunityStageCounts', ownerFilter, user?.id, teamOwnerIds],
     queryFn: () => opportunitiesApi.getStageCounts(ownerFilter, teamOwnerIds),
+    enabled: !!user?.id,
   });
 
   // Fetch lead counts
   const { data: leadCounts } = useQuery({
     queryKey: ['leadCounts', ownerFilter, user?.id],
     queryFn: () => leadsApi.getLeadCounts(buildFilterParams()),
+    enabled: !!user?.id,
   });
 
   // Fetch counts for stats cards with appropriate filtering
   const { data: accountsData } = useQuery({
     queryKey: ['accountsCount', ownerFilter, user?.id],
     queryFn: () => accountsApi.getAccounts(buildFilterParams({ limit: 1 })),
+    enabled: !!user?.id,
   });
 
   const { data: contactsData } = useQuery({
     queryKey: ['contactsCount', ownerFilter, user?.id],
     queryFn: () => contactsApi.getContacts(buildFilterParams({ limit: 1 })),
+    enabled: !!user?.id,
   });
 
   const { data: opportunitiesData } = useQuery({
     queryKey: ['opportunitiesCount', ownerFilter, user?.id],
     queryFn: () => opportunitiesApi.getOpportunities(buildFilterParams({ limit: 1 })),
+    enabled: !!user?.id,
   });
 
   const { data: leadsData } = useQuery({
     queryKey: ['leadsCount', ownerFilter, user?.id],
     queryFn: () => leadsApi.getLeads(buildFilterParams({ limit: 1 })),
+    enabled: !!user?.id,
   });
 
   // Fetch recent jobs for activity feed
@@ -111,6 +117,7 @@ export default function Dashboard() {
       sortBy: 'updatedAt',
       sortOrder: 'desc',
     })),
+    enabled: !!user?.id,
   });
 
   // Fetch work orders for today's schedule
@@ -121,6 +128,7 @@ export default function Dashboard() {
       startDateFrom: format(new Date(), 'yyyy-MM-dd'),
       startDateTo: format(new Date(), 'yyyy-MM-dd'),
     })),
+    enabled: !!user?.id,
   });
 
   // Fetch real attention items from attention queue API

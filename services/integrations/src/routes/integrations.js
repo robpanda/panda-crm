@@ -82,8 +82,8 @@ async function getCachedServiceResources(resourceFilter = {}) {
           id: true,
           firstName: true,
           lastName: true,
-          googleCalendarEmail: true,
-          googleCalendarSyncEnabled: true,
+          google_calendar_email: true,
+          google_calendar_sync_enabled: true,
         },
       },
     },
@@ -91,7 +91,7 @@ async function getCachedServiceResources(resourceFilter = {}) {
 
   // Filter to only resources with Google Calendar enabled
   const resourcesWithCalendar = resources.filter(
-    r => r.user?.googleCalendarEmail && r.user?.googleCalendarSyncEnabled
+    r => r.user?.google_calendar_email && r.user?.google_calendar_sync_enabled
   );
 
   // Store in cache if full list
@@ -705,22 +705,22 @@ router.get('/google/users/:userId/status', authMiddleware, async (req, res, next
  */
 router.post('/google/users/:userId/link', authMiddleware, async (req, res, next) => {
   try {
-    const { googleCalendarEmail, enableSync } = req.body;
+    const { google_calendar_email, enableSync } = req.body;
 
-    if (!googleCalendarEmail) {
+    if (!google_calendar_email) {
       return res.status(400).json({
         success: false,
-        error: { code: 'VALIDATION_ERROR', message: 'googleCalendarEmail is required' },
+        error: { code: 'VALIDATION_ERROR', message: 'google_calendar_email is required' },
       });
     }
 
     const result = await googleCalendarService.linkUserToGoogleCalendar(
       req.params.userId,
-      googleCalendarEmail,
+      google_calendar_email,
       enableSync !== false // Default to true
     );
 
-    logger.info(`Linked user ${req.params.userId} to Google Calendar ${googleCalendarEmail}`);
+    logger.info(`Linked user ${req.params.userId} to Google Calendar ${google_calendar_email}`);
 
     res.json({ success: true, data: result });
   } catch (error) {
@@ -738,10 +738,10 @@ router.get('/google/events/:userId', authMiddleware, async (req, res, next) => {
     // Get user's Google Calendar email
     const user = await prisma.user.findUnique({
       where: { id: req.params.userId },
-      select: { googleCalendarEmail: true }
+      select: { google_calendar_email: true }
     });
 
-    if (!user?.googleCalendarEmail) {
+    if (!user?.google_calendar_email) {
       return res.status(400).json({
         success: false,
         error: { code: 'NOT_CONFIGURED', message: 'User does not have a Google Calendar linked' },
@@ -749,7 +749,7 @@ router.get('/google/events/:userId', authMiddleware, async (req, res, next) => {
     }
 
     const events = await googleCalendarService.getEvents(
-      user.googleCalendarEmail,
+      user.google_calendar_email,
       startDate ? new Date(startDate) : undefined,
       endDate ? new Date(endDate) : undefined
     );
@@ -780,13 +780,13 @@ router.get('/google/freebusy', authMiddleware, async (req, res, next) => {
     const users = await prisma.user.findMany({
       where: {
         id: { in: userIdArray },
-        googleCalendarEmail: { not: null },
-        googleCalendarSyncEnabled: true
+        google_calendar_email: { not: null },
+        google_calendar_sync_enabled: true
       },
-      select: { id: true, googleCalendarEmail: true, firstName: true, lastName: true }
+      select: { id: true, google_calendar_email: true, firstName: true, lastName: true }
     });
 
-    const emails = users.map(u => u.googleCalendarEmail);
+    const emails = users.map(u => u.google_calendar_email);
 
     if (emails.length === 0) {
       return res.json({ success: true, data: { users: [], freeBusy: {} } });
@@ -801,7 +801,7 @@ router.get('/google/freebusy', authMiddleware, async (req, res, next) => {
     res.json({
       success: true,
       data: {
-        users: users.map(u => ({ id: u.id, name: `${u.firstName} ${u.lastName}`, email: u.googleCalendarEmail })),
+        users: users.map(u => ({ id: u.id, name: `${u.firstName} ${u.lastName}`, email: u.google_calendar_email })),
         freeBusy
       }
     });
@@ -857,10 +857,10 @@ router.post('/google/appointment', authMiddleware, async (req, res, next) => {
     // Get user's Google Calendar email
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { googleCalendarEmail: true, googleCalendarSyncEnabled: true }
+      select: { google_calendar_email: true, google_calendar_sync_enabled: true }
     });
 
-    if (!user?.googleCalendarEmail || !user.googleCalendarSyncEnabled) {
+    if (!user?.google_calendar_email || !user.google_calendar_sync_enabled) {
       return res.status(400).json({
         success: false,
         error: { code: 'NOT_CONFIGURED', message: 'User does not have Google Calendar sync enabled' },
@@ -868,7 +868,7 @@ router.post('/google/appointment', authMiddleware, async (req, res, next) => {
     }
 
     const event = await googleCalendarService.createAppointmentEvent(
-      user.googleCalendarEmail,
+      user.google_calendar_email,
       appointment
     );
 
@@ -889,8 +889,8 @@ router.post('/google/toggle/:userId', authMiddleware, async (req, res, next) => 
 
     const user = await prisma.user.update({
       where: { id: req.params.userId },
-      data: { googleCalendarSyncEnabled: enabled === true },
-      select: { id: true, firstName: true, lastName: true, googleCalendarEmail: true, googleCalendarSyncEnabled: true }
+      data: { google_calendar_sync_enabled: enabled === true },
+      select: { id: true, firstName: true, lastName: true, google_calendar_email: true, google_calendar_sync_enabled: true }
     });
 
     logger.info(`Google Calendar sync ${enabled ? 'enabled' : 'disabled'} for user ${req.params.userId}`);
@@ -909,8 +909,8 @@ router.delete('/google/users/:userId', authMiddleware, async (req, res, next) =>
     const user = await prisma.user.update({
       where: { id: req.params.userId },
       data: {
-        googleCalendarEmail: null,
-        googleCalendarSyncEnabled: false,
+        google_calendar_email: null,
+        google_calendar_sync_enabled: false,
         googleCalendarLastSyncAt: null
       },
       select: { id: true, firstName: true, lastName: true }
@@ -973,7 +973,7 @@ router.get('/google/resource-events', authMiddleware, async (req, res, next) => 
     const fetchPromises = resourcesWithCalendar.map(async (resource) => {
       try {
         const { events, fromCache } = await getCachedCalendarEvents(
-          resource.user.googleCalendarEmail,
+          resource.user.google_calendar_email,
           startDate,
           endDate
         );
@@ -1034,7 +1034,7 @@ router.get('/google/resource-events', authMiddleware, async (req, res, next) => 
       resourceSummary.push({
         resourceId: resource.id,
         resourceName: resource.name,
-        googleEmail: resource.user.googleCalendarEmail,
+        googleEmail: resource.user.google_calendar_email,
         eventCount: events.length,
         fromCache: fromCache || false,
         ...(error && { error }),
@@ -1106,8 +1106,8 @@ router.get('/google/resource/:resourceId/events', authMiddleware, async (req, re
       include: {
         user: {
           select: {
-            googleCalendarEmail: true,
-            googleCalendarSyncEnabled: true,
+            google_calendar_email: true,
+            google_calendar_sync_enabled: true,
           },
         },
       },
@@ -1120,7 +1120,7 @@ router.get('/google/resource/:resourceId/events', authMiddleware, async (req, re
       });
     }
 
-    if (!resource.user?.googleCalendarEmail || !resource.user?.googleCalendarSyncEnabled) {
+    if (!resource.user?.google_calendar_email || !resource.user?.google_calendar_sync_enabled) {
       return res.status(400).json({
         success: false,
         error: { code: 'NOT_CONFIGURED', message: 'This resource does not have Google Calendar enabled' },
@@ -1128,7 +1128,7 @@ router.get('/google/resource/:resourceId/events', authMiddleware, async (req, re
     }
 
     const events = await googleCalendarService.getEvents(
-      resource.user.googleCalendarEmail,
+      resource.user.google_calendar_email,
       new Date(startDate),
       new Date(endDate)
     );
@@ -1178,10 +1178,10 @@ router.get('/status', authMiddleware, async (req, res, next) => {
 
     // Get Google Calendar connections (users with calendar linked)
     const googleUsersLinked = await prisma.user.count({
-      where: { googleCalendarEmail: { not: null } }
+      where: { google_calendar_email: { not: null } }
     });
     const googleUsersEnabled = await prisma.user.count({
-      where: { googleCalendarSyncEnabled: true }
+      where: { google_calendar_sync_enabled: true }
     });
 
     res.json({

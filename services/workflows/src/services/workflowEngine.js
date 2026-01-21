@@ -505,30 +505,314 @@ export const workflowEngine = {
 
   /**
    * Send document for signature (integrates with PandaSign)
+   * @param {object} config - Action configuration
+   * @param {string} config.templateId - Agreement template ID (optional if documentType specified)
+   * @param {string} config.documentType - Type of document: 'quote', 'invoice', 'workorder', 'contract', 'custom'
+   * @param {string} config.documentId - ID of the source document (quoteId, invoiceId, etc.)
+   * @param {string} config.recipientEmailField - Field path for recipient email (default: contact.email)
+   * @param {string} config.recipientNameField - Field path for recipient name (default: contact.name)
+   * @param {boolean} config.sendViaSms - Also send signing link via SMS
+   * @param {boolean} config.sendImmediately - Send immediately after creating (default: true)
    */
   async sendAgreement(config, record, userId) {
-    const { templateId, recipientEmail, recipientName } = config;
+    const {
+      templateId,
+      documentType,
+      documentId,
+      recipientEmailField,
+      recipientNameField,
+      sendViaSms = false,
+      sendImmediately = true,
+      mergeData: additionalMergeData = {},
+    } = config;
 
-    const agreement = await prisma.agreement.create({
-      data: {
-        agreementNumber: `AGR-${Date.now()}`,
-        name: `Agreement for ${record.name || record.id}`,
-        templateId,
-        status: 'SENT',
-        opportunityId: record.opportunityId || record.id,
-        accountId: record.accountId,
-        contactId: record.contactId,
-        recipientEmail: recipientEmail || this.getFieldValue(record, 'email'),
-        recipientName: recipientName || this.getFieldValue(record, 'name'),
-        sentAt: new Date(),
-        createdById: userId,
-      },
-    });
+    logger.info(`Sending agreement via workflow: documentType=${documentType}, recordId=${record.id}`);
 
-    // Call PandaSign API to create and send document
-    // TODO: Integrate with actual PandaSign service
+    // Resolve recipient info from record
+    const recipientEmail = recipientEmailField
+      ? this.getFieldValue(record, recipientEmailField)
+      : (record.contact?.email || record.contactEmail || record.account?.email || record.recipientEmail);
 
-    return { sent: true, agreementId: agreement.id };
+    const recipientName = recipientNameField
+      ? this.getFieldValue(record, recipientNameField)
+      : (record.contact?.name || `${record.contact?.firstName || ''} ${record.contact?.lastName || ''}`.trim() ||
+         record.account?.name || record.recipientName || 'Customer');
+
+    if (!recipientEmail) {
+      throw new Error('Cannot send agreement: no recipient email found');
+    }
+
+    let agreement;
+    const crypto = await import('crypto');
+    const { v4: uuidv4 } = await import('uuid');
+
+    // Generate signing token
+    const signingToken = crypto.randomBytes(32).toString('hex');
+    const signingBaseUrl = process.env.SIGNING_BASE_URL || 'https://sign.pandaexteriors.com';
+
+    // Handle different document types
+    if (documentType === 'quote') {
+      // Get quote data
+      const quote = await prisma.quote.findUnique({
+        where: { id: documentId || record.quoteId || record.id },
+        include: {
+          opportunity: { include: { account: true, contact: true } },
+          lineItems: { include: { product: true } },
+        },
+      });
+
+      if (!quote) throw new Error('Quote not found');
+
+      // Find or create quote acceptance template
+      let template = await prisma.agreementTemplate.findFirst({
+        where: { category: 'QUOTE_ACCEPT', isActive: true },
+      });
+
+      if (!template) {
+        template = await prisma.agreementTemplate.create({
+          data: {
+            name: 'Quote Acceptance',
+            category: 'QUOTE_ACCEPT',
+            content: 'I accept this quote and authorize the work to proceed.',
+            signatureFields: [{ name: 'signature', page: 1, x: 100, y: 100, width: 200, height: 50 }],
+            isActive: true,
+          },
+        });
+      }
+
+      agreement = await prisma.agreement.create({
+        data: {
+          agreementNumber: `QUOTE-${quote.quoteNumber}-${Date.now()}`,
+          name: `Quote Acceptance - ${quote.quoteNumber}`,
+          status: 'DRAFT',
+          templateId: template.id,
+          opportunityId: quote.opportunityId,
+          accountId: quote.opportunity?.accountId,
+          contactId: quote.opportunity?.contactId,
+          recipientEmail,
+          recipientName,
+          signingToken,
+          signingUrl: `${signingBaseUrl}/sign/${signingToken}`,
+          expiresAt: quote.expirationDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+          mergeData: {
+            quoteId: quote.id,
+            quoteNumber: quote.quoteNumber,
+            quoteTotal: quote.grandTotal || quote.total,
+            projectName: quote.opportunity?.name,
+            ...additionalMergeData,
+          },
+          createdById: userId,
+        },
+      });
+
+    } else if (documentType === 'invoice') {
+      const invoice = await prisma.invoice.findUnique({
+        where: { id: documentId || record.invoiceId || record.id },
+        include: { account: { include: { primaryContact: true } } },
+      });
+
+      if (!invoice) throw new Error('Invoice not found');
+
+      let template = await prisma.agreementTemplate.findFirst({
+        where: { category: 'INVOICE_ACK', isActive: true },
+      });
+
+      if (!template) {
+        template = await prisma.agreementTemplate.create({
+          data: {
+            name: 'Invoice Acknowledgment',
+            category: 'INVOICE_ACK',
+            content: 'I acknowledge receipt of this invoice.',
+            signatureFields: [{ name: 'signature', page: 1, x: 100, y: 100, width: 200, height: 50 }],
+            isActive: true,
+          },
+        });
+      }
+
+      agreement = await prisma.agreement.create({
+        data: {
+          agreementNumber: `INV-ACK-${invoice.invoiceNumber}-${Date.now()}`,
+          name: `Invoice Acknowledgment - ${invoice.invoiceNumber}`,
+          status: 'DRAFT',
+          templateId: template.id,
+          accountId: invoice.accountId,
+          recipientEmail,
+          recipientName,
+          signingToken,
+          signingUrl: `${signingBaseUrl}/sign/${signingToken}`,
+          expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+          mergeData: {
+            invoiceId: invoice.id,
+            invoiceNumber: invoice.invoiceNumber,
+            invoiceTotal: invoice.total,
+            ...additionalMergeData,
+          },
+          createdById: userId,
+        },
+      });
+
+    } else if (documentType === 'workorder') {
+      const workOrder = await prisma.workOrder.findUnique({
+        where: { id: documentId || record.workOrderId || record.id },
+        include: { opportunity: { include: { account: true, contact: true } } },
+      });
+
+      if (!workOrder) throw new Error('Work order not found');
+
+      let template = await prisma.agreementTemplate.findFirst({
+        where: { category: 'WORK_ORDER_AUTH', isActive: true },
+      });
+
+      if (!template) {
+        template = await prisma.agreementTemplate.create({
+          data: {
+            name: 'Work Order Authorization',
+            category: 'WORK_ORDER_AUTH',
+            content: 'I authorize this work order to proceed.',
+            signatureFields: [{ name: 'signature', page: 1, x: 100, y: 100, width: 200, height: 50 }],
+            isActive: true,
+          },
+        });
+      }
+
+      agreement = await prisma.agreement.create({
+        data: {
+          agreementNumber: `WO-${workOrder.workOrderNumber}-${Date.now()}`,
+          name: `Work Order Authorization - ${workOrder.workOrderNumber}`,
+          status: 'DRAFT',
+          templateId: template.id,
+          opportunityId: workOrder.opportunityId,
+          accountId: workOrder.opportunity?.accountId,
+          contactId: workOrder.opportunity?.contactId,
+          recipientEmail,
+          recipientName,
+          signingToken,
+          signingUrl: `${signingBaseUrl}/sign/${signingToken}`,
+          expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+          mergeData: {
+            workOrderId: workOrder.id,
+            workOrderNumber: workOrder.workOrderNumber,
+            workType: workOrder.workType,
+            ...additionalMergeData,
+          },
+          createdById: userId,
+        },
+      });
+
+    } else if (documentType === 'contract' || templateId) {
+      // Use specified template or find contract template
+      let template = templateId
+        ? await prisma.agreementTemplate.findUnique({ where: { id: templateId } })
+        : await prisma.agreementTemplate.findFirst({ where: { category: 'CONTRACT', isActive: true } });
+
+      if (!template) throw new Error('Agreement template not found');
+
+      // Build merge data from record
+      const mergeData = {
+        customerName: recipientName,
+        customerEmail: recipientEmail,
+        projectName: record.name,
+        projectAddress: record.projectAddress || record.address,
+        contractAmount: record.amount || record.total,
+        contractDate: new Date().toLocaleDateString(),
+        salesRep: record.ownerName || record.salesRep,
+        ...additionalMergeData,
+      };
+
+      agreement = await prisma.agreement.create({
+        data: {
+          agreementNumber: `AGR-${Date.now()}-${uuidv4().slice(0, 4).toUpperCase()}`,
+          name: this.interpolateTemplate(template.name, record) || `Agreement for ${record.name || record.id}`,
+          status: 'DRAFT',
+          templateId: template.id,
+          opportunityId: record.opportunityId || record.id,
+          accountId: record.accountId,
+          contactId: record.contactId,
+          recipientEmail,
+          recipientName,
+          signingToken,
+          signingUrl: `${signingBaseUrl}/sign/${signingToken}`,
+          expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+          mergeData,
+          createdById: userId,
+        },
+      });
+    } else {
+      throw new Error('Must specify either documentType or templateId for sendAgreement action');
+    }
+
+    // Create audit log
+    await this.createAuditLog('agreements', agreement.id, 'CREATE', {
+      agreementNumber: agreement.agreementNumber,
+      documentType,
+      status: 'DRAFT',
+      source: 'workflow_engine',
+    }, userId);
+
+    // Send immediately if configured
+    if (sendImmediately) {
+      // Update status to SENT
+      await prisma.agreement.update({
+        where: { id: agreement.id },
+        data: {
+          status: 'SENT',
+          sentAt: new Date(),
+          sentById: userId,
+        },
+      });
+
+      // Trigger Bamboogli document signing automation for email/SMS
+      try {
+        const bamboogliBaseUrl = process.env.BAMBOOGLI_SERVICE_URL || 'http://localhost:3012';
+        await fetch(`${bamboogliBaseUrl}/api/automations/document/trigger`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            automationType: 'document_signing_request',
+            agreementId: agreement.id,
+            opportunityId: agreement.opportunityId,
+          }),
+        });
+        logger.info(`Triggered document signing automation for agreement ${agreement.id}`);
+      } catch (automationError) {
+        logger.warn(`Failed to trigger Bamboogli automation: ${automationError.message}`);
+        // Don't fail the workflow if automation trigger fails
+      }
+
+      // Also send via SMS if configured
+      if (sendViaSms) {
+        const recipientPhone = record.contact?.phone || record.contact?.mobilePhone ||
+                              record.phone || record.mobilePhone;
+        if (recipientPhone) {
+          try {
+            await fetch(`${bamboogliBaseUrl}/api/automations/document/send-sms`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                agreementId: agreement.id,
+                phoneNumber: recipientPhone,
+              }),
+            });
+            logger.info(`Sent signing link SMS to ${recipientPhone}`);
+          } catch (smsError) {
+            logger.warn(`Failed to send SMS signing link: ${smsError.message}`);
+          }
+        }
+      }
+
+      await this.createAuditLog('agreements', agreement.id, 'SENT', {
+        recipientEmail,
+        sendViaSms,
+      }, userId);
+    }
+
+    return {
+      sent: sendImmediately,
+      agreementId: agreement.id,
+      agreementNumber: agreement.agreementNumber,
+      signingUrl: agreement.signingUrl,
+      documentType,
+    };
   },
 
   /**
@@ -556,13 +840,18 @@ export const workflowEngine = {
 
   /**
    * Interpolate template variables
+   * Supports both {var} and {{var}} syntax for merge fields
+   * Also supports dot notation for nested fields: {{contact.firstName}} or {contact.firstName}
    */
   interpolateTemplate(template, record) {
     if (!template) return template;
 
-    return template.replace(/\{\{([^}]+)\}\}/g, (match, fieldPath) => {
+    // Support both {var} and {{var}} syntax
+    return template.replace(/\{\{?([^}]+)\}?\}/g, (match, fieldPath) => {
+      // Skip if this looks like a JSON object or other non-merge-field syntax
+      if (fieldPath.includes(':') || fieldPath.includes('"')) return match;
       const value = this.getFieldValue(record, fieldPath.trim());
-      return value !== undefined ? value : match;
+      return value !== undefined && value !== null ? value : match;
     });
   },
 

@@ -5348,7 +5348,13 @@ export default function OpportunityDetail() {
 
                     {/* Cases List */}
                     {cases && cases.length > 0 ? cases.map((caseItem) => (
-                      <div key={caseItem.id} className="border border-gray-200 rounded-lg overflow-hidden hover:border-panda-primary transition-colors">
+                      <div key={caseItem.id} className="border border-gray-200 rounded-lg overflow-hidden hover:border-panda-primary transition-colors cursor-pointer"
+                        onClick={(e) => {
+                          // Don't navigate if clicking on action buttons
+                          if (e.target.closest('button')) return;
+                          navigate(`/cases/${caseItem.id}`);
+                        }}
+                      >
                         <div className="p-4">
                           <div className="flex items-center justify-between">
                             <div className="flex items-center space-x-3">
@@ -5366,7 +5372,7 @@ export default function OpportunityDetail() {
                                 }`} />
                               </div>
                               <div>
-                                <h4 className="font-medium text-gray-900">{caseItem.caseNumber}</h4>
+                                <h4 className="font-medium text-gray-900 hover:text-panda-primary">{caseItem.caseNumber}</h4>
                                 <p className="text-sm text-gray-600">{caseItem.subject}</p>
                               </div>
                             </div>
@@ -6969,7 +6975,7 @@ export default function OpportunityDetail() {
                                     </div>
                                   </div>
                                   <div className="mt-3 flex space-x-2">
-                                    {file.contentUrl && (
+                                    {file.contentUrl ? (
                                       <a
                                         href={file.contentUrl}
                                         target="_blank"
@@ -6979,6 +6985,11 @@ export default function OpportunityDetail() {
                                         <Download className="w-3 h-3 mr-1" />
                                         Download
                                       </a>
+                                    ) : (
+                                      <span className="flex-1 inline-flex items-center justify-center px-3 py-1.5 bg-gray-100 text-gray-400 text-xs font-medium rounded-md">
+                                        <FileText className="w-3 h-3 mr-1" />
+                                        {file.category || 'Salesforce'}
+                                      </span>
                                     )}
                                   </div>
                                 </div>

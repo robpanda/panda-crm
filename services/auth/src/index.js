@@ -15,8 +15,11 @@ import { errorHandler } from './middleware/errorHandler.js';
 import { logger } from './middleware/logger.js';
 import { authMiddleware } from './middleware/auth.js';
 import { permissionService } from './services/permissionService.js';
+import { PrismaClient } from '@prisma/client';
 
 dotenv.config();
+
+const prisma = new PrismaClient();
 
 const app = express();
 const PORT = process.env.AUTH_PORT || 3000;
@@ -29,7 +32,8 @@ app.use(cors({
     'http://localhost:5173',
     'https://crm.pandaadmin.com',
     'https://crm.pandaexteriors.com',
-    'https://bamboo.pandaadmin.com'
+    'https://bamboo.pandaadmin.com',
+    'https://bamboo.pandaexteriors.com'
   ],
   credentials: true,
 }));
@@ -70,9 +74,75 @@ const initializePermissions = async () => {
   }
 };
 
+// One-time migration to set Sutton and Greg Young as Call Center Managers
+const setCallCenterManagers = async () => {
+  try {
+    // First, ensure Call Center Manager role exists
+    let ccManagerRole = await prisma.role.findFirst({
+      where: { name: 'Call Center Manager' }
+    });
+
+    if (!ccManagerRole) {
+      ccManagerRole = await prisma.role.create({
+        data: {
+          name: 'Call Center Manager',
+          description: 'Default Call Center Manager role',
+          roleType: 'call_center_manager',
+          isActive: true,
+          permissionsJson: {
+            accounts: ['read', 'update'],
+            contacts: ['create', 'read', 'update', 'export', 'assign'],
+            leads: ['create', 'read', 'update', 'export', 'assign'],
+            opportunities: ['read', 'update'],
+            appointments: ['create', 'read', 'update', 'assign'],
+            templates: ['read', 'update'],
+            campaigns: ['create', 'read', 'update'],
+            users: ['read'],
+            reports: ['read', 'export'],
+          }
+        }
+      });
+      logger.info('Created Call Center Manager role');
+    }
+
+    // Find and update Sutton and Greg Young
+    const usersToUpdate = await prisma.user.findMany({
+      where: {
+        OR: [
+          { firstName: { contains: 'Sutton', mode: 'insensitive' } },
+          { lastName: { contains: 'Sutton', mode: 'insensitive' } },
+          {
+            AND: [
+              { firstName: { contains: 'Greg', mode: 'insensitive' } },
+              { lastName: { contains: 'Young', mode: 'insensitive' } }
+            ]
+          }
+        ]
+      }
+    });
+
+    if (usersToUpdate.length > 0) {
+      const updateResult = await prisma.user.updateMany({
+        where: {
+          id: { in: usersToUpdate.map(u => u.id) }
+        },
+        data: {
+          roleId: ccManagerRole.id
+        }
+      });
+      logger.info(`Set ${updateResult.count} user(s) as Call Center Manager: ${usersToUpdate.map(u => `${u.firstName} ${u.lastName}`).join(', ')}`);
+    } else {
+      logger.info('No users found matching Sutton or Greg Young');
+    }
+  } catch (error) {
+    logger.error('Failed to set call center managers:', error);
+  }
+};
+
 app.listen(PORT, () => {
   logger.info(`Auth service running on port ${PORT}`);
   initializePermissions();
+  setCallCenterManagers();
 });
 
 export default app;
