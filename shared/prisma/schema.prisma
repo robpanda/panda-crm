@@ -412,6 +412,7 @@ model Opportunity {
   emails                   Email[]                 @relation("OpportunityEmails")
   events                   Event[]                 @relation("OpportunityEvents")
   materialOrders           MaterialOrder[]
+  laborOrders              LaborOrder[]
   measurementReports       MeasurementReport[]
   mobileActivities         MobileActivity[]
   notes                    Note[]                  @relation("OpportunityNotes")
@@ -432,6 +433,7 @@ model Opportunity {
   workOrders               WorkOrder[]
   documentLinks            DocumentLink[]
   photoProjects            PhotoProject[]          @relation("PhotoProjectOpportunity")
+  laborOrders              LaborOrder[]
 
   @@index([accountId])
   @@index([ownerId])
@@ -482,6 +484,7 @@ model WorkOrder {
   updatedAt             DateTime                    @updatedAt @map("updated_at")
   attentionItems        AttentionItem[]             @relation("WorkOrderAttentionItems")
   materialOrders        MaterialOrder[]
+  laborOrders           LaborOrder[]
   notifications         Notification[]              @relation("WorkOrderNotifications")
   serviceAppointments   ServiceAppointment[]
   skillRequirements     WorkOrderSkillRequirement[]
@@ -901,6 +904,7 @@ model MaterialOrder {
   opportunityId         String?                 @map("opportunity_id")
   accountId             String?                 @map("account_id")
   orderId               String?                 @map("order_id")
+  orderTemplateId       String?                 @map("order_template_id")
   orderedById           String?                 @map("ordered_by_id")
   orderedAt             DateTime?               @map("ordered_at")
   createdAt             DateTime                @default(now()) @map("created_at")
@@ -908,6 +912,7 @@ model MaterialOrder {
   lineItems             MaterialOrderLineItem[]
   opportunity           Opportunity?            @relation(fields: [opportunityId], references: [id])
   order                 Order?                  @relation(fields: [orderId], references: [id])
+  orderTemplate         OrderTemplate?          @relation("MaterialOrderTemplate", fields: [orderTemplateId], references: [id])
   orderedBy             User?                   @relation("MaterialOrdersPlaced", fields: [orderedById], references: [id])
   supplier              Supplier?               @relation(fields: [supplierId], references: [id])
   workOrder             WorkOrder               @relation(fields: [workOrderId], references: [id])
@@ -917,6 +922,7 @@ model MaterialOrder {
   @@index([materialStatus])
   @@index([deliveryDate])
   @@index([supplierId])
+  @@index([orderTemplateId])
   @@map("material_orders")
 }
 
@@ -979,10 +985,12 @@ model Product {
   createdAt              DateTime                @default(now()) @map("created_at")
   updatedAt              DateTime                @updatedAt @map("updated_at")
   materialOrderLineItems MaterialOrderLineItem[]
+  laborOrderLineItems    LaborOrderLineItem[]
   opportunityLineItems   OpportunityLineItem[]
   orderLineItems         OrderLineItem[]
   pricebookEntries       PricebookEntry[]
   quoteLineItems         QuoteLineItem[]
+  categoryMappings       ProductCategoryMapping[]
 
   @@index([family])
   @@index([isActive])
@@ -998,8 +1006,9 @@ model Pricebook {
   isStandard   Boolean          @default(false) @map("is_standard")
   createdAt    DateTime         @default(now()) @map("created_at")
   updatedAt    DateTime         @updatedAt @map("updated_at")
-  entries      PricebookEntry[]
-  quotes       Quote[]          @relation("QuotePricebook")
+  entries        PricebookEntry[]
+  quotes         Quote[]          @relation("QuotePricebook")
+  orderTemplates OrderTemplate[]  @relation("OrderTemplatePricebook")
 
   @@index([isActive])
   @@map("pricebooks")
@@ -1520,6 +1529,7 @@ model User {
   leadsSetBy                                       Lead[]                  @relation("LeadSetByUser")
   ownedLeads                                       Lead[]                  @relation("LeadOwner")
   materialOrdersPlaced                             MaterialOrder[]         @relation("MaterialOrdersPlaced")
+  laborOrdersCreated                               LaborOrder[]            @relation("LaborOrdersCreated")
   measurementReportsOrdered                        MeasurementReport[]
   mobileActivities                                 MobileActivity[]
   mobileSessions                                   MobileSession[]
@@ -5635,4 +5645,193 @@ enum OrphanStatus {
   LINKED               // Manually linked to a record
   DELETED              // Marked as deleted/not needed
   SKIPPED              // Intentionally skipped
+}
+
+// ============================================================================
+// ORDER TEMPLATES & LABOR ORDERS
+// For material and labor ordering workflow (Project Coordinators)
+// ============================================================================
+
+// Order Template - defines packages like "Standard Package", "Gold Pledge", "Presidential"
+model OrderTemplate {
+  id                String              @id @default(cuid())
+  name              String
+  code              String?             @unique // e.g., "STANDARD", "GOLD_PLEDGE"
+  description       String?
+  category          OrderTemplateCategory @default(ROOFING)
+
+  // Supplier association
+  supplier          String?             // "ABC", "SRS", etc.
+  isAbcTemplate     Boolean             @default(false) @map("is_abc_template")
+  isSrsTemplate     Boolean             @default(false) @map("is_srs_template")
+
+  // Template structure - JSON containing product categories and defaults
+  structure         Json?               // { categories: [...], products: [...], defaults: {...} }
+
+  // Pricing configuration
+  pricebookId       String?             @map("pricebook_id")
+
+  // Status
+  isActive          Boolean             @default(true) @map("is_active")
+  isDefault         Boolean             @default(false) @map("is_default")
+  sortOrder         Int                 @default(0) @map("sort_order")
+
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
+
+  // Relations
+  pricebook         Pricebook?          @relation("OrderTemplatePricebook", fields: [pricebookId], references: [id])
+  laborOrders       LaborOrder[]
+  materialOrders    MaterialOrder[]     @relation("MaterialOrderTemplate")
+
+  @@index([category])
+  @@index([isActive])
+  @@index([supplier])
+  @@map("order_templates")
+}
+
+enum OrderTemplateCategory {
+  ROOFING
+  SIDING
+  GUTTERS
+  SOLAR
+  GENERAL
+}
+
+// Labor Order - tracks labor costs and crew assignments
+model LaborOrder {
+  id                    String                @id @default(cuid())
+  laborOrderNumber      String                @unique @map("labor_order_number")
+  status                LaborOrderStatus      @default(DRAFT)
+
+  // Work Type association
+  workTypeId            String?               @map("work_type_id")
+  workTypeName          String?               @map("work_type_name")
+
+  // Order Template association
+  orderTemplateId       String?               @map("order_template_id")
+
+  // Pricing
+  subtotal              Decimal               @default(0) @db.Decimal(12, 2)
+  tax                   Decimal               @default(0) @db.Decimal(12, 2)
+  total                 Decimal               @default(0) @db.Decimal(12, 2)
+
+  // Additional work flags (from Salesforce screenshots)
+  includeSiding         Boolean               @default(false) @map("include_siding")
+  includeSolarDnr       Boolean               @default(false) @map("include_solar_dnr")
+  includeGutter         Boolean               @default(false) @map("include_gutter")
+  includeTrimWork       Boolean               @default(false) @map("include_trim_work")
+  includeInteriorWork   Boolean               @default(false) @map("include_interior_work")
+  includeAtticInsulation Boolean              @default(false) @map("include_attic_insulation")
+
+  // Relations
+  workOrderId           String                @map("work_order_id")
+  opportunityId         String?               @map("opportunity_id")
+  accountId             String?               @map("account_id")
+  createdById           String?               @map("created_by_id")
+
+  notes                 String?               @db.Text
+
+  createdAt             DateTime              @default(now()) @map("created_at")
+  updatedAt             DateTime              @updatedAt @map("updated_at")
+
+  // Relations
+  workOrder             WorkOrder             @relation(fields: [workOrderId], references: [id])
+  opportunity           Opportunity?          @relation(fields: [opportunityId], references: [id])
+  orderTemplate         OrderTemplate?        @relation(fields: [orderTemplateId], references: [id])
+  createdBy             User?                 @relation("LaborOrdersCreated", fields: [createdById], references: [id])
+  lineItems             LaborOrderLineItem[]
+
+  @@index([workOrderId])
+  @@index([opportunityId])
+  @@index([status])
+  @@map("labor_orders")
+}
+
+enum LaborOrderStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+// Labor Order Line Item - individual labor items with pricing
+model LaborOrderLineItem {
+  id                String         @id @default(cuid())
+  laborOrderId      String         @map("labor_order_id")
+
+  // Product/Service info
+  productId         String?        @map("product_id")
+  productName       String         @map("product_name")
+  description       String?
+
+  // Pricing
+  listPrice         Decimal        @map("list_price") @db.Decimal(12, 2)
+  unitPrice         Decimal        @map("unit_price") @db.Decimal(12, 2)
+  quantity          Decimal        @default(1) @db.Decimal(10, 2)
+  totalPrice        Decimal        @map("total_price") @db.Decimal(12, 2)
+
+  // Unit of measure
+  uom               String?        // "SQ", "LF", "EA", etc.
+
+  // Work Type categorization
+  workType          String?        @map("work_type") // "Gold Pledge Installation", "Siding Installation"
+
+  sortOrder         Int            @default(0) @map("sort_order")
+
+  createdAt         DateTime       @default(now()) @map("created_at")
+  updatedAt         DateTime       @updatedAt @map("updated_at")
+
+  // Relations
+  laborOrder        LaborOrder     @relation(fields: [laborOrderId], references: [id], onDelete: Cascade)
+  product           Product?       @relation(fields: [productId], references: [id])
+
+  @@index([laborOrderId])
+  @@map("labor_order_line_items")
+}
+
+// Product Category - for organizing material products in the ordering UI
+model ProductCategory {
+  id                String         @id @default(cuid())
+  name              String
+  code              String?        @unique // e.g., "SHINGLES", "HIP_RIDGE", "STARTER"
+  description       String?
+  icon              String?        // Icon name for UI
+  sortOrder         Int            @default(0) @map("sort_order")
+  isActive          Boolean        @default(true) @map("is_active")
+
+  // Parent category for hierarchical organization
+  parentId          String?        @map("parent_id")
+
+  createdAt         DateTime       @default(now()) @map("created_at")
+  updatedAt         DateTime       @updatedAt @map("updated_at")
+
+  // Relations
+  parent            ProductCategory?  @relation("ProductCategoryHierarchy", fields: [parentId], references: [id])
+  children          ProductCategory[] @relation("ProductCategoryHierarchy")
+  products          ProductCategoryMapping[]
+
+  @@index([parentId])
+  @@index([isActive])
+  @@map("product_categories")
+}
+
+// Product Category Mapping - links products to categories
+model ProductCategoryMapping {
+  id                String         @id @default(cuid())
+  productId         String         @map("product_id")
+  categoryId        String         @map("category_id")
+  sortOrder         Int            @default(0) @map("sort_order")
+
+  createdAt         DateTime       @default(now()) @map("created_at")
+
+  // Relations
+  product           Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  category          ProductCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, categoryId])
+  @@index([categoryId])
+  @@map("product_category_mappings")
 }

@@ -24,6 +24,9 @@ const DEFAULT_ROLE_PERMISSIONS = {
     commissions: ['create', 'read', 'update', 'delete', 'approve'],
     workflows: ['create', 'read', 'update', 'delete'],
     templates: ['create', 'read', 'update', 'delete'],
+    order_templates: ['create', 'read', 'update', 'delete'],
+    labor_orders: ['create', 'read', 'update', 'delete'],
+    material_orders: ['create', 'read', 'update', 'delete'],
     agreements: ['create', 'read', 'update', 'delete'],
     campaigns: ['create', 'read', 'update', 'delete'],
     users: ['create', 'read', 'update', 'delete'],
@@ -50,6 +53,9 @@ const DEFAULT_ROLE_PERMISSIONS = {
     commissions: ['read', 'approve'],
     workflows: ['create', 'read', 'update', 'delete'],
     templates: ['create', 'read', 'update', 'delete'],
+    order_templates: ['create', 'read', 'update', 'delete'],
+    labor_orders: ['create', 'read', 'update', 'delete'],
+    material_orders: ['create', 'read', 'update', 'delete'],
     agreements: ['create', 'read', 'update', 'delete'],
     campaigns: ['create', 'read', 'update', 'delete'],
     users: ['read', 'update'],
@@ -105,6 +111,9 @@ const DEFAULT_ROLE_PERMISSIONS = {
     appointments: ['create', 'read', 'update', 'assign'],
     commissions: ['read'],
     templates: ['read'],
+    order_templates: ['read'],
+    labor_orders: ['create', 'read', 'update'],
+    material_orders: ['create', 'read', 'update'],
     agreements: ['create', 'read', 'update'],
     reports: ['read'],
     cases: ['create', 'read', 'update'],
@@ -124,6 +133,25 @@ const DEFAULT_ROLE_PERMISSIONS = {
     templates: ['read'],
     agreements: ['create', 'read', 'update'], // For change orders
     cases: ['create', 'read', 'update'], // Create and manage HOA, PII, Permit, Ad Hoc cases
+    reports: ['read'],
+  },
+
+  project_coordinator: {
+    // Project Coordinator - handles material & labor orders (almost anyone except call center)
+    accounts: ['read', 'update'],
+    contacts: ['read', 'update'],
+    opportunities: ['read', 'update'],
+    quotes: ['read', 'update'],
+    orders: ['create', 'read', 'update'], // Material orders
+    invoices: ['read'],
+    workorders: ['create', 'read', 'update'], // Create work orders
+    appointments: ['create', 'read', 'update'],
+    commissions: ['read'],
+    templates: ['read'],
+    order_templates: ['read'], // Access to order templates
+    labor_orders: ['create', 'read', 'update'], // Create labor orders
+    material_orders: ['create', 'read', 'update'], // Create material orders
+    agreements: ['read'],
     reports: ['read'],
   },
 

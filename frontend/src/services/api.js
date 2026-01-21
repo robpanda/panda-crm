@@ -2217,6 +2217,97 @@ export const scheduleApi = {
   },
 };
 
+// Order Templates API
+export const orderTemplatesApi = {
+  async getOrderTemplates(params = {}) {
+    const response = await api.get('/api/order-templates', { params });
+    return response.data;
+  },
+
+  async getOrderTemplate(id) {
+    const response = await api.get(`/api/order-templates/${id}`);
+    return response.data;
+  },
+
+  async createOrderTemplate(data) {
+    const response = await api.post('/api/order-templates', data);
+    return response.data;
+  },
+
+  async updateOrderTemplate(id, data) {
+    const response = await api.put(`/api/order-templates/${id}`, data);
+    return response.data;
+  },
+
+  async deleteOrderTemplate(id) {
+    const response = await api.delete(`/api/order-templates/${id}`);
+    return response.data;
+  },
+
+  async getProductCategories(params = {}) {
+    const response = await api.get('/api/order-templates/categories', { params });
+    return response.data;
+  },
+
+  async seedOrderTemplates() {
+    const response = await api.post('/api/order-templates/seed');
+    return response.data;
+  },
+
+  async seedProductCategories() {
+    const response = await api.post('/api/order-templates/seed-categories');
+    return response.data;
+  },
+};
+
+// Labor Orders API
+export const laborOrdersApi = {
+  async getLaborOrders(params = {}) {
+    const response = await api.get('/api/labor-orders', { params });
+    return response.data;
+  },
+
+  async getLaborOrderCounts() {
+    const response = await api.get('/api/labor-orders/counts');
+    return response.data;
+  },
+
+  async getLaborOrder(id) {
+    const response = await api.get(`/api/labor-orders/${id}`);
+    return response.data;
+  },
+
+  async createLaborOrder(data) {
+    const response = await api.post('/api/labor-orders', data);
+    return response.data;
+  },
+
+  async updateLaborOrder(id, data) {
+    const response = await api.put(`/api/labor-orders/${id}`, data);
+    return response.data;
+  },
+
+  async updateLaborOrderStatus(id, status) {
+    const response = await api.patch(`/api/labor-orders/${id}/status`, { status });
+    return response.data;
+  },
+
+  async deleteLaborOrder(id) {
+    const response = await api.delete(`/api/labor-orders/${id}`);
+    return response.data;
+  },
+
+  async getLaborPriceBookItems(params = {}) {
+    const response = await api.get('/api/labor-orders/pricebook-items', { params });
+    return response.data;
+  },
+
+  async getDefaultLaborItems(workType) {
+    const response = await api.get(`/api/labor-orders/defaults/${encodeURIComponent(workType)}`);
+    return response.data;
+  },
+};
+
 // Payments & Invoicing API
 export const paymentsApi = {
   // === INVOICES ===

@@ -9,6 +9,8 @@ import schedulingRoutes from './routes/scheduling.js';
 import schedulingPolicyRoutes from './routes/schedulingPolicies.js';
 import googleCalendarRoutes from './routes/googleCalendar.js';
 import materialOrderRoutes from './routes/materialOrders.js';
+import orderTemplateRoutes from './routes/orderTemplates.js';
+import laborOrderRoutes from './routes/laborOrders.js';
 
 const app = express();
 const PORT = process.env.PORT || 3005;
@@ -42,6 +44,8 @@ app.use('/api/scheduling-policies', schedulingPolicyRoutes);
 app.use('/api/field-service/scheduling-policies', schedulingPolicyRoutes); // Alias for frontend compatibility
 app.use('/api/google', googleCalendarRoutes);
 app.use('/api/material-orders', materialOrderRoutes);
+app.use('/api/order-templates', orderTemplateRoutes);
+app.use('/api/labor-orders', laborOrderRoutes);
 
 // Error handling
 app.use((err, req, res, next) => {

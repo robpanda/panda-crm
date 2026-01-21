@@ -12,6 +12,7 @@ import {
 import { LeadRankBadge, LeadScoreCard } from '../components/LeadRankBadge';
 import LoadingSpinner from '../components/LoadingSpinner';
 import MentionTextarea from '../components/MentionTextarea';
+import LeadNotesSidebar from '../components/LeadNotesSidebar';
 
 // SMS Modal Component with Canned Responses
 function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {} }) {
@@ -1877,72 +1878,8 @@ export default function LeadDetail() {
         </div>
       </div>
 
-      {/* Notes Section - Full Width */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
-          <FileText className="w-5 h-5 mr-2 text-panda-primary" />
-          Notes
-        </h2>
-
-        {isEditing ? (
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Call Center Notes
-                <span className="text-xs text-gray-400 ml-2">Use @ to mention users</span>
-              </label>
-              <MentionTextarea
-                value={formData.leadNotes}
-                onChange={(val) => setFormData(prev => ({ ...prev, leadNotes: val }))}
-                rows={3}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
-                placeholder="Call center notes... Use @name to mention users"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Job Notes
-                <span className="text-xs text-gray-400 ml-2">(visible on Job) Use @ to mention users</span>
-              </label>
-              <MentionTextarea
-                value={formData.jobNotes}
-                onChange={(val) => setFormData(prev => ({ ...prev, jobNotes: val }))}
-                rows={3}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
-                placeholder="Job notes visible on the job... Use @name to mention users"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Additional Information
-                <span className="text-xs text-gray-400 ml-2">Use @ to mention users</span>
-              </label>
-              <MentionTextarea
-                value={formData.description}
-                onChange={(val) => setFormData(prev => ({ ...prev, description: val }))}
-                rows={3}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
-                placeholder="Additional information... Use @name to mention users"
-              />
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-4">
-            <div>
-              <h3 className="text-sm font-medium text-gray-500 mb-1">Call Center Notes</h3>
-              <p className="text-gray-900 whitespace-pre-wrap">{lead.leadNotes || 'No call center notes.'}</p>
-            </div>
-            <div>
-              <h3 className="text-sm font-medium text-gray-500 mb-1">Job Notes <span className="text-xs text-gray-400">(visible on Job)</span></h3>
-              <p className="text-gray-900 whitespace-pre-wrap">{lead.jobNotes || 'No job notes.'}</p>
-            </div>
-            <div>
-              <h3 className="text-sm font-medium text-gray-500 mb-1">Additional Information</h3>
-              <p className="text-gray-900 whitespace-pre-wrap">{lead.description || 'No additional information.'}</p>
-            </div>
-          </div>
-        )}
-      </div>
+      {/* Notes & Comments Section - Full Width Interactive */}
+      <LeadNotesSidebar leadId={id} />
 
       {/* Metadata */}
       <div className="bg-gray-50 rounded-xl p-4 text-sm text-gray-500">

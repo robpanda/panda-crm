@@ -12,6 +12,7 @@ import DraggableMap from '../components/DraggableMap';
 import MilestoneTracker from '../components/MilestoneTracker';
 import JobPriority from '../components/JobPriority';
 import SpecsPreparation from '../components/SpecsPreparation';
+import MaterialLaborOrderWizard from '../components/MaterialLaborOrderWizard';
 import CommissionsTab from '../components/CommissionsTab';
 import TasksTab from '../components/TasksTab';
 import ContractSigningModal from '../components/ContractSigningModal';
@@ -1629,6 +1630,7 @@ export default function OpportunityDetail() {
   const [actionError, setActionError] = useState(null);
   const [actionSuccess, setActionSuccess] = useState(null);
   const [showSpecsPreparation, setShowSpecsPreparation] = useState(false);
+  const [showMaterialLaborWizard, setShowMaterialLaborWizard] = useState(false);
 
   // Sidebar accordion states (now handled by WorkflowSidebar component)
   // const [expandedSections, setExpandedSections] = useState({
@@ -5161,16 +5163,25 @@ export default function OpportunityDetail() {
                     {/* Header with Create Button */}
                     <div className="flex items-center justify-between">
                       <h3 className="text-sm font-semibold text-gray-900">Work Orders</h3>
-                      <button
-                        onClick={() => {
-                          setActiveQuickAction('createWorkOrder');
-                          setShowQuickActionModal(true);
-                        }}
-                        className="flex items-center space-x-1 px-3 py-1.5 bg-panda-primary text-white rounded-lg hover:bg-panda-dark text-sm"
-                      >
-                        <Plus className="w-4 h-4" />
-                        <span>Create Work Order</span>
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => setShowMaterialLaborWizard(true)}
+                          className="flex items-center space-x-1 px-3 py-1.5 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-lg hover:from-blue-700 hover:to-purple-700 text-sm"
+                        >
+                          <Package className="w-4 h-4" />
+                          <span>Material & Labor Orders</span>
+                        </button>
+                        <button
+                          onClick={() => {
+                            setActiveQuickAction('createWorkOrder');
+                            setShowQuickActionModal(true);
+                          }}
+                          className="flex items-center space-x-1 px-3 py-1.5 bg-panda-primary text-white rounded-lg hover:bg-panda-dark text-sm"
+                        >
+                          <Plus className="w-4 h-4" />
+                          <span>Create Work Order</span>
+                        </button>
+                      </div>
                     </div>
 
                     {/* Work Order List */}
@@ -10201,6 +10212,20 @@ export default function OpportunityDetail() {
           onCancel={() => setShowSpecsPreparation(false)}
         />
       )}
+
+      {/* Material & Labor Order Wizard */}
+      <MaterialLaborOrderWizard
+        isOpen={showMaterialLaborWizard}
+        onClose={() => setShowMaterialLaborWizard(false)}
+        opportunity={opportunity}
+        workOrder={workOrders?.[0]}
+        onComplete={(orderData) => {
+          setShowMaterialLaborWizard(false);
+          setActionSuccess('Orders created successfully. Navigate to Production tab to manage and submit.');
+          queryClient.invalidateQueries(['opportunityWorkOrders', id]);
+          setTimeout(() => setActionSuccess(null), 5000);
+        }}
+      />
 
       {/* Activity Detail Modal */}
       {showActivityModal && selectedActivity && (
