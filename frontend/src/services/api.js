@@ -476,9 +476,45 @@ export const leadsApi = {
     return response.data;
   },
 
-  // Add call center note to lead
+  // ============================================================================
+  // LEAD NOTES CRUD
+  // ============================================================================
+
+  // Get all notes for a lead (pinned first, then chronological)
+  async getNotes(leadId) {
+    const response = await api.get(`/api/leads/${leadId}/notes`);
+    return response.data.data?.notes || response.data.data || [];
+  },
+
+  // Create a new note for a lead
+  async createNote(leadId, data) {
+    // data: { title?, body, isPinned? }
+    const response = await api.post(`/api/leads/${leadId}/notes`, data);
+    return response.data.data;
+  },
+
+  // Update a note
+  async updateNote(leadId, noteId, data) {
+    // data: { title?, body?, isPinned? }
+    const response = await api.put(`/api/leads/${leadId}/notes/${noteId}`, data);
+    return response.data.data;
+  },
+
+  // Delete a note
+  async deleteNote(leadId, noteId) {
+    const response = await api.delete(`/api/leads/${leadId}/notes/${noteId}`);
+    return response.data.data;
+  },
+
+  // Toggle pin status on a note (only one pinned at a time)
+  async toggleNotePin(leadId, noteId) {
+    const response = await api.post(`/api/leads/${leadId}/notes/${noteId}/pin`);
+    return response.data.data;
+  },
+
+  // Legacy alias for backward compatibility
   async addLeadNote(id, note) {
-    const response = await api.post(`/api/leads/${id}/notes`, { note });
+    const response = await api.post(`/api/leads/${id}/notes`, { body: note });
     return response.data.data;
   },
 
