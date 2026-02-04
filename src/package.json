@@ -1,0 +1,84 @@
+{
+  "name": "panda-claude-agent",
+  "displayName": "Panda Claude Agent",
+  "description": "AI-powered coding assistant for Panda CRM development",
+  "version": "0.1.0",
+  "publisher": "panda-exteriors",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Machine Learning"
+  ],
+  "activationEvents": [
+    "onCommand:panda-crm.openChat"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "panda-crm.openChat",
+        "title": "Open Panda Claude Chat",
+        "category": "Panda CRM"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "panda-crm.openChat",
+        "key": "ctrl+shift+p",
+        "mac": "cmd+shift+p",
+        "when": "editorTextFocus"
+      }
+    ],
+    "configuration": {
+      "title": "Panda Claude Agent",
+      "properties": {
+        "pandaClaude.awsRegion": {
+          "type": "string",
+          "default": "us-east-2",
+          "description": "AWS region for Secrets Manager and S3"
+        },
+        "pandaClaude.secretName": {
+          "type": "string",
+          "default": "panda-claude-agent/api-key",
+          "description": "AWS Secrets Manager secret name for Claude API key"
+        },
+        "pandaClaude.s3Bucket": {
+          "type": "string",
+          "default": "panda-claude-agent-memory",
+          "description": "S3 bucket for conversation memory storage"
+        },
+        "pandaClaude.defaultModel": {
+          "type": "string",
+          "default": "claude-sonnet-4-20250514",
+          "enum": [
+            "claude-sonnet-4-20250514",
+            "claude-opus-4-20250514",
+            "claude-3-5-sonnet-20241022"
+          ],
+          "description": "Default Claude model to use"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.500.0",
+    "@aws-sdk/client-secrets-manager": "^3.500.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.15.0",
+    "@typescript-eslint/parser": "^6.15.0",
+    "eslint": "^8.56.0",
+    "typescript": "^5.3.3"
+  }
+}
