@@ -37,6 +37,10 @@ const DISPOSITION_STAGE_MAP = {
   RETAIL_NOT_SOLD: 'CLOSED_LOST',
 };
 
+function hasOwnField(obj, key) {
+  return Object.prototype.hasOwnProperty.call(obj, key);
+}
+
 function parseDate(value) {
   if (!value) return null;
   const parsed = new Date(value);
@@ -1911,7 +1915,6 @@ Be factual and professional. Highlight anything that needs attention.`;
       select: {
         stage: true,
         status: true,
-        stageName: true,
         isApproved: true,
         claimNumber: true,
         claimFiledDate: true,
@@ -1928,6 +1931,53 @@ Be factual and professional. Highlight anything that needs attention.`;
         supplementHoldsJob: true,
       },
     });
+
+    const updateData = {
+      name: data.name,
+      description: data.description,
+      stage: data.stage,
+      status: data.status,
+      probability: data.probability,
+      closeDate: data.closeDate ? new Date(data.closeDate) : undefined,
+      appointmentDate: data.appointmentDate ? new Date(data.appointmentDate) : undefined,
+      soldDate: data.soldDate ? new Date(data.soldDate) : undefined,
+      amount: data.amount,
+      contractTotal: data.contractTotal,
+      type: data.type,
+      workType: data.workType,
+      leadSource: data.leadSource,
+      isSelfGen: data.isSelfGen,
+      isPandaClaims: data.isPandaClaims,
+      isApproved: data.isApproved,
+      claimNumber: data.claimNumber,
+      claimFiledDate: data.claimFiledDate ? new Date(data.claimFiledDate) : undefined,
+      insuranceCarrier: data.insuranceCarrier,
+      rcvAmount: data.rcvAmount,
+      acvAmount: data.acvAmount,
+      deductible: data.deductible,
+      supplementsTotal: data.supplementsTotal,
+      // Address fields
+      street: data.street,
+      city: data.city,
+      state: data.state,
+      postalCode: data.postalCode,
+      accountId: data.accountId,
+      contactId: data.contactId,
+      ownerId: data.ownerId,
+      // Invoice workflow fields
+      invoiceStatus: data.invoiceStatus,
+      invoiceReadyDate: data.invoiceReadyDate ? new Date(data.invoiceReadyDate) : undefined,
+      invoicedDate: data.invoicedDate ? new Date(data.invoicedDate) : undefined,
+      followUpDate: data.followUpDate ? new Date(data.followUpDate) : undefined,
+    };
+
+    if (hasOwnField(data, 'damageLocation')) {
+      updateData.damageLocation = data.damageLocation || null;
+    }
+
+    if (hasOwnField(data, 'dateOfLoss')) {
+      updateData.dateOfLoss = parseDate(data.dateOfLoss);
+    }
 
     // Handle line items separately if provided
     if (data.lineItems !== undefined) {
@@ -1954,45 +2004,7 @@ Be factual and professional. Highlight anything that needs attention.`;
 
     const opportunity = await prisma.opportunity.update({
       where: { id },
-      data: {
-        name: data.name,
-        description: data.description,
-        stage: data.stage,
-        status: data.status,
-        stageName: data.stageName,
-        probability: data.probability,
-        closeDate: data.closeDate ? new Date(data.closeDate) : undefined,
-        appointmentDate: data.appointmentDate ? new Date(data.appointmentDate) : undefined,
-        soldDate: data.soldDate ? new Date(data.soldDate) : undefined,
-        amount: data.amount,
-        contractTotal: data.contractTotal,
-        type: data.type,
-        workType: data.workType,
-        leadSource: data.leadSource,
-        isSelfGen: data.isSelfGen,
-        isPandaClaims: data.isPandaClaims,
-        isApproved: data.isApproved,
-        claimNumber: data.claimNumber,
-        claimFiledDate: data.claimFiledDate ? new Date(data.claimFiledDate) : undefined,
-        insuranceCarrier: data.insuranceCarrier,
-        rcvAmount: data.rcvAmount,
-        acvAmount: data.acvAmount,
-        deductible: data.deductible,
-        supplementsTotal: data.supplementsTotal,
-        // Address fields
-        street: data.street,
-        city: data.city,
-        state: data.state,
-        postalCode: data.postalCode,
-        accountId: data.accountId,
-        contactId: data.contactId,
-        ownerId: data.ownerId,
-        // Invoice workflow fields
-        invoiceStatus: data.invoiceStatus,
-        invoiceReadyDate: data.invoiceReadyDate ? new Date(data.invoiceReadyDate) : undefined,
-        invoicedDate: data.invoicedDate ? new Date(data.invoicedDate) : undefined,
-        followUpDate: data.followUpDate ? new Date(data.followUpDate) : undefined,
-      },
+      data: updateData,
       include: {
         account: { select: { id: true, name: true } },
         contact: { select: { id: true, firstName: true, lastName: true } },
@@ -2010,21 +2022,30 @@ Be factual and professional. Highlight anything that needs attention.`;
     // ============================================================================
     if (previousState && (opportunity.type === 'INSURANCE' || data.type === 'INSURANCE')) {
       try {
+        const currentStageName = this.formatStageName(opportunity.stage);
+        const previousStageName = this.formatStageName(previousState.stage);
+
         // Build changes object to pass to triggers
         const changes = {
-          stageName: data.stageName,
-          stage: data.stage,
-          status: data.status,
-          isApproved: data.isApproved,
-          claimNumber: data.claimNumber,
-          insuranceCarrier: data.insuranceCarrier,
-          claimFiledDate: data.claimFiledDate,
-          isPandaClaims: data.isPandaClaims,
-          rcvAmount: data.rcvAmount,
-          acvAmount: data.acvAmount,
-          deductible: data.deductible,
+          stageName: currentStageName,
+          stage: hasOwnField(data, 'stage') ? data.stage : previousState.stage,
+          status: hasOwnField(data, 'status') ? data.status : previousState.status,
+          isApproved: hasOwnField(data, 'isApproved') ? data.isApproved : previousState.isApproved,
+          claimNumber: hasOwnField(data, 'claimNumber') ? data.claimNumber : previousState.claimNumber,
+          insuranceCarrier: hasOwnField(data, 'insuranceCarrier')
+            ? data.insuranceCarrier
+            : previousState.insuranceCarrier,
+          claimFiledDate: hasOwnField(data, 'claimFiledDate')
+            ? data.claimFiledDate
+            : previousState.claimFiledDate,
+          isPandaClaims: hasOwnField(data, 'isPandaClaims')
+            ? data.isPandaClaims
+            : previousState.isPandaClaims,
+          rcvAmount: hasOwnField(data, 'rcvAmount') ? data.rcvAmount : previousState.rcvAmount,
+          acvAmount: hasOwnField(data, 'acvAmount') ? data.acvAmount : previousState.acvAmount,
+          deductible: hasOwnField(data, 'deductible') ? data.deductible : previousState.deductible,
           // Include previous values for comparison
-          _previousStageName: previousState.stageName,
+          _previousStageName: previousStageName,
           _previousStage: previousState.stage,
           _previousStatus: previousState.status,
           _previousIsApproved: previousState.isApproved,
@@ -2033,7 +2054,7 @@ Be factual and professional. Highlight anything that needs attention.`;
 
         // Only trigger if there was an actual change in relevant fields
         const hasRelevantChange =
-          changes.stageName !== previousState.stageName ||
+          changes.stageName !== previousStageName ||
           changes.stage !== previousState.stage ||
           changes.status !== previousState.status ||
           changes.isApproved !== previousState.isApproved ||
