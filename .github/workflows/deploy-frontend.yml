@@ -1,6 +1,11 @@
 name: Build and Deploy Frontend
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/deploy-frontend.yml'
   workflow_dispatch:
 
 env:
@@ -49,6 +54,8 @@ jobs:
         env:
           VITE_API_BASE: https://bamboo.pandaadmin.com
           VITE_GOOGLE_MAPS_API_KEY: ${{ env.VITE_GOOGLE_MAPS_API_KEY }}
+          VITE_BUILD_SHA: ${{ github.sha }}
+          VITE_BUILD_TIME: ${{ github.run_started_at }}
         run: npm run build
 
       - name: Deploy to S3
