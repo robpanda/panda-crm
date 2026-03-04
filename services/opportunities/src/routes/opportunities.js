@@ -599,7 +599,7 @@ router.get('/:id/contacts', async (req, res, next) => {
 });
 
 // Generate customer portal link
-router.post('/:id/portal-link', async (req, res, next) => {
+const handleGeneratePortalLink = async (req, res, next) => {
   try {
     const result = await opportunityService.generatePortalLink(req.params.id, {
       expiresInDays: req.body?.expiresInDays,
@@ -608,7 +608,13 @@ router.post('/:id/portal-link', async (req, res, next) => {
   } catch (error) {
     next(error);
   }
-});
+};
+
+// Primary endpoint
+router.post('/:id/portal-link', handleGeneratePortalLink);
+// Compatibility aliases for environments/clients using alternate path shapes
+router.post('/:id/portal', handleGeneratePortalLink);
+router.post('/:id/portalLink', handleGeneratePortalLink);
 
 // Transfer an opportunity/job to another owner
 router.post('/:id/transfer', async (req, res, next) => {

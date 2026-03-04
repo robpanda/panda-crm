@@ -3882,7 +3882,7 @@ export default function OpportunityDetail() {
                         ) : (
                           <Globe className="w-4 h-4 text-blue-600" />
                         )}
-                        <span>{generatePortalLinkMutation.isPending ? 'Generating Portal Link...' : 'Copy Customer Portal Link'}</span>
+                        <span>{generatePortalLinkMutation.isPending ? 'Opening Customer Portal...' : 'Customer Portal'}</span>
                       </button>
                       <button
                         onClick={() => {

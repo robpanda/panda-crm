@@ -788,8 +788,35 @@ export const opportunitiesApi = {
 
   // Generate a shareable customer portal link
   async generatePortalLink(id, options = {}) {
-    const response = await api.post(`/api/opportunities/${id}/portal-link`, options);
-    return response.data;
+    try {
+      const response = await api.post(`/api/opportunities/${id}/portal-link`, options);
+      return response.data;
+    } catch (error) {
+      if (error?.response?.status !== 404) {
+        throw error;
+      }
+
+      // Compatibility fallback: some environments route alternate path variants.
+      const fallbackPaths = [
+        `/api/opportunities/${id}/portal`,
+        `/api/opportunities/${id}/portalLink`,
+      ];
+
+      let lastError = error;
+      for (const path of fallbackPaths) {
+        try {
+          const response = await api.post(path, options);
+          return response.data;
+        } catch (fallbackError) {
+          lastError = fallbackError;
+          if (fallbackError?.response?.status !== 404) {
+            throw fallbackError;
+          }
+        }
+      }
+
+      throw lastError;
+    }
   },
 
   // Transfer a job/opportunity to a different owner
