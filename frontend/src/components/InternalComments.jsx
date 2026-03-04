@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { leadsApi, opportunitiesApi } from '../services/api';
 import MentionTextarea from './MentionTextarea';
+import ThreadMessageList, { ThreadBody } from './ThreadMessageList';
 
 const apiByEntity = {
   lead: leadsApi,
@@ -247,7 +248,7 @@ export default function InternalComments({ entityType, entityId }) {
               </div>
             </div>
           ) : (
-            <p className="text-sm text-gray-700 whitespace-pre-wrap">{contentText}</p>
+            <ThreadBody text={contentText} />
           )}
           {renderAttachments(attachmentUrls)}
         </div>
@@ -339,13 +340,12 @@ export default function InternalComments({ entityType, entityId }) {
         </div>
       </div>
 
-      {comments.length === 0 ? (
-        <div className="text-sm text-gray-500">No internal comments yet.</div>
-      ) : (
-        <div className="space-y-6">
-          {comments.map((comment) => renderComment(comment, 0))}
-        </div>
-      )}
+      <ThreadMessageList
+        items={comments}
+        emptyTitle="No internal comments yet."
+        className="space-y-6"
+        renderItem={(comment) => renderComment(comment, 0)}
+      />
     </div>
   );
 }

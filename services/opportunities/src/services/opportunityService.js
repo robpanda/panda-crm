@@ -3,7 +3,6 @@
 // This is the HUB - Opportunity is the central object in Panda CRM
 import { PrismaClient, Prisma } from '@prisma/client';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
-import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import crypto from 'crypto';
 import { logger } from '../middleware/logger.js';
@@ -14,9 +13,8 @@ const prisma = new PrismaClient();
 const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-east-2' });
 const S3_BUCKET = process.env.S3_BUCKET || 'pandasign-documents';
 
-// SES client for email notifications
-const sesClient = new SESClient({ region: process.env.AWS_REGION || 'us-east-2' });
-const FROM_EMAIL = process.env.SES_FROM_EMAIL || 'notifications@pandaexteriors.com';
+const NOTIFICATION_SERVICE_URL = process.env.NOTIFICATION_SERVICE_URL || 'http://localhost:3011';
+const MENTION_DISPATCH_ENDPOINT = `${NOTIFICATION_SERVICE_URL}/api/notifications/mentions/dispatch`;
 
 const DISPOSITION_CATEGORIES = {
   INSPECTION_NOT_COMPLETED: 'INSPECTION_NOT_COMPLETED',
@@ -80,6 +78,10 @@ function extractMentionUserId(mention) {
   if (!mention) return null;
   if (typeof mention === 'string') return mention;
   return mention.userId || mention.id || null;
+}
+
+function buildCorrelationId(prefix, entityId) {
+  return `${prefix}-${entityId}-${Date.now()}`;
 }
 
 function validateAppointmentResultPayload(payload = {}) {
@@ -242,8 +244,6 @@ async function getNotificationService() {
     try {
       // The notification service runs on a separate port - call via HTTP
       // In production, this would be an internal service mesh call
-      const NOTIFICATION_SERVICE_URL =
-        process.env.NOTIFICATION_SERVICE_URL || 'http://localhost:3011';
       notificationService = {
         // Wrap notification methods to call via HTTP
         async notifyAppointmentBooked(inspectorId, appointment, opportunity, options) {
@@ -1628,118 +1628,45 @@ Be factual and professional. Highlight anything that needs attention.`;
   /**
    * Add a reply with @mentions - creates a note and sends notifications
    */
-  async addReplyWithMentions(opportunityId, { content, parentId, mentions, channel }, user) {
+  async addReplyWithMentions(opportunityId, { content, parentId, mentions, channel, correlationId = null }, user) {
+    const normalizedContent = String(content || '').trim();
+    const noteBody = normalizedContent || '[mention]';
+    const resolvedCorrelationId = correlationId || buildCorrelationId('opportunity-reply', opportunityId);
+
+    const opportunity = await prisma.opportunity.findUnique({
+      where: { id: opportunityId },
+      select: { id: true, name: true, jobId: true },
+    });
+    if (!opportunity) {
+      const error = new Error(`Opportunity not found: ${opportunityId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
     // Create the note/reply
     const note = await prisma.note.create({
       data: {
         opportunityId,
-        title: `Reply${channel ? ` (${channel})` : ''}`,
-        body: content,
+        title: `CONVERSATION_REPLY|${channel || 'internal'}`,
+        body: noteBody,
         createdById: user?.id,
       },
     });
 
-    // Send notifications to mentioned users
-    if (mentions && mentions.length > 0) {
-      const opportunity = await prisma.opportunity.findUnique({
-        where: { id: opportunityId },
-        select: { name: true, jobId: true },
-      });
-
-      const notificationPromises = mentions.map(async (mention) => {
-        const mentionUserId = extractMentionUserId(mention);
-        if (!mentionUserId) return;
-
-        // Create in-app notification
-        await prisma.notification.create({
-          data: {
-            userId: mentionUserId,
-            type: 'MENTION',
-            title: `${user?.firstName || 'Someone'} mentioned you`,
-            message: `You were mentioned in a reply on ${opportunity?.name || opportunity?.jobId || 'an opportunity'}: "${content.substring(0, 100)}${content.length > 100 ? '...' : ''}"`,
-            opportunityId: opportunityId,
-            actionUrl: `/jobs/${opportunityId}`,
-            actionLabel: 'View Job',
-            sourceType: 'OPPORTUNITY',
-            sourceId: opportunityId,
-            status: 'UNREAD',
-          },
-        });
-
-        // Get user email for email notification
-        const mentionedUser = await prisma.user.findUnique({
-          where: { id: mentionUserId },
-          select: { email: true, firstName: true },
-        });
-
-        if (mentionedUser?.email) {
-          // Send email notification (fire and forget)
-          this.sendMentionEmail({
-            toEmail: mentionedUser.email,
-            toName: mentionedUser.firstName,
-            mentionerName: `${user?.firstName} ${user?.lastName}`,
-            opportunityName: opportunity?.name || opportunity?.jobId,
-            opportunityId,
-            messagePreview: content.substring(0, 200),
-          }).catch(err => console.error('Failed to send mention email:', err));
-        }
-      });
-
-      await Promise.all(notificationPromises);
-    }
+    const mentionsNotified = await this.notifyOpportunityMentions({
+      opportunityId,
+      content: normalizedContent || noteBody,
+      mentions: mentions || [],
+      actor: user,
+      opportunityName: opportunity.name,
+      opportunityJobId: opportunity.jobId,
+      noteId: note.id,
+      correlationId: resolvedCorrelationId,
+    });
 
     return {
       ...note,
-      mentionsNotified: mentions?.length || 0,
-    };
-  }
-
-  /**
-   * Send email notification for @mention
-   */
-  async sendMentionEmail({ toEmail, toName, mentionerName, opportunityName, opportunityId, messagePreview }) {
-    try {
-      const opportunityUrl = `https://bamboo.pandaadmin.com/opportunities/${opportunityId}`;
-
-      await sesClient.send(new SendEmailCommand({
-        Source: FROM_EMAIL,
-        Destination: {
-          ToAddresses: [toEmail],
-        },
-        Message: {
-          Subject: {
-            Data: `${mentionerName} mentioned you on ${opportunityName}`,
-          },
-          Body: {
-            Html: {
-              Data: `
-                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-                  <h2 style="color: #333;">You were mentioned in a conversation</h2>
-                  <p>Hi ${toName},</p>
-                  <p><strong>${mentionerName}</strong> mentioned you in a reply on <strong>${opportunityName}</strong>:</p>
-                  <div style="background: #f5f5f5; padding: 15px; border-radius: 8px; margin: 15px 0;">
-                    <p style="margin: 0; color: #666;">"${messagePreview}"</p>
-                  </div>
-                  <a href="${opportunityUrl}" style="display: inline-block; background: #667eea; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin-top: 10px;">
-                    View Conversation
-                  </a>
-                  <p style="color: #999; font-size: 12px; margin-top: 30px;">
-                    This is an automated notification from Panda CRM.
-                  </p>
-                </div>
-              `,
-            },
-            Text: {
-              Data: `You were mentioned by ${mentionerName} on ${opportunityName}: "${messagePreview}"\n\nView at: ${opportunityUrl}`,
-            },
-          },
-        },
-      }));
-
-      console.log(`Mention email sent to ${toEmail}`);
-    } catch (error) {
-      console.error('Error sending mention email:', error);
-      throw error;
+      mentionsNotified,
     }
   }
 
@@ -4030,6 +3957,9 @@ Be factual and professional. Highlight anything that needs attention.`;
     actor = null,
     opportunityName = null,
     opportunityJobId = null,
+    noteId = null,
+    commentId = null,
+    correlationId = null,
   }) {
     const mentionUserIds = [...new Set((mentions || [])
       .map(extractMentionUserId)
@@ -4039,47 +3969,53 @@ Be factual and professional. Highlight anything that needs attention.`;
       return 0;
     }
 
-    const users = await prisma.user.findMany({
-      where: { id: { in: mentionUserIds } },
-      select: { id: true, email: true, firstName: true },
-    });
-    const userById = new Map(users.map((u) => [u.id, u]));
     const actorName = `${actor?.firstName || ''} ${actor?.lastName || ''}`.trim() || actor?.email || 'Someone';
     const subjectName = opportunityName || opportunityJobId || 'an opportunity';
     const preview = (content || '').substring(0, 100);
+    const resolvedCorrelationId = correlationId || buildCorrelationId('opportunity-mention', opportunityId);
 
-    for (const userId of mentionUserIds) {
-      const mentionedUser = userById.get(userId);
-      if (!mentionedUser) continue;
+    const payload = {
+      actorId: actor?.id || null,
+      actorName,
+      recipients: mentionUserIds.map((userId) => ({ userId })),
+      entityType: 'opportunity',
+      entityId: opportunityId,
+      noteId,
+      commentId,
+      bodyPreview: content || '',
+      snippet: preview,
+      actionPath: `/jobs/${opportunityId}`,
+      actionLabel: 'View Job',
+      context: subjectName,
+      sourceType: 'OPPORTUNITY',
+      sourceId: opportunityId,
+      opportunityId,
+      correlationId: resolvedCorrelationId,
+    };
 
-      await prisma.notification.create({
-        data: {
-          userId,
-          type: 'MENTION',
-          title: `${actorName} mentioned you`,
-          message: `You were mentioned on ${subjectName}: "${preview}${(content || '').length > 100 ? '...' : ''}"`,
-          opportunityId,
-          actionUrl: `/jobs/${opportunityId}`,
-          actionLabel: 'View Job',
-          sourceType: 'OPPORTUNITY',
-          sourceId: opportunityId,
-          status: 'UNREAD',
-        },
+    try {
+      const response = await fetch(MENTION_DISPATCH_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
       });
 
-      if (mentionedUser.email) {
-        this.sendMentionEmail({
-          toEmail: mentionedUser.email,
-          toName: mentionedUser.firstName || 'there',
-          mentionerName: actorName,
-          opportunityName: subjectName,
-          opportunityId,
-          messagePreview: (content || '').substring(0, 200),
-        }).catch((err) => logger.warn(`Failed to send mention email to ${mentionedUser.email}: ${err.message}`));
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        logger.warn(
+          `[mentions.dispatch] opportunityId=${opportunityId} correlationId=${resolvedCorrelationId} status=${response.status} body=${errorText}`
+        );
+        return 0;
       }
-    }
 
-    return mentionUserIds.length;
+      const result = await response.json().catch(() => ({}));
+      return result?.data?.dispatched ?? 0;
+    } catch (error) {
+      logger.warn(
+        `[mentions.dispatch] opportunityId=${opportunityId} correlationId=${resolvedCorrelationId} failed: ${error.message}`
+      );
+      return 0;
+    }
   }
 
   async getOpportunityInternalComments(opportunityId) {
@@ -4158,6 +4094,7 @@ Be factual and professional. Highlight anything that needs attention.`;
       },
     });
 
+    const correlationId = payload.correlationId || buildCorrelationId('opportunity-internal-comment', opportunityId);
     const mentionsNotified = await this.notifyOpportunityMentions({
       opportunityId,
       content,
@@ -4165,6 +4102,8 @@ Be factual and professional. Highlight anything that needs attention.`;
       actor: user,
       opportunityName: opportunity.name,
       opportunityJobId: opportunity.jobId,
+      commentId: comment.id,
+      correlationId,
     });
 
     return {
@@ -4242,11 +4181,14 @@ Be factual and professional. Highlight anything that needs attention.`;
       },
     });
 
+    const correlationId = payload.correlationId || buildCorrelationId('opportunity-internal-comment-update', opportunityId);
     const mentionsNotified = await this.notifyOpportunityMentions({
       opportunityId,
       content: nextContent,
       mentions: payload.mentions || [],
       actor: user,
+      commentId: updated.id,
+      correlationId,
     });
 
     return {
@@ -4302,7 +4244,14 @@ Be factual and professional. Highlight anything that needs attention.`;
     logger.info(`Getting notes for opportunity: ${opportunityId}`);
 
     const notes = await prisma.note.findMany({
-      where: { opportunityId },
+      where: {
+        opportunityId,
+        NOT: [
+          { title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } },
+          { title: { startsWith: 'CONVERSATION_REPLY|' } },
+          { title: { startsWith: 'Reply' } }, // Legacy conversation replies
+        ],
+      },
       include: {
         createdBy: {
           select: { id: true, firstName: true, lastName: true, email: true },
@@ -4337,6 +4286,7 @@ Be factual and professional. Highlight anything that needs attention.`;
    */
   async createOpportunityNote(opportunityId, data) {
     logger.info(`Creating note for opportunity: ${opportunityId}`);
+    const correlationId = data.correlationId || buildCorrelationId('opportunity-note', opportunityId);
 
     // If this note is pinned, unpin any existing pinned notes
     if (data.isPinned) {
@@ -4362,6 +4312,22 @@ Be factual and professional. Highlight anything that needs attention.`;
       },
     });
 
+    const opportunity = await prisma.opportunity.findUnique({
+      where: { id: opportunityId },
+      select: { id: true, name: true, jobId: true },
+    });
+
+    const mentionsNotified = await this.notifyOpportunityMentions({
+      opportunityId,
+      content: note.body,
+      mentions: data.mentions || [],
+      actor: note.createdBy || (data.createdById ? { id: data.createdById } : null),
+      opportunityName: opportunity?.name,
+      opportunityJobId: opportunity?.jobId,
+      noteId: note.id,
+      correlationId,
+    });
+
     logger.info(`Note created: ${note.id}`);
     return {
       id: note.id,
@@ -4377,19 +4343,26 @@ Be factual and professional. Highlight anything that needs attention.`;
             email: note.createdBy.email,
           }
         : null,
+      mentionsNotified,
     };
   }
 
   /**
    * Update an existing note
    */
-  async updateOpportunityNote(noteId, data) {
+  async updateOpportunityNote(opportunityId, noteId, data, actor = null) {
     logger.info(`Updating note: ${noteId}`);
+    const correlationId = data.correlationId || buildCorrelationId('opportunity-note-update', opportunityId);
 
     const existingNote = await prisma.note.findUnique({ where: { id: noteId } });
     if (!existingNote) {
       const error = new Error(`Note not found: ${noteId}`);
       error.name = 'NotFoundError';
+      throw error;
+    }
+    if (opportunityId && existingNote.opportunityId !== opportunityId) {
+      const error = new Error('Note does not belong to this opportunity');
+      error.name = 'ValidationError';
       throw error;
     }
 
@@ -4419,6 +4392,24 @@ Be factual and professional. Highlight anything that needs attention.`;
       },
     });
 
+    let mentionsNotified = 0;
+    if (Array.isArray(data.mentions) && data.mentions.length > 0) {
+      const opportunity = await prisma.opportunity.findUnique({
+        where: { id: opportunityId || note.opportunityId },
+        select: { id: true, name: true, jobId: true },
+      });
+      mentionsNotified = await this.notifyOpportunityMentions({
+        opportunityId: opportunityId || note.opportunityId,
+        content: note.body,
+        mentions: data.mentions,
+        actor,
+        opportunityName: opportunity?.name,
+        opportunityJobId: opportunity?.jobId,
+        noteId: note.id,
+        correlationId,
+      });
+    }
+
     return {
       id: note.id,
       title: note.title,
@@ -4434,6 +4425,7 @@ Be factual and professional. Highlight anything that needs attention.`;
             email: note.createdBy.email,
           }
         : null,
+      mentionsNotified,
     };
   }
 

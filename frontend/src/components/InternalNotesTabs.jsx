@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { leadsApi, opportunitiesApi } from '../services/api';
 import MentionTextarea from './MentionTextarea';
+import ThreadMessageList, { ThreadBody } from './ThreadMessageList';
 
 const apiByEntity = {
   lead: leadsApi,
@@ -260,11 +261,11 @@ export default function InternalNotesTabs({ entityType = 'lead', entityId }) {
         </div>
       )}
 
-      <div className="space-y-3">
-        {unpinnedNotes.length === 0 && !pinnedNote && (
-          <p className="text-sm text-gray-500">No notes yet</p>
-        )}
-        {unpinnedNotes.map((note) => {
+      <ThreadMessageList
+        items={unpinnedNotes}
+        emptyTitle={pinnedNote ? '' : 'No notes yet'}
+        className="space-y-3"
+        renderItem={(note) => {
           const isExpanded = expandedNotes.has(note.id);
           const isEditing = editingNoteId === note.id;
           const author = note.createdBy || note.author || note.user || {};
@@ -350,8 +351,8 @@ export default function InternalNotesTabs({ entityType = 'lead', entityId }) {
                     </div>
                   </div>
 
-                  <div className="mt-2 text-sm text-gray-700">
-                    {isExpanded ? note.body : truncateText(note.body)}
+                  <div className="mt-2">
+                    <ThreadBody text={isExpanded ? note.body : truncateText(note.body)} />
                   </div>
 
                   {note.body && note.body.length > 100 && (
@@ -387,8 +388,8 @@ export default function InternalNotesTabs({ entityType = 'lead', entityId }) {
               )}
             </div>
           );
-        })}
-      </div>
+        }}
+      />
     </div>
   );
 }

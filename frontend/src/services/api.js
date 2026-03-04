@@ -1466,6 +1466,11 @@ export const notificationsApi = {
     return response.data;
   },
 
+  async getOutbox(params = {}) {
+    const response = await api.get('/api/notifications/outbox', { params });
+    return response.data;
+  },
+
   async getNotification(id) {
     const response = await api.get(`/api/notifications/${id}`);
     return response.data;

@@ -3,6 +3,8 @@ import {
   listNotifications,
   getNotification,
   createNotification,
+  listOutboxNotifications,
+  dispatchMentionNotifications,
   markAsRead,
   markAllAsRead,
   archiveNotification,
@@ -154,8 +156,14 @@ router.post('/inspectors/for-notification', async (req, res, next) => {
 // Counts
 router.get('/unread-count', getUnreadCount);
 
+// Mention dispatch (canonical entrypoint from domain services)
+router.post('/mentions/dispatch', dispatchMentionNotifications);
+
 // By opportunity (for Opportunity Hub)
 router.get('/opportunity/:opportunityId', getNotificationsByOpportunity);
+
+// Outbox
+router.get('/outbox', listOutboxNotifications);
 
 // Bulk operations
 router.post('/bulk-status', bulkUpdateStatus);

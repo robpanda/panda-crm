@@ -17,19 +17,28 @@ class NotificationService {
    * @param {object} data - Data for template interpolation
    * @param {object} relations - Related record IDs
    */
-  async createFromTemplate(type, userId, data, relations = {}) {
+  async createFromTemplate(type, userId, data, relations = {}, options = {}) {
     // Get template
     let template = await prisma.notificationTemplate.findUnique({
       where: { type },
     });
 
-    // Use defaults if no custom template
-    if (!template) {
-      const defaults = await this.getDefaultTemplate(type);
-      if (!defaults) {
-        throw new Error(`No template found for type: ${type}`);
-      }
+    const defaults = await this.getDefaultTemplate(type);
+    // Use defaults if no custom template; if a custom template exists, backfill missing fields from defaults.
+    if (!template && defaults) {
       template = defaults;
+    } else if (template && defaults) {
+      template = {
+        ...defaults,
+        ...template,
+        emailSubjectTemplate: template.emailSubjectTemplate || defaults.emailSubjectTemplate,
+        emailBodyTemplate: template.emailBodyTemplate || defaults.emailBodyTemplate,
+        smsTemplate: template.smsTemplate || defaults.smsTemplate,
+      };
+    }
+
+    if (!template) {
+      throw new Error(`No template found for type: ${type}`);
     }
 
     // Interpolate templates
@@ -41,8 +50,9 @@ class NotificationService {
       where: { userId },
     });
 
-    // Check if notification type is enabled
-    if (preferences?.typePreferences?.[type]?.enabled === false) {
+    // Check if notification type is enabled (mentions can force in-app creation even when channel toggles are restrictive)
+    const allowInAppOverride = Boolean(options.forceInApp && type === 'MENTION');
+    if (!allowInAppOverride && !this.isNotificationTypeEnabled(type, preferences)) {
       console.log(`Notification type ${type} disabled for user ${userId}`);
       return null;
     }
@@ -70,13 +80,14 @@ class NotificationService {
         leadId: relations.leadId,
         workOrderId: relations.workOrderId,
         caseId: relations.caseId,
+        actorId: relations.actorId || data.actorId || null,
         sourceType: data.sourceType,
         sourceId: data.sourceId,
       },
     });
 
     // Handle delivery channels
-    await this.deliverNotification(notification, template, preferences, data);
+    await this.deliverNotification(notification, template, preferences, data, { type });
 
     return notification;
   }
@@ -84,32 +95,35 @@ class NotificationService {
   /**
    * Handle delivery across channels (email, SMS, push)
    */
-  async deliverNotification(notification, template, preferences, data) {
+  async deliverNotification(notification, template, preferences, data, options = {}) {
     const channels = [];
+    const type = options.type || notification.type;
+    const mentionChannelPrefs = this.resolveMentionChannelPreferences(preferences);
+    const isMention = type === 'MENTION';
 
     // Email delivery
-    if (preferences?.emailEnabled !== false && template.emailSubjectTemplate) {
+    if (preferences?.emailEnabled !== false && template.emailSubjectTemplate && (!isMention || mentionChannelPrefs.email !== false)) {
       channels.push(
         this.sendEmailNotification(notification, template, data)
-          .then(() => this.updateDeliveryStatus(notification.id, 'email'))
+          .then((sent) => (sent ? this.updateDeliveryStatus(notification.id, 'email') : null))
           .catch(err => console.error('Email delivery failed:', err))
       );
     }
 
     // SMS delivery
-    if (preferences?.smsEnabled && template.smsTemplate) {
+    if (preferences?.smsEnabled && template.smsTemplate && (!isMention || mentionChannelPrefs.sms !== false)) {
       channels.push(
         this.sendSmsNotification(notification, template, data)
-          .then(() => this.updateDeliveryStatus(notification.id, 'sms'))
+          .then((sent) => (sent ? this.updateDeliveryStatus(notification.id, 'sms') : null))
           .catch(err => console.error('SMS delivery failed:', err))
       );
     }
 
     // Push notification (in-app is default)
-    if (preferences?.pushEnabled !== false) {
+    if (preferences?.pushEnabled !== false && (!isMention || mentionChannelPrefs.push !== false)) {
       channels.push(
         this.sendPushNotification(notification, data)
-          .then(() => this.updateDeliveryStatus(notification.id, 'push'))
+          .then((sent) => (sent ? this.updateDeliveryStatus(notification.id, 'push') : null))
           .catch(err => console.error('Push delivery failed:', err))
       );
     }
@@ -128,7 +142,7 @@ class NotificationService {
 
     if (!user?.email) {
       console.log('No email for user:', notification.userId);
-      return;
+      return false;
     }
 
     const subject = this.interpolate(template.emailSubjectTemplate, data);
@@ -151,6 +165,12 @@ class NotificationService {
           opportunityId: data.opportunityId || notification.opportunityId,
           accountId: data.accountId || notification.accountId,
           sentById: 'system', // System notification
+          internalNotification: true,
+          metadata: {
+            notificationId: notification.id,
+            notificationType: notification.type,
+            correlationId: data.correlationId || null,
+          },
         }),
       });
 
@@ -171,11 +191,12 @@ class NotificationService {
         providerId: result.providerId,
       });
 
-      return result;
+      return Boolean(result);
     } catch (error) {
       console.error('Failed to send email notification:', error);
       // Don't throw - email failure shouldn't break the notification flow
       // The in-app notification is still created
+      return false;
     }
   }
 
@@ -190,7 +211,7 @@ class NotificationService {
 
     if (!user?.mobilePhone) {
       console.log('No mobile for user:', notification.userId);
-      return;
+      return false;
     }
 
     const message = this.interpolate(template.smsTemplate, data);
@@ -208,6 +229,12 @@ class NotificationService {
           opportunityId: data.opportunityId || notification.opportunityId,
           accountId: data.accountId || notification.accountId,
           sentById: 'system', // System notification
+          internalNotification: true,
+          metadata: {
+            notificationId: notification.id,
+            notificationType: notification.type,
+            correlationId: data.correlationId || null,
+          },
         }),
       });
 
@@ -228,11 +255,12 @@ class NotificationService {
         providerId: result.providerId,
       });
 
-      return result;
+      return Boolean(result);
     } catch (error) {
       console.error('Failed to send SMS notification:', error);
       // Don't throw - SMS failure shouldn't break the notification flow
       // The in-app notification is still created
+      return false;
     }
   }
 
@@ -251,6 +279,44 @@ class NotificationService {
     });
 
     // TODO: Integrate with real-time service (Socket.io, Pusher, etc.)
+    return true;
+  }
+
+  isNotificationTypeEnabled(type, preferences) {
+    if (!preferences?.typePreferences) return true;
+    const typePrefs = preferences.typePreferences[type];
+    if (!typePrefs) return true;
+    return typePrefs.enabled !== false;
+  }
+
+  resolveMentionChannelPreferences(preferences) {
+    const typePreferences = preferences?.typePreferences || {};
+    const mentionPrefs = typePreferences.MENTION || typePreferences.mention || {};
+    const resolve = (explicit, fallback) => (explicit === undefined ? fallback : explicit);
+
+    return {
+      email: resolve(
+        resolve(
+          resolve(mentionPrefs.emailMentions, mentionPrefs.email),
+          mentionPrefs.emailEnabled
+        ),
+        preferences?.emailMentions
+      ),
+      sms: resolve(
+        resolve(
+          resolve(mentionPrefs.smsMentions, mentionPrefs.sms),
+          mentionPrefs.smsEnabled
+        ),
+        preferences?.smsMentions
+      ),
+      push: resolve(
+        resolve(
+          resolve(mentionPrefs.pushMentions, mentionPrefs.push),
+          mentionPrefs.pushEnabled
+        ),
+        preferences?.pushMentions
+      ),
+    };
   }
 
   /**
@@ -345,6 +411,14 @@ class NotificationService {
         titleTemplate: 'Congratulations! Opportunity Won',
         messageTemplate: 'Opportunity "{{opportunityName}}" has been closed won! Amount: {{amount}}',
         defaultPriority: 'HIGH',
+      },
+      MENTION: {
+        titleTemplate: '{{mentionedBy}} mentioned you',
+        messageTemplate: '{{mentionedBy}} mentioned you in {{context}}',
+        emailSubjectTemplate: '{{mentionedBy}} mentioned you',
+        emailBodyTemplate: '<p><strong>{{mentionedBy}}</strong> mentioned you in {{context}}:</p><p>"{{excerpt}}"</p><p><a href="{{actionUrl}}">Open in CRM</a></p>',
+        smsTemplate: '{{mentionedBy}} mentioned you in {{context}}: "{{excerpt}}"',
+        defaultPriority: 'NORMAL',
       },
       // Appointment notifications for Call Center / Inspector integration
       APPOINTMENT_BOOKED: {

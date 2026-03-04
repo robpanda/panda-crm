@@ -5,7 +5,7 @@ import { useAuth, ROLE_TYPES } from '../context/AuthContext';
 import { useRingCentral } from '../context/RingCentralContext';
 import { leadsApi, opportunitiesApi, usersApi, accountsApi, bamboogliApi, callListsApi, ringCentralApi } from '../services/api';
 import CrewSelector from '../components/CrewSelector';
-import { formatDistanceToNow, format, parseISO, startOfDay, startOfWeek, startOfMonth, endOfDay, endOfWeek, endOfMonth, isToday, isTomorrow, addDays } from 'date-fns';
+import { formatDistanceToNow, format, parseISO, startOfDay, startOfWeek, startOfMonth, endOfDay, endOfWeek, endOfMonth, addDays } from 'date-fns';
 import { formatNumber } from '../utils/formatters';
 import {
   Phone,
@@ -2449,9 +2449,21 @@ export default function CallCenterDashboard() {
   // Format appointment date/time nicely
   const formatApptDateTime = (dateStr, timeStr) => {
     if (!dateStr) return '-';
-    const date = parseISO(dateStr.split('T')[0]);
-    const dateLabel = isToday(date) ? 'Today' : isTomorrow(date) ? 'Tomorrow' : format(date, 'EEE, MMM d');
-    return timeStr ? `${dateLabel} at ${timeStr}` : dateLabel;
+    const parsedDate = parseISO(String(dateStr).split('T')[0]);
+    const dateLabel = Number.isNaN(parsedDate.getTime()) ? '-' : format(parsedDate, 'dd/MM/yyyy');
+
+    if (!timeStr) return dateLabel;
+
+    const timeMatch = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(String(timeStr));
+    if (!timeMatch) return `${dateLabel} ${timeStr}`;
+
+    const hour = Number(timeMatch[1]);
+    const minute = timeMatch[2];
+    if (!Number.isFinite(hour) || hour < 0 || hour > 23) return `${dateLabel} ${timeStr}`;
+
+    const meridiem = hour >= 12 ? 'PM' : 'AM';
+    const hour12 = hour % 12 || 12;
+    return `${dateLabel} ${hour12}:${minute} ${meridiem}`;
   };
 
   // Open SMS modal

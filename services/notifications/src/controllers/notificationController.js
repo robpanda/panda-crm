@@ -1,4 +1,6 @@
 import { PrismaClient } from '@prisma/client';
+import { notificationService } from '../services/notificationService.js';
+import { dispatchMentions } from '../services/mentionDispatcher.js';
 
 const prisma = new PrismaClient();
 
@@ -34,6 +36,9 @@ export async function listNotifications(req, res, next) {
       prisma.notification.findMany({
         where,
         include: {
+          actor: {
+            select: { id: true, fullName: true, firstName: true, lastName: true, email: true },
+          },
           opportunity: {
             select: { id: true, name: true, stage: true },
           },
@@ -71,6 +76,66 @@ export async function listNotifications(req, res, next) {
   }
 }
 
+// List notifications sent by an actor (Outbox)
+export async function listOutboxNotifications(req, res, next) {
+  try {
+    const {
+      actorId,
+      type,
+      priority,
+      status,
+      opportunityId,
+      accountId,
+      page = 1,
+      limit = 20,
+    } = req.query;
+
+    if (!actorId) {
+      return res.status(400).json({ error: 'actorId is required' });
+    }
+
+    const where = {
+      actorId,
+      ...(status && { status }),
+      ...(type && { type }),
+      ...(priority && { priority }),
+      ...(opportunityId && { opportunityId }),
+      ...(accountId && { accountId }),
+      status: status || { not: 'DELETED' },
+    };
+
+    const [notifications, total] = await Promise.all([
+      prisma.notification.findMany({
+        where,
+        include: {
+          user: {
+            select: { id: true, fullName: true, firstName: true, lastName: true, email: true },
+          },
+          actor: {
+            select: { id: true, fullName: true, firstName: true, lastName: true, email: true },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip: (parseInt(page, 10) - 1) * parseInt(limit, 10),
+        take: parseInt(limit, 10),
+      }),
+      prisma.notification.count({ where }),
+    ]);
+
+    res.json({
+      data: notifications,
+      pagination: {
+        page: parseInt(page, 10),
+        limit: parseInt(limit, 10),
+        total,
+        totalPages: Math.ceil(total / parseInt(limit, 10)),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 // Get a single notification
 export async function getNotification(req, res, next) {
   try {
@@ -80,6 +145,9 @@ export async function getNotification(req, res, next) {
       where: { id },
       include: {
         user: {
+          select: { id: true, fullName: true, email: true },
+        },
+        actor: {
           select: { id: true, fullName: true, email: true },
         },
         opportunity: true,
@@ -120,6 +188,7 @@ export async function createNotification(req, res, next) {
       sourceType,
       sourceId,
       expiresAt,
+      actorId,
     } = req.body;
 
     if (!userId || !type || !title || !message) {
@@ -159,11 +228,15 @@ export async function createNotification(req, res, next) {
         leadId,
         workOrderId,
         caseId,
+        actorId: actorId || null,
         sourceType,
         sourceId,
         expiresAt: expiresAt ? new Date(expiresAt) : null,
       },
       include: {
+        actor: {
+          select: { id: true, fullName: true, email: true },
+        },
         opportunity: {
           select: { id: true, name: true },
         },
@@ -329,12 +402,78 @@ export async function getNotificationsByOpportunity(req, res, next) {
         user: {
           select: { id: true, fullName: true },
         },
+        actor: {
+          select: { id: true, fullName: true },
+        },
       },
       orderBy: { createdAt: 'desc' },
       take: parseInt(limit),
     });
 
     res.json(notifications);
+  } catch (error) {
+    next(error);
+  }
+}
+
+// Canonical mention dispatch endpoint for lead/job internal comms.
+export async function dispatchMentionNotifications(req, res, next) {
+  try {
+    const {
+      actorId = null,
+      actorName = null,
+      recipients = [],
+      entityType = null,
+      entityId = null,
+      noteId = null,
+      commentId = null,
+      snippet = '',
+      bodyPreview = '',
+      actionPath = null,
+      actionLabel = null,
+      context = null,
+      sourceType = null,
+      sourceId = null,
+      leadId = null,
+      opportunityId = null,
+      accountId = null,
+      correlationId = null,
+    } = req.body || {};
+
+    if (!Array.isArray(recipients) || recipients.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'recipients array is required' },
+      });
+    }
+
+    const dispatchResult = await dispatchMentions({
+      notificationService,
+      actorId,
+      actorName: actorName || 'Someone',
+      recipients,
+      entityType,
+      entityId,
+      noteId,
+      commentId,
+      snippet,
+      bodyPreview,
+      actionPath,
+      actionLabel,
+      context,
+      sourceType,
+      sourceId,
+      leadId,
+      opportunityId,
+      accountId,
+      correlationId,
+      logger: console,
+    });
+
+    res.json({
+      success: true,
+      data: dispatchResult,
+    });
   } catch (error) {
     next(error);
   }

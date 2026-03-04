@@ -490,6 +490,46 @@ const US_STATES = [
   { value: 'FL', label: 'Florida' },
 ];
 
+const formatAppointmentDateDisplay = (value) => {
+  if (!value) return '-';
+  const raw = String(value).trim();
+  const isoMatch = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw);
+  if (isoMatch) {
+    const [, year, month, day] = isoMatch;
+    return `${day}/${month}/${year}`;
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '-';
+
+  const day = String(parsed.getDate()).padStart(2, '0');
+  const month = String(parsed.getMonth() + 1).padStart(2, '0');
+  const year = String(parsed.getFullYear());
+  return `${day}/${month}/${year}`;
+};
+
+const formatAppointmentTimeDisplay = (value) => {
+  if (!value) return '-';
+  const raw = String(value).trim();
+  const timeMatch = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(raw);
+
+  if (timeMatch) {
+    const hour = Number(timeMatch[1]);
+    const minute = timeMatch[2];
+    if (!Number.isFinite(hour) || hour < 0 || hour > 23) return raw;
+    const meridiem = hour >= 12 ? 'PM' : 'AM';
+    const hour12 = hour % 12 || 12;
+    return `${hour12}:${minute} ${meridiem}`;
+  }
+
+  const parsed = new Date(value);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  }
+
+  return raw;
+};
+
 export default function LeadDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -522,7 +562,8 @@ export default function LeadDetail() {
     enabled: !!id,
   });
 
-  const leadSetByIdForManager = (isEditing ? formData.leadSetById : lead?.leadSetById) || null;
+  const leadSetByIdForManager =
+    (isEditing ? formData.leadSetById : (lead?.leadSetById || lead?.leadSetBy?.id)) || null;
   const { data: leadSetByUserData } = useQuery({
     queryKey: ['lead-set-by-user', leadSetByIdForManager],
     queryFn: () => usersApi.getUser(leadSetByIdForManager),
@@ -548,7 +589,21 @@ export default function LeadDetail() {
     ? `${leadSetByManagerData.firstName || ''} ${leadSetByManagerData.lastName || ''}`.trim()
     : leadSetByUserData?.manager
       ? `${leadSetByUserData.manager.firstName || ''} ${leadSetByUserData.manager.lastName || ''}`.trim()
+      : lead?.leadSetBy?.manager
+        ? `${lead.leadSetBy.manager.firstName || ''} ${lead.leadSetBy.manager.lastName || ''}`.trim()
       : '';
+
+  const leadSetByDisplayName = isEditing
+    ? formData.leadSetByName || ''
+    : (
+      lead?.leadSetBy
+        ? `${lead.leadSetBy.firstName || ''} ${lead.leadSetBy.lastName || ''}`.trim()
+        : lead?.leadSetByName || (
+          leadSetByUserData
+            ? `${leadSetByUserData.firstName || ''} ${leadSetByUserData.lastName || ''}`.trim()
+            : ''
+        )
+    );
 
   useEffect(() => {
     const tabParam = new URLSearchParams(location.search).get('tab');
@@ -1413,6 +1468,27 @@ export default function LeadDetail() {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Lead Set By</label>
+                  <input
+                    type="text"
+                    value={leadSetByDisplayName || 'Unassigned'}
+                    readOnly
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Manager</label>
+                  <input
+                    type="text"
+                    value={leadSetByManagerName || 'Unassigned'}
+                    readOnly
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Property Type</label>
                   <select
                     name="propertyType"
@@ -1467,6 +1543,14 @@ export default function LeadDetail() {
                 <span className="text-gray-500">Lead Source</span>
                 <span className="text-gray-900">{lead.source || lead.leadSource || '-'}</span>
               </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Lead Set By</span>
+                <span className="text-gray-900">{leadSetByDisplayName || '-'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Manager</span>
+                <span className="text-gray-900">{leadSetByManagerName || '-'}</span>
+              </div>
               {lead.isChampionReferral && (
                 <div className="mt-3 p-3 bg-amber-50 rounded-lg border border-amber-200">
                   <div className="flex items-center gap-2 text-amber-800 font-medium mb-2">
@@ -1520,28 +1604,6 @@ export default function LeadDetail() {
                 />
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Lead Set By</label>
-                <UserSearchDropdown
-                  value={formData.leadSetByName || ''}
-                  onChange={(name, user) => {
-                    setFormData(prev => ({ ...prev, leadSetById: user ? user.id : '', leadSetByName: name }));
-                  }}
-                  placeholder="Search for a user..."
-                  showClear
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Manager</label>
-                <input
-                  type="text"
-                  value={leadSetByManagerName || 'Unassigned'}
-                  readOnly
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
-                />
-              </div>
-
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Tentative Date</label>
@@ -1576,28 +1638,16 @@ export default function LeadDetail() {
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-gray-500">Lead Set By</span>
-                <span className="text-gray-900">
-                  {lead.leadSetBy
-                    ? `${lead.leadSetBy.firstName} ${lead.leadSetBy.lastName}`
-                    : lead.leadSetByName || '-'}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Manager</span>
-                <span className="text-gray-900">{leadSetByManagerName || '-'}</span>
-              </div>
-              <div className="flex justify-between">
                 <span className="text-gray-500">Tentative Date</span>
                 <span className="text-gray-900">
                   {lead.tentativeAppointmentDate
-                    ? lead.tentativeAppointmentDate.split('T')[0]
+                    ? formatAppointmentDateDisplay(lead.tentativeAppointmentDate)
                     : '-'}
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">Tentative Time</span>
-                <span className="text-gray-900">{lead.tentativeAppointmentTime || '-'}</span>
+                <span className="text-gray-900">{formatAppointmentTimeDisplay(lead.tentativeAppointmentTime)}</span>
               </div>
             </div>
           )}

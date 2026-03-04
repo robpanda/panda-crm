@@ -690,9 +690,10 @@ router.get('/:id/notes', async (req, res, next) => {
 // Add a note to a lead
 router.post('/:id/notes', async (req, res, next) => {
   try {
-    const { body, title, isPinned } = req.body;
+    const { body, title, isPinned, mentions } = req.body;
     // Support both 'body' and 'note' field names for compatibility
     const noteBody = body || req.body.note;
+    const correlationId = req.headers['x-correlation-id'] || req.headers['x-request-id'] || null;
 
     if (!noteBody || !noteBody.trim()) {
       return res.status(400).json({
@@ -705,7 +706,9 @@ router.post('/:id/notes', async (req, res, next) => {
       note: noteBody,
       title,
       isPinned,
+      mentions: Array.isArray(mentions) ? mentions : [],
       createdBy: req.user?.id,
+      correlationId,
     });
     res.json({ success: true, data: result });
   } catch (error) {
@@ -716,7 +719,9 @@ router.post('/:id/notes', async (req, res, next) => {
 // Add a reply to a lead note
 router.post('/:id/notes/:noteId/replies', async (req, res, next) => {
   try {
-    const result = await leadService.addLeadNoteReply(req.params.id, req.params.noteId, req.body, req.user);
+    const correlationId = req.headers['x-correlation-id'] || req.headers['x-request-id'] || null;
+    const payload = { ...req.body, correlationId };
+    const result = await leadService.addLeadNoteReply(req.params.id, req.params.noteId, payload, req.user);
     res.status(201).json({ success: true, data: result });
   } catch (error) {
     next(error);
@@ -726,12 +731,15 @@ router.post('/:id/notes/:noteId/replies', async (req, res, next) => {
 // Update a note
 router.put('/:id/notes/:noteId', async (req, res, next) => {
   try {
-    const { title, body, isPinned } = req.body;
+    const { title, body, isPinned, mentions } = req.body;
+    const correlationId = req.headers['x-correlation-id'] || req.headers['x-request-id'] || null;
     const result = await leadService.updateLeadNote(req.params.id, req.params.noteId, {
       title,
       body,
       isPinned,
-    });
+      mentions: Array.isArray(mentions) ? mentions : [],
+      correlationId,
+    }, req.user);
     res.json({ success: true, data: result });
   } catch (error) {
     next(error);
@@ -781,7 +789,9 @@ router.get('/:id/internal-comments', async (req, res, next) => {
 // Create internal comment for a lead
 router.post('/:id/internal-comments', async (req, res, next) => {
   try {
-    const comment = await leadService.createLeadInternalComment(req.params.id, req.body, req.user);
+    const correlationId = req.headers['x-correlation-id'] || req.headers['x-request-id'] || null;
+    const payload = { ...req.body, correlationId };
+    const comment = await leadService.createLeadInternalComment(req.params.id, payload, req.user);
     res.status(201).json({ success: true, data: comment });
   } catch (error) {
     next(error);
@@ -791,10 +801,12 @@ router.post('/:id/internal-comments', async (req, res, next) => {
 // Update internal comment for a lead
 router.put('/:id/internal-comments/:commentId', async (req, res, next) => {
   try {
+    const correlationId = req.headers['x-correlation-id'] || req.headers['x-request-id'] || null;
+    const payload = { ...req.body, correlationId };
     const comment = await leadService.updateLeadInternalComment(
       req.params.id,
       req.params.commentId,
-      req.body,
+      payload,
       req.user
     );
     res.json({ success: true, data: comment });

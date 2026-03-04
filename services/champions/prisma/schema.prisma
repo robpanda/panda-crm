@@ -1287,6 +1287,7 @@ model User {
   createdNotes                                     Note[]                  @relation("NoteCreator")
   notificationPreferences                          NotificationPreference? @relation("UserNotificationPreferences")
   notifications                                    Notification[]          @relation("UserNotifications")
+  actedNotifications                               Notification[]          @relation("UserActorNotifications")
   ownedOpportunities                               Opportunity[]           @relation("OpportunityOwner")
   projectManagedOpportunities                      Opportunity[]           @relation("OpportunityProjectManager")
   page_layouts                                     page_layouts[]
@@ -2244,6 +2245,7 @@ model Territory {
 model Notification {
   id            String               @id @default(cuid())
   userId        String               @map("user_id")
+  actorId       String?              @map("actor_id")
   type          NotificationType
   title         String
   message       String
@@ -2276,10 +2278,12 @@ model Notification {
   lead          Lead?                @relation("LeadNotifications", fields: [leadId], references: [id])
   opportunity   Opportunity?         @relation("OpportunityNotifications", fields: [opportunityId], references: [id])
   user          User                 @relation("UserNotifications", fields: [userId], references: [id], onDelete: Cascade)
+  actor         User?                @relation("UserActorNotifications", fields: [actorId], references: [id], onDelete: SetNull)
   workOrder     WorkOrder?           @relation("WorkOrderNotifications", fields: [workOrderId], references: [id])
 
   @@index([userId, status])
   @@index([userId, createdAt])
+  @@index([actorId, createdAt])
   @@index([opportunityId])
   @@index([accountId])
   @@index([type])

@@ -172,6 +172,7 @@ const DEFAULT_TEMPLATES = {
     messageTemplate: '{{mentionedBy}} mentioned you in {{context}}',
     emailSubjectTemplate: '{{mentionedBy}} mentioned you',
     emailBodyTemplate: '<p><strong>{{mentionedBy}}</strong> mentioned you in {{context}}:</p><p>"{{excerpt}}"</p>',
+    smsTemplate: '{{mentionedBy}} mentioned you in {{context}}: "{{excerpt}}"',
     defaultPriority: 'NORMAL',
     enabledByDefault: true,
   },

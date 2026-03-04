@@ -10,6 +10,8 @@ const lambdaClient = new LambdaClient({ region: 'us-east-2' });
 // Job ID starting number (first job ID will be YYYY-1000)
 const JOB_ID_STARTING_NUMBER = 999;
 const INTERNAL_COMMENT_TITLE_PREFIX = 'INTERNAL_COMMENT|';
+const NOTIFICATION_SERVICE_URL = process.env.NOTIFICATION_SERVICE_URL || 'http://localhost:3011';
+const MENTION_DISPATCH_ENDPOINT = `${NOTIFICATION_SERVICE_URL}/api/notifications/mentions/dispatch`;
 
 function normalizeDepartmentTag(value) {
   const normalized = String(value || 'general')
@@ -41,6 +43,10 @@ function extractMentionUserId(mention) {
   if (!mention) return null;
   if (typeof mention === 'string') return mention;
   return mention.userId || mention.id || null;
+}
+
+function buildCorrelationId(prefix, entityId) {
+  return `${prefix}-${entityId}-${Date.now()}`;
 }
 
 // Audit logging helper
@@ -586,6 +592,17 @@ class LeadService {
         owner: {
           select: { id: true, firstName: true, lastName: true, email: true },
         },
+        leadSetBy: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            managerId: true,
+            manager: {
+              select: { id: true, firstName: true, lastName: true },
+            },
+          },
+        },
         notes: {
           orderBy: { createdAt: 'desc' },
           take: 10,
@@ -649,9 +666,10 @@ class LeadService {
     // Map frontend fields to schema fields
     // creatorId -> ownerId (the person who created/owns the lead)
     // leadSetById -> assignedById (the person who assigned/set the lead)
+    const auditUserId = data._auditContext?.userId || null;
     const rawOwnerId = data.ownerId || data.creatorId || null;
     const rawAssignedById = data.leadSetById || data.assignedById || null;
-    const rawLeadSetById = data.leadSetById || null;
+    const rawLeadSetById = data.leadSetById || data.creatorId || auditUserId || null;
 
     // Resolve Cognito IDs to actual user IDs
     const ownerId = await this.resolveUserId(rawOwnerId);
@@ -1456,6 +1474,21 @@ class LeadService {
       disposition: lead.disposition,
       leadSetById: lead.leadSetById,
       leadSetByName: lead.leadSetBy ? `${lead.leadSetBy.firstName} ${lead.leadSetBy.lastName}` : null,
+      leadSetBy: lead.leadSetBy
+        ? {
+          id: lead.leadSetBy.id,
+          firstName: lead.leadSetBy.firstName,
+          lastName: lead.leadSetBy.lastName,
+          managerId: lead.leadSetBy.managerId || null,
+          manager: lead.leadSetBy.manager
+            ? {
+              id: lead.leadSetBy.manager.id,
+              firstName: lead.leadSetBy.manager.firstName,
+              lastName: lead.leadSetBy.manager.lastName,
+            }
+            : null,
+        }
+        : null,
       // Lead Intelligence / Scoring fields
       leadScore: lead.leadScore,
       leadRank: lead.leadRank,
@@ -2060,7 +2093,13 @@ class LeadService {
     }
 
     const notes = await prisma.note.findMany({
-      where: { leadId: leadId },
+      where: {
+        leadId,
+        NOT: [
+          { title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } },
+          { title: { startsWith: 'REPLY|' } },
+        ],
+      },
       orderBy: { createdAt: 'desc' },
       include: {
         createdBy: {
@@ -2091,7 +2130,7 @@ class LeadService {
    * Used by: Call Center to document calls and status updates
    */
   async addLeadNote(leadId, data) {
-    const { note, title, createdBy } = data;
+    const { note, title, createdBy, mentions = [], correlationId = null } = data;
 
     // Verify lead exists
     const lead = await prisma.lead.findUnique({
@@ -2120,6 +2159,23 @@ class LeadService {
       },
     });
 
+    const resolvedCorrelationId = correlationId || buildCorrelationId('lead-note', leadId);
+    const leadName = `${lead.firstName || ''} ${lead.lastName || ''}`.trim();
+    let mentionsNotified = 0;
+    try {
+      mentionsNotified = await this.notifyLeadMentions({
+        leadId,
+        content: note,
+        mentions,
+        actor: newNote.createdBy || (createdBy ? { id: createdBy } : null),
+        leadName,
+        noteId: newNote.id,
+        correlationId: resolvedCorrelationId,
+      });
+    } catch (error) {
+      logger.warn(`[mentions.dispatch] lead note mention dispatch failed correlationId=${resolvedCorrelationId}: ${error.message}`);
+    }
+
     logger.info(`Note added to lead ${leadId}`);
 
     return {
@@ -2130,10 +2186,11 @@ class LeadService {
       createdAt: newNote.createdAt,
       updatedAt: newNote.updatedAt,
       createdBy: newNote.createdBy,
+      mentionsNotified,
     };
   }
 
-  async notifyLeadMentions({ leadId, content, mentions = [], actor = null, leadName = null }) {
+  async notifyLeadMentions({ leadId, content, mentions = [], actor = null, leadName = null, noteId = null, commentId = null, correlationId = null }) {
     const mentionUserIds = [...new Set((mentions || [])
       .map(extractMentionUserId)
       .filter(Boolean))];
@@ -2142,34 +2199,53 @@ class LeadService {
       return 0;
     }
 
-    const users = await prisma.user.findMany({
-      where: { id: { in: mentionUserIds } },
-      select: { id: true },
-    });
-    const existingUserIds = new Set(users.map((u) => u.id));
-    const actorName = actor?.email || 'Someone';
+    const actorName = `${actor?.firstName || ''} ${actor?.lastName || ''}`.trim() || actor?.email || 'Someone';
     const preview = (content || '').substring(0, 100);
     const targetName = leadName || 'a lead';
 
-    for (const userId of mentionUserIds) {
-      if (!existingUserIds.has(userId)) continue;
-      await prisma.notification.create({
-        data: {
-          userId,
-          type: 'MENTION',
-          title: `${actorName} mentioned you`,
-          message: `You were mentioned on ${targetName}: "${preview}${(content || '').length > 100 ? '...' : ''}"`,
-          leadId,
-          actionUrl: `/leads/${leadId}`,
-          actionLabel: 'View Lead',
-          sourceType: 'LEAD',
-          sourceId: leadId,
-          status: 'UNREAD',
-        },
-      });
-    }
+    const resolvedCorrelationId = correlationId || buildCorrelationId('lead-mention', leadId);
+    const payload = {
+      actorId: actor?.id || null,
+      actorName,
+      recipients: mentionUserIds.map((userId) => ({ userId })),
+      entityType: 'lead',
+      entityId: leadId,
+      noteId,
+      commentId,
+      bodyPreview: content || '',
+      snippet: preview,
+      actionPath: `/leads/${leadId}`,
+      actionLabel: 'View Lead',
+      context: targetName,
+      sourceType: 'LEAD',
+      sourceId: leadId,
+      leadId,
+      correlationId: resolvedCorrelationId,
+    };
 
-    return mentionUserIds.length;
+    try {
+      const response = await fetch(MENTION_DISPATCH_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        logger.warn(
+          `[mentions.dispatch] leadId=${leadId} correlationId=${resolvedCorrelationId} status=${response.status} body=${errorText}`
+        );
+        return 0;
+      }
+
+      const result = await response.json().catch(() => ({}));
+      return result?.data?.dispatched ?? 0;
+    } catch (error) {
+      logger.warn(
+        `[mentions.dispatch] leadId=${leadId} correlationId=${resolvedCorrelationId} failed: ${error.message}`
+      );
+      return 0;
+    }
   }
 
   async addLeadNoteReply(leadId, noteId, payload = {}, actor = null) {
@@ -2217,12 +2293,15 @@ class LeadService {
       },
     });
 
+    const correlationId = payload.correlationId || buildCorrelationId('lead-note-reply', leadId);
     const mentionsNotified = await this.notifyLeadMentions({
       leadId,
       content,
       mentions: payload.mentions || [],
       actor,
       leadName: `${lead.firstName || ''} ${lead.lastName || ''}`.trim(),
+      noteId: reply.id,
+      correlationId,
     });
 
     return {
@@ -2328,12 +2407,15 @@ class LeadService {
       },
     });
 
+    const correlationId = payload.correlationId || buildCorrelationId('lead-internal-comment', leadId);
     const mentionsNotified = await this.notifyLeadMentions({
       leadId,
       content,
       mentions: payload.mentions || [],
       actor,
       leadName: `${lead.firstName || ''} ${lead.lastName || ''}`.trim(),
+      commentId: comment.id,
+      correlationId,
     });
 
     return {
@@ -2412,11 +2494,14 @@ class LeadService {
       },
     });
 
+    const correlationId = payload.correlationId || buildCorrelationId('lead-internal-comment-update', leadId);
     const mentionsNotified = await this.notifyLeadMentions({
       leadId,
       content: nextContent,
       mentions: payload.mentions || [],
       actor,
+      commentId: updated.id,
+      correlationId,
     });
 
     return {
@@ -2467,7 +2552,7 @@ class LeadService {
    * @param {string} noteId - Note ID
    * @param {object} data - { title?, body?, isPinned? }
    */
-  async updateLeadNote(leadId, noteId, data) {
+  async updateLeadNote(leadId, noteId, data, actor = null) {
     // Verify lead exists
     const lead = await prisma.lead.findUnique({
       where: { id: leadId },
@@ -2505,6 +2590,19 @@ class LeadService {
       },
     });
 
+    let mentionsNotified = 0;
+    if (Array.isArray(data.mentions) && data.mentions.length > 0) {
+      const correlationId = data.correlationId || buildCorrelationId('lead-note-update', leadId);
+      mentionsNotified = await this.notifyLeadMentions({
+        leadId,
+        content: updatedNote.body,
+        mentions: data.mentions,
+        actor,
+        noteId: updatedNote.id,
+        correlationId,
+      });
+    }
+
     logger.info(`Note ${noteId} updated for lead ${leadId}`);
 
     return {
@@ -2516,6 +2614,7 @@ class LeadService {
       createdAt: updatedNote.createdAt,
       updatedAt: updatedNote.updatedAt,
       createdBy: updatedNote.createdBy,
+      mentionsNotified,
     };
   }
 

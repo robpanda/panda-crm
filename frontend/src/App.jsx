@@ -46,6 +46,7 @@ import Schedule from './pages/Schedule';
 import Documents from './pages/Documents';
 import Campaigns from './pages/Campaigns';
 import Settings from './pages/Settings';
+import Notifications from './pages/Notifications';
 import QuoteBuilder from './pages/QuoteBuilder';
 import Invoices from './pages/Invoices';
 import WorkOrders from './pages/WorkOrders';
@@ -219,6 +220,7 @@ export default function App() {
         <Route path="documents" element={<Documents />} />
         <Route path="campaigns" element={<Campaigns />} />
         <Route path="settings" element={<Settings />} />
+        <Route path="notifications" element={<Notifications />} />
         <Route path="more" element={<More />} />
         <Route path="search" element={<Search />} />
         <Route path="help" element={<Help />} />

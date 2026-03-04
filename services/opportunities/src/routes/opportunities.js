@@ -647,12 +647,13 @@ router.post('/:id/conversation/summarize', async (req, res, next) => {
 router.post('/:id/replies', async (req, res, next) => {
   try {
     const { content, parentId, mentions, channel } = req.body;
+    const correlationId = req.headers['x-correlation-id'] || req.headers['x-request-id'] || null;
     if (!content && (!mentions || mentions.length === 0)) {
       return res.status(400).json({ success: false, error: 'Content or mentions required' });
     }
     const reply = await opportunityService.addReplyWithMentions(
       req.params.id,
-      { content, parentId, mentions, channel },
+      { content, parentId, mentions, channel, correlationId },
       req.user
     );
     res.json({ success: true, data: reply });
@@ -1068,7 +1069,8 @@ router.get('/:id/notes', async (req, res, next) => {
  */
 router.post('/:id/notes', async (req, res, next) => {
   try {
-    const { title, body, isPinned } = req.body;
+    const { title, body, isPinned, mentions } = req.body;
+    const correlationId = req.headers['x-correlation-id'] || req.headers['x-request-id'] || null;
     if (!body || body.trim().length === 0) {
       return res.status(400).json({
         success: false,
@@ -1080,6 +1082,8 @@ router.post('/:id/notes', async (req, res, next) => {
       body,
       isPinned: isPinned || false,
       createdById: req.user?.id,
+      mentions: Array.isArray(mentions) ? mentions : [],
+      correlationId,
     });
     res.status(201).json({ success: true, data: note });
   } catch (error) {
@@ -1093,12 +1097,15 @@ router.post('/:id/notes', async (req, res, next) => {
  */
 router.put('/:id/notes/:noteId', async (req, res, next) => {
   try {
-    const { title, body, isPinned } = req.body;
-    const note = await opportunityService.updateOpportunityNote(req.params.noteId, {
+    const { title, body, isPinned, mentions } = req.body;
+    const correlationId = req.headers['x-correlation-id'] || req.headers['x-request-id'] || null;
+    const note = await opportunityService.updateOpportunityNote(req.params.id, req.params.noteId, {
       title,
       body,
       isPinned,
-    });
+      mentions: Array.isArray(mentions) ? mentions : [],
+      correlationId,
+    }, req.user);
     res.json({ success: true, data: note });
   } catch (error) {
     next(error);
@@ -1144,7 +1151,9 @@ router.get('/:id/internal-comments', async (req, res, next) => {
 // Create internal comment for an opportunity
 router.post('/:id/internal-comments', async (req, res, next) => {
   try {
-    const comment = await opportunityService.createOpportunityInternalComment(req.params.id, req.body, req.user);
+    const correlationId = req.headers['x-correlation-id'] || req.headers['x-request-id'] || null;
+    const payload = { ...req.body, correlationId };
+    const comment = await opportunityService.createOpportunityInternalComment(req.params.id, payload, req.user);
     res.status(201).json({ success: true, data: comment });
   } catch (error) {
     next(error);
@@ -1154,10 +1163,12 @@ router.post('/:id/internal-comments', async (req, res, next) => {
 // Update internal comment
 router.put('/:id/internal-comments/:commentId', async (req, res, next) => {
   try {
+    const correlationId = req.headers['x-correlation-id'] || req.headers['x-request-id'] || null;
+    const payload = { ...req.body, correlationId };
     const comment = await opportunityService.updateOpportunityInternalComment(
       req.params.id,
       req.params.commentId,
-      req.body,
+      payload,
       req.user
     );
     res.json({ success: true, data: comment });
