@@ -37,6 +37,7 @@ const DISPOSITION_STAGE_MAP = {
 };
 
 const INTERNAL_COMMENT_TITLE_PREFIX = 'INTERNAL_COMMENT|';
+const INTERNAL_COMMENT_REPLY_TITLE_PREFIX = 'INTERNAL_COMMENT_REPLY|';
 
 function hasOwnField(obj, key) {
   return Object.prototype.hasOwnProperty.call(obj, key);
@@ -61,6 +62,10 @@ function toInternalCommentTitle(departmentTag = 'general', isResolved = false) {
   return `${INTERNAL_COMMENT_TITLE_PREFIX}${normalizeDepartmentTag(departmentTag)}|${isResolved ? '1' : '0'}`;
 }
 
+function toInternalCommentReplyTitle(parentCommentId, departmentTag = 'general', isResolved = false) {
+  return `${INTERNAL_COMMENT_REPLY_TITLE_PREFIX}${parentCommentId}|${normalizeDepartmentTag(departmentTag)}|${isResolved ? '1' : '0'}`;
+}
+
 function parseInternalCommentTitle(title) {
   if (typeof title !== 'string' || !title.startsWith(INTERNAL_COMMENT_TITLE_PREFIX)) {
     return null;
@@ -72,6 +77,79 @@ function parseInternalCommentTitle(title) {
     departmentTag: normalizeDepartmentTag(departmentTagRaw),
     isResolved: resolvedRaw === '1' || String(resolvedRaw).toLowerCase() === 'true',
   };
+}
+
+function parseInternalCommentReplyTitle(title) {
+  if (typeof title !== 'string' || !title.startsWith(INTERNAL_COMMENT_REPLY_TITLE_PREFIX)) {
+    return null;
+  }
+
+  const remainder = title.slice(INTERNAL_COMMENT_REPLY_TITLE_PREFIX.length);
+  const [parentCommentId = '', departmentTagRaw = 'general', resolvedRaw = '0'] = remainder.split('|');
+  if (!parentCommentId) return null;
+  return {
+    parentCommentId,
+    departmentTag: normalizeDepartmentTag(departmentTagRaw),
+    isResolved: resolvedRaw === '1' || String(resolvedRaw).toLowerCase() === 'true',
+  };
+}
+
+function isLegacyInternalCommentTitle(title) {
+  if (typeof title !== 'string') return false;
+  const normalized = title.trim().toUpperCase().replace(/\s+/g, '_');
+  return normalized === 'INTERNAL_COMMENT' || normalized === 'INTERNAL_COMMENTS';
+}
+
+function parseInternalCommentMeta(title) {
+  const replyMeta = parseInternalCommentReplyTitle(title);
+  if (replyMeta) {
+    return {
+      ...replyMeta,
+      isReply: true,
+      isInternal: true,
+    };
+  }
+
+  const internalMeta = parseInternalCommentTitle(title);
+  if (internalMeta) {
+    return {
+      ...internalMeta,
+      parentCommentId: null,
+      isReply: false,
+      isInternal: true,
+    };
+  }
+
+  if (isLegacyInternalCommentTitle(title)) {
+    return {
+      departmentTag: 'general',
+      isResolved: false,
+      parentCommentId: null,
+      isReply: false,
+      isInternal: true,
+    };
+  }
+
+  return {
+    departmentTag: 'general',
+    isResolved: false,
+    parentCommentId: null,
+    isReply: false,
+    isInternal: false,
+  };
+}
+
+function sortInternalCommentTree(nodes, root = false) {
+  nodes.sort((a, b) => {
+    const aTime = new Date(a.createdAt).getTime();
+    const bTime = new Date(b.createdAt).getTime();
+    return root ? bTime - aTime : aTime - bTime;
+  });
+  nodes.forEach((node) => {
+    if (node.replies?.length) {
+      sortInternalCommentTree(node.replies, false);
+    }
+  });
 }
 
 function extractMentionUserId(mention) {
@@ -4038,27 +4116,31 @@ Be factual and professional. Highlight anything that needs attention.`;
     const comments = await prisma.note.findMany({
       where: {
         opportunityId,
-        title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+        OR: [
+          { title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } },
+          { title: { startsWith: INTERNAL_COMMENT_REPLY_TITLE_PREFIX } },
+          { title: { contains: 'INTERNAL_COMMENT', mode: 'insensitive' } },
+          { title: { equals: 'Internal Comment', mode: 'insensitive' } },
+          { title: { equals: 'Internal Comments', mode: 'insensitive' } },
+        ],
       },
       include: {
         createdBy: {
           select: { id: true, firstName: true, lastName: true, email: true },
         },
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { createdAt: 'asc' },
     });
 
-    return comments.map((comment) => {
-      const meta = parseInternalCommentTitle(comment.title) || {
-        departmentTag: 'general',
-        isResolved: false,
-      };
+    const normalized = comments.map((comment) => {
+      const meta = parseInternalCommentMeta(comment.title);
       return {
         id: comment.id,
         content: comment.body,
         body: comment.body,
         departmentTag: meta.departmentTag,
         isResolved: meta.isResolved,
+        parentCommentId: meta.parentCommentId || null,
         createdAt: comment.createdAt,
         updatedAt: comment.updatedAt,
         author: comment.createdBy
@@ -4073,6 +4155,19 @@ Be factual and professional. Highlight anything that needs attention.`;
         attachmentUrls: [],
       };
     });
+
+    const byId = new Map(normalized.map((item) => [item.id, item]));
+    const roots = [];
+    normalized.forEach((item) => {
+      if (item.parentCommentId && byId.has(item.parentCommentId)) {
+        byId.get(item.parentCommentId).replies.push(item);
+      } else {
+        roots.push(item);
+      }
+    });
+
+    sortInternalCommentTree(roots, true);
+    return roots;
   }
 
   async createOpportunityInternalComment(opportunityId, payload = {}, user = null) {
@@ -4085,7 +4180,7 @@ Be factual and professional. Highlight anything that needs attention.`;
 
     const opportunity = await prisma.opportunity.findUnique({
       where: { id: opportunityId },
-      select: { id: true, name: true, jobId: true },
+      select: { id: true, name: true, jobId: true, ownerId: true },
     });
     if (!opportunity) {
       const error = new Error(`Opportunity not found: ${opportunityId}`);
@@ -4093,15 +4188,76 @@ Be factual and professional. Highlight anything that needs attention.`;
       throw error;
     }
 
-    const departmentTag = normalizeDepartmentTag(payload.departmentTag || payload.department || 'general');
-    const isResolved = Boolean(payload.isResolved);
+    const parentCommentId = payload.parentCommentId || payload.parentId || payload.replyToId || null;
+    let parentComment = null;
+    if (parentCommentId) {
+      parentComment = await prisma.note.findFirst({
+        where: {
+          id: parentCommentId,
+          opportunityId,
+          OR: [
+            { title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } },
+            { title: { startsWith: INTERNAL_COMMENT_REPLY_TITLE_PREFIX } },
+            { title: { contains: 'INTERNAL_COMMENT', mode: 'insensitive' } },
+            { title: { equals: 'Internal Comment', mode: 'insensitive' } },
+            { title: { equals: 'Internal Comments', mode: 'insensitive' } },
+          ],
+        },
+        select: { id: true, title: true },
+      });
+
+      if (!parentComment) {
+        const error = new Error(`Parent internal comment not found: ${parentCommentId}`);
+        error.name = 'ValidationError';
+        throw error;
+      }
+    }
+
+    const parentMeta = parentComment ? parseInternalCommentMeta(parentComment.title) : null;
+    const departmentTag = normalizeDepartmentTag(
+      payload.departmentTag || payload.department || parentMeta?.departmentTag || 'general'
+    );
+    const isResolved = hasOwnField(payload, 'isResolved')
+      ? Boolean(payload.isResolved)
+      : (parentMeta?.isResolved || false);
+    let createdById = user?.id || user?.userId || user?.cognitoId || user?.sub || null;
+    if (createdById) {
+      const directUser = await prisma.user.findUnique({
+        where: { id: createdById },
+        select: { id: true },
+      });
+      if (!directUser) {
+        const cognitoUser = await prisma.user.findFirst({
+          where: { cognitoId: createdById },
+          select: { id: true },
+        });
+        createdById = cognitoUser?.id || null;
+      }
+    }
+    if (!createdById && user?.email) {
+      const emailUser = await prisma.user.findUnique({
+        where: { email: user.email },
+        select: { id: true },
+      });
+      createdById = emailUser?.id || null;
+    }
+    if (!createdById) {
+      createdById = opportunity.ownerId || null;
+    }
+    if (!createdById) {
+      const error = new Error('Unable to resolve a valid author for this internal comment');
+      error.name = 'ValidationError';
+      throw error;
+    }
 
     const comment = await prisma.note.create({
       data: {
         opportunityId,
-        title: toInternalCommentTitle(departmentTag, isResolved),
+        title: parentComment
+          ? toInternalCommentReplyTitle(parentComment.id, departmentTag, isResolved)
+          : toInternalCommentTitle(departmentTag, isResolved),
         body: content,
-        createdById: user?.id,
+        createdById,
       },
       include: {
         createdBy: {
@@ -4128,6 +4284,7 @@ Be factual and professional. Highlight anything that needs attention.`;
       body: comment.body,
       departmentTag,
       isResolved,
+      parentCommentId: parentComment?.id || null,
       createdAt: comment.createdAt,
       updatedAt: comment.updatedAt,
       author: comment.createdBy
@@ -4149,7 +4306,13 @@ Be factual and professional. Highlight anything that needs attention.`;
       where: {
         id: commentId,
         opportunityId,
-        title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+        OR: [
+          { title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } },
+          { title: { startsWith: INTERNAL_COMMENT_REPLY_TITLE_PREFIX } },
+          { title: { contains: 'INTERNAL_COMMENT', mode: 'insensitive' } },
+          { title: { equals: 'Internal Comment', mode: 'insensitive' } },
+          { title: { equals: 'Internal Comments', mode: 'insensitive' } },
+        ],
       },
       include: {
         createdBy: {
@@ -4164,16 +4327,15 @@ Be factual and professional. Highlight anything that needs attention.`;
       throw error;
     }
 
-    const meta = parseInternalCommentTitle(existing.title) || {
-      departmentTag: 'general',
-      isResolved: false,
-    };
+    const meta = parseInternalCommentMeta(existing.title);
+    const fallbackMeta = { departmentTag: 'general', isResolved: false };
+    const effectiveParentCommentId = meta.parentCommentId || null;
     const nextDepartment = hasOwnField(payload, 'departmentTag') || hasOwnField(payload, 'department')
       ? normalizeDepartmentTag(payload.departmentTag || payload.department)
-      : meta.departmentTag;
+      : (meta.departmentTag || fallbackMeta.departmentTag);
     const nextResolved = hasOwnField(payload, 'isResolved')
       ? Boolean(payload.isResolved)
-      : meta.isResolved;
+      : (meta.isResolved ?? fallbackMeta.isResolved);
     const nextContent = hasOwnField(payload, 'content') || hasOwnField(payload, 'body')
       ? String(payload.content || payload.body || '').trim()
       : existing.body;
@@ -4187,7 +4349,9 @@ Be factual and professional. Highlight anything that needs attention.`;
     const updated = await prisma.note.update({
       where: { id: commentId },
       data: {
-        title: toInternalCommentTitle(nextDepartment, nextResolved),
+        title: effectiveParentCommentId
+          ? toInternalCommentReplyTitle(effectiveParentCommentId, nextDepartment, nextResolved)
+          : toInternalCommentTitle(nextDepartment, nextResolved),
         body: nextContent,
       },
       include: {
@@ -4213,6 +4377,7 @@ Be factual and professional. Highlight anything that needs attention.`;
       body: updated.body,
       departmentTag: nextDepartment,
       isResolved: nextResolved,
+      parentCommentId: effectiveParentCommentId,
       createdAt: updated.createdAt,
       updatedAt: updated.updatedAt,
       author: updated.createdBy
@@ -4234,7 +4399,13 @@ Be factual and professional. Highlight anything that needs attention.`;
       where: {
         id: commentId,
         opportunityId,
-        title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+        OR: [
+          { title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } },
+          { title: { startsWith: INTERNAL_COMMENT_REPLY_TITLE_PREFIX } },
+          { title: { contains: 'INTERNAL_COMMENT', mode: 'insensitive' } },
+          { title: { equals: 'Internal Comment', mode: 'insensitive' } },
+          { title: { equals: 'Internal Comments', mode: 'insensitive' } },
+        ],
       },
       select: { id: true },
     });

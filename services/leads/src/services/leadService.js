@@ -10,6 +10,7 @@ const lambdaClient = new LambdaClient({ region: 'us-east-2' });
 // Job ID starting number (first job ID will be YYYY-1000)
 const JOB_ID_STARTING_NUMBER = 999;
 const INTERNAL_COMMENT_TITLE_PREFIX = 'INTERNAL_COMMENT|';
+const INTERNAL_COMMENT_REPLY_TITLE_PREFIX = 'INTERNAL_COMMENT_REPLY|';
 const NOTIFICATION_SERVICE_URL = process.env.NOTIFICATION_SERVICE_URL || 'http://localhost:3011';
 const MENTION_DISPATCH_ENDPOINT = `${NOTIFICATION_SERVICE_URL}/api/notifications/mentions/dispatch`;
 
@@ -26,6 +27,10 @@ function toInternalCommentTitle(departmentTag = 'general', isResolved = false) {
   return `${INTERNAL_COMMENT_TITLE_PREFIX}${normalizeDepartmentTag(departmentTag)}|${isResolved ? '1' : '0'}`;
 }
 
+function toInternalCommentReplyTitle(parentCommentId, departmentTag = 'general', isResolved = false) {
+  return `${INTERNAL_COMMENT_REPLY_TITLE_PREFIX}${parentCommentId}|${normalizeDepartmentTag(departmentTag)}|${isResolved ? '1' : '0'}`;
+}
+
 function parseInternalCommentTitle(title) {
   if (typeof title !== 'string' || !title.startsWith(INTERNAL_COMMENT_TITLE_PREFIX)) {
     return null;
@@ -37,6 +42,88 @@ function parseInternalCommentTitle(title) {
     departmentTag: normalizeDepartmentTag(departmentTagRaw),
     isResolved: resolvedRaw === '1' || String(resolvedRaw).toLowerCase() === 'true',
   };
+}
+
+function parseInternalCommentReplyTitle(title) {
+  if (typeof title !== 'string' || !title.startsWith(INTERNAL_COMMENT_REPLY_TITLE_PREFIX)) {
+    return null;
+  }
+
+  const remainder = title.slice(INTERNAL_COMMENT_REPLY_TITLE_PREFIX.length);
+  const [parentCommentId = '', departmentTagRaw = 'general', resolvedRaw = '0'] = remainder.split('|');
+  if (!parentCommentId) return null;
+  return {
+    parentCommentId,
+    departmentTag: normalizeDepartmentTag(departmentTagRaw),
+    isResolved: resolvedRaw === '1' || String(resolvedRaw).toLowerCase() === 'true',
+  };
+}
+
+function parseLegacyReplyTitle(title) {
+  if (typeof title !== 'string' || !title.startsWith('REPLY|')) {
+    return null;
+  }
+  const parentCommentId = title.slice('REPLY|'.length).split('|')[0];
+  if (!parentCommentId) return null;
+  return { parentCommentId };
+}
+
+function isLegacyInternalCommentTitle(title) {
+  if (typeof title !== 'string') return false;
+  const normalized = title.trim().toUpperCase().replace(/\s+/g, '_');
+  return normalized === 'INTERNAL_COMMENT' || normalized === 'INTERNAL_COMMENTS';
+}
+
+function parseInternalCommentMeta(title) {
+  const replyMeta = parseInternalCommentReplyTitle(title);
+  if (replyMeta) {
+    return {
+      ...replyMeta,
+      isReply: true,
+      isInternal: true,
+    };
+  }
+
+  const internalMeta = parseInternalCommentTitle(title);
+  if (internalMeta) {
+    return {
+      ...internalMeta,
+      parentCommentId: null,
+      isReply: false,
+      isInternal: true,
+    };
+  }
+
+  if (isLegacyInternalCommentTitle(title)) {
+    return {
+      departmentTag: 'general',
+      isResolved: false,
+      parentCommentId: null,
+      isReply: false,
+      isInternal: true,
+    };
+  }
+
+  return {
+    departmentTag: 'general',
+    isResolved: false,
+    parentCommentId: null,
+    isReply: false,
+    isInternal: false,
+  };
+}
+
+function sortInternalCommentTree(nodes, root = false) {
+  nodes.sort((a, b) => {
+    const aTime = new Date(a.createdAt).getTime();
+    const bTime = new Date(b.createdAt).getTime();
+    return root ? bTime - aTime : aTime - bTime;
+  });
+  nodes.forEach((node) => {
+    if (node.replies?.length) {
+      sortInternalCommentTree(node.replies, false);
+    }
+  });
 }
 
 function extractMentionUserId(mention) {
@@ -992,6 +1079,12 @@ class LeadService {
     }
 
     const shouldCreateServiceAppointment = options.createServiceAppointment !== false && !!resolvedTentativeAppointmentDate;
+    const resolvedConversionOwnerId =
+      options.ownerId
+      || lead.ownerId
+      || options.leadSetById
+      || lead.leadSetById
+      || null;
 
     // Use transaction for conversion
     const result = await prisma.$transaction(async (tx) => {
@@ -1007,7 +1100,7 @@ class LeadService {
           email: lead.email,
           type: 'RESIDENTIAL',
           status: 'NEW',
-          ownerId: lead.ownerId,
+          ownerId: resolvedConversionOwnerId,
         },
       });
 
@@ -1080,7 +1173,7 @@ class LeadService {
             type: options.opportunityType || 'INSURANCE',
             leadSource: lead.source,
             isSelfGen: lead.isSelfGen,
-            ownerId: lead.ownerId,
+            ownerId: resolvedConversionOwnerId,
             closeDate: options.closeDate ? new Date(options.closeDate) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
             // Store work type and appointment date on opportunity
             workType: options.workType,
@@ -2335,27 +2428,34 @@ class LeadService {
     const comments = await prisma.note.findMany({
       where: {
         leadId,
-        title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+        OR: [
+          { title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } },
+          { title: { startsWith: INTERNAL_COMMENT_REPLY_TITLE_PREFIX } },
+          { title: { startsWith: 'REPLY|' } },
+          { title: { contains: 'INTERNAL_COMMENT', mode: 'insensitive' } },
+          { title: { equals: 'Internal Comment', mode: 'insensitive' } },
+          { title: { equals: 'Internal Comments', mode: 'insensitive' } },
+        ],
       },
       include: {
         createdBy: {
           select: { id: true, firstName: true, lastName: true, email: true },
         },
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: { createdAt: 'asc' },
     });
 
-    return comments.map((comment) => {
-      const meta = parseInternalCommentTitle(comment.title) || {
-        departmentTag: 'general',
-        isResolved: false,
-      };
+    const normalized = comments.map((comment) => {
+      const meta = parseInternalCommentMeta(comment.title);
+      const legacyReply = parseLegacyReplyTitle(comment.title);
+      const parentCommentId = meta.parentCommentId || legacyReply?.parentCommentId || null;
       return {
         id: comment.id,
         content: comment.body,
         body: comment.body,
         departmentTag: meta.departmentTag,
         isResolved: meta.isResolved,
+        parentCommentId,
         createdAt: comment.createdAt,
         updatedAt: comment.updatedAt,
         author: comment.createdBy
@@ -2370,6 +2470,19 @@ class LeadService {
         attachmentUrls: [],
       };
     });
+
+    const byId = new Map(normalized.map((item) => [item.id, item]));
+    const roots = [];
+    normalized.forEach((item) => {
+      if (item.parentCommentId && byId.has(item.parentCommentId)) {
+        byId.get(item.parentCommentId).replies.push(item);
+      } else {
+        roots.push(item);
+      }
+    });
+
+    sortInternalCommentTree(roots, true);
+    return roots;
   }
 
   async createLeadInternalComment(leadId, payload = {}, actor = null) {
@@ -2382,7 +2495,7 @@ class LeadService {
 
     const lead = await prisma.lead.findUnique({
       where: { id: leadId },
-      select: { id: true, firstName: true, lastName: true },
+      select: { id: true, firstName: true, lastName: true, ownerId: true, leadSetById: true },
     });
     if (!lead) {
       const error = new Error(`Lead not found: ${leadId}`);
@@ -2390,15 +2503,64 @@ class LeadService {
       throw error;
     }
 
-    const departmentTag = normalizeDepartmentTag(payload.departmentTag || payload.department || 'general');
-    const isResolved = Boolean(payload.isResolved);
+    const parentCommentId = payload.parentCommentId || payload.parentId || payload.replyToId || null;
+    let parentComment = null;
+    if (parentCommentId) {
+      parentComment = await prisma.note.findFirst({
+        where: {
+          id: parentCommentId,
+          leadId,
+          OR: [
+            { title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } },
+            { title: { startsWith: INTERNAL_COMMENT_REPLY_TITLE_PREFIX } },
+            { title: { startsWith: 'REPLY|' } },
+            { title: { contains: 'INTERNAL_COMMENT', mode: 'insensitive' } },
+            { title: { equals: 'Internal Comment', mode: 'insensitive' } },
+            { title: { equals: 'Internal Comments', mode: 'insensitive' } },
+          ],
+        },
+        select: { id: true, title: true },
+      });
+
+      if (!parentComment) {
+        const error = new Error(`Parent internal comment not found: ${parentCommentId}`);
+        error.name = 'ValidationError';
+        throw error;
+      }
+    }
+
+    const parentMeta = parentComment ? parseInternalCommentMeta(parentComment.title) : null;
+    const departmentTag = normalizeDepartmentTag(
+      payload.departmentTag || payload.department || parentMeta?.departmentTag || 'general'
+    );
+    const isResolved = Object.prototype.hasOwnProperty.call(payload, 'isResolved')
+      ? Boolean(payload.isResolved)
+      : (parentMeta?.isResolved || false);
+    let createdById = await this.resolveUserId(actor?.id || actor?.userId || actor?.cognitoId || actor?.sub || null);
+    if (!createdById && actor?.email) {
+      const actorUser = await prisma.user.findUnique({
+        where: { email: actor.email },
+        select: { id: true },
+      });
+      createdById = actorUser?.id || null;
+    }
+    if (!createdById) {
+      createdById = lead.ownerId || lead.leadSetById || null;
+    }
+    if (!createdById) {
+      const error = new Error('Unable to resolve a valid author for this internal comment');
+      error.name = 'ValidationError';
+      throw error;
+    }
 
     const comment = await prisma.note.create({
       data: {
         leadId,
-        title: toInternalCommentTitle(departmentTag, isResolved),
+        title: parentComment
+          ? toInternalCommentReplyTitle(parentComment.id, departmentTag, isResolved)
+          : toInternalCommentTitle(departmentTag, isResolved),
         body: content,
-        createdById: actor?.id,
+        createdById,
       },
       include: {
         createdBy: {
@@ -2424,6 +2586,7 @@ class LeadService {
       body: comment.body,
       departmentTag,
       isResolved,
+      parentCommentId: parentComment?.id || null,
       createdAt: comment.createdAt,
       updatedAt: comment.updatedAt,
       author: comment.createdBy
@@ -2445,7 +2608,14 @@ class LeadService {
       where: {
         id: commentId,
         leadId,
-        title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+        OR: [
+          { title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } },
+          { title: { startsWith: INTERNAL_COMMENT_REPLY_TITLE_PREFIX } },
+          { title: { startsWith: 'REPLY|' } },
+          { title: { contains: 'INTERNAL_COMMENT', mode: 'insensitive' } },
+          { title: { equals: 'Internal Comment', mode: 'insensitive' } },
+          { title: { equals: 'Internal Comments', mode: 'insensitive' } },
+        ],
       },
       include: {
         createdBy: {
@@ -2461,16 +2631,19 @@ class LeadService {
     }
 
     const has = (key) => Object.prototype.hasOwnProperty.call(payload, key);
-    const meta = parseInternalCommentTitle(existing.title) || {
+    const meta = parseInternalCommentMeta(existing.title);
+    const legacyReply = parseLegacyReplyTitle(existing.title);
+    const effectiveParentCommentId = meta.parentCommentId || legacyReply?.parentCommentId || null;
+    const fallbackMeta = {
       departmentTag: 'general',
       isResolved: false,
     };
     const nextDepartment = has('departmentTag') || has('department')
       ? normalizeDepartmentTag(payload.departmentTag || payload.department)
-      : meta.departmentTag;
+      : (meta.departmentTag || fallbackMeta.departmentTag);
     const nextResolved = has('isResolved')
       ? Boolean(payload.isResolved)
-      : meta.isResolved;
+      : (meta.isResolved ?? fallbackMeta.isResolved);
     const nextContent = has('content') || has('body')
       ? String(payload.content || payload.body || '').trim()
       : existing.body;
@@ -2484,7 +2657,9 @@ class LeadService {
     const updated = await prisma.note.update({
       where: { id: commentId },
       data: {
-        title: toInternalCommentTitle(nextDepartment, nextResolved),
+        title: effectiveParentCommentId
+          ? toInternalCommentReplyTitle(effectiveParentCommentId, nextDepartment, nextResolved)
+          : toInternalCommentTitle(nextDepartment, nextResolved),
         body: nextContent,
       },
       include: {
@@ -2510,6 +2685,7 @@ class LeadService {
       body: updated.body,
       departmentTag: nextDepartment,
       isResolved: nextResolved,
+      parentCommentId: effectiveParentCommentId,
       createdAt: updated.createdAt,
       updatedAt: updated.updatedAt,
       author: updated.createdBy
@@ -2531,7 +2707,14 @@ class LeadService {
       where: {
         id: commentId,
         leadId,
-        title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+        OR: [
+          { title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } },
+          { title: { startsWith: INTERNAL_COMMENT_REPLY_TITLE_PREFIX } },
+          { title: { startsWith: 'REPLY|' } },
+          { title: { contains: 'INTERNAL_COMMENT', mode: 'insensitive' } },
+          { title: { equals: 'Internal Comment', mode: 'insensitive' } },
+          { title: { equals: 'Internal Comments', mode: 'insensitive' } },
+        ],
       },
       select: { id: true },
     });

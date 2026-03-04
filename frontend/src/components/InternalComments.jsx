@@ -42,6 +42,9 @@ export default function InternalComments({ entityType, entityId }) {
   const [editingId, setEditingId] = useState(null);
   const [editContent, setEditContent] = useState('');
   const [editMentions, setEditMentions] = useState([]);
+  const [replyingToId, setReplyingToId] = useState(null);
+  const [replyContent, setReplyContent] = useState('');
+  const [replyMentions, setReplyMentions] = useState([]);
 
   const { data: comments = [], isLoading, error } = useQuery({
     queryKey: ['internalComments', entityType, entityId],
@@ -83,6 +86,16 @@ export default function InternalComments({ entityType, entityId }) {
       setNewContent('');
       setNewMentions([]);
       setNewDepartment('general');
+    },
+  });
+
+  const createReplyMutation = useMutation({
+    mutationFn: ({ parentCommentId, data }) => api.createInternalComment(entityId, { ...data, parentCommentId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['internalComments', entityType, entityId]);
+      setReplyingToId(null);
+      setReplyContent('');
+      setReplyMentions([]);
     },
   });
 
@@ -148,6 +161,29 @@ export default function InternalComments({ entityType, entityId }) {
     });
   };
 
+  const startReply = (commentId) => {
+    setReplyingToId(commentId);
+    setReplyContent('');
+    setReplyMentions([]);
+  };
+
+  const cancelReply = () => {
+    setReplyingToId(null);
+    setReplyContent('');
+    setReplyMentions([]);
+  };
+
+  const handleCreateReply = (commentId) => {
+    if (!replyContent.trim()) return;
+    createReplyMutation.mutate({
+      parentCommentId: commentId,
+      data: {
+        content: replyContent.trim(),
+        mentions: replyMentions,
+      },
+    });
+  };
+
   const renderAttachments = (attachmentUrls = []) => {
     if (!attachmentUrls.length) return null;
     return (
@@ -195,6 +231,13 @@ export default function InternalComments({ entityType, entityId }) {
             <div className="text-xs text-gray-400">{formatDate(comment.createdAt)}</div>
           </div>
           <div className="flex items-center gap-2 text-xs text-gray-400">
+            <button
+              onClick={() => startReply(comment.id)}
+              className="flex items-center gap-1 hover:text-panda-primary"
+              title="Reply"
+            >
+              <MessageCircle className="w-4 h-4" />
+            </button>
             {!comment.isResolved ? (
               <button
                 onClick={() => toggleResolvedMutation.mutate({ commentId: comment.id, isResolved: true })}
@@ -260,6 +303,36 @@ export default function InternalComments({ entityType, entityId }) {
             <ThreadBody text={contentText} />
           )}
           {renderAttachments(attachmentUrls)}
+          {replyingToId === comment.id && (
+            <div className="mt-3 p-3 rounded-lg border border-gray-200 bg-gray-50 space-y-2">
+              <MentionTextarea
+                value={replyContent}
+                onChange={setReplyContent}
+                mentions={replyMentions}
+                onMentionsChange={setReplyMentions}
+                rows={2}
+                placeholder="Write a reply..."
+                className="w-full text-sm text-gray-700 bg-white border border-gray-200 rounded-lg p-2 focus:outline-none"
+              />
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleCreateReply(comment.id)}
+                  disabled={!replyContent.trim() || createReplyMutation.isPending}
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs bg-panda-primary text-white rounded-lg disabled:opacity-50"
+                >
+                  <Check className="w-3 h-3" />
+                  Reply
+                </button>
+                <button
+                  onClick={cancelReply}
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs bg-gray-100 text-gray-700 rounded-lg"
+                >
+                  <X className="w-3 h-3" />
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
         {comment.replies && comment.replies.length > 0 && (
           <div className="mt-4 space-y-4">
@@ -336,13 +409,20 @@ export default function InternalComments({ entityType, entityId }) {
         <div className="flex justify-end">
           <button
             onClick={handleCreate}
-            disabled={!newContent.trim()}
+            disabled={!newContent.trim() || createMutation.isPending}
             className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-white bg-panda-primary rounded-lg disabled:opacity-50"
           >
             <Plus className="w-4 h-4" />
             Add Comment
           </button>
         </div>
+        {(createMutation.error || createReplyMutation.error || updateMutation.error || deleteMutation.error || toggleResolvedMutation.error) && (
+          <p className="text-xs text-red-600">
+            {(createMutation.error || createReplyMutation.error || updateMutation.error || deleteMutation.error || toggleResolvedMutation.error)?.response?.data?.error?.message
+              || (createMutation.error || createReplyMutation.error || updateMutation.error || deleteMutation.error || toggleResolvedMutation.error)?.message
+              || 'Unable to save internal comment changes.'}
+          </p>
+        )}
       </div>
 
       <ThreadMessageList
