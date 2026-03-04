@@ -154,7 +154,7 @@ export default function NotesSidebar({ opportunityId }) {
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
         <div className="flex items-center gap-2 mb-4">
           <StickyNote className="w-5 h-5 text-yellow-500" />
-          <h3 className="font-semibold text-gray-900">Notes</h3>
+          <h3 className="font-semibold text-gray-900">Quick Notes</h3>
         </div>
         <div className="animate-pulse space-y-3">
           <div className="h-16 bg-gray-100 rounded-lg"></div>
@@ -170,7 +170,7 @@ export default function NotesSidebar({ opportunityId }) {
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
         <div className="flex items-center gap-2 mb-4">
           <StickyNote className="w-5 h-5 text-yellow-500" />
-          <h3 className="font-semibold text-gray-900">Notes</h3>
+          <h3 className="font-semibold text-gray-900">Quick Notes</h3>
         </div>
         <p className="text-sm text-red-500">Failed to load notes</p>
       </div>
@@ -183,7 +183,7 @@ export default function NotesSidebar({ opportunityId }) {
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
           <StickyNote className="w-5 h-5 text-yellow-500" />
-          <h3 className="font-semibold text-gray-900">Notes</h3>
+          <h3 className="font-semibold text-gray-900">Quick Notes</h3>
           <span className="text-xs text-gray-400">({notes.length})</span>
         </div>
         {!isAddingNote && (

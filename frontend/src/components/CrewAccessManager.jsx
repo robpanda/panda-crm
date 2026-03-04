@@ -142,12 +142,12 @@ export default function CrewAccessManager({
                 <div className="flex items-center space-x-3">
                   <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center">
                     <span className="text-sm font-medium text-gray-600">
-                      {(user.first_name?.[0] || user.email?.[0] || '?').toUpperCase()}
+                      {(user.firstName?.[0] || user.email?.[0] || '?').toUpperCase()}
                     </span>
                   </div>
                   <div>
                     <p className="font-medium text-gray-900">
-                      {user.first_name} {user.last_name}
+                      {user.firstName} {user.lastName}
                     </p>
                     <p className="text-sm text-gray-500">{user.email}</p>
                   </div>

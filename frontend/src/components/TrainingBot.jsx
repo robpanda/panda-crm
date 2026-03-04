@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useOverlay } from '../context/OverlayContext';
 import {
   MessageCircle,
   X,
@@ -32,6 +33,7 @@ export default function TrainingBot() {
   const location = useLocation();
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { isOverlayOpen } = useOverlay();
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -247,6 +249,12 @@ export default function TrainingBot() {
 
     return elements;
   };
+
+  // Hide TrainingBot when fullscreen overlays (lightbox, modals) are open
+  // IMPORTANT: This check must be AFTER all hooks to comply with React's Rules of Hooks
+  if (isOverlayOpen) {
+    return null;
+  }
 
   return (
     <>

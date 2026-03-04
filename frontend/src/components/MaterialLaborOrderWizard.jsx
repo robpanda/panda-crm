@@ -42,7 +42,7 @@ const STEPS = [
   { id: 'measurements', label: 'Confirm Measurements', icon: Ruler, description: 'Review roof measurements' },
   { id: 'materials', label: 'Draft Material Order', icon: Package, description: 'Select materials' },
   { id: 'materialConfirm', label: 'Confirm Materials', icon: ClipboardList, description: 'Review material order' },
-  { id: 'workOrder', label: 'Create Work Order', icon: Wrench, description: 'Select work type & options' },
+  { id: 'workOrder', label: 'Work Order Details', icon: Wrench, description: 'Contract details & work type' },
   { id: 'laborOrder', label: 'Create Labor Order', icon: DollarSign, description: 'Add labor items' },
   { id: 'review', label: 'Review & Finish', icon: CheckCircle, description: 'Submit orders' },
 ];
@@ -163,11 +163,63 @@ export default function MaterialLaborOrderWizard({
 
     // Labor order
     laborItems: [],
+
+    // Order inputs
+    requestedDelivery: '',
+
+    // Contract details
+    contractDetails: {
+      shingleColor: '',
+      dripEdgeColor: '',
+      flashingColor: '',
+      ventilation: '',
+      flags: {
+        extraLayer: false,
+        steepFee: false,
+        chimney: false,
+        roofLoad: false,
+      },
+      plywood: {
+        deckingReplacement: false,
+        atticFanCover: false,
+        coverGableVent: false,
+        sheets: 0,
+        fans: 0,
+        vents: 0,
+      },
+      pipeCollars: {
+        pipe15: 0,
+        pipe2: 0,
+        pipe3: 0,
+        pipe4: 0,
+      },
+      notes: '',
+    },
   });
 
   const [searchTerms, setSearchTerms] = useState({});
   const [activeMaterialCategory, setActiveMaterialCategory] = useState('SHINGLES');
   const [activeLaborCategory, setActiveLaborCategory] = useState('Gold Pledge Installation');
+
+  const contactName = useMemo(() => {
+    if (!opportunity) return '';
+    const contact = opportunity.contact || {};
+    if (contact.firstName || contact.lastName) {
+      return `${contact.firstName || ''} ${contact.lastName || ''}`.trim();
+    }
+    return opportunity.contactName || opportunity.name || '';
+  }, [opportunity]);
+
+  const jobAddress = useMemo(() => {
+    if (!opportunity) return '';
+    const parts = [
+      opportunity.street,
+      opportunity.city,
+      opportunity.state,
+      opportunity.postalCode,
+    ].filter(Boolean);
+    return parts.join(', ');
+  }, [opportunity]);
 
   // Fetch order templates
   const { data: templates, isLoading: templatesLoading } = useQuery({
@@ -358,22 +410,69 @@ export default function MaterialLaborOrderWizard({
     }));
   };
 
+  const updateContractDetails = (updates) => {
+    setFormData(prev => ({
+      ...prev,
+      contractDetails: { ...prev.contractDetails, ...updates },
+    }));
+  };
+
+  const updateContractFlags = (flag, value) => {
+    setFormData(prev => ({
+      ...prev,
+      contractDetails: {
+        ...prev.contractDetails,
+        flags: { ...prev.contractDetails.flags, [flag]: value },
+      },
+    }));
+  };
+
+  const updatePlywoodDetails = (field, value) => {
+    setFormData(prev => ({
+      ...prev,
+      contractDetails: {
+        ...prev.contractDetails,
+        plywood: { ...prev.contractDetails.plywood, [field]: value },
+      },
+    }));
+  };
+
+  const updatePipeCollars = (field, value) => {
+    setFormData(prev => ({
+      ...prev,
+      contractDetails: {
+        ...prev.contractDetails,
+        pipeCollars: { ...prev.contractDetails.pipeCollars, [field]: value },
+      },
+    }));
+  };
+
   // Calculate totals
   const materialTotal = useMemo(() => {
-    return formData.selectedMaterials.reduce(
+    const materials = Array.isArray(formData.selectedMaterials) ? formData.selectedMaterials : [];
+    return materials.reduce(
       (sum, m) => sum + (m.unitPrice || 0) * (m.quantity || 1),
       0
     );
   }, [formData.selectedMaterials]);
 
   const laborTotal = useMemo(() => {
-    return formData.laborItems
+    const laborItems = Array.isArray(formData.laborItems) ? formData.laborItems : [];
+    return laborItems
       .filter(l => l.selected)
       .reduce(
         (sum, l) => sum + (l.unitPrice || l.listPrice || 0) * (l.quantity || 1),
         0
       );
   }, [formData.laborItems]);
+
+  const totalPlywoodSheets = useMemo(() => {
+    const plywood = formData.contractDetails.plywood;
+    const sheets = plywood.deckingReplacement ? Number(plywood.sheets || 0) : 0;
+    const fans = plywood.atticFanCover ? Number(plywood.fans || 0) : 0;
+    const vents = plywood.coverGableVent ? Number(plywood.vents || 0) : 0;
+    return sheets + fans + vents;
+  }, [formData.contractDetails.plywood]);
 
   // Submit the wizard
   const handleSubmit = async () => {
@@ -850,13 +949,275 @@ export default function MaterialLaborOrderWizard({
 
           {/* Step 5: Create Work Order */}
           {currentStepData.id === 'workOrder' && (
-            <div className="space-y-4">
+            <div className="space-y-6">
               <div className="text-center mb-6">
-                <h3 className="text-lg font-semibold text-gray-900">Create Work Order</h3>
-                <p className="text-sm text-gray-500">Select work type and additional options</p>
+                <h3 className="text-lg font-semibold text-gray-900">Work Order Details</h3>
+                <p className="text-sm text-gray-500">Contract details, order inputs, and work type</p>
               </div>
 
-              <div className="space-y-6">
+              <div className="space-y-8">
+                {/* Order Inputs */}
+                <div className="border rounded-xl overflow-hidden">
+                  <div className="bg-gray-50 px-4 py-2 text-xs font-semibold text-gray-600 uppercase">
+                    Order Inputs
+                  </div>
+                  <table className="w-full text-sm">
+                    <tbody className="divide-y">
+                      <tr>
+                        <td className="px-4 py-2 font-medium text-gray-600">Package</td>
+                        <td className="px-4 py-2 text-gray-900">
+                          {formData.selectedTemplate?.name || '—'}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="px-4 py-2 font-medium text-gray-600">Shingle/Ridge Color</td>
+                        <td className="px-4 py-2 text-gray-900">
+                          {formData.contractDetails.shingleColor || '—'}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="px-4 py-2 font-medium text-gray-600">Drip Edge Color</td>
+                        <td className="px-4 py-2 text-gray-900">
+                          {formData.contractDetails.dripEdgeColor || '—'}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="px-4 py-2 font-medium text-gray-600">Flashing Color</td>
+                        <td className="px-4 py-2 text-gray-900">
+                          {formData.contractDetails.flashingColor || '—'}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="px-4 py-2 font-medium text-gray-600">Job #</td>
+                        <td className="px-4 py-2 text-gray-900">
+                          {opportunity?.jobNumber || opportunity?.id || '—'}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="px-4 py-2 font-medium text-gray-600">Customer</td>
+                        <td className="px-4 py-2 text-gray-900">
+                          {contactName || '—'}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="px-4 py-2 font-medium text-gray-600">Address</td>
+                        <td className="px-4 py-2 text-gray-900">
+                          {jobAddress || '—'}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="px-4 py-2 font-medium text-gray-600">Requested Delivery</td>
+                        <td className="px-4 py-2">
+                          <input
+                            type="date"
+                            value={formData.requestedDelivery}
+                            onChange={(e) => setFormData(prev => ({ ...prev, requestedDelivery: e.target.value }))}
+                            className="w-full max-w-[200px] border rounded-lg px-2 py-1 text-sm"
+                          />
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Contract Details */}
+                <div className="border rounded-xl p-4 space-y-5">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-semibold text-gray-900">Contract Details</h4>
+                    <span className="text-xs text-gray-500">Inspection + contract selections</span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Shingle Color</label>
+                      <input
+                        type="text"
+                        value={formData.contractDetails.shingleColor}
+                        onChange={(e) => updateContractDetails({ shingleColor: e.target.value })}
+                        className="w-full border rounded-lg px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Drip Edge</label>
+                      <input
+                        type="text"
+                        value={formData.contractDetails.dripEdgeColor}
+                        onChange={(e) => updateContractDetails({ dripEdgeColor: e.target.value })}
+                        className="w-full border rounded-lg px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Flashing</label>
+                      <input
+                        type="text"
+                        value={formData.contractDetails.flashingColor}
+                        onChange={(e) => updateContractDetails({ flashingColor: e.target.value })}
+                        className="w-full border rounded-lg px-3 py-2 text-sm"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-2">Ventilation</label>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      <button
+                        onClick={() => updateContractDetails({ ventilation: 'ridge' })}
+                        className={`flex items-center gap-2 px-3 py-2 border rounded-lg text-sm ${
+                          formData.contractDetails.ventilation === 'ridge'
+                            ? 'border-blue-500 bg-blue-50 text-blue-700'
+                            : 'border-gray-200 text-gray-700'
+                        }`}
+                      >
+                        <span className={`w-3 h-3 rounded-full border ${
+                          formData.contractDetails.ventilation === 'ridge'
+                            ? 'bg-blue-500 border-blue-500'
+                            : 'border-gray-300'
+                        }`} />
+                        Ridge Vent
+                      </button>
+                      <button
+                        onClick={() => updateContractDetails({ ventilation: 'box' })}
+                        className={`flex items-center gap-2 px-3 py-2 border rounded-lg text-sm ${
+                          formData.contractDetails.ventilation === 'box'
+                            ? 'border-blue-500 bg-blue-50 text-blue-700'
+                            : 'border-gray-200 text-gray-700'
+                        }`}
+                      >
+                        <span className={`w-3 h-3 rounded-full border ${
+                          formData.contractDetails.ventilation === 'box'
+                            ? 'bg-blue-500 border-blue-500'
+                            : 'border-gray-300'
+                        }`} />
+                        Box Vents
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-2">Contract Flags</label>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                      <ToggleSwitch
+                        label="Extra Layer"
+                        checked={formData.contractDetails.flags.extraLayer}
+                        onChange={(val) => updateContractFlags('extraLayer', val)}
+                      />
+                      <ToggleSwitch
+                        label="Steep Fee"
+                        checked={formData.contractDetails.flags.steepFee}
+                        onChange={(val) => updateContractFlags('steepFee', val)}
+                      />
+                      <ToggleSwitch
+                        label="Chimney"
+                        checked={formData.contractDetails.flags.chimney}
+                        onChange={(val) => updateContractFlags('chimney', val)}
+                      />
+                      <ToggleSwitch
+                        label="Roof Load"
+                        checked={formData.contractDetails.flags.roofLoad}
+                        onChange={(val) => updateContractFlags('roofLoad', val)}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                    <div className="lg:col-span-2 space-y-2">
+                      <label className="block text-xs font-medium text-gray-600">Plywood</label>
+                      <div className="space-y-2">
+                        <ToggleSwitch
+                          label="Roof Decking Replacement"
+                          checked={formData.contractDetails.plywood.deckingReplacement}
+                          onChange={(val) => updatePlywoodDetails('deckingReplacement', val)}
+                        />
+                        <ToggleSwitch
+                          label="Remove & Cover Attic Fan"
+                          checked={formData.contractDetails.plywood.atticFanCover}
+                          onChange={(val) => updatePlywoodDetails('atticFanCover', val)}
+                        />
+                        <ToggleSwitch
+                          label="Cover Gable Vent"
+                          checked={formData.contractDetails.plywood.coverGableVent}
+                          onChange={(val) => updatePlywoodDetails('coverGableVent', val)}
+                        />
+                      </div>
+                    </div>
+                    <div className="border rounded-lg p-3 bg-gray-50">
+                      <div className="flex items-center justify-between text-xs text-gray-500">
+                        <span>Total Sheets</span>
+                        <span className="font-semibold text-gray-800">{totalPlywoodSheets}</span>
+                      </div>
+                      <div className="mt-3 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <label className="text-xs text-gray-600">Sheets</label>
+                          <input
+                            type="number"
+                            min="0"
+                            value={formData.contractDetails.plywood.sheets}
+                            onChange={(e) => updatePlywoodDetails('sheets', parseInt(e.target.value, 10) || 0)}
+                            className="w-20 border rounded-md px-2 py-1 text-xs text-right"
+                          />
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <label className="text-xs text-gray-600">Fans</label>
+                          <input
+                            type="number"
+                            min="0"
+                            value={formData.contractDetails.plywood.fans}
+                            onChange={(e) => updatePlywoodDetails('fans', parseInt(e.target.value, 10) || 0)}
+                            className="w-20 border rounded-md px-2 py-1 text-xs text-right"
+                          />
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <label className="text-xs text-gray-600">Vents</label>
+                          <input
+                            type="number"
+                            min="0"
+                            value={formData.contractDetails.plywood.vents}
+                            onChange={(e) => updatePlywoodDetails('vents', parseInt(e.target.value, 10) || 0)}
+                            className="w-20 border rounded-md px-2 py-1 text-xs text-right"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-2">Pipe Collars</label>
+                    <div className="flex flex-wrap gap-2">
+                      <PipeCollarInput
+                        label='1.5"'
+                        value={formData.contractDetails.pipeCollars.pipe15}
+                        onChange={(val) => updatePipeCollars('pipe15', val)}
+                      />
+                      <PipeCollarInput
+                        label='2"'
+                        value={formData.contractDetails.pipeCollars.pipe2}
+                        onChange={(val) => updatePipeCollars('pipe2', val)}
+                      />
+                      <PipeCollarInput
+                        label='3"'
+                        value={formData.contractDetails.pipeCollars.pipe3}
+                        onChange={(val) => updatePipeCollars('pipe3', val)}
+                      />
+                      <PipeCollarInput
+                        label='4"'
+                        value={formData.contractDetails.pipeCollars.pipe4}
+                        onChange={(val) => updatePipeCollars('pipe4', val)}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Notes</label>
+                    <textarea
+                      value={formData.contractDetails.notes}
+                      onChange={(e) => updateContractDetails({ notes: e.target.value })}
+                      rows={3}
+                      className="w-full border rounded-lg px-3 py-2 text-sm"
+                      placeholder="Notes for the order builder"
+                    />
+                  </div>
+                </div>
+
                 {/* Work Type Selection */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-3">Work Type</label>
@@ -1183,6 +1544,42 @@ function MeasurementField({ label, value, unit, onChange }) {
         />
         <span className="text-sm font-medium text-gray-500">{unit}</span>
       </div>
+    </div>
+  );
+}
+
+function ToggleSwitch({ label, checked, onChange }) {
+  return (
+    <label className="flex items-center justify-between gap-2 px-3 py-2 border rounded-lg text-sm text-gray-700 cursor-pointer">
+      <span>{label}</span>
+      <button
+        type="button"
+        onClick={() => onChange(!checked)}
+        className={`w-10 h-5 rounded-full relative transition ${
+          checked ? 'bg-blue-600' : 'bg-gray-200'
+        }`}
+      >
+        <span
+          className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition ${
+            checked ? 'left-5' : 'left-0.5'
+          }`}
+        />
+      </button>
+    </label>
+  );
+}
+
+function PipeCollarInput({ label, value, onChange }) {
+  return (
+    <div className="flex items-center gap-2 border rounded-lg px-2 py-1 text-sm">
+      <span className="text-xs text-gray-600">{label}</span>
+      <input
+        type="number"
+        min="0"
+        value={value}
+        onChange={(e) => onChange(parseInt(e.target.value, 10) || 0)}
+        className="w-14 text-right text-sm border rounded-md px-1 py-0.5"
+      />
     </div>
   );
 }

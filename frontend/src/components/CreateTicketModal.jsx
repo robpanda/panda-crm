@@ -502,7 +502,7 @@ export default function CreateTicketModal({ onClose, onSubmit }) {
                           className="text-amber-800 hover:text-amber-900 hover:underline"
                         >
                           <span className="font-mono text-xs bg-amber-100 px-1 rounded mr-2">
-                            {ticket.ticket_number}
+                            {ticket.ticketNumber}
                           </span>
                           {ticket.subject}
                         </a>

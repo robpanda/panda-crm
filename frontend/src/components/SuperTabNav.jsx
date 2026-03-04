@@ -72,9 +72,11 @@ export const CATEGORIES = {
     label: 'Messages',
     icon: MessageSquare,
     color: 'rose',
+    defaultSubTab: 'internalComments',
     subTabs: [
-      { id: 'conversations', label: 'Conversations' },
       { id: 'communications', label: 'Communications' },
+      { id: 'internal', label: 'Internal Notes' },
+      { id: 'internalComments', label: 'Internal Comments' },
       { id: 'notifications', label: 'Notifications' },
       { id: 'activity', label: 'Activity' },
     ],
@@ -87,6 +89,7 @@ export const TAB_TO_CATEGORY = {
   schedule: 'schedule',
   tasks: 'schedule',
   checklist: 'schedule',
+  financials: 'financial', // Main financials tab
   invoices: 'financial',
   payments: 'financial',
   commissions: 'financial',
@@ -95,13 +98,14 @@ export const TAB_TO_CATEGORY = {
   checklists: 'photos',
   comparisons: 'photos',
   documents: 'documents',
-  activity: 'messages',
   workOrders: 'team',
   cases: 'team',
   approvals: 'team',
-  conversations: 'messages',
   communications: 'messages',
   notifications: 'messages',
+  internal: 'messages',
+  internalComments: 'messages',
+  activity: 'messages',
 };
 
 export default function SuperTabNav({
@@ -242,7 +246,10 @@ export function SubTabNav({
   if (!categoryConfig) return null;
 
   return (
-    <div className="flex gap-1 border-b border-gray-200 mb-4">
+    <div
+      className="flex gap-1 border-b border-gray-200 mb-4 overflow-x-auto [&::-webkit-scrollbar]:hidden"
+      style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+    >
       {categoryConfig.subTabs.map((subTab) => {
         const isActive = activeSubTab === subTab.id;
         const count = subTabCounts[subTab.id] || 0;
@@ -253,7 +260,7 @@ export function SubTabNav({
             onClick={() => onSubTabChange(subTab.id)}
             className={`
               flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px
-              transition-colors duration-150
+              whitespace-nowrap transition-colors duration-150
               ${isActive
                 ? 'border-panda-primary text-panda-primary'
                 : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'

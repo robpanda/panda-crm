@@ -92,7 +92,8 @@ export default function ChangeOrderModal({
 
   // Calculate totals
   const originalAmount = parseFloat(contract?.contractTotal || opportunity?.contractTotal || opportunity?.amount || 0);
-  const amendmentAmount = selectedProducts.reduce((sum, p) => sum + (p.quantity * p.unitPrice), 0);
+  const amendmentAmount = (Array.isArray(selectedProducts) ? selectedProducts : [])
+    .reduce((sum, p) => sum + (p.quantity * p.unitPrice), 0);
   const newTotal = originalAmount + amendmentAmount;
 
   // Reset state when modal opens

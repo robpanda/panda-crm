@@ -60,33 +60,25 @@ export default function ClickToCall({
       if (useRingOut) {
         // Use RingOut API (desk phone)
         const response = await ringCentralApi.initiateCall({
+          toNumber: phoneNumber,
           to: phoneNumber,
           playPrompt: true,
         });
 
-        if (response.success && response.ringout) {
-          setRingOutId(response.ringout.id);
+        const payload = response?.data || response;
+        const nextRingOutId = payload?.ringOutId || payload?.ringout?.id || payload?.id;
+
+        if (nextRingOutId) {
+          setRingOutId(nextRingOutId);
           setCallStatus('connected');
 
-          // Link call to record if provided
-          if (recordType && recordId) {
-            try {
-              await ringCentralApi.linkCallToRecord(response.ringout.id, {
-                recordType,
-                recordId,
-              });
-            } catch (linkError) {
-              console.warn('Failed to link call to record:', linkError);
-            }
-          }
-
           onCallStart?.({
-            ringoutId: response.ringout.id,
+            ringoutId: nextRingOutId,
             phoneNumber,
             contactName,
           });
         } else {
-          throw new Error(response.error || 'Failed to initiate call');
+          throw new Error(payload?.error?.message || payload?.message || 'Failed to initiate call');
         }
       } else {
         // Use RingCentral Embeddable widget (WebRTC)

@@ -26,10 +26,14 @@ import {
   LifeBuoy,
   PanelLeftClose,
   PanelLeft,
+  BarChart3,
+  Bot,
+  Camera,
 } from 'lucide-react';
 
 // Setup categories with their routes - alphabetized
 const SETUP_CATEGORIES = [
+  { id: 'agent-console', name: 'Agent Console', icon: Bot, description: 'AI agent plans and memory', path: '/admin/agent-console' },
   { id: 'audit', name: 'Audit Logs', icon: ClipboardList, description: 'System activity and change tracking', path: '/admin/audit' },
   { id: 'bamboogli', name: 'Bamboogli', icon: MessageSquare, description: 'SMS and email messaging', path: '/admin/bamboogli' },
   { id: 'callcenter', name: 'Call Center', icon: Phone, description: 'Call center configuration', path: '/admin/call-center' },
@@ -40,6 +44,8 @@ const SETUP_CATEGORIES = [
   { id: 'help', name: 'Help Admin', icon: HelpCircle, description: 'Help articles and documentation', path: '/admin/help' },
   { id: 'integrations', name: 'Integrations', icon: Link2, description: 'Third-party integrations', path: '/admin/integrations' },
   { id: 'modules', name: 'Module Manager', icon: Layers, description: 'Configure system modules', path: '/admin/setup' },
+  { id: 'metabase', name: 'Metabase', icon: BarChart3, description: 'Business intelligence and analytics', path: '/admin/metabase' },
+  { id: 'orphaned-companycam', name: 'Orphaned Projects', icon: Camera, description: 'Unlinked CompanyCam and photo projects', path: '/admin/orphaned-companycam' },
   { id: 'pandasign', name: 'PandaSign', icon: FileSignature, description: 'E-signature settings', path: '/admin/pandasign' },
   { id: 'payment', name: 'Payment Center', icon: CreditCard, description: 'Payments and invoice workflows', path: '/admin/payment-engine' },
   { id: 'referral', name: 'Referral Program', icon: Gift, description: 'Referral settings and payouts', path: '/admin/referral' },

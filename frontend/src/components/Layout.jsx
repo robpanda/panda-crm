@@ -3,8 +3,9 @@ import { Outlet, useLocation } from 'react-router-dom';
 import Navbar from './Navbar';
 import MobileNav from './MobileNav';
 import MobileSidebar from './MobileSidebar';
-import TrainingBot from './TrainingBot';
+import AgentChat from './AgentChat';
 import OnboardingTour from './OnboardingTour';
+import { OverlayProvider } from '../context/OverlayContext';
 
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -31,28 +32,30 @@ export default function Layout() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-slate-100">
-      {/* Top Navigation */}
-      <Navbar onMenuClick={() => setSidebarOpen(true)} showMenuButton={isMobile} />
+    <OverlayProvider>
+      <div className="min-h-screen bg-slate-100">
+        {/* Top Navigation */}
+        <Navbar onMenuClick={() => setSidebarOpen(true)} showMenuButton={isMobile} />
 
-      {/* Mobile Sidebar Drawer */}
-      <MobileSidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
+        {/* Mobile Sidebar Drawer */}
+        <MobileSidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
-      {/* Main Content - Full width now, with safe area inset for iPhone notch/Dynamic Island */}
-      <main className={`min-h-[calc(100vh-4rem)] p-4 sm:p-6 ${isMobile ? 'pb-20' : ''}`} style={{ marginTop: 'calc(4rem + env(safe-area-inset-top, 0px))' }}>
-        <div className="max-w-[1920px] mx-auto">
-          <Outlet />
-        </div>
-      </main>
+        {/* Main Content - Full width now, with safe area inset for iPhone notch/Dynamic Island */}
+        <main className={`min-h-[calc(100vh-4rem)] p-4 sm:p-6 ${isMobile ? 'pb-20' : ''}`} style={{ marginTop: 'calc(4rem + env(safe-area-inset-top, 0px))' }}>
+          <div className="max-w-[1920px] mx-auto">
+            <Outlet />
+          </div>
+        </main>
 
-      {/* Mobile Bottom Navigation */}
-      {isMobile && <MobileNav onMoreClick={() => setSidebarOpen(true)} />}
+        {/* Mobile Bottom Navigation */}
+        {isMobile && <MobileNav onMoreClick={() => setSidebarOpen(true)} />}
 
-      {/* Training Bot Widget */}
-      <TrainingBot />
+        {/* AI Agent Chat Widget */}
+        <AgentChat />
 
-      {/* First-time User Onboarding Tour */}
-      <OnboardingTour />
-    </div>
+        {/* First-time User Onboarding Tour */}
+        <OnboardingTour />
+      </div>
+    </OverlayProvider>
   );
 }

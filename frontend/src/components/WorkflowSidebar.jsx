@@ -242,6 +242,7 @@ export default function WorkflowSidebar({
   onActionClick,
   onEditClick,
   onScheduleClick,
+  beforeQuickInfo,
 }) {
   const queryClient = useQueryClient();
   const currentStage = opportunity?.stageName || opportunity?.stage || 'LEAD_UNASSIGNED';
@@ -431,6 +432,8 @@ export default function WorkflowSidebar({
       )}
 
       {/* Quick Info (includes contact info) */}
+      {beforeQuickInfo || null}
+
       {quickInfo.length > 0 && (
         <CollapsibleSection title="Quick Info" icon={Flag} color="gray" defaultOpen={true}>
           <div className="space-y-2">

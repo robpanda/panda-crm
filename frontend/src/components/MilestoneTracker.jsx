@@ -279,7 +279,8 @@ export default function MilestoneTracker({ opportunity, onStageChange }) {
 
       {/* Milestone Timeline */}
       <div className="px-4 py-4">
-        <div className="flex items-start justify-between">
+        {/* Full timeline - desktop/tablet */}
+        <div className="hidden sm:flex items-start justify-between">
           {milestoneData.map((milestone, idx) => {
             const Icon = milestone.icon;
             const isLast = idx === milestoneData.length - 1;
@@ -338,6 +339,70 @@ export default function MilestoneTracker({ opportunity, onStageChange }) {
               </div>
             );
           })}
+        </div>
+
+        {/* Compact timeline - mobile only (current + next) */}
+        <div className="flex sm:hidden items-start justify-between">
+          {(() => {
+            // Filter to show: last completed, current, and next milestone
+            const mobileMilestones = milestoneData.filter((m, idx) => {
+              if (m.isCurrent) return true;
+              // Show the milestone right before current (last completed)
+              if (currentMilestoneIndex > 0 && idx === currentMilestoneIndex - 1) return true;
+              // Show the milestone right after current (next)
+              if (idx === currentMilestoneIndex + 1) return true;
+              return false;
+            });
+            // Fallback: show first 3 if no current found
+            const toShow = mobileMilestones.length > 0 ? mobileMilestones : milestoneData.slice(0, 3);
+
+            return toShow.map((milestone, idx) => {
+              const Icon = milestone.icon;
+              const isLast = idx === toShow.length - 1;
+
+              return (
+                <div key={milestone.id} className="flex-1 relative">
+                  {!isLast && (
+                    <div className={`absolute top-4 left-1/2 w-full h-0.5 ${
+                      milestone.isComplete ? 'bg-green-400' : 'bg-gray-200'
+                    }`} />
+                  )}
+                  <div className="relative flex flex-col items-center">
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center z-10 transition-all ${
+                      milestone.isComplete
+                        ? 'bg-green-500 text-white shadow-sm'
+                        : milestone.isCurrent
+                        ? isLost
+                          ? 'bg-red-500 text-white shadow-lg ring-2 ring-red-100'
+                          : 'bg-panda-primary text-white shadow-lg ring-2 ring-panda-primary/20'
+                        : 'bg-gray-100 text-gray-400'
+                    }`}>
+                      {milestone.isComplete ? (
+                        <Check className="w-4 h-4" />
+                      ) : isLost && milestone.isCurrent ? (
+                        <XCircle className="w-4 h-4" />
+                      ) : (
+                        <Icon className="w-4 h-4" />
+                      )}
+                    </div>
+                    <span className={`mt-1.5 text-xs font-medium text-center ${
+                      milestone.isCurrent ? 'text-gray-900' : milestone.isComplete ? 'text-gray-700' : 'text-gray-400'
+                    }`}>
+                      {milestone.label}
+                    </span>
+                    <span className={`text-[10px] ${milestone.formattedDate ? 'text-gray-500' : 'text-gray-300'}`}>
+                      {milestone.formattedDate || '- -'}
+                    </span>
+                    {milestone.isCurrent && milestone.duration && (
+                      <span className="text-[10px] text-panda-primary font-medium">
+                        {milestone.duration}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            });
+          })()}
         </div>
       </div>
 

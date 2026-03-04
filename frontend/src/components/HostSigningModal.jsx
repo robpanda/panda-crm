@@ -237,7 +237,7 @@ export default function HostSigningModal({
                       <p className="text-sm text-blue-700 mt-1">
                         <strong>{agreement?.recipientName}</strong> signed this agreement on{' '}
                         {agreement?.signedAt
-                          ? new Date(agreement.signedAt).toLocaleString()
+                          ? new Date(agreement.signedAt).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })
                           : 'N/A'}
                       </p>
                     </div>

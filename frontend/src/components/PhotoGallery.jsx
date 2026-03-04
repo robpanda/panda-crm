@@ -1057,7 +1057,7 @@ export default function PhotoGallery({ opportunityId, projectId, title = 'Photos
                 {selectedPhoto.takenAt && (
                   <span className="flex items-center">
                     <Calendar className="w-4 h-4 mr-1" />
-                    {new Date(selectedPhoto.takenAt).toLocaleString()}
+                    {new Date(selectedPhoto.takenAt).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })}
                   </span>
                 )}
                 {selectedPhoto.latitude && selectedPhoto.longitude && (

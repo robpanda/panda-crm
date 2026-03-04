@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { commissionsApi, usersApi } from '../services/api';
+import { commissionsApi } from '../services/api';
 import {
   Percent,
   DollarSign,
@@ -26,6 +26,7 @@ import {
   Shield,
   Loader2,
   Plus,
+  Trash2,
 } from 'lucide-react';
 
 // Commission Type Display Configuration with explicit Tailwind classes
@@ -57,14 +58,35 @@ const STATUS_CONFIG = {
 };
 
 // Individual Commission Card Component
-function CommissionCard({ commission, onSelect, isExpanded, isPotentialDuplicate, duplicateIds }) {
+function CommissionCard({ commission, onSelect, isExpanded, isPotentialDuplicate, duplicateIds, opportunityId, onEdit }) {
+  const queryClient = useQueryClient();
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  const deleteMutation = useMutation({
+    mutationFn: () => commissionsApi.deleteCommission(commission.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['opportunity', opportunityId]);
+      queryClient.invalidateQueries(['commissions']);
+      setShowDeleteConfirm(false);
+    },
+  });
+
+  const updateStatusMutation = useMutation({
+    mutationFn: ({ status }) => commissionsApi.updateCommissionStatus(commission.id, { status }),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['opportunity', opportunityId]);
+      queryClient.invalidateQueries(['commissions']);
+    },
+  });
+
   const type = COMMISSION_TYPES[commission.type] || { label: commission.type?.replace(/_/g, ' '), bgClass: 'bg-gray-100', textClass: 'text-gray-600', description: '' };
   const status = STATUS_CONFIG[commission.status] || { label: commission.status, bgClass: 'bg-gray-100', textClass: 'text-gray-700', icon: Clock };
   const StatusIcon = status.icon || Clock;
 
   // Calculate display values
   const commissionValue = parseFloat(commission.commissionValue || 0);
-  const commissionRate = parseFloat(commission.commissionRate || 0);
+  const rawRate = parseFloat(commission.commissionRate || 0);
+  const commissionRate = rawRate > 0 ? rawRate : (commissionValue > 0 ? parseFloat(((parseFloat(commission.commissionAmount || 0)) / commissionValue * 100).toFixed(2)) : 0);
   const commissionAmount = parseFloat(commission.commissionAmount || 0);
   const requestedAmount = parseFloat(commission.requestedAmount || commissionAmount);
   const paidAmount = parseFloat(commission.paidAmount || 0);
@@ -115,9 +137,18 @@ function CommissionCard({ commission, onSelect, isExpanded, isPotentialDuplicate
 
           <div className="flex items-center space-x-4">
             <div className="text-right">
-              <p className="font-bold text-lg text-green-600">${requestedAmount.toLocaleString()}</p>
-              <p className="text-xs text-gray-500">{commissionRate}% of ${commissionValue.toLocaleString()}</p>
+              <p className="font-bold text-lg text-green-600">${paidAmount.toLocaleString()}</p>
+              <p className="text-xs text-gray-500">Paid</p>
             </div>
+            {isPotentialDuplicate && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setShowDeleteConfirm(true); }}
+                className="p-1.5 rounded-lg text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                title="Delete duplicate commission"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            )}
             {isExpanded ? (
               <ChevronDown className="w-5 h-5 text-gray-400" />
             ) : (
@@ -192,6 +223,57 @@ function CommissionCard({ commission, onSelect, isExpanded, isPotentialDuplicate
                 );
               })}
             </div>
+          </div>
+
+          {/* Quick Actions */}
+          <div className="px-4 pb-3 flex items-center space-x-2 flex-wrap gap-y-2">
+            <button
+              onClick={(e) => { e.stopPropagation(); onEdit?.(commission); }}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 transition-colors flex items-center space-x-1"
+            >
+              <Edit className="w-3.5 h-3.5" />
+              <span>Edit</span>
+            </button>
+            {!['APPROVED', 'PAID'].includes(commission.status) && (
+              <button
+                onClick={(e) => { e.stopPropagation(); updateStatusMutation.mutate({ status: 'APPROVED' }); }}
+                disabled={updateStatusMutation.isPending}
+                className="px-3 py-1.5 text-xs font-medium rounded-lg border border-green-300 text-green-700 hover:bg-green-50 transition-colors flex items-center space-x-1"
+              >
+                <CheckCircle className="w-3.5 h-3.5" />
+                <span>Approve</span>
+              </button>
+            )}
+            {!['HOLD', 'PAID'].includes(commission.status) && (
+              <button
+                onClick={(e) => { e.stopPropagation(); updateStatusMutation.mutate({ status: 'HOLD' }); }}
+                disabled={updateStatusMutation.isPending}
+                className="px-3 py-1.5 text-xs font-medium rounded-lg border border-orange-300 text-orange-700 hover:bg-orange-50 transition-colors flex items-center space-x-1"
+              >
+                <AlertCircle className="w-3.5 h-3.5" />
+                <span>Hold</span>
+              </button>
+            )}
+            {!['DENIED', 'PAID'].includes(commission.status) && (
+              <button
+                onClick={(e) => { e.stopPropagation(); updateStatusMutation.mutate({ status: 'DENIED' }); }}
+                disabled={updateStatusMutation.isPending}
+                className="px-3 py-1.5 text-xs font-medium rounded-lg border border-red-300 text-red-700 hover:bg-red-50 transition-colors flex items-center space-x-1"
+              >
+                <XCircle className="w-3.5 h-3.5" />
+                <span>Deny</span>
+              </button>
+            )}
+            {commission.status === 'APPROVED' && (
+              <button
+                onClick={(e) => { e.stopPropagation(); updateStatusMutation.mutate({ status: 'PAID' }); }}
+                disabled={updateStatusMutation.isPending}
+                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-green-600 text-white hover:bg-green-700 transition-colors flex items-center space-x-1"
+              >
+                <CreditCard className="w-3.5 h-3.5" />
+                <span>Mark Paid</span>
+              </button>
+            )}
           </div>
 
           {/* Dates & Notes Section */}
@@ -276,6 +358,41 @@ function CommissionCard({ commission, onSelect, isExpanded, isPotentialDuplicate
           )}
         </div>
       )}
+
+      {/* Delete Confirmation Dialog */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowDeleteConfirm(false)}>
+          <div className="bg-white rounded-xl p-6 max-w-sm mx-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center space-x-3 mb-4">
+              <div className="p-2 bg-red-100 rounded-full">
+                <Trash2 className="w-5 h-5 text-red-600" />
+              </div>
+              <h3 className="text-lg font-semibold text-gray-900">Delete Commission</h3>
+            </div>
+            <p className="text-sm text-gray-600 mb-1">
+              Are you sure you want to delete this <strong>{COMMISSION_TYPES[commission.type]?.label || commission.type}</strong> commission?
+            </p>
+            <p className="text-sm text-gray-500 mb-4">
+              Amount: <strong>${parseFloat(commission.commissionAmount || 0).toLocaleString()}</strong> — This will remove it from all reports, records, and totals.
+            </p>
+            <div className="flex items-center justify-end space-x-3">
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => deleteMutation.mutate()}
+                disabled={deleteMutation.isPending}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-50"
+              >
+                {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -283,8 +400,9 @@ function CommissionCard({ commission, onSelect, isExpanded, isPotentialDuplicate
 // Summary Header Component
 function CommissionsSummary({ commissions, summary, opportunity }) {
   // Calculate totals
-  const totalRequested = commissions?.reduce((sum, c) => sum + parseFloat(c.requestedAmount || c.commissionAmount || 0), 0) || 0;
-  const totalPaid = commissions?.reduce((sum, c) => sum + parseFloat(c.paidAmount || 0), 0) || 0;
+  const commissionList = Array.isArray(commissions) ? commissions : [];
+  const totalRequested = commissionList.reduce((sum, c) => sum + parseFloat(c.requestedAmount || c.commissionAmount || 0), 0);
+  const totalPaid = commissionList.reduce((sum, c) => sum + parseFloat(c.paidAmount || 0), 0);
   const pendingCount = commissions?.filter(c => ['NEW', 'REQUESTED'].includes(c.status)).length || 0;
   const approvedCount = commissions?.filter(c => c.status === 'APPROVED').length || 0;
   const paidCount = commissions?.filter(c => c.status === 'PAID').length || 0;
@@ -373,12 +491,20 @@ function NewCommissionModal({ isOpen, onClose, opportunityId, accountId, onSucce
   const [error, setError] = useState('');
   const queryClient = useQueryClient();
 
-  // Fetch users for dropdown
-  const { data: users = [], isLoading: usersLoading } = useQuery({
-    queryKey: ['users-dropdown'],
-    queryFn: () => usersApi.getUsersForDropdown(),
+  // Fetch commission-eligible users only (users with commission rates configured)
+  const { data: commissionUsersData = {}, isLoading: usersLoading } = useQuery({
+    queryKey: ['commission-eligible-users'],
+    queryFn: () => commissionsApi.getCommissionEligibleUsers(),
     enabled: isOpen,
   });
+  const usersRaw = commissionUsersData?.data || commissionUsersData;
+  const users = (Array.isArray(usersRaw) ? usersRaw : [])
+    .slice()
+    .sort((a, b) => {
+      const nameA = `${a.firstName || ''} ${a.lastName || ''}`.trim().toLowerCase();
+      const nameB = `${b.firstName || ''} ${b.lastName || ''}`.trim().toLowerCase();
+      return nameA.localeCompare(nameB);
+    });
 
   // Create commission mutation
   const createMutation = useMutation({
@@ -559,6 +685,309 @@ function NewCommissionModal({ isOpen, onClose, opportunityId, accountId, onSucce
   );
 }
 
+// Standalone EditCommissionModal adapted from admin/Commissions.jsx EditModal
+function EditCommissionModal({ commission, onClose, onSave }) {
+  const queryClient = useQueryClient();
+
+  const STATUS_CONFIG = {
+    NEW: { label: 'New', color: 'blue' },
+    REQUESTED: { label: 'Requested', color: 'purple' },
+    APPROVED: { label: 'Approved', color: 'green' },
+    PAID: { label: 'Paid', color: 'emerald' },
+    DENIED: { label: 'Denied', color: 'red' },
+    HOLD: { label: 'On Hold', color: 'amber' },
+  };
+
+  const formatCurrency = (val) => {
+    const num = parseFloat(val);
+    if (isNaN(num)) return '$0.00';
+    return '$' + num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+
+  const formatDate = (d) => {
+    if (!d) return '';
+    return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  };
+
+  const updateCommissionMutation = useMutation({
+    mutationFn: ({ id, data }) => commissionsApi.updateCommission(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['commissions'] });
+      queryClient.invalidateQueries({ queryKey: ['opportunity'] });
+      onClose();
+      if (onSave) onSave();
+    },
+  });
+
+  const updatePaidAmountMutation = useMutation({
+    mutationFn: ({ id, paidAmount, notes }) => commissionsApi.updateCommission(id, { paidAmount, paidAmountNotes: notes }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['commissions'] });
+    },
+  });
+
+  const revertOverrideMutation = useMutation({
+    mutationFn: (id) => commissionsApi.updateCommission(id, { isManualOverride: false, commissionAmount: commission.originalAmount }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['commissions'] });
+      onClose();
+      if (onSave) onSave();
+    },
+  });
+
+  const [editData, setEditData] = useState({
+    commissionValue: commission?.commissionValue != null ? Number(commission.commissionValue) : '',
+    commissionRate: commission?.commissionRate != null ? Number(commission.commissionRate) : '',
+    paidAmount: commission?.paidAmount != null ? Number(commission.paidAmount) : '',
+    notes: commission?.notes || '',
+    status: commission?.status || 'NEW',
+  });
+  const [paidAmountNotes, setPaidAmountNotes] = useState('');
+  const [isManualOverride, setIsManualOverride] = useState(false);
+  const [overrideReason, setOverrideReason] = useState('');
+
+  if (!commission) return null;
+
+  const calculatedAmount = editData.commissionValue && editData.commissionRate
+    ? (parseFloat(editData.commissionValue) * parseFloat(editData.commissionRate) / 100).toFixed(2)
+    : 0;
+
+  const isPaidAmountChanged = commission?.paidAmount !== editData.paidAmount &&
+    editData.paidAmount !== '' && editData.paidAmount !== null;
+
+  const isAmountChanged = editData.commissionValue &&
+    parseFloat(editData.commissionValue) !== parseFloat(commission.commissionValue || 0);
+
+  const handleSave = () => {
+    if (isPaidAmountChanged) {
+      updatePaidAmountMutation.mutate({
+        id: commission.id,
+        paidAmount: parseFloat(editData.paidAmount),
+        notes: paidAmountNotes,
+      });
+    }
+    const updateData = {
+      commissionValue: parseFloat(editData.commissionValue),
+      commissionRate: parseFloat(editData.commissionRate),
+      notes: editData.notes,
+      status: editData.status,
+    };
+    if (isAmountChanged && isManualOverride) {
+      updateData.isManualOverride = true;
+      updateData.overrideReason = overrideReason;
+    }
+    updateCommissionMutation.mutate({
+      id: commission.id,
+      data: updateData,
+    });
+  };
+
+  const handleRevertOverride = () => {
+    if (window.confirm('Are you sure you want to revert this commission to its original calculated amount?')) {
+      revertOverrideMutation.mutate(commission.id);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
+        <div className="p-6 border-b border-gray-100">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xl font-semibold">Edit Commission</h2>
+            <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+        <div className="p-6 space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+            <select
+              value={editData.status}
+              onChange={(e) => setEditData({ ...editData, status: e.target.value })}
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+            >
+              {Object.entries(STATUS_CONFIG).map(([key, val]) => (
+                <option key={key} value={key}>{val.label}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Commission Value ($)</label>
+              <input
+                type="number"
+                value={editData.commissionValue}
+                onChange={(e) => setEditData({ ...editData, commissionValue: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Rate (%)</label>
+              <input
+                type="number"
+                step="0.01"
+                value={editData.commissionRate}
+                onChange={(e) => setEditData({ ...editData, commissionRate: e.target.value })}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+              />
+            </div>
+          </div>
+
+          <div className="p-3 bg-green-50 rounded-lg">
+            <p className="text-sm text-gray-600">Calculated Commission Amount:</p>
+            <p className="text-xl font-bold text-green-600">{formatCurrency(calculatedAmount)}</p>
+          </div>
+
+          {/* Manual Override Section */}
+          {commission.isManualOverride && commission.originalAmount && (
+            <div className="p-4 bg-orange-50 border border-orange-200 rounded-lg space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center">
+                  <AlertCircle className="w-5 h-5 text-orange-600 mr-2" />
+                  <h3 className="font-medium text-orange-900">Manual Override Active</h3>
+                </div>
+                <button
+                  onClick={handleRevertOverride}
+                  disabled={revertOverrideMutation.isPending}
+                  className="px-3 py-1 text-sm bg-orange-100 text-orange-700 rounded-lg hover:bg-orange-200 disabled:opacity-50"
+                >
+                  {revertOverrideMutation.isPending ? 'Reverting...' : 'Revert to Original'}
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <p className="text-gray-600">Original Amount:</p>
+                  <p className="font-semibold text-gray-900">{formatCurrency(commission.originalAmount)}</p>
+                </div>
+                <div>
+                  <p className="text-gray-600">Current (Overridden):</p>
+                  <p className="font-semibold text-orange-700">{formatCurrency(commission.commissionAmount)}</p>
+                </div>
+              </div>
+              {commission.overrideReason && (
+                <div className="text-sm">
+                  <p className="text-gray-600">Reason:</p>
+                  <p className="text-gray-800">{commission.overrideReason}</p>
+                </div>
+              )}
+              {commission.overrideDate && (
+                <p className="text-xs text-orange-600">
+                  Overridden on: {formatDate(commission.overrideDate)}
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Override Toggle - shown when amount is being changed */}
+          {isAmountChanged && !commission.isManualOverride && (
+            <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg space-y-3">
+              <label className="flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={isManualOverride}
+                  onChange={(e) => setIsManualOverride(e.target.checked)}
+                  className="w-4 h-4 text-amber-600 border-gray-300 rounded focus:ring-amber-500"
+                />
+                <span className="ml-2 text-sm font-medium text-amber-900">
+                  Mark as Manual Override
+                </span>
+              </label>
+              <p className="text-xs text-amber-700">
+                Enable this to track this as a manual override. The original calculated amount will be preserved for audit purposes.
+              </p>
+              {isManualOverride && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Override Reason (required)</label>
+                  <input
+                    type="text"
+                    value={overrideReason}
+                    onChange={(e) => setOverrideReason(e.target.value)}
+                    className="w-full px-3 py-2 border border-amber-200 rounded-lg focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 outline-none"
+                    placeholder="Enter reason for override..."
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Paid Amount Section */}
+          {commission.status === 'PAID' && (
+            <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg space-y-3">
+              <div className="flex items-center">
+                <DollarSign className="w-5 h-5 text-blue-600 mr-2" />
+                <h3 className="font-medium text-blue-900">Paid Amount (Payroll Adjustment)</h3>
+              </div>
+              <p className="text-sm text-blue-700">
+                Changes to paid amount are tracked for the Payroll Change Report.
+              </p>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Paid Amount ($)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={editData.paidAmount}
+                  onChange={(e) => setEditData({ ...editData, paidAmount: e.target.value })}
+                  className="w-full px-3 py-2 border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
+                  placeholder="Enter paid amount..."
+                />
+              </div>
+              {isPaidAmountChanged && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Reason for Change</label>
+                  <input
+                    type="text"
+                    value={paidAmountNotes}
+                    onChange={(e) => setPaidAmountNotes(e.target.value)}
+                    className="w-full px-3 py-2 border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
+                    placeholder="Enter reason for payroll adjustment..."
+                  />
+                </div>
+              )}
+              {commission.payrollUpdateDate && (
+                <p className="text-xs text-blue-600">
+                  Last payroll update: {formatDate(commission.payrollUpdateDate)}
+                </p>
+              )}
+            </div>
+          )}
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+            <textarea
+              value={editData.notes}
+              onChange={(e) => setEditData({ ...editData, notes: e.target.value })}
+              rows={3}
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+              placeholder="Add notes..."
+            />
+          </div>
+        </div>
+        <div className="p-6 border-t border-gray-100 flex justify-end space-x-2">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 border border-gray-200 rounded-lg text-gray-700 hover:bg-gray-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={
+              updateCommissionMutation.isPending ||
+              updatePaidAmountMutation.isPending ||
+              (isManualOverride && isAmountChanged && !overrideReason.trim())
+            }
+            className="px-4 py-2 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg hover:opacity-90 disabled:opacity-50"
+          >
+            {(updateCommissionMutation.isPending || updatePaidAmountMutation.isPending) ? 'Saving...' : 'Save Changes'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Detect potential duplicate commissions
 function detectDuplicates(commissions) {
   if (!commissions || commissions.length < 2) return {};
@@ -603,6 +1032,8 @@ export default function CommissionsTab({ commissions, commissionSummary, summary
   const [expandedId, setExpandedId] = useState(null);
   const [filter, setFilter] = useState('all'); // all, pending, approved, paid
   const [showNewCommissionModal, setShowNewCommissionModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingCommission, setEditingCommission] = useState(null);
 
   const handleSelect = (id) => {
     setExpandedId(expandedId === id ? null : id);
@@ -705,6 +1136,8 @@ export default function CommissionsTab({ commissions, commissionSummary, summary
               isExpanded={expandedId === commission.id}
               isPotentialDuplicate={!!duplicateMap[commission.id]}
               duplicateIds={duplicateMap[commission.id]}
+              opportunityId={opportunity?.id}
+              onEdit={(c) => { setEditingCommission(c); setShowEditModal(true); }}
             />
           ))
         ) : (
@@ -750,6 +1183,16 @@ export default function CommissionsTab({ commissions, commissionSummary, summary
           // Toast or notification could go here
         }}
       />
+      {editingCommission && (
+        <EditCommissionModal
+          isOpen={showEditModal}
+          onClose={() => { setShowEditModal(false); setEditingCommission(null); }}
+          commission={editingCommission}
+          opportunityId={opportunity?.id}
+          accountId={opportunity?.accountId}
+          onSuccess={() => {}}
+        />
+      )}
     </div>
   );
 }

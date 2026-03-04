@@ -32,6 +32,7 @@ export default function CrewSelector({
   const [expandedCrew, setExpandedCrew] = useState(null);
   const [filterSkill, setFilterSkill] = useState('all');
   const [sortBy, setSortBy] = useState('score'); // score, distance, availability
+  const [eligibilityNotice, setEligibilityNotice] = useState('');
 
   useEffect(() => {
     if (isOpen && appointmentData) {
@@ -42,8 +43,73 @@ export default function CrewSelector({
   const loadCrewCandidates = async () => {
     try {
       setLoading(true);
+      setEligibilityNotice('');
+
+      // Prefer eligibility-based resources when a work order exists.
+      if (appointmentData?.workOrderId) {
+        try {
+          const eligibilityResponse = await api.get(
+            `/api/eligibility/work-orders/${appointmentData.workOrderId}/resources`,
+            {
+              params: appointmentData.scheduledDate
+                ? { targetDate: appointmentData.scheduledDate }
+                : undefined,
+            }
+          );
+
+          const eligible = eligibilityResponse.data?.eligibleResources || [];
+          if (eligible.length === 0) {
+            setEligibilityNotice('No eligible crews found for the selected date based on scheduling rules.');
+            setCrews([]);
+            return;
+          }
+
+          // Enrich with resource details when available.
+          let resourceMap = new Map();
+          try {
+            const resourcesResponse = await api.get('/api/resources', {
+              params: { isActive: true },
+            });
+            const resources = resourcesResponse.data?.data || resourcesResponse.data?.resources || [];
+            resourceMap = new Map(resources.map(r => [r.id, r]));
+          } catch (resourceError) {
+            // Non-blocking; eligible list still works with minimal fields.
+          }
+
+          setCrews(eligible.map((resource) => {
+            const detail = resourceMap.get(resource.resourceId);
+            return {
+              id: resource.resourceId,
+              name: resource.resourceName || detail?.name || 'Crew',
+              phone: detail?.phone,
+              email: detail?.email,
+              resourceType: resource.resourceType || detail?.resourceType,
+              skills: resource.skills || detail?.skills?.map(s => s.skill?.name).filter(Boolean) || [],
+              score: Math.max(50, 100 - (resource.penalty || 0)),
+              scoreBreakdown: {},
+              distance: null,
+              travelTime: null,
+              todayAppointments: detail?._count?.assignments || 0,
+              todayCalendarEvents: 0,
+              totalBusyBlocks: detail?._count?.assignments || 0,
+              todaySchedule: [],
+              isRecommended: true,
+            };
+          }));
+          return;
+        } catch (eligibilityError) {
+          const message = eligibilityError?.response?.data?.error;
+          if (message) {
+            setEligibilityNotice(message);
+            setCrews([]);
+            return;
+          }
+          // Fall back to candidate scoring if eligibility lookup fails.
+        }
+      }
+
       // Call the scheduling policy service to get best candidates
-      const response = await api.post('/workorders/scheduling/candidates', {
+      const response = await api.post('/api/scheduling/candidates', {
         opportunityId: appointmentData.opportunityId,
         workType: appointmentData.workType,
         address: appointmentData.address,
@@ -51,21 +117,22 @@ export default function CrewSelector({
         estimatedDuration: appointmentData.estimatedDuration || 120, // default 2 hours
       });
 
-      setCrews(response.data.candidates || []);
+      setCrews(response.data.candidates || response.data.data?.candidates || []);
     } catch (error) {
       console.error('Failed to load crew candidates:', error);
       // Fallback to all available resources
       try {
-        const resourcesResponse = await api.get('/workorders/resources', {
+        const resourcesResponse = await api.get('/api/resources', {
           params: { isActive: true },
         });
-        setCrews(resourcesResponse.data.resources?.map(r => ({
+        const resources = resourcesResponse.data?.data || resourcesResponse.data?.resources || [];
+        setCrews(resources.map(r => ({
           ...r,
           score: 50,
           distance: null,
           travelTime: null,
           todayAppointments: 0,
-        })) || []);
+        })));
       } catch (fallbackError) {
         console.error('Failed to load resources:', fallbackError);
         setCrews([]);
@@ -124,6 +191,13 @@ export default function CrewSelector({
             <X className="w-5 h-5 text-gray-500" />
           </button>
         </div>
+
+        {eligibilityNotice && (
+          <div className="px-6 py-3 border-b bg-amber-50 text-amber-800 text-sm flex items-center gap-2">
+            <AlertCircle className="w-4 h-4" />
+            <span>{eligibilityNotice}</span>
+          </div>
+        )}
 
         {/* Filters */}
         <div className="px-6 py-3 border-b bg-gray-50 flex flex-wrap gap-3 items-center">

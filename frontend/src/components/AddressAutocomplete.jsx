@@ -180,7 +180,7 @@ export default function AddressAutocomplete({
     // Get place details to extract address components
     placesServiceRef.current.getDetails(
       {
-        placeId: prediction.place_id,
+        placeId: prediction.placeId,
         fields: ['address_components', 'formatted_address', 'geometry'],
         sessionToken: sessionTokenRef.current,
       },
@@ -188,7 +188,7 @@ export default function AddressAutocomplete({
         setIsLoading(false);
 
         if (status === window.google.maps.places.PlacesServiceStatus.OK && place) {
-          const addressData = parseAddressComponents(place.address_components, place);
+          const addressData = parseAddressComponents(place.addressComponents, place);
 
           // Update the input with the street address
           setInputValue(addressData.street);
@@ -229,22 +229,22 @@ export default function AddressAutocomplete({
 
       switch (type) {
         case 'street_number':
-          streetNumber = component.long_name;
+          streetNumber = component.longName;
           break;
         case 'route':
-          route = component.long_name;
+          route = component.longName;
           break;
         case 'locality':
-          result.city = component.long_name;
+          result.city = component.longName;
           break;
         case 'administrative_area_level_1':
-          result.state = component.short_name; // State abbreviation (e.g., "MD")
+          result.state = component.shortName; // State abbreviation (e.g., "MD")
           break;
         case 'postal_code':
-          result.postalCode = component.long_name;
+          result.postalCode = component.longName;
           break;
         case 'country':
-          result.country = component.short_name;
+          result.country = component.shortName;
           break;
       }
     });
@@ -316,7 +316,7 @@ export default function AddressAutocomplete({
         >
           {suggestions.map((prediction) => (
             <button
-              key={prediction.place_id}
+              key={prediction.placeId}
               type="button"
               onClick={() => handleSelectSuggestion(prediction)}
               className="w-full px-4 py-3 text-left hover:bg-gray-50 flex items-start space-x-3 border-b border-gray-100 last:border-b-0 transition-colors"
@@ -324,10 +324,10 @@ export default function AddressAutocomplete({
               <MapPin className="w-4 h-4 text-gray-400 mt-0.5 flex-shrink-0" />
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-gray-900 truncate">
-                  {prediction.structured_formatting?.main_text || prediction.description}
+                  {prediction.structuredFormatting?.mainText || prediction.description}
                 </p>
                 <p className="text-xs text-gray-500 truncate">
-                  {prediction.structured_formatting?.secondary_text || ''}
+                  {prediction.structuredFormatting?.secondaryText || ''}
                 </p>
               </div>
             </button>
