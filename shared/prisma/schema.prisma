@@ -435,7 +435,6 @@ model Opportunity {
   workOrders               WorkOrder[]
   documentLinks            DocumentLink[]
   photoProjects            PhotoProject[]          @relation("PhotoProjectOpportunity")
-  laborOrders              LaborOrder[]
   appointmentResults       AppointmentResult[]     @relation("AppointmentResults")
 
   @@index([accountId])
