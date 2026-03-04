@@ -259,6 +259,23 @@ class LeadService {
     return trimmed.length > 0 ? trimmed : null;
   }
 
+  resolveLeadCustomerName(lead = {}) {
+    const firstName = this.normalizeOptionalText(lead.firstName);
+    const lastName = this.normalizeOptionalText(lead.lastName);
+    const fullName = [firstName, lastName].filter(Boolean).join(' ').trim();
+    const companyName = this.normalizeOptionalText(lead.company);
+    return fullName || companyName || null;
+  }
+
+  buildConvertedOpportunityName(lead = {}) {
+    return this.resolveLeadCustomerName(lead) || 'Customer';
+  }
+
+  buildConvertedAccountName(lead = {}, jobId = null) {
+    const customerName = this.resolveLeadCustomerName(lead) || 'Customer';
+    return jobId ? `${jobId} ${customerName}` : customerName;
+  }
+
   /**
    * Scheduling timezone used when date/time payloads arrive without an explicit timezone offset.
    */
@@ -351,6 +368,36 @@ class LeadService {
 
     const nextNumber = Number.isFinite(lastNumber) ? lastNumber + 1 : 1;
     return `SA-${String(nextNumber).padStart(6, '0')}`;
+  }
+
+  async generateJobId(tx = prisma) {
+    const currentYear = new Date().getFullYear();
+
+    const sequences = await tx.$queryRaw`
+      SELECT id, year, last_number
+      FROM job_id_sequences
+      WHERE year = ${currentYear}
+      FOR UPDATE
+    `;
+
+    let nextNumber;
+    if (!sequences || sequences.length === 0) {
+      const newSequenceId = `job-seq-${currentYear}`;
+      await tx.$executeRaw`
+        INSERT INTO job_id_sequences (id, year, last_number, created_at, updated_at)
+        VALUES (${newSequenceId}, ${currentYear}, ${JOB_ID_STARTING_NUMBER + 1}, NOW(), NOW())
+      `;
+      nextNumber = JOB_ID_STARTING_NUMBER + 1;
+    } else {
+      nextNumber = Number(sequences[0].last_number) + 1;
+      await tx.$executeRaw`
+        UPDATE job_id_sequences
+        SET last_number = ${nextNumber}, updated_at = NOW()
+        WHERE year = ${currentYear}
+      `;
+    }
+
+    return `${currentYear}-${nextNumber}`;
   }
 
   /**
@@ -1131,10 +1178,24 @@ class LeadService {
 
     // Use transaction for conversion
     const result = await prisma.$transaction(async (tx) => {
+      let jobId = null;
+      if (options.createOpportunity !== false) {
+        try {
+          jobId = await this.generateJobId(tx);
+          logger.info(`Generated Job ID: ${jobId} for lead conversion`);
+        } catch (err) {
+          // Log error but don't fail the conversion - Job ID can be assigned later
+          logger.warn(`Failed to generate Job ID: ${err.message}`);
+        }
+      }
+
+      const defaultOpportunityName = this.buildConvertedOpportunityName(lead);
+      const defaultAccountName = this.buildConvertedAccountName(lead, jobId);
+
       // Create Account
       const account = await tx.account.create({
         data: {
-          name: options.accountName || lead.company || `${lead.firstName} ${lead.lastName}`,
+          name: defaultAccountName,
           billingStreet: lead.street,
           billingCity: lead.city,
           billingState: lead.state,
@@ -1168,47 +1229,9 @@ class LeadService {
       // Create Opportunity if requested
       let opportunity = null;
       if (options.createOpportunity !== false) {
-        // Generate Job ID within transaction using row-level lock
-        const currentYear = new Date().getFullYear();
-        let jobId = null;
-
-        try {
-          // Try to get and lock the sequence row for this year
-          const sequences = await tx.$queryRaw`
-            SELECT id, year, last_number
-            FROM job_id_sequences
-            WHERE year = ${currentYear}
-            FOR UPDATE
-          `;
-
-          let nextNumber;
-          if (!sequences || sequences.length === 0) {
-            // First job of the year - create the sequence
-            const newSequenceId = `job-seq-${currentYear}`;
-            await tx.$executeRaw`
-              INSERT INTO job_id_sequences (id, year, last_number, created_at, updated_at)
-              VALUES (${newSequenceId}, ${currentYear}, ${JOB_ID_STARTING_NUMBER + 1}, NOW(), NOW())
-            `;
-            nextNumber = JOB_ID_STARTING_NUMBER + 1;
-          } else {
-            // Increment the sequence
-            nextNumber = Number(sequences[0].last_number) + 1;
-            await tx.$executeRaw`
-              UPDATE job_id_sequences
-              SET last_number = ${nextNumber}, updated_at = NOW()
-              WHERE year = ${currentYear}
-            `;
-          }
-          jobId = `${currentYear}-${nextNumber}`;
-          logger.info(`Generated Job ID: ${jobId} for lead conversion`);
-        } catch (err) {
-          // Log error but don't fail the conversion - Job ID can be assigned later
-          logger.warn(`Failed to generate Job ID: ${err.message}`);
-        }
-
         opportunity = await tx.opportunity.create({
           data: {
-            name: options.opportunityName || `${lead.firstName} ${lead.lastName} - ${new Date().toLocaleDateString()}`,
+            name: defaultOpportunityName,
             job_id: jobId, // Auto-assigned Job ID (using underscore field name from schema)
             accountId: account.id,
             contactId: contact.id,

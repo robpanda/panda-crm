@@ -1313,8 +1313,9 @@ export default function LeadWizard() {
     }
 
     const conversionData = {
-      accountName: formData.company || `${formData.firstName} ${formData.lastName}`,
-      // Note: opportunityName not sent - backend auto-generates using job number
+      // Backend enforces naming:
+      // Opportunity name -> customer full name or company
+      // Account name -> "<jobId> <customer full name/company>"
       opportunityType,
       createOpportunity: true,
       // Pass work type and appointment for Service Appointment creation
