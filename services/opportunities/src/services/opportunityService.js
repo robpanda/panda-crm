@@ -456,6 +456,79 @@ async function getNotificationService() {
 }
 
 class OpportunityService {
+  async getConvertedLeadContext(opportunityId) {
+    if (!opportunityId) {
+      return {
+        sourceLeadId: null,
+        leadSetById: null,
+        leadSetByName: null,
+        leadSetBy: null,
+      };
+    }
+
+    const sourceLead = await prisma.lead.findFirst({
+      where: { convertedOpportunityId: opportunityId },
+      select: {
+        id: true,
+        leadSetById: true,
+        ownerId: true,
+        leadSetBy: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            managerId: true,
+            manager: { select: { id: true, firstName: true, lastName: true } },
+          },
+        },
+        owner: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            managerId: true,
+            manager: { select: { id: true, firstName: true, lastName: true } },
+          },
+        },
+      },
+    });
+
+    if (!sourceLead) {
+      return {
+        sourceLeadId: null,
+        leadSetById: null,
+        leadSetByName: null,
+        leadSetBy: null,
+      };
+    }
+
+    const leadSetter = sourceLead.leadSetBy || sourceLead.owner || null;
+    const leadSetByName = leadSetter
+      ? `${leadSetter.firstName || ''} ${leadSetter.lastName || ''}`.trim()
+      : null;
+
+    return {
+      sourceLeadId: sourceLead.id,
+      leadSetById: sourceLead.leadSetById || sourceLead.ownerId || null,
+      leadSetByName: leadSetByName || null,
+      leadSetBy: leadSetter
+        ? {
+          id: leadSetter.id,
+          firstName: leadSetter.firstName || null,
+          lastName: leadSetter.lastName || null,
+          managerId: leadSetter.managerId || null,
+          manager: leadSetter.manager
+            ? {
+              id: leadSetter.manager.id,
+              firstName: leadSetter.manager.firstName || null,
+              lastName: leadSetter.manager.lastName || null,
+            }
+            : null,
+        }
+        : null,
+    };
+  }
+
   /**
    * Get opportunities with filtering and pagination
    * Replicates: SalesLeaderOpportunityListController.getOpportunities()
@@ -577,60 +650,63 @@ class OpportunityService {
   async getOpportunityDetails(id) {
     try {
       console.log(`[getOpportunityDetails] Fetching opportunity: ${id}`);
-      const opportunity = await prisma.opportunity.findUnique({
-        where: { id },
-        include: {
-          account: true,
-          contact: true,
-          owner: {
-            select: { id: true, firstName: true, lastName: true, email: true },
-          },
-          lineItems: {
-            orderBy: { sortOrder: 'asc' },
-            include: { product: true },
-          },
-          quotes: {
-            orderBy: { createdAt: 'desc' },
-            take: 10,
-            include: {
-              lineItems: {
-                include: { product: true },
-                orderBy: { sortOrder: 'asc' },
+      const [opportunity, convertedLeadContext] = await Promise.all([
+        prisma.opportunity.findUnique({
+          where: { id },
+          include: {
+            account: true,
+            contact: true,
+            owner: {
+              select: { id: true, firstName: true, lastName: true, email: true },
+            },
+            lineItems: {
+              orderBy: { sortOrder: 'asc' },
+              include: { product: true },
+            },
+            quotes: {
+              orderBy: { createdAt: 'desc' },
+              take: 10,
+              include: {
+                lineItems: {
+                  include: { product: true },
+                  orderBy: { sortOrder: 'asc' },
+                },
+              },
+            },
+            orders: {
+              orderBy: { createdAt: 'desc' },
+              take: 10,
+            },
+            serviceContract: true,
+            commissions: {
+              include: {
+                owner: { select: { firstName: true, lastName: true } },
+              },
+            },
+            notes: {
+              orderBy: { createdAt: 'desc' },
+              take: 20,
+              include: {
+                createdBy: { select: { firstName: true, lastName: true } },
+              },
+            },
+            tasks: {
+              orderBy: { dueDate: 'asc' },
+              include: {
+                assignedTo: { select: { firstName: true, lastName: true } },
+              },
+            },
+            measurementReports: {
+              orderBy: { createdAt: 'desc' },
+              take: 5,
+              include: {
+                orderedBy: { select: { firstName: true, lastName: true } },
               },
             },
           },
-          orders: {
-            orderBy: { createdAt: 'desc' },
-            take: 10,
-          },
-          serviceContract: true,
-          commissions: {
-            include: {
-              owner: { select: { firstName: true, lastName: true } },
-            },
-          },
-          notes: {
-            orderBy: { createdAt: 'desc' },
-            take: 20,
-            include: {
-              createdBy: { select: { firstName: true, lastName: true } },
-            },
-          },
-          tasks: {
-            orderBy: { dueDate: 'asc' },
-            include: {
-              assignedTo: { select: { firstName: true, lastName: true } },
-            },
-          },
-          measurementReports: {
-            orderBy: { createdAt: 'desc' },
-            take: 5,
-            include: {
-              orderedBy: { select: { firstName: true, lastName: true } },
-            },
-          },
-        },
-      });
+        }),
+        this.getConvertedLeadContext(id),
+      ]);
 
       if (!opportunity) {
         console.log(`[getOpportunityDetails] Opportunity not found: ${id}`);
@@ -640,7 +716,7 @@ class OpportunityService {
       }
 
       console.log(`[getOpportunityDetails] Found opportunity: ${opportunity.name}`);
-      const wrapper = this.createOpportunityWrapper(opportunity, true);
+      const wrapper = this.createOpportunityWrapper({ ...opportunity, ...convertedLeadContext }, true);
       console.log(`[getOpportunityDetails] Wrapper created successfully`);
       return wrapper;
     } catch (error) {
@@ -2126,7 +2202,8 @@ Be factual and professional. Highlight anything that needs attention.`;
     });
 
     logger.info(`Opportunity created: ${opportunity.id} (${opportunity.name}) with Job ID: ${opportunity.jobId}`);
-    return this.createOpportunityWrapper(opportunity, true);
+    const convertedLeadContext = await this.getConvertedLeadContext(opportunity.id);
+    return this.createOpportunityWrapper({ ...opportunity, ...convertedLeadContext }, true);
   }
 
   /**
@@ -2344,7 +2421,8 @@ Be factual and professional. Highlight anything that needs attention.`;
       }
     }
 
-    return this.createOpportunityWrapper(opportunity, true);
+    const convertedLeadContext = await this.getConvertedLeadContext(id);
+    return this.createOpportunityWrapper({ ...opportunity, ...convertedLeadContext }, true);
   }
 
   /**
@@ -2416,8 +2494,9 @@ Be factual and professional. Highlight anything that needs attention.`;
       },
     });
 
+    const convertedLeadContext = await this.getConvertedLeadContext(id);
     return {
-      opportunity: this.createOpportunityWrapper(updatedOpportunity, true),
+      opportunity: this.createOpportunityWrapper({ ...updatedOpportunity, ...convertedLeadContext }, true),
       appointmentResult,
     };
   }
@@ -2480,6 +2559,10 @@ Be factual and professional. Highlight anything that needs attention.`;
    * Create opportunity wrapper with computed fields
    */
   createOpportunityWrapper(opp, includeDetails = false) {
+    const leadSetByName = opp.leadSetByName
+      || (opp.leadSetBy ? `${opp.leadSetBy.firstName || ''} ${opp.leadSetBy.lastName || ''}`.trim() : null)
+      || null;
+
     const wrapper = {
       id: opp.id,
       name: opp.name,
@@ -2519,6 +2602,25 @@ Be factual and professional. Highlight anything that needs attention.`;
       // Owner
       ownerId: opp.ownerId,
       ownerName: opp.owner ? `${opp.owner.firstName} ${opp.owner.lastName}` : 'Unassigned',
+      // Source lead attribution
+      sourceLeadId: opp.sourceLeadId || null,
+      leadSetById: opp.leadSetById || null,
+      leadSetByName,
+      leadSetBy: opp.leadSetBy
+        ? {
+          id: opp.leadSetBy.id,
+          firstName: opp.leadSetBy.firstName,
+          lastName: opp.leadSetBy.lastName,
+          managerId: opp.leadSetBy.managerId || null,
+          manager: opp.leadSetBy.manager
+            ? {
+              id: opp.leadSetBy.manager.id,
+              firstName: opp.leadSetBy.manager.firstName,
+              lastName: opp.leadSetBy.manager.lastName,
+            }
+            : null,
+        }
+        : null,
       // Timestamps
       createdAt: opp.createdAt,
       updatedAt: opp.updatedAt,

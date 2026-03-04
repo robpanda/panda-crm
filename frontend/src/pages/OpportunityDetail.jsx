@@ -2191,7 +2191,6 @@ export default function OpportunityDetail() {
     disposition: '',
     workType: '',
     leadSource: '',
-    leadCreditor: '',
     amount: '',
     street: '',
     city: '',
@@ -2417,7 +2416,6 @@ export default function OpportunityDetail() {
         disposition: opportunity.disposition || '',
         workType: opportunity.workType || '',
         leadSource: opportunity.leadSource || '',
-        leadCreditor: opportunity.leadCreditor || '',
         amount: opportunity.amount || '',
         street: opportunity.street || '',
         city: opportunity.city || '',
@@ -2439,7 +2437,6 @@ export default function OpportunityDetail() {
         disposition: opportunity.disposition || '',
         workType: opportunity.workType || '',
         leadSource: opportunity.leadSource || '',
-        leadCreditor: opportunity.leadCreditor || '',
         amount: opportunity.amount || '',
         street: opportunity.street || '',
         city: opportunity.city || '',
@@ -2457,7 +2454,6 @@ export default function OpportunityDetail() {
       disposition: editForm.disposition || null,
       workType: editForm.workType || null,
       leadSource: editForm.leadSource || null,
-      leadCreditor: editForm.leadCreditor || null,
       amount: editForm.amount ? parseFloat(editForm.amount) : null,
       street: editForm.street || null,
       city: editForm.city || null,
@@ -4215,20 +4211,10 @@ export default function OpportunityDetail() {
                           )}
                         </div>
                         <div className={`bg-gray-50 p-4 rounded-lg border-l-4 border-blue-400 ${isEditMode ? 'ring-2 ring-blue-200' : ''}`}>
-                          <label className="text-sm text-gray-500">Lead Creditor</label>
-                          {isEditMode ? (
-                            <input
-                              type="text"
-                              value={editForm.leadCreditor}
-                              onChange={(e) => setEditForm({ ...editForm, leadCreditor: e.target.value })}
-                              placeholder="Enter lead creditor"
-                              className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-panda-primary focus:border-transparent"
-                            />
-                          ) : (
-                            <p className={`font-medium ${opportunity.leadCreditor ? 'text-gray-900' : 'text-gray-500 italic'}`}>
-                              {opportunity.leadCreditor || 'Not set'}
-                            </p>
-                          )}
+                          <label className="text-sm text-gray-500">Lead Set By</label>
+                          <p className={`font-medium ${opportunity.leadSetByName ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                            {opportunity.leadSetByName || 'Not set'}
+                          </p>
                         </div>
                         <div className="bg-gray-50 p-4 rounded-lg border-l-4 border-blue-400">
                           <label className="text-sm text-gray-500">Account Name</label>
@@ -7821,8 +7807,10 @@ export default function OpportunityDetail() {
                     <p className="font-medium text-gray-500 italic">Not set</p>
                   </div>
                   <div>
-                    <label className="text-sm text-gray-500">Lead Creditor</label>
-                    <p className="font-medium text-gray-500 italic">Not set</p>
+                    <label className="text-sm text-gray-500">Lead Set By</label>
+                    <p className={`font-medium ${opportunity.leadSetByName ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                      {opportunity.leadSetByName || 'Not set'}
+                    </p>
                   </div>
                   <div>
                     <label className="text-sm text-gray-500">Account Name</label>
