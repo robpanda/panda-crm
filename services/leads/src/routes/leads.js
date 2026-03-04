@@ -6,6 +6,13 @@ import { leadScoringService } from '../services/leadScoringService.js';
 
 const router = Router();
 
+const getAuditContext = (req) => ({
+  userId: req.user?.id,
+  userEmail: req.user?.email,
+  ipAddress: req.ip || req.headers['x-forwarded-for']?.split(',')[0],
+  userAgent: req.headers['user-agent'],
+});
+
 // Validation error handler
 const handleValidation = async (req, res, next) => {
   const { validationResult } = await import('express-validator');
@@ -535,6 +542,52 @@ router.post('/', validateCreate, handleValidation, async (req, res, next) => {
 // DYNAMIC :id ROUTES - Must come AFTER static routes
 // ============================================================================
 
+// Get lead gating state (sales path decision state + conversion blockers)
+router.get('/:id/gating/state', async (req, res, next) => {
+  try {
+    const state = await leadService.getGatingState(req.params.id);
+    res.json({ success: true, data: state });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Validate lead pre-conversion gating rules
+const handleValidatePreConversion = async (req, res, next) => {
+  try {
+    const result = await leadService.validatePreConversion(req.params.id);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+};
+router.post('/:id/gating/validate-pre-conversion', handleValidatePreConversion);
+router.get('/:id/gating/validate-pre-conversion', handleValidatePreConversion);
+
+// Select sales path (RETAIL/INSURANCE) for inspected leads
+router.post('/:id/gating/select-sales-path', async (req, res, next) => {
+  try {
+    const salesPath = req.body?.salesPath || req.body?.path || req.body?.opportunityType;
+    const result = await leadService.selectSalesPath(req.params.id, salesPath, getAuditContext(req));
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Apply gating transition (e.g. NO_INSPECTION, INSPECTED)
+const handleGatingTransition = async (req, res, next) => {
+  try {
+    const transition = req.body?.transition || req.body?.action || req.body?.target;
+    const result = await leadService.applyGatingTransition(req.params.id, transition, getAuditContext(req));
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+};
+router.post('/:id/gating/apply-transition', handleGatingTransition);
+router.post('/:id/gating/transition', handleGatingTransition);
+
 // Get lead by ID
 router.get('/:id', async (req, res, next) => {
   try {
@@ -550,12 +603,7 @@ router.put('/:id', async (req, res, next) => {
   try {
     const lead = await leadService.updateLead(req.params.id, {
       ...req.body,
-      _auditContext: {
-        userId: req.user?.id,
-        userEmail: req.user?.email,
-        ipAddress: req.ip || req.headers['x-forwarded-for']?.split(',')[0],
-        userAgent: req.headers['user-agent'],
-      },
+      _auditContext: getAuditContext(req),
     });
     res.json({ success: true, data: lead });
   } catch (error) {
@@ -567,12 +615,7 @@ router.patch('/:id', async (req, res, next) => {
   try {
     const lead = await leadService.updateLead(req.params.id, {
       ...req.body,
-      _auditContext: {
-        userId: req.user?.id,
-        userEmail: req.user?.email,
-        ipAddress: req.ip || req.headers['x-forwarded-for']?.split(',')[0],
-        userAgent: req.headers['user-agent'],
-      },
+      _auditContext: getAuditContext(req),
     });
     res.json({ success: true, data: lead });
   } catch (error) {

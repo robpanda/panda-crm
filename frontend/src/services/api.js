@@ -358,6 +358,26 @@ export const leadsApi = {
     return response.data.data;
   },
 
+  async getGatingState(leadId) {
+    const response = await api.get(`/api/leads/${leadId}/gating/state`);
+    return response.data;
+  },
+
+  async validatePreConversion(leadId) {
+    const response = await api.post(`/api/leads/${leadId}/gating/validate-pre-conversion`, {});
+    return response.data;
+  },
+
+  async selectSalesPath(leadId, salesPath) {
+    const response = await api.post(`/api/leads/${leadId}/gating/select-sales-path`, { salesPath });
+    return response.data;
+  },
+
+  async applyGatingTransition(leadId, transition) {
+    const response = await api.post(`/api/leads/${leadId}/gating/apply-transition`, { transition });
+    return response.data;
+  },
+
   async getLeadCounts(ownerIdOrParams, ownerIds) {
     const params = {};
     // Handle both calling conventions:
