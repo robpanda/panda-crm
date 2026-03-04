@@ -45,7 +45,16 @@ export default function InternalComments({ entityType, entityId }) {
 
   const { data: comments = [], isLoading, error } = useQuery({
     queryKey: ['internalComments', entityType, entityId],
-    queryFn: () => api?.getInternalComments?.(entityId),
+    queryFn: async () => {
+      try {
+        return await api?.getInternalComments?.(entityId);
+      } catch (err) {
+        // Some older backend routes return 404 for empty/unwired internal comments.
+        // Treat this as empty state instead of hard failure so the tab remains usable.
+        if (err?.response?.status === 404) return [];
+        throw err;
+      }
+    },
     enabled: !!entityId && !!api?.getInternalComments,
   });
 
@@ -279,17 +288,13 @@ export default function InternalComments({ entityType, entityId }) {
   }
 
   if (error) {
-    const status = error?.response?.status;
-    const message = status === 404
-      ? 'Internal comments are not available for this record yet.'
-      : 'Failed to load internal comments.';
     return (
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
         <div className="flex items-center gap-2 mb-4">
           <MessageCircle className="w-5 h-5 text-panda-primary" />
           <h3 className="text-lg font-semibold text-gray-900">Internal Comments</h3>
         </div>
-        <p className="text-sm text-red-500">{message}</p>
+        <p className="text-sm text-red-500">Failed to load internal comments.</p>
       </div>
     );
   }

@@ -3498,11 +3498,11 @@ export default function OpportunityDetail() {
         };
       case 'messages':
         return {
-          conversations: totalUnread,
-          internalNotes: 0,
           internalComments: 0,
-          communications: activityData?.activities?.filter(a => a.sourceType === 'ACCULYNX_IMPORT')?.length || 0,
+          internalNotes: 0,
+          conversations: totalUnread,
           notifications: unreadNotifications,
+          activity: activityData?.activities?.length || 0,
         };
       default:
         return {};
@@ -3540,7 +3540,7 @@ export default function OpportunityDetail() {
     { id: 'contacts', label: 'Contacts', icon: Users, count: summary?.counts?.contacts || contacts?.length || 0 },
     { id: 'workOrders', label: 'Work Orders', icon: Wrench, count: summary?.counts?.workOrders || workOrders?.length || 0 },
     { id: 'cases', label: 'Cases', icon: Briefcase, count: cases?.length || 0 },
-    { id: 'conversations', label: 'Conversations', icon: MessageSquare, count: totalUnread, highlight: totalUnread > 0 },
+    { id: 'conversations', label: 'Customer Comms', icon: MessageSquare, count: totalUnread, highlight: totalUnread > 0 },
     { id: 'notifications', label: 'Notifications', icon: Bell, count: unreadNotifications, highlight: unreadNotifications > 0 },
     { id: 'approvals', label: 'Approvals', icon: Scale },
     { id: 'financials', label: 'Financials', icon: DollarSign, count: (invoices?.length || 0) + (quotes?.length || 0) },
@@ -3549,8 +3549,7 @@ export default function OpportunityDetail() {
     { id: 'payments', label: 'Payments', icon: CreditCard, count: payments?.length || 0 },
     { id: 'commissions', label: 'Commissions', icon: Percent, count: summary?.counts?.commissions || commissions?.length || 0 },
     { id: 'documents', label: 'Documents', icon: FileSignature, count: (summary?.counts?.documents || documents?.documents?.length || 0) },
-    { id: 'activity', label: 'Activity', icon: Activity, count: activityData?.activities?.filter(a => a.sourceType !== 'ACCULYNX_IMPORT')?.length || 0 },
-    { id: 'communications', label: 'Communications', icon: PhoneCall, count: activityData?.activities?.filter(a => a.sourceType === 'ACCULYNX_IMPORT')?.length || 0 },
+    { id: 'activity', label: 'Activity', icon: Activity, count: activityData?.activities?.length || 0 },
     { id: 'tasks', label: 'Tasks', icon: CheckSquare, count: tasks?.filter(t => t.status !== 'COMPLETED')?.length || 0 },
     { id: 'checklist', label: 'Checklist', icon: ClipboardList },
   ];
@@ -6015,7 +6014,7 @@ export default function OpportunityDetail() {
                   <div className="space-y-4">
                     {/* Header with Action Buttons */}
                     <div className="flex items-center justify-between">
-                      <h3 className="text-sm font-semibold text-gray-900">Conversations</h3>
+                      <h3 className="text-sm font-semibold text-gray-900">Customer Comms</h3>
                       <div className="flex items-center space-x-2">
                         <button
                           onClick={() => setShowSmsModal(true)}
@@ -7564,25 +7563,11 @@ export default function OpportunityDetail() {
 
                 {activeTab === 'activity' && (
                   <ActivityTimelineTab
-                    activities={activityData?.activities?.filter(a => a.sourceType !== 'ACCULYNX_IMPORT') || []}
+                    activities={activityData?.activities || []}
                     onActivityClick={(item) => {
                       setSelectedActivity(item);
                       setShowActivityModal(true);
                     }}
-                  />
-                )}
-
-                {activeTab === 'communications' && (
-                  <CommunicationsTab
-                    phone={opportunity?.contact?.phone || opportunity?.contact?.mobilePhone}
-                    email={opportunity?.contact?.email}
-                    contactName={opportunity?.contact?.name || `${opportunity?.contact?.firstName || ''} ${opportunity?.contact?.lastName || ''}`}
-                    archivedActivities={activityData?.activities?.filter(a => a.sourceType === 'ACCULYNX_IMPORT') || []}
-                    onActivityClick={(item) => {
-                      setSelectedActivity(item);
-                      setShowActivityModal(true);
-                    }}
-                    opportunityId={id}
                   />
                 )}
 
