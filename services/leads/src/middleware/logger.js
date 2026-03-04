@@ -10,7 +10,7 @@ export const logger = winston.createLogger({
     errors({ stack: true }),
     json()
   ),
-  defaultMeta: { service: 'accounts-service' },
+  defaultMeta: { service: 'leads-service' },
   transports: [
     new winston.transports.Console({
       format: process.env.NODE_ENV === 'production'

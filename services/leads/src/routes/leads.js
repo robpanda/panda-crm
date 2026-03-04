@@ -66,6 +66,20 @@ router.get('/sources', (req, res) => {
   res.json({ success: true, data: leadService.getLeadSources() });
 });
 
+// Internal comment departments (static list until dedicated comment service is wired)
+router.get('/comment-departments', (req, res) => {
+  res.json({
+    success: true,
+    data: [
+      { value: 'general', label: 'General' },
+      { value: 'sales', label: 'Sales' },
+      { value: 'production', label: 'Production' },
+      { value: 'admin', label: 'Admin' },
+      { value: 'finance', label: 'Finance' },
+    ],
+  });
+});
+
 // Get lead counts
 router.get('/counts', async (req, res, next) => {
   try {

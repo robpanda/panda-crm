@@ -253,15 +253,24 @@ class LeadService {
     }
 
     // By status (with owner filter if specified)
-    const statusCounts = await prisma.lead.groupBy({
-      by: ['status'],
-      where: { isConverted: false, deleted_at: null, ...ownerWhere },
-      _count: { id: true },
-    });
+    // Use raw SQL here so legacy/non-enum status values do not crash Prisma enum decoding.
+    let statusQueryWhere = Prisma.sql`WHERE is_converted = false AND deleted_at IS NULL`;
+    if (ownerIds && ownerIds.length > 0) {
+      statusQueryWhere = Prisma.sql`${statusQueryWhere} AND owner_id IN (${Prisma.join(ownerIds)})`;
+    } else if (ownerId) {
+      statusQueryWhere = Prisma.sql`${statusQueryWhere} AND owner_id = ${ownerId}`;
+    }
+
+    const statusCounts = await prisma.$queryRaw`
+      SELECT status::text AS status, COUNT(*)::int AS count
+      FROM leads
+      ${statusQueryWhere}
+      GROUP BY status
+    `;
 
     for (const item of statusCounts) {
       if (item.status) {
-        counts[item.status] = item._count.id;
+        counts[item.status] = item.count;
       }
     }
 
@@ -527,16 +536,15 @@ class LeadService {
       const rank = score >= 80 ? 'A' : score >= 60 ? 'B' : score >= 40 ? 'C' : score >= 20 ? 'D' : 'F';
 
       // Update lead with score
-      // Note: Using underscore field names from schema (lead_rank, lead_score, etc.)
       await prisma.lead.update({
         where: { id: leadId },
         data: {
           score: score,
-          lead_score: score,
-          lead_rank: rank,
-          score_factors: factors,
-          scored_at: new Date(),
-          score_version: 1,
+          leadScore: score,
+          leadRank: rank,
+          scoreFactors: factors,
+          scoredAt: new Date(),
+          scoreVersion: 1,
         },
       });
 
@@ -929,17 +937,17 @@ class LeadService {
       disposition: lead.disposition,
       leadSetById: lead.leadSetById,
       leadSetByName: lead.leadSetBy ? `${lead.leadSetBy.firstName} ${lead.leadSetBy.lastName}` : null,
-      // Lead Intelligence / Scoring fields (snake_case in DB)
-      leadScore: lead.lead_score,
-      leadRank: lead.lead_rank,
-      scoreFactors: lead.score_factors,
-      scoredAt: lead.scored_at,
-      // Demographic enrichment (snake_case in DB)
-      medianHouseholdIncome: lead.median_household_income,
-      medianHomeValue: lead.median_home_value,
-      homeownershipRate: lead.homeownership_rate,
-      medianAge: lead.median_age,
-      enrichedAt: lead.enriched_at,
+      // Lead Intelligence / Scoring fields
+      leadScore: lead.leadScore,
+      leadRank: lead.leadRank,
+      scoreFactors: lead.scoreFactors,
+      scoredAt: lead.scoredAt,
+      // Demographic enrichment
+      medianHouseholdIncome: lead.medianHouseholdIncome,
+      medianHomeValue: lead.medianHomeValue,
+      homeownershipRate: lead.homeownershipRate,
+      medianAge: lead.medianAge,
+      enrichedAt: lead.enrichedAt,
       // Champion Referral fields
       isChampionReferral: lead.isChampionReferral || false,
       championReferralId: lead.championReferralId,
@@ -1585,7 +1593,7 @@ class LeadService {
    * Used by: Call Center to document calls and status updates
    */
   async addLeadNote(leadId, data) {
-    const { note, title, createdBy, isPinned } = data;
+    const { note, title, createdBy } = data;
 
     // Verify lead exists
     const lead = await prisma.lead.findUnique({
@@ -1599,14 +1607,6 @@ class LeadService {
       throw error;
     }
 
-    // If this note will be pinned, unpin any existing pinned notes
-    if (isPinned) {
-      await prisma.note.updateMany({
-        where: { leadId: leadId, isPinned: true },
-        data: { isPinned: false, pinnedAt: null },
-      });
-    }
-
     // Create the note
     const newNote = await prisma.note.create({
       data: {
@@ -1614,8 +1614,6 @@ class LeadService {
         body: note,
         leadId: leadId,
         createdById: createdBy,
-        isPinned: isPinned || false,
-        pinnedAt: isPinned ? new Date() : null,
       },
       include: {
         createdBy: {
@@ -1630,7 +1628,7 @@ class LeadService {
       id: newNote.id,
       title: newNote.title,
       body: newNote.body,
-      isPinned: newNote.isPinned || false,
+      isPinned: false,
       createdAt: newNote.createdAt,
       updatedAt: newNote.updatedAt,
       createdBy: newNote.createdBy,
@@ -1670,10 +1668,6 @@ class LeadService {
     const updateData = {};
     if (data.title !== undefined) updateData.title = data.title;
     if (data.body !== undefined) updateData.body = data.body;
-    if (data.isPinned !== undefined) {
-      updateData.isPinned = data.isPinned;
-      updateData.pinnedAt = data.isPinned ? new Date() : null;
-    }
 
     const updatedNote = await prisma.note.update({
       where: { id: noteId },
@@ -1691,8 +1685,8 @@ class LeadService {
       id: updatedNote.id,
       title: updatedNote.title,
       body: updatedNote.body,
-      isPinned: updatedNote.isPinned || false,
-      pinnedAt: updatedNote.pinnedAt,
+      isPinned: false,
+      pinnedAt: null,
       createdAt: updatedNote.createdAt,
       updatedAt: updatedNote.updatedAt,
       createdBy: updatedNote.createdBy,
@@ -1720,6 +1714,11 @@ class LeadService {
     // Verify note exists and belongs to this lead
     const existingNote = await prisma.note.findFirst({
       where: { id: noteId, leadId: leadId },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
     });
 
     if (!existingNote) {
@@ -1766,41 +1765,17 @@ class LeadService {
       throw error;
     }
 
-    const newPinnedState = !existingNote.isPinned;
-
-    // If pinning, unpin any other pinned notes for this lead
-    if (newPinnedState) {
-      await prisma.note.updateMany({
-        where: { leadId: leadId, isPinned: true },
-        data: { isPinned: false, pinnedAt: null },
-      });
-    }
-
-    // Update the note
-    const updatedNote = await prisma.note.update({
-      where: { id: noteId },
-      data: {
-        isPinned: newPinnedState,
-        pinnedAt: newPinnedState ? new Date() : null,
-      },
-      include: {
-        createdBy: {
-          select: { id: true, firstName: true, lastName: true, email: true },
-        },
-      },
-    });
-
-    logger.info(`Note ${noteId} pin toggled to ${newPinnedState} for lead ${leadId}`);
+    logger.warn(`Pinning notes is not supported by current schema; returning unpinned note for lead ${leadId}`);
 
     return {
-      id: updatedNote.id,
-      title: updatedNote.title,
-      body: updatedNote.body,
-      isPinned: updatedNote.isPinned || false,
-      pinnedAt: updatedNote.pinnedAt,
-      createdAt: updatedNote.createdAt,
-      updatedAt: updatedNote.updatedAt,
-      createdBy: updatedNote.createdBy,
+      id: existingNote.id,
+      title: existingNote.title,
+      body: existingNote.body,
+      isPinned: false,
+      pinnedAt: null,
+      createdAt: existingNote.createdAt,
+      updatedAt: existingNote.updatedAt,
+      createdBy: existingNote.createdBy,
     };
   }
 
