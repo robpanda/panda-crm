@@ -94,6 +94,7 @@ function PaymentForm({ invoice, paymentAmount, onSuccess, onCancel, clientSecret
       <PaymentElement
         options={{
           layout: 'tabs',
+          paymentMethodOrder: ['card', 'us_bank_account'],
         }}
       />
 
@@ -357,7 +358,7 @@ export default function PayInvoiceModal({ isOpen, onClose, invoice, opportunity 
                   />
 
                   <p className="text-xs text-gray-500 text-center">
-                    Payments are securely processed by Stripe. Your card information is never stored on our servers.
+                    Payments are securely processed by Stripe. Available methods: Credit Card and ACH.
                   </p>
                 </div>
               </Elements>

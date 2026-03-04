@@ -37,8 +37,15 @@ function getSesClient() {
 // Validation schemas
 const lineItemSchema = z.object({
   description: z.string().min(1),
-  quantity: z.number().positive().default(1),
-  unitPrice: z.number().nonnegative(),
+  quantity: z.coerce.number().positive().default(1),
+  unitPrice: z.coerce.number().nonnegative(),
+});
+
+const additionalChargeSchema = z.object({
+  name: z.string().min(1).default('Supplement'),
+  chargeType: z.enum(['LATE_FEE', 'SERVICE_FEE', 'PROCESSING_FEE', 'ADJUSTMENT', 'OTHER']).optional(),
+  amount: z.coerce.number().nonnegative(),
+  notes: z.string().optional(),
 });
 
 const createInvoiceSchema = z.object({
@@ -58,8 +65,11 @@ const createInvoiceSchema = z.object({
 const updateInvoiceSchema = z.object({
   invoiceDate: z.string().datetime().optional(),
   dueDate: z.string().datetime().optional(),
-  terms: z.number().int().positive().optional(),
-  tax: z.number().nonnegative().optional(),
+  terms: z.coerce.number().int().positive().optional(),
+  tax: z.coerce.number().nonnegative().optional(),
+  notes: z.string().optional(),
+  lineItems: z.array(lineItemSchema).optional(),
+  additionalCharges: z.array(additionalChargeSchema).optional(),
   status: z.enum(['DRAFT', 'PENDING', 'SENT', 'PARTIAL', 'PAID', 'OVERDUE', 'VOID']).optional(),
 });
 
@@ -269,7 +279,13 @@ export async function updateInvoice(req, res, next) {
     const { id } = req.params;
     const data = updateInvoiceSchema.parse(req.body);
 
-    const existing = await prisma.invoice.findUnique({ where: { id } });
+    const existing = await prisma.invoice.findUnique({
+      where: { id },
+      include: {
+        lineItems: true,
+        additionalCharges: true,
+      },
+    });
     if (!existing) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
@@ -279,7 +295,12 @@ export async function updateInvoice(req, res, next) {
       return res.status(400).json({ error: `Cannot update ${existing.status.toLowerCase()} invoice` });
     }
 
-    const updateData = { ...data };
+    const updateData = {
+      status: data.status,
+      notes: data.notes,
+      terms: data.terms,
+      tax: data.tax,
+    };
 
     // Recalculate due date if terms or invoice date changed
     if (data.invoiceDate || data.terms) {
@@ -290,18 +311,96 @@ export async function updateInvoice(req, res, next) {
       updateData.dueDate = addDays(invoiceDate, terms);
     }
 
-    const invoice = await prisma.invoice.update({
-      where: { id },
-      data: {
-        ...updateData,
-        invoiceDate: data.invoiceDate ? new Date(data.invoiceDate) : undefined,
-        dueDate: updateData.dueDate,
-      },
-      include: {
-        account: { select: { id: true, name: true } },
-        lineItems: true,
-        payments: true,
-      },
+    if (data.dueDate) {
+      updateData.dueDate = new Date(data.dueDate);
+    }
+
+    const lineItemsForTotals = data.lineItems ?? existing.lineItems.map((item) => ({
+      description: item.description,
+      quantity: Number(item.quantity),
+      unitPrice: Number(item.unitPrice),
+    }));
+
+    if (lineItemsForTotals.length === 0) {
+      return res.status(400).json({ error: 'Invoice must have at least one line item' });
+    }
+
+    const taxAmount = data.tax ?? Number(existing.tax || 0);
+    const { lineItems: processedLineItems, subtotal, tax, total } = calculateTotals(lineItemsForTotals, taxAmount);
+
+    const additionalChargesForTotals = data.additionalCharges ?? existing.additionalCharges.map((charge) => ({
+      name: charge.name,
+      chargeType: charge.chargeType,
+      amount: Number(charge.amount),
+      notes: charge.notes || '',
+    }));
+
+    const additionalChargesTotal = additionalChargesForTotals.reduce(
+      (sum, charge) => sum.plus(charge.amount || 0),
+      new Decimal(0)
+    );
+
+    const invoiceTotal = new Decimal(total).plus(additionalChargesTotal);
+    const newBalanceDue = Decimal.max(invoiceTotal.minus(existing.amountPaid || 0), 0).toNumber();
+
+    const invoice = await prisma.$transaction(async (tx) => {
+      if (data.lineItems !== undefined) {
+        await tx.invoiceLineItem.deleteMany({ where: { invoiceId: id } });
+        if (processedLineItems.length > 0) {
+          await tx.invoiceLineItem.createMany({
+            data: processedLineItems.map((item) => ({
+              invoiceId: id,
+              description: item.description,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+              totalPrice: item.totalPrice,
+            })),
+          });
+        }
+      }
+
+      if (data.additionalCharges !== undefined) {
+        await tx.invoiceAdditionalCharge.deleteMany({
+          where: {
+            invoiceId: id,
+            chargeType: { in: ['SERVICE_FEE', 'PROCESSING_FEE', 'ADJUSTMENT', 'OTHER'] },
+          },
+        });
+
+        const chargesToCreate = additionalChargesForTotals
+          .filter((charge) => Number(charge.amount || 0) > 0)
+          .map((charge) => ({
+            invoiceId: id,
+            name: charge.name || 'Supplement',
+            chargeType: charge.chargeType || 'ADJUSTMENT',
+            amount: Number(charge.amount || 0),
+            fixedAmount: Number(charge.amount || 0),
+            notes: charge.notes || null,
+          }));
+
+        if (chargesToCreate.length > 0) {
+          await tx.invoiceAdditionalCharge.createMany({ data: chargesToCreate });
+        }
+      }
+
+      return tx.invoice.update({
+        where: { id },
+        data: {
+          ...updateData,
+          invoiceDate: data.invoiceDate ? new Date(data.invoiceDate) : undefined,
+          dueDate: updateData.dueDate,
+          subtotal,
+          tax,
+          total: invoiceTotal.toNumber(),
+          balanceDue: newBalanceDue,
+        },
+        include: {
+          account: { select: { id: true, name: true } },
+          lineItems: true,
+          additionalCharges: true,
+          payments: true,
+        },
+      });
     });
 
     res.json(invoice);

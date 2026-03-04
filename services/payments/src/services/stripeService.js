@@ -45,7 +45,14 @@ export const stripeService = {
 
   // ==================== PAYMENT INTENTS ====================
 
-  async createPaymentIntent({ amount, currency = 'usd', customerId, metadata = {}, description }) {
+  async createPaymentIntent({
+    amount,
+    currency = 'usd',
+    customerId,
+    metadata = {},
+    description,
+    paymentMethodTypes,
+  }) {
     logger.info('Creating payment intent', { amount, customerId });
 
     const paymentIntentData = {
@@ -56,10 +63,15 @@ export const stripeService = {
         source: 'panda-crm',
         ...metadata,
       },
-      automatic_payment_methods: {
-        enabled: true,
-      },
     };
+
+    if (Array.isArray(paymentMethodTypes) && paymentMethodTypes.length > 0) {
+      paymentIntentData.payment_method_types = paymentMethodTypes;
+    } else {
+      paymentIntentData.automatic_payment_methods = {
+        enabled: true,
+      };
+    }
 
     // Only add customer if provided
     if (customerId) {

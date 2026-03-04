@@ -1158,6 +1158,7 @@ class OpportunityService {
           orderBy: { paymentDate: 'desc' },
         },
         lineItems: true,
+        additionalCharges: true,
       },
     });
 
@@ -1172,6 +1173,7 @@ class OpportunityService {
             orderBy: { paymentDate: 'desc' },
           },
           lineItems: true,
+          additionalCharges: true,
         },
       });
     }
@@ -1189,8 +1191,13 @@ class OpportunityService {
         subtotal: Number(inv.subtotal),
         tax: Number(inv.tax),
         total: Number(inv.total),
+        totalAmount: Number(inv.total),
         amountPaid: Number(inv.amountPaid),
         balanceDue: Number(inv.balanceDue),
+        notes: inv.notes || '',
+        claimNumber: inv.claimNumber || null,
+        insuranceCarrier: inv.insuranceCarrier || null,
+        isInsuranceInvoice: !!inv.isInsuranceInvoice,
         // Stripe
         stripePaymentLinkUrl: inv.stripePaymentLinkUrl,
         stripeHostedInvoiceUrl: inv.stripeHostedInvoiceUrl,
@@ -1199,10 +1206,19 @@ class OpportunityService {
         qbSyncStatus: inv.qbSyncStatus,
         // Line items
         lineItems: inv.lineItems.map((li) => ({
+          id: li.id,
           description: li.description,
           quantity: Number(li.quantity),
           unitPrice: Number(li.unitPrice),
           totalPrice: Number(li.totalPrice),
+        })),
+        // Additional charges / supplements
+        additionalCharges: inv.additionalCharges.map((charge) => ({
+          id: charge.id,
+          name: charge.name,
+          chargeType: charge.chargeType,
+          amount: Number(charge.amount),
+          notes: charge.notes || '',
         })),
         // Payments
         payments: inv.payments.map((p) => ({

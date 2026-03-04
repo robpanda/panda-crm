@@ -501,6 +501,7 @@ router.post('/invoices/:invoiceId/create-intent', async (req, res, next) => {
       amount: Math.round(paymentAmount * 100), // Convert to cents
       currency: 'usd',
       customerId: stripeCustomerId,
+      paymentMethodTypes: ['card', 'us_bank_account'],
       metadata: {
         invoiceId: invoice.id,
         invoiceNumber: invoice.invoiceNumber,

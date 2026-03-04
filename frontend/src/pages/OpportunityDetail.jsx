@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { opportunitiesApi, companyCamApi, scheduleApi, casesApi, emailsApi, notificationsApi, bamboogliApi, approvalsApi, measurementsApi, contactsApi, ringCentralApi, usersApi, quotesApi, invoicesApi, tasksApi, documentsApi } from '../services/api';
+import { opportunitiesApi, companyCamApi, scheduleApi, casesApi, emailsApi, notificationsApi, bamboogliApi, approvalsApi, measurementsApi, contactsApi, ringCentralApi, usersApi, quotesApi, invoicesApi, paymentsApi, tasksApi, documentsApi } from '../services/api';
 import { useRingCentral } from '../context/RingCentralContext';
 import { useAuth } from '../context/AuthContext';
 import { addRecentItem } from '../utils/recentItems';
@@ -99,6 +99,7 @@ import {
   Send,
   ExternalLink,
   Download,
+  Trash2,
   ZoomIn,
   ChevronLeft,
   Grid,
@@ -494,25 +495,27 @@ function EmailModal({ isOpen, onClose, email, recipientName, onSent, mergeData =
   );
 }
 
-// Invoice Detail Modal Component - Shows invoice details with payment history
-function InvoiceDetailModal({ invoice, onClose }) {
+// Invoice Detail Modal Component - Includes send/resend, pay, download, and edit
+function InvoiceDetailModal({
+  invoice,
+  onClose,
+  onInvoiceUpdated,
+  onOpenSendInvoice,
+  onOpenPayInvoice,
+}) {
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    loadPayments();
-  }, [invoice.id]);
-
-  const loadPayments = async () => {
-    try {
-      const response = await paymentsApi.getPaymentsByInvoice(invoice.id);
-      setPayments(response.data || []);
-    } catch (err) {
-      console.error('Error loading payments:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [isEditing, setIsEditing] = useState(false);
+  const [editError, setEditError] = useState(null);
+  const [editSuccess, setEditSuccess] = useState(null);
+  const [form, setForm] = useState({
+    invoiceDate: '',
+    dueDate: '',
+    tax: 0,
+    notes: '',
+    lineItems: [],
+    additionalCharges: [],
+  });
 
   const formatDate = (date) => {
     if (!date) return '-';
@@ -523,18 +526,174 @@ function InvoiceDetailModal({ invoice, onClose }) {
     });
   };
 
+  const formatDateInput = (date) => {
+    if (!date) return '';
+    const parsed = new Date(date);
+    if (Number.isNaN(parsed.getTime())) return '';
+    return parsed.toISOString().slice(0, 10);
+  };
+
   const formatCurrency = (amount) => {
     if (amount === null || amount === undefined) return '$0.00';
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: 'USD',
-    }).format(amount);
+    }).format(Number(amount) || 0);
+  };
+
+  const hydrateFormFromInvoice = useCallback((sourceInvoice) => ({
+    invoiceDate: formatDateInput(sourceInvoice?.invoiceDate),
+    dueDate: formatDateInput(sourceInvoice?.dueDate),
+    tax: Number(sourceInvoice?.tax || 0),
+    notes: sourceInvoice?.notes || '',
+    lineItems: (sourceInvoice?.lineItems || []).map((item) => ({
+      id: item.id || null,
+      description: item.description || item.name || '',
+      quantity: Number(item.quantity || 1),
+      unitPrice: Number(item.unitPrice || item.price || 0),
+    })),
+    additionalCharges: (sourceInvoice?.additionalCharges || []).map((charge) => ({
+      id: charge.id || null,
+      name: charge.name || 'Supplement',
+      amount: Number(charge.amount || charge.fixedAmount || 0),
+      notes: charge.notes || '',
+      chargeType: charge.chargeType || 'ADJUSTMENT',
+    })),
+  }), []);
+
+  useEffect(() => {
+    setForm(hydrateFormFromInvoice(invoice));
+    setIsEditing(false);
+    setEditError(null);
+    setEditSuccess(null);
+  }, [invoice, hydrateFormFromInvoice]);
+
+  useEffect(() => {
+    const loadPayments = async () => {
+      setLoading(true);
+      try {
+        const response = await paymentsApi.getPaymentsByInvoice(invoice.id);
+        setPayments(response?.data || []);
+      } catch (err) {
+        console.error('Error loading payments:', err);
+        setPayments([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadPayments();
+  }, [invoice.id]);
+
+  const lineItemsSubtotal = useMemo(
+    () => form.lineItems.reduce((sum, item) => sum + (Number(item.quantity) * Number(item.unitPrice)), 0),
+    [form.lineItems]
+  );
+  const supplementsTotal = useMemo(
+    () => form.additionalCharges.reduce((sum, charge) => sum + Number(charge.amount || 0), 0),
+    [form.additionalCharges]
+  );
+  const computedTotal = lineItemsSubtotal + Number(form.tax || 0) + supplementsTotal;
+  const invoiceAmountPaid = Number(invoice.amountPaid || 0);
+  const computedBalanceDue = Math.max(computedTotal - invoiceAmountPaid, 0);
+
+  const canSendOrResend = (invoice.status || 'DRAFT') !== 'VOID';
+  const sendLabel = ['SENT', 'OVERDUE', 'PARTIAL', 'PAID'].includes(invoice.status) ? 'Resend' : 'Send';
+  const canPay = invoice.status !== 'PAID' && Number(invoice.balanceDue || 0) > 0;
+
+  const updateInvoiceMutation = useMutation({
+    mutationFn: (payload) => invoicesApi.updateInvoice(invoice.id, payload),
+    onSuccess: (updated) => {
+      const updatedInvoice = updated?.data || updated;
+      onInvoiceUpdated?.(updatedInvoice);
+      setEditSuccess('Invoice updated successfully');
+      setEditError(null);
+      setIsEditing(false);
+    },
+    onError: (error) => {
+      setEditError(error.message || 'Failed to update invoice');
+    },
+  });
+
+  const downloadInvoicePdfMutation = useMutation({
+    mutationFn: async () => {
+      let result = await invoicesApi.getInvoicePdf(invoice.id);
+      let pdfUrl = result?.pdfUrl || result?.data?.pdfUrl;
+      if (!pdfUrl) {
+        await invoicesApi.generateInvoicePdf(invoice.id);
+        result = await invoicesApi.getInvoicePdf(invoice.id);
+        pdfUrl = result?.pdfUrl || result?.data?.pdfUrl;
+      }
+      if (!pdfUrl) {
+        throw new Error('Invoice PDF is unavailable');
+      }
+      return pdfUrl;
+    },
+    onSuccess: (pdfUrl) => {
+      window.open(pdfUrl, '_blank', 'noopener,noreferrer');
+    },
+    onError: (error) => {
+      setEditError(error.message || 'Failed to download invoice PDF');
+    },
+  });
+
+  const handleLineItemChange = (index, key, value) => {
+    setForm((prev) => {
+      const updated = [...prev.lineItems];
+      updated[index] = {
+        ...updated[index],
+        [key]: key === 'quantity' || key === 'unitPrice' ? Number(value) : value,
+      };
+      return { ...prev, lineItems: updated };
+    });
+  };
+
+  const handleAdditionalChargeChange = (index, key, value) => {
+    setForm((prev) => {
+      const updated = [...prev.additionalCharges];
+      updated[index] = {
+        ...updated[index],
+        [key]: key === 'amount' ? Number(value) : value,
+      };
+      return { ...prev, additionalCharges: updated };
+    });
+  };
+
+  const handleSave = () => {
+    if (!form.lineItems.length) {
+      setEditError('At least one line item is required.');
+      return;
+    }
+    if (form.lineItems.some((item) => !item.description?.trim())) {
+      setEditError('All line items must have a description.');
+      return;
+    }
+
+    const payload = {
+      invoiceDate: form.invoiceDate ? new Date(`${form.invoiceDate}T00:00:00.000Z`).toISOString() : undefined,
+      dueDate: form.dueDate ? new Date(`${form.dueDate}T00:00:00.000Z`).toISOString() : undefined,
+      tax: Number(form.tax || 0),
+      notes: form.notes || '',
+      lineItems: form.lineItems.map((item) => ({
+        description: item.description.trim(),
+        quantity: Number(item.quantity || 0),
+        unitPrice: Number(item.unitPrice || 0),
+      })),
+      additionalCharges: form.additionalCharges
+        .filter((charge) => Number(charge.amount || 0) > 0)
+        .map((charge) => ({
+          name: charge.name?.trim() || 'Supplement',
+          amount: Number(charge.amount || 0),
+          notes: charge.notes || '',
+          chargeType: 'ADJUSTMENT',
+        })),
+    };
+
+    updateInvoiceMutation.mutate(payload);
   };
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col">
-        {/* Header */}
+      <div className="bg-white rounded-xl max-w-5xl w-full max-h-[88vh] overflow-hidden flex flex-col">
         <div className="flex items-center justify-between p-4 border-b">
           <div className="flex items-center gap-3">
             <Receipt className="w-6 h-6 text-panda-primary" />
@@ -545,39 +704,143 @@ function InvoiceDetailModal({ invoice, onClose }) {
               <p className="text-sm text-gray-500">Invoice Details</p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-          >
-            <X className="w-5 h-5 text-gray-500" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => downloadInvoicePdfMutation.mutate()}
+              disabled={downloadInvoicePdfMutation.isPending}
+              className="inline-flex items-center gap-1 px-3 py-2 border border-gray-200 rounded-lg text-sm hover:bg-gray-50 disabled:opacity-60"
+            >
+              {downloadInvoicePdfMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+              Download
+            </button>
+            {canSendOrResend && (
+              <button
+                onClick={() => onOpenSendInvoice?.(invoice)}
+                className="inline-flex items-center gap-1 px-3 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700"
+              >
+                <Mail className="w-4 h-4" />
+                {sendLabel}
+              </button>
+            )}
+            {canPay && (
+              <button
+                onClick={() => onOpenPayInvoice?.(invoice)}
+                className="inline-flex items-center gap-1 px-3 py-2 bg-green-600 text-white rounded-lg text-sm hover:bg-green-700"
+              >
+                <CreditCard className="w-4 h-4" />
+                Pay
+              </button>
+            )}
+            {!isEditing ? (
+              <button
+                onClick={() => {
+                  setIsEditing(true);
+                  setEditError(null);
+                  setEditSuccess(null);
+                }}
+                className="inline-flex items-center gap-1 px-3 py-2 border border-gray-200 rounded-lg text-sm hover:bg-gray-50"
+              >
+                <Edit className="w-4 h-4" />
+                Edit
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={handleSave}
+                  disabled={updateInvoiceMutation.isPending}
+                  className="inline-flex items-center gap-1 px-3 py-2 bg-panda-primary text-white rounded-lg text-sm hover:bg-panda-primary/90 disabled:opacity-60"
+                >
+                  {updateInvoiceMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
+                  Save
+                </button>
+                <button
+                  onClick={() => {
+                    setForm(hydrateFormFromInvoice(invoice));
+                    setIsEditing(false);
+                    setEditError(null);
+                  }}
+                  className="inline-flex items-center gap-1 px-3 py-2 border border-gray-200 rounded-lg text-sm hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+              </>
+            )}
+            <button
+              onClick={onClose}
+              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              <X className="w-5 h-5 text-gray-500" />
+            </button>
+          </div>
         </div>
 
-        {/* Content */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {/* Summary Grid */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {editError && (
+            <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+              <AlertCircle className="w-4 h-4" />
+              {editError}
+            </div>
+          )}
+          {editSuccess && (
+            <div className="flex items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-lg text-green-700 text-sm">
+              <CheckCircle className="w-4 h-4" />
+              {editSuccess}
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
             <div className="bg-gray-50 rounded-lg p-3">
               <p className="text-xs text-gray-500">Invoice Date</p>
-              <p className="text-sm font-medium">{formatDate(invoice.invoiceDate)}</p>
+              {isEditing ? (
+                <input
+                  type="date"
+                  value={form.invoiceDate}
+                  onChange={(e) => setForm((prev) => ({ ...prev, invoiceDate: e.target.value }))}
+                  className="mt-1 w-full text-sm px-2 py-1 border border-gray-300 rounded"
+                />
+              ) : (
+                <p className="text-sm font-medium">{formatDate(invoice.invoiceDate)}</p>
+              )}
             </div>
             <div className="bg-gray-50 rounded-lg p-3">
               <p className="text-xs text-gray-500">Due Date</p>
-              <p className="text-sm font-medium">{formatDate(invoice.dueDate)}</p>
+              {isEditing ? (
+                <input
+                  type="date"
+                  value={form.dueDate}
+                  onChange={(e) => setForm((prev) => ({ ...prev, dueDate: e.target.value }))}
+                  className="mt-1 w-full text-sm px-2 py-1 border border-gray-300 rounded"
+                />
+              ) : (
+                <p className="text-sm font-medium">{formatDate(invoice.dueDate)}</p>
+              )}
+            </div>
+            <div className="bg-gray-50 rounded-lg p-3">
+              <p className="text-xs text-gray-500">Tax</p>
+              {isEditing ? (
+                <input
+                  type="number"
+                  step="0.01"
+                  value={form.tax}
+                  onChange={(e) => setForm((prev) => ({ ...prev, tax: Number(e.target.value || 0) }))}
+                  className="mt-1 w-full text-sm px-2 py-1 border border-gray-300 rounded"
+                />
+              ) : (
+                <p className="text-sm font-medium">{formatCurrency(invoice.tax || 0)}</p>
+              )}
             </div>
             <div className="bg-gray-50 rounded-lg p-3">
               <p className="text-xs text-gray-500">Total Amount</p>
-              <p className="text-sm font-medium">{formatCurrency(invoice.totalAmount)}</p>
+              <p className="text-sm font-medium">{formatCurrency(isEditing ? computedTotal : (invoice.totalAmount ?? invoice.total ?? 0))}</p>
             </div>
             <div className="bg-gray-50 rounded-lg p-3">
               <p className="text-xs text-gray-500">Balance Due</p>
-              <p className={`text-sm font-medium ${parseFloat(invoice.balanceDue) > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                {formatCurrency(invoice.balanceDue)}
+              <p className={`text-sm font-medium ${(isEditing ? computedBalanceDue : Number(invoice.balanceDue || 0)) > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                {formatCurrency(isEditing ? computedBalanceDue : invoice.balanceDue)}
               </p>
             </div>
           </div>
 
-          {/* Status */}
           <div className="flex items-center gap-2">
             <span className="text-sm text-gray-500">Status:</span>
             <span className={`px-2 py-1 rounded-full text-xs font-medium ${
@@ -590,36 +853,233 @@ function InvoiceDetailModal({ invoice, onClose }) {
             </span>
           </div>
 
-          {/* Line Items */}
-          {invoice.lineItems && invoice.lineItems.length > 0 && (
-            <div>
-              <h3 className="text-sm font-medium text-gray-900 mb-2">Line Items</h3>
-              <div className="border rounded-lg overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="text-left p-2 text-gray-600">Description</th>
-                      <th className="text-right p-2 text-gray-600">Qty</th>
-                      <th className="text-right p-2 text-gray-600">Price</th>
-                      <th className="text-right p-2 text-gray-600">Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {invoice.lineItems.map((item, idx) => (
-                      <tr key={idx} className="border-t">
-                        <td className="p-2">{item.description || item.name}</td>
-                        <td className="p-2 text-right">{item.quantity || 1}</td>
-                        <td className="p-2 text-right">{formatCurrency(item.unitPrice || item.price)}</td>
-                        <td className="p-2 text-right">{formatCurrency(item.totalAmount || item.total)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+          <div className="border rounded-lg overflow-hidden">
+            <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b">
+              <h3 className="text-sm font-semibold text-gray-900">Line Items</h3>
+              {isEditing && (
+                <button
+                  onClick={() => setForm((prev) => ({
+                    ...prev,
+                    lineItems: [...prev.lineItems, { id: null, description: '', quantity: 1, unitPrice: 0 }],
+                  }))}
+                  className="inline-flex items-center gap-1 px-2 py-1 text-xs bg-panda-primary text-white rounded hover:bg-panda-primary/90"
+                >
+                  <Plus className="w-3 h-3" />
+                  Add Line Item
+                </button>
+              )}
             </div>
-          )}
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="text-left p-2 text-gray-600">Description</th>
+                  <th className="text-right p-2 text-gray-600 w-24">Qty</th>
+                  <th className="text-right p-2 text-gray-600 w-32">Price</th>
+                  <th className="text-right p-2 text-gray-600 w-32">Total</th>
+                  {isEditing && <th className="text-center p-2 text-gray-600 w-12"> </th>}
+                </tr>
+              </thead>
+              <tbody>
+                {form.lineItems.length > 0 ? form.lineItems.map((item, idx) => (
+                  <tr key={`${item.id || 'new'}-${idx}`} className="border-t">
+                    <td className="p-2">
+                      {isEditing ? (
+                        <input
+                          type="text"
+                          value={item.description}
+                          onChange={(e) => handleLineItemChange(idx, 'description', e.target.value)}
+                          className="w-full px-2 py-1 border border-gray-300 rounded"
+                        />
+                      ) : (
+                        item.description || '-'
+                      )}
+                    </td>
+                    <td className="p-2 text-right">
+                      {isEditing ? (
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={item.quantity}
+                          onChange={(e) => handleLineItemChange(idx, 'quantity', e.target.value)}
+                          className="w-full px-2 py-1 border border-gray-300 rounded text-right"
+                        />
+                      ) : (
+                        Number(item.quantity || 0).toLocaleString()
+                      )}
+                    </td>
+                    <td className="p-2 text-right">
+                      {isEditing ? (
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={item.unitPrice}
+                          onChange={(e) => handleLineItemChange(idx, 'unitPrice', e.target.value)}
+                          className="w-full px-2 py-1 border border-gray-300 rounded text-right"
+                        />
+                      ) : (
+                        formatCurrency(item.unitPrice)
+                      )}
+                    </td>
+                    <td className="p-2 text-right font-medium">
+                      {formatCurrency(Number(item.quantity || 0) * Number(item.unitPrice || 0))}
+                    </td>
+                    {isEditing && (
+                      <td className="p-2 text-center">
+                        <button
+                          onClick={() => setForm((prev) => ({
+                            ...prev,
+                            lineItems: prev.lineItems.filter((_, itemIndex) => itemIndex !== idx),
+                          }))}
+                          className="text-red-600 hover:text-red-700"
+                          title="Remove line item"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+                )) : (
+                  <tr>
+                    <td colSpan={isEditing ? 5 : 4} className="p-4 text-center text-gray-500">
+                      No line items
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
 
-          {/* Payment History */}
+          <div className="border rounded-lg overflow-hidden">
+            <div className="flex items-center justify-between px-3 py-2 bg-gray-50 border-b">
+              <h3 className="text-sm font-semibold text-gray-900">Supplements / Additional Charges</h3>
+              {isEditing && (
+                <button
+                  onClick={() => setForm((prev) => ({
+                    ...prev,
+                    additionalCharges: [
+                      ...prev.additionalCharges,
+                      { id: null, name: 'Supplement', amount: 0, notes: '', chargeType: 'ADJUSTMENT' },
+                    ],
+                  }))}
+                  className="inline-flex items-center gap-1 px-2 py-1 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700"
+                >
+                  <Plus className="w-3 h-3" />
+                  Add Supplement
+                </button>
+              )}
+            </div>
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="text-left p-2 text-gray-600">Name</th>
+                  <th className="text-right p-2 text-gray-600 w-32">Amount</th>
+                  <th className="text-left p-2 text-gray-600">Notes</th>
+                  {isEditing && <th className="text-center p-2 text-gray-600 w-12"> </th>}
+                </tr>
+              </thead>
+              <tbody>
+                {form.additionalCharges.length > 0 ? form.additionalCharges.map((charge, idx) => (
+                  <tr key={`${charge.id || 'new-charge'}-${idx}`} className="border-t">
+                    <td className="p-2">
+                      {isEditing ? (
+                        <input
+                          type="text"
+                          value={charge.name}
+                          onChange={(e) => handleAdditionalChargeChange(idx, 'name', e.target.value)}
+                          className="w-full px-2 py-1 border border-gray-300 rounded"
+                        />
+                      ) : (
+                        charge.name || '-'
+                      )}
+                    </td>
+                    <td className="p-2 text-right">
+                      {isEditing ? (
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={charge.amount}
+                          onChange={(e) => handleAdditionalChargeChange(idx, 'amount', e.target.value)}
+                          className="w-full px-2 py-1 border border-gray-300 rounded text-right"
+                        />
+                      ) : (
+                        formatCurrency(charge.amount)
+                      )}
+                    </td>
+                    <td className="p-2">
+                      {isEditing ? (
+                        <input
+                          type="text"
+                          value={charge.notes || ''}
+                          onChange={(e) => handleAdditionalChargeChange(idx, 'notes', e.target.value)}
+                          className="w-full px-2 py-1 border border-gray-300 rounded"
+                        />
+                      ) : (
+                        charge.notes || '-'
+                      )}
+                    </td>
+                    {isEditing && (
+                      <td className="p-2 text-center">
+                        <button
+                          onClick={() => setForm((prev) => ({
+                            ...prev,
+                            additionalCharges: prev.additionalCharges.filter((_, chargeIndex) => chargeIndex !== idx),
+                          }))}
+                          className="text-red-600 hover:text-red-700"
+                          title="Remove supplement"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+                )) : (
+                  <tr>
+                    <td colSpan={isEditing ? 4 : 3} className="p-4 text-center text-gray-500">
+                      No supplements / additional charges
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="bg-gray-50 rounded-lg p-3 space-y-1 text-sm">
+            <div className="flex justify-between">
+              <span className="text-gray-500">Line Items Subtotal</span>
+              <span className="font-medium">{formatCurrency(lineItemsSubtotal)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-500">Supplements / Charges</span>
+              <span className="font-medium">{formatCurrency(supplementsTotal)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-500">Tax</span>
+              <span className="font-medium">{formatCurrency(form.tax)}</span>
+            </div>
+            <div className="flex justify-between pt-2 border-t border-gray-200">
+              <span className="text-gray-700 font-semibold">Total</span>
+              <span className="font-bold text-gray-900">{formatCurrency(computedTotal)}</span>
+            </div>
+          </div>
+
+          <div>
+            <h3 className="text-sm font-medium text-gray-900 mb-2">Notes</h3>
+            {isEditing ? (
+              <textarea
+                value={form.notes}
+                onChange={(e) => setForm((prev) => ({ ...prev, notes: e.target.value }))}
+                rows={3}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                placeholder="Add invoice notes..."
+              />
+            ) : (
+              <p className="text-sm text-gray-700 bg-gray-50 rounded-lg p-3">{invoice.notes || 'No notes'}</p>
+            )}
+          </div>
+
           <div>
             <h3 className="text-sm font-medium text-gray-900 mb-2">Payment History</h3>
             {loading ? (
@@ -649,7 +1109,6 @@ function InvoiceDetailModal({ invoice, onClose }) {
           </div>
         </div>
 
-        {/* Footer */}
         <div className="border-t p-4">
           <button
             onClick={onClose}
@@ -6364,7 +6823,7 @@ export default function OpportunityDetail() {
                               <div className="flex justify-between">
                                 <span className="text-gray-500">Total Invoiced</span>
                                 <span className="font-medium">
-                                  ${invoices.reduce((sum, inv) => sum + (parseFloat(inv.totalAmount) || 0), 0).toLocaleString()}
+                                  ${invoices.reduce((sum, inv) => sum + (parseFloat(inv.totalAmount ?? inv.total) || 0), 0).toLocaleString()}
                                 </span>
                               </div>
                               <div className="flex justify-between">
@@ -6475,7 +6934,7 @@ export default function OpportunityDetail() {
                             type: 'invoice',
                             date: inv.createdAt,
                             label: `Invoice ${inv.invoiceNumber || `#${inv.id?.slice(-6)}`}`,
-                            amount: inv.totalAmount,
+                            amount: inv.totalAmount ?? inv.total,
                             status: inv.status,
                           })),
                           ...(commissions || []).filter(c => c.status === 'PAID').map(comm => ({
@@ -6573,7 +7032,7 @@ export default function OpportunityDetail() {
                             </div>
                             <div className="flex items-center gap-4">
                               <div className="text-right">
-                                <p className="font-semibold text-gray-900">${(invoice.totalAmount || 0).toLocaleString()}</p>
+                                <p className="font-semibold text-gray-900">${Number(invoice.totalAmount ?? invoice.total ?? 0).toLocaleString()}</p>
                                 <span className={`px-2 py-0.5 rounded text-xs font-medium ${
                                   invoice.status === 'PAID' ? 'bg-green-100 text-green-800' :
                                   invoice.status === 'OVERDUE' ? 'bg-red-100 text-red-800' :
@@ -6585,8 +7044,8 @@ export default function OpportunityDetail() {
                               </div>
                               {/* Invoice Action Buttons */}
                               <div className="flex items-center gap-2">
-                                {/* Send Invoice Button - show if not already sent or paid */}
-                                {invoice.status !== 'PAID' && invoice.status !== 'SENT' && (
+                                {/* Send/Resend Invoice Button */}
+                                {invoice.status !== 'VOID' && (
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();
@@ -6596,11 +7055,14 @@ export default function OpportunityDetail() {
                                     className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
                                   >
                                     <Mail className="w-4 h-4" />
-                                    Send
+                                    {['SENT', 'OVERDUE', 'PARTIAL', 'PAID'].includes(invoice.status) ? 'Resend' : 'Send'}
                                   </button>
                                 )}
                                 {/* Pay Invoice Button - only show if not fully paid */}
-                                {invoice.status !== 'PAID' && (parseFloat(invoice.balanceDue) > 0 || parseFloat(invoice.totalAmount) > parseFloat(invoice.amountPaid || 0)) && (
+                                {invoice.status !== 'PAID' && (
+                                  (parseFloat(invoice.balanceDue) > 0) ||
+                                  (parseFloat(invoice.totalAmount ?? invoice.total) > parseFloat(invoice.amountPaid || 0))
+                                ) && (
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();
@@ -6623,7 +7085,7 @@ export default function OpportunityDetail() {
                             <div className="mt-3 pt-3 border-t border-gray-100 flex justify-between text-sm">
                               <span className="text-gray-500">Balance Due:</span>
                               <span className="font-medium text-red-600">
-                                ${parseFloat(invoice.balanceDue || (invoice.totalAmount - (invoice.amountPaid || 0)) || 0).toLocaleString()}
+                                ${parseFloat(invoice.balanceDue || ((invoice.totalAmount ?? invoice.total) - (invoice.amountPaid || 0)) || 0).toLocaleString()}
                               </span>
                             </div>
                           )}
@@ -10457,6 +10919,22 @@ export default function OpportunityDetail() {
       {showInvoiceDetailModal && selectedInvoice && (
         <InvoiceDetailModal
           invoice={selectedInvoice}
+          onInvoiceUpdated={(updatedInvoice) => {
+            queryClient.invalidateQueries({ queryKey: ['opportunityInvoices', id] });
+            setSelectedInvoice((prev) => ({
+              ...prev,
+              ...(updatedInvoice || {}),
+            }));
+          }}
+          onOpenSendInvoice={(invoiceRecord) => {
+            setInvoiceToSend(invoiceRecord);
+            setShowSendInvoiceModal(true);
+          }}
+          onOpenPayInvoice={(invoiceRecord) => {
+            setSelectedInvoice(invoiceRecord);
+            setShowInvoiceDetailModal(false);
+            setShowPayInvoiceModal(true);
+          }}
           onClose={() => {
             setShowInvoiceDetailModal(false);
             setSelectedInvoice(null);
