@@ -1,8 +1,47 @@
 // Lead Assignment Service - Automated lead routing and assignment
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
+import { randomUUID } from 'crypto';
 import { logger } from '../middleware/logger.js';
 
 const prisma = new PrismaClient();
+const JOB_ID_STARTING_NUMBER = 999;
+
+async function generateJobId(tx) {
+  const currentYear = new Date().getFullYear();
+  try {
+    const sequences = await tx.$queryRaw`
+      SELECT id, year, last_number
+      FROM job_id_sequences
+      WHERE year = ${currentYear}
+      FOR UPDATE
+    `;
+
+    let nextNumber;
+    if (!sequences || sequences.length === 0) {
+      await tx.job_id_sequences.create({
+        data: {
+          id: randomUUID(),
+          year: currentYear,
+          last_number: JOB_ID_STARTING_NUMBER + 1,
+        },
+      });
+      nextNumber = JOB_ID_STARTING_NUMBER + 1;
+    } else {
+      nextNumber = Number(sequences[0].last_number) + 1;
+      await tx.job_id_sequences.update({
+        where: { year: currentYear },
+        data: { last_number: nextNumber },
+      });
+    }
+
+    const jobId = `${currentYear}-${nextNumber}`;
+    logger.info(`Generated Job ID: ${jobId} for lead assignment`);
+    return jobId;
+  } catch (err) {
+    logger.warn(`Failed to generate Job ID for lead assignment: ${err.message}`);
+    return null;
+  }
+}
 
 // Settings key constants
 const SETTINGS_KEYS = {
@@ -665,26 +704,46 @@ export const leadAssignmentService = {
    * Create an opportunity from a lead
    */
   async createOpportunityFromLead(lead, rule) {
-    const opportunity = await prisma.opportunity.create({
-      data: {
-        name: `${lead.firstName} ${lead.lastName} - ${lead.workType || 'New'}`.trim(),
-        accountId: lead.accountId,
-        leadId: lead.id,
-        ownerId: lead.ownerId,
-        stage: rule.defaultOpportunityStage || 'LEAD_ASSIGNED',
-        workType: lead.workType,
-        type: lead.type,
-        leadSource: lead.leadSource,
-        description: lead.description,
-        amount: 0,
-        probability: 10,
-      },
-    });
+    const baseAccountName = lead.company || `${lead.firstName} ${lead.lastName}`;
+    const opportunity = await prisma.$transaction(async (tx) => {
+      const jobId = await generateJobId(tx);
+      const created = await tx.opportunity.create({
+        data: {
+          name: baseAccountName,
+          job_id: jobId,
+          accountId: lead.accountId,
+          leadId: lead.id,
+          ownerId: lead.ownerId,
+          stage: rule.defaultOpportunityStage || 'LEAD_ASSIGNED',
+          workType: lead.workType,
+          type: lead.type,
+          leadSource: lead.leadSource,
+          description: lead.description,
+          amount: 0,
+          probability: 10,
+        },
+      });
 
-    // Update lead with opportunity reference
-    await prisma.lead.update({
-      where: { id: lead.id },
-      data: { convertedOpportunityId: opportunity.id },
+      // Update lead with opportunity reference
+      await tx.lead.update({
+        where: { id: lead.id },
+        data: { convertedOpportunityId: created.id },
+      });
+
+      if (jobId && lead.accountId) {
+        const desiredAccountName = `${jobId} - ${baseAccountName}`.trim();
+        const account = await tx.account.findUnique({ where: { id: lead.accountId } });
+        if (account && (!account.name || !account.name.includes(jobId))) {
+          await tx.account.update({
+            where: { id: lead.accountId },
+            data: { name: desiredAccountName },
+          });
+        }
+      }
+
+      return created;
+    }, {
+      isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
     });
 
     logger.info(`Created opportunity ${opportunity.id} from lead ${lead.id}`);

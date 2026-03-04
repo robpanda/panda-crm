@@ -325,7 +325,11 @@ export async function deleteInvoice(req, res, next) {
     }
 
     if (existing.payments.length > 0) {
-      return res.status(400).json({ error: 'Cannot delete invoice with payments' });
+      const blockingStatuses = ['PROCESSING', 'SETTLED', 'REFUNDED', 'PARTIALLY_REFUNDED'];
+      const hasBlockingPayments = existing.payments.some(p => blockingStatuses.includes(p.status));
+      if (hasBlockingPayments) {
+        return res.status(400).json({ error: 'Cannot delete invoice with completed or in-flight payments' });
+      }
     }
 
     // Delete line items first (cascade should handle this, but being explicit)
@@ -356,7 +360,7 @@ export async function sendInvoice(req, res, next) {
         account: true,
         lineItems: true,
         payments: {
-          where: { status: 'COMPLETED' },
+          where: { status: 'SETTLED' },
           orderBy: { paymentDate: 'desc' },
         },
       },
@@ -881,7 +885,7 @@ export async function generateInvoicePdf(req, res, next) {
         account: true,
         lineItems: true,
         payments: {
-          where: { status: 'COMPLETED' },
+          where: { status: 'SETTLED' },
           orderBy: { paymentDate: 'desc' },
         },
       },
@@ -926,7 +930,7 @@ export async function getInvoicePdf(req, res, next) {
         account: true,
         lineItems: true,
         payments: {
-          where: { status: 'COMPLETED' },
+          where: { status: 'SETTLED' },
           orderBy: { paymentDate: 'desc' },
         },
       },

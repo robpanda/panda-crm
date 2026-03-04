@@ -3,6 +3,7 @@ import { Router } from 'express';
 import { body, query } from 'express-validator';
 import { leadService } from '../services/leadService.js';
 import { leadScoringService } from '../services/leadScoringService.js';
+import { logger } from '../middleware/logger.js';
 
 const router = Router();
 
@@ -70,9 +71,13 @@ router.get('/sources', (req, res) => {
 router.get('/counts', async (req, res, next) => {
   try {
     // Parse ownerIds if provided (comma-separated string)
-    const ownerIds = req.query.ownerIds
-      ? req.query.ownerIds.split(',').filter(id => id.trim())
-      : [];
+    const rawOwnerIds = req.query.ownerIds;
+    let ownerIds = [];
+    if (Array.isArray(rawOwnerIds)) {
+      ownerIds = rawOwnerIds.map(id => `${id}`.trim()).filter(id => id);
+    } else if (typeof rawOwnerIds === 'string') {
+      ownerIds = rawOwnerIds.split(',').map(id => id.trim()).filter(id => id);
+    }
     // If single ownerId is provided, use it
     const ownerId = req.query.ownerId || null;
     const counts = await leadService.getLeadCounts(req.user?.id, ownerId, ownerIds);
@@ -502,6 +507,14 @@ router.post('/', validateCreate, handleValidation, async (req, res, next) => {
         userAgent: req.headers['user-agent'],
       },
     });
+    // Score lead asynchronously so it doesn't block the create response
+    if (lead?.id) {
+      setImmediate(() => {
+        leadScoringService
+          .scoreLead(lead.id, { enrichDemographics: false, useML: false })
+          .catch((err) => logger.warn(`Lead scoring failed for ${lead.id}: ${err.message}`));
+      });
+    }
     res.status(201).json({ success: true, data: lead });
   } catch (error) {
     next(error);
@@ -718,6 +731,51 @@ router.post('/scoring/score-unscored', async (req, res, next) => {
     const limit = Math.min(parseInt(req.query.limit) || 100, 500);
     const result = await leadScoringService.scoreUnscoredLeads(limit);
     res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /scoring/backfill
+ * Backfill scores for all unscored leads (batched)
+ * Body: { batchSize?: number, maxBatches?: number, enrichDemographics?: boolean, useML?: boolean, async?: boolean }
+ */
+router.post('/scoring/backfill', async (req, res, next) => {
+  try {
+    const {
+      batchSize = 200,
+      maxBatches = 50,
+      enrichDemographics = true,
+      useML = false,
+      async: asyncMode = true,
+    } = req.body || {};
+
+    const runBackfill = async () => leadScoringService.backfillAllUnscoredLeads({
+      batchSize: Math.min(Math.max(parseInt(batchSize) || 200, 1), 500),
+      maxBatches: Math.min(Math.max(parseInt(maxBatches) || 50, 1), 200),
+      enrichDemographics,
+      useML,
+    });
+
+    if (asyncMode) {
+      setImmediate(() => {
+        runBackfill().catch((err) => logger.error(`Lead scoring backfill failed: ${err.message}`));
+      });
+      return res.status(202).json({
+        success: true,
+        data: {
+          started: true,
+          batchSize,
+          maxBatches,
+          enrichDemographics,
+          useML,
+        },
+      });
+    }
+
+    const result = await runBackfill();
+    return res.json({ success: true, data: result });
   } catch (error) {
     next(error);
   }

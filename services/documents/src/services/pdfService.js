@@ -3,11 +3,9 @@
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../lib/prisma.js';
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../middleware/logger.js';
-
-const prisma = new PrismaClient();
 const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-east-2' });
 
 const S3_BUCKET = process.env.DOCUMENTS_BUCKET || 'panda-crm-documents';
@@ -51,7 +49,7 @@ export const pdfService = {
         account: true,
         lineItems: true,
         payments: {
-          where: { status: 'COMPLETED' },
+          where: { status: 'SETTLED' },
           orderBy: { paymentDate: 'desc' },
         },
       },
@@ -60,6 +58,10 @@ export const pdfService = {
     if (!invoice) {
       throw new Error('Invoice not found');
     }
+
+    const account = invoice.account || {};
+    const lineItems = Array.isArray(invoice.lineItems) ? invoice.lineItems : [];
+    const payments = Array.isArray(invoice.payments) ? invoice.payments : [];
 
     // Create PDF document
     const pdfDoc = await PDFDocument.create();
@@ -176,7 +178,7 @@ export const pdfService = {
     });
 
     y -= 18;
-    page.drawText(invoice.account.name || 'N/A', {
+    page.drawText(account.name || 'N/A', {
       x: 50,
       y,
       size: 12,
@@ -184,9 +186,9 @@ export const pdfService = {
       color: COLORS.dark,
     });
 
-    if (invoice.account.billingAddress) {
+    if (account.billingAddress) {
       y -= 14;
-      page.drawText(invoice.account.billingAddress, {
+      page.drawText(account.billingAddress, {
         x: 50,
         y,
         size: 10,
@@ -195,12 +197,12 @@ export const pdfService = {
       });
     }
 
-    if (invoice.account.billingCity || invoice.account.billingState) {
+    if (account.billingCity || account.billingState) {
       y -= 14;
       const cityStateZip = [
-        invoice.account.billingCity,
-        invoice.account.billingState,
-        invoice.account.billingZip,
+        account.billingCity,
+        account.billingState,
+        account.billingZip,
       ].filter(Boolean).join(', ');
       page.drawText(cityStateZip, {
         x: 50,
@@ -211,9 +213,9 @@ export const pdfService = {
       });
     }
 
-    if (invoice.account.email) {
+    if (account.email) {
       y -= 14;
-      page.drawText(invoice.account.email, {
+      page.drawText(account.email, {
         x: 50,
         y,
         size: 10,
@@ -300,7 +302,7 @@ export const pdfService = {
 
     // Line Items
     y -= 25;
-    for (const item of invoice.lineItems) {
+    for (const item of lineItems) {
       y -= 20;
 
       // Wrap long descriptions
@@ -461,7 +463,7 @@ export const pdfService = {
     });
 
     // Payment History (if any payments)
-    if (invoice.payments.length > 0) {
+    if (payments.length > 0) {
       y -= 60;
       page.drawText('Payment History:', {
         x: 50,
@@ -471,7 +473,7 @@ export const pdfService = {
         color: COLORS.dark,
       });
 
-      for (const payment of invoice.payments) {
+      for (const payment of payments) {
         y -= 18;
         const paymentDate = payment.paymentDate
           ? new Date(payment.paymentDate).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
@@ -516,7 +518,8 @@ export const pdfService = {
     const pdfBytes = await pdfDoc.save();
 
     // Upload to S3
-    const key = `invoices/${invoice.invoiceNumber}-${uuidv4().slice(0, 8)}.pdf`;
+    const invoiceNumberSafe = invoice.invoiceNumber || invoice.id?.slice(0, 8) || 'invoice';
+    const key = `invoices/${invoiceNumberSafe}-${uuidv4().slice(0, 8)}.pdf`;
     await s3Client.send(new PutObjectCommand({
       Bucket: S3_BUCKET,
       Key: key,
@@ -1321,9 +1324,9 @@ export const pdfService = {
     const summaryY = y - 40;
     const measurements = measurementData.measurements || measurementData;
 
-    const totalArea = measurements.total_area_sqft || measurements.totalRoofArea || 0;
-    const roofSquares = measurements.roof_squares || measurements.totalRoofSquares || (totalArea / 100);
-    const pitch = measurements.predominant_pitch || measurements.roofPitch || 'N/A';
+    const totalArea = measurements.totalAreaSqft || measurements.totalRoofArea || 0;
+    const roofSquares = measurements.roofSquares || measurements.totalRoofSquares || (totalArea / 100);
+    const pitch = measurements.predominantPitch || measurements.roofPitch || 'N/A';
     const facetCount = measurementData.segmentation?.facets?.length || measurements.facetCount || 'N/A';
 
     // Column 1: Total Area
@@ -1389,7 +1392,7 @@ export const pdfService = {
 
       y -= 18;
 
-      const lengthFt = data.length_ft || data.lengthFt || data.length || 0;
+      const lengthFt = data.lengthFt || data.lengthFt || data.length || 0;
       const confidence = data.confidence || 'N/A';
 
       page.drawText(item.label, { x: 60, y, size: 10, font: fontRegular, color: COLORS.dark });

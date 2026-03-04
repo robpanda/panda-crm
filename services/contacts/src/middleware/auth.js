@@ -1,6 +1,7 @@
 // Authentication Middleware
 // Validates JWT tokens from Amazon Cognito
 import { logger } from './logger.js';
+import { cognitoConfig } from '../../../../shared/config/cognito.js';
 
 // In production, this will verify Cognito JWT tokens
 // For development, we accept a simple API key or mock token
@@ -83,9 +84,9 @@ async function verifyToken(token) {
   const { CognitoJwtVerifier } = await import('aws-jwt-verify');
 
   const verifier = CognitoJwtVerifier.create({
-    userPoolId: process.env.COGNITO_USER_POOL_ID,
+    userPoolId: cognitoConfig.userPoolId,
     tokenUse: 'access',
-    clientId: process.env.COGNITO_CLIENT_ID,
+    clientId: cognitoConfig.clientId,
   });
 
   const payload = await verifier.verify(token);

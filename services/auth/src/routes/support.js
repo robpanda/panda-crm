@@ -21,6 +21,34 @@ const upload = multer({
 const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-east-2' });
 const BUCKET_NAME = process.env.S3_BUCKET_NAME || 'panda-crm-support';
 
+const getAuthUserId = (user) => user?.id || user?.userId || user?.sub || null;
+
+const normalizeRole = (value) => {
+  if (!value) return '';
+  if (typeof value === 'string') return value.toLowerCase();
+  if (typeof value === 'object' && value.name) return String(value.name).toLowerCase();
+  return '';
+};
+
+const isAdminUser = (user) => {
+  if (!user) return false;
+  if (user.isSystem) return true;
+  const roleValues = [
+    normalizeRole(user.roleType),
+    normalizeRole(user.role),
+    normalizeRole(user.role?.name),
+  ].filter(Boolean);
+  const roleMatch = roleValues.some((role) =>
+    role.includes('admin') || role.includes('super') || role.includes('owner')
+  );
+  const groups = Array.isArray(user.groups) ? user.groups : [];
+  const groupMatch = groups.some((group) => {
+    const normalized = String(group).toLowerCase();
+    return normalized.includes('admin') || normalized.includes('super') || normalized.includes('owner');
+  });
+  return roleMatch || groupMatch;
+};
+
 // Helper to generate ticket number
 function generateTicketNumber() {
   const prefix = 'TKT';
@@ -46,6 +74,10 @@ async function uploadToS3(file, folder = 'support') {
 // Upload endpoint for attachments
 router.post('/upload', authMiddleware, upload.single('file'), async (req, res) => {
   try {
+    const authUserId = getAuthUserId(req.user);
+    if (!authUserId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
     if (!req.file) {
       return res.status(400).json({ error: 'No file provided' });
     }
@@ -61,8 +93,12 @@ router.post('/upload', authMiddleware, upload.single('file'), async (req, res) =
 // Get user's tickets
 router.get('/tickets', authMiddleware, async (req, res) => {
   try {
+    const authUserId = getAuthUserId(req.user);
+    if (!authUserId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
     const tickets = await prisma.support_tickets.findMany({
-      where: { user_id: req.user.id },
+      where: { user_id: authUserId },
       include: {
         _count: {
           select: {
@@ -84,11 +120,15 @@ router.get('/tickets', authMiddleware, async (req, res) => {
 // Get single ticket
 router.get('/tickets/:id', authMiddleware, async (req, res) => {
   try {
+    const authUserId = getAuthUserId(req.user);
+    if (!authUserId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const adminUser = isAdminUser(req.user);
     const ticket = await prisma.support_tickets.findFirst({
-      where: {
-        id: req.params.id,
-        user_id: req.user.id, // Users can only see their own tickets
-      },
+      where: adminUser
+        ? { id: req.params.id }
+        : { id: req.params.id, user_id: authUserId },
       include: {
         user: {
           select: {
@@ -140,7 +180,27 @@ router.get('/tickets/:id', authMiddleware, async (req, res) => {
       orderBy: { created_at: 'asc' },
     });
 
-    res.json({ ticket, messages });
+    // Attach message-level attachments
+    const messageIds = messages.map((msg) => msg.id);
+    let messageAttachments = [];
+    if (messageIds.length > 0) {
+      messageAttachments = await prisma.support_ticket_attachments.findMany({
+        where: { message_id: { in: messageIds } },
+        orderBy: { created_at: 'asc' },
+      });
+    }
+    const attachmentsByMessage = messageAttachments.reduce((acc, attachment) => {
+      if (!attachment.message_id) return acc;
+      if (!acc[attachment.message_id]) acc[attachment.message_id] = [];
+      acc[attachment.message_id].push(attachment);
+      return acc;
+    }, {});
+    const messagesWithAttachments = messages.map((msg) => ({
+      ...msg,
+      attachments: attachmentsByMessage[msg.id] || [],
+    }));
+
+    res.json({ ticket, messages: messagesWithAttachments });
   } catch (error) {
     console.error('Failed to get ticket:', error);
     res.status(500).json({ error: 'Failed to load ticket' });
@@ -153,6 +213,10 @@ router.post('/tickets', authMiddleware, upload.fields([
   { name: 'attachments', maxCount: 5 }
 ]), async (req, res) => {
   try {
+    const authUserId = getAuthUserId(req.user);
+    if (!authUserId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
     const { subject, description, category, priority, pageUrl, browserInfo } = req.body;
 
     // Upload screenshot if provided
@@ -173,7 +237,7 @@ router.post('/tickets', authMiddleware, upload.fields([
         page_url: pageUrl || null,
         browser_info: browserInfo || null,
         screenshot_url: screenshotUrl,
-        user_id: req.user.id,
+        user_id: authUserId,
       },
     });
 
@@ -189,7 +253,7 @@ router.post('/tickets', authMiddleware, upload.fields([
             file_url: fileUrl,
             file_size: file.size,
             file_type: file.mimetype,
-            uploaded_by_id: req.user.id,
+            uploaded_by_id: authUserId,
           },
         });
       }
@@ -205,16 +269,23 @@ router.post('/tickets', authMiddleware, upload.fields([
 // Add message to ticket
 router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
   try {
+    const authUserId = getAuthUserId(req.user);
+    if (!authUserId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
     const { message, attachments } = req.body;
 
     // Verify ticket belongs to user or user is admin
+    const adminUser = isAdminUser(req.user);
     const ticket = await prisma.support_tickets.findFirst({
       where: {
         id: req.params.id,
-        OR: [
-          { user_id: req.user.id },
-          { assigned_to_id: req.user.id },
-        ],
+        ...(adminUser ? {} : {
+          OR: [
+            { user_id: authUserId },
+            { assigned_to_id: authUserId },
+          ],
+        }),
       },
     });
 
@@ -226,14 +297,32 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
     const newMessage = await prisma.support_ticket_messages.create({
       data: {
         ticket_id: req.params.id,
-        user_id: req.user.id,
+        user_id: authUserId,
         message,
         is_internal: false,
       },
     });
 
+    // Attach message files (already uploaded via /support/upload)
+    if (attachments && Array.isArray(attachments) && attachments.length > 0) {
+      for (const attachment of attachments) {
+        if (!attachment?.file_url) continue;
+        await prisma.support_ticket_attachments.create({
+          data: {
+            ticket_id: req.params.id,
+            message_id: newMessage.id,
+            file_name: attachment.file_name || 'attachment',
+            file_url: attachment.file_url,
+            file_size: attachment.file_size || null,
+            file_type: attachment.file_type || null,
+            uploaded_by_id: authUserId,
+          },
+        });
+      }
+    }
+
     // Update ticket timestamps
-    const isUserMessage = req.user.id === ticket.user_id;
+    const isUserMessage = authUserId === ticket.user_id;
     const updateData = {
       last_response_at: new Date(),
     };
@@ -255,7 +344,15 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
       data: updateData,
     });
 
-    res.status(201).json({ message: newMessage });
+    // Return message with attachments
+    const createdAttachments = attachments && attachments.length > 0
+      ? await prisma.support_ticket_attachments.findMany({
+        where: { message_id: newMessage.id },
+        orderBy: { created_at: 'asc' },
+      })
+      : [];
+
+    res.status(201).json({ message: { ...newMessage, attachments: createdAttachments } });
   } catch (error) {
     console.error('Failed to create message:', error);
     res.status(500).json({ error: 'Failed to send message' });
@@ -266,9 +363,7 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
 router.get('/admin/tickets', authMiddleware, async (req, res) => {
   try {
     // Check if user is admin
-    const isAdmin = req.user.roleType?.toLowerCase() === 'admin' ||
-                    req.user.role?.name?.toLowerCase()?.includes('admin');
-    if (!isAdmin) {
+    if (!isAdminUser(req.user)) {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
@@ -313,9 +408,7 @@ router.get('/admin/tickets', authMiddleware, async (req, res) => {
 // Admin: Get stats
 router.get('/admin/stats', authMiddleware, async (req, res) => {
   try {
-    const isAdmin = req.user.roleType?.toLowerCase() === 'admin' ||
-                    req.user.role?.name?.toLowerCase()?.includes('admin');
-    if (!isAdmin) {
+    if (!isAdminUser(req.user)) {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
@@ -358,9 +451,7 @@ router.get('/admin/stats', authMiddleware, async (req, res) => {
 // Admin: Export tickets
 router.get('/admin/export', authMiddleware, async (req, res) => {
   try {
-    const isAdmin = req.user.roleType?.toLowerCase() === 'admin' ||
-                    req.user.role?.name?.toLowerCase()?.includes('admin');
-    if (!isAdmin) {
+    if (!isAdminUser(req.user)) {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 

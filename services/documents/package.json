@@ -27,7 +27,17 @@
     "pdf-lib": "^1.17.1",
     "sharp": "^0.33.1",
     "uuid": "^9.0.1",
-    "winston": "^3.11.0"
+    "winston": "^3.11.0",
+    "@aws-sdk/credential-provider-imds": "^3.374.0",
+    "@aws-sdk/credential-provider-node": "^3.972.10",
+    "canvas": "^2.11.2",
+    "docxtemplater": "^3.37.0",
+    "form-data": "^4.0.0",
+    "mammoth": "^1.6.0",
+    "node-fetch": "^3.3.2",
+    "pdfjs-dist": "^4.0.379",
+    "pizzip": "^3.1.4",
+    "playwright": "^1.49.1"
   },
   "devDependencies": {
     "prisma": "^5.7.0"

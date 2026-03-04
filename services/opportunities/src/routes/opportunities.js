@@ -36,6 +36,11 @@ const validatePagination = [
   query('stage').optional(),
   query('type').optional().isIn(['all', 'INSURANCE', 'RETAIL', 'COMMERCIAL']),
   query('ownerFilter').optional().isIn(['mine', 'all']),
+  query('ownerId').optional(),
+  query('leadSource').optional(),
+  query('workType').optional(),
+  query('createdFrom').optional(),
+  query('createdTo').optional(),
   query('invoiceStatus').optional().isIn(['all', 'NOT_READY', 'READY', 'INVOICED', 'FOLLOW_UP_SCHEDULED', 'PAID']),
 ];
 
@@ -390,6 +395,10 @@ router.get('/', validatePagination, handleValidation, async (req, res, next) => 
       currentUserId: req.user?.id,
       closeDateFrom: req.query.closeDateFrom, // Date filtering for dashboard
       closeDateTo: req.query.closeDateTo,     // Date filtering for dashboard
+      createdFrom: req.query.createdFrom,
+      createdTo: req.query.createdTo,
+      leadSource: req.query.leadSource,
+      workType: req.query.workType,
       invoiceStatus: req.query.invoiceStatus, // Filter for Finance team "Invoice Ready" view
     });
     res.json({ success: true, ...result });

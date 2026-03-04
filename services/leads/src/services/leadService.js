@@ -1,6 +1,7 @@
 // Lead Service - Business Logic Layer
 // Replicates SalesLeaderLeadListController.cls and LeadWizard functionality
 import { PrismaClient, Prisma } from '@prisma/client';
+import { randomUUID } from 'crypto';
 import { logger } from '../middleware/logger.js';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 
@@ -79,6 +80,216 @@ class LeadService {
     const upper = rating.toUpperCase();
     if (['HOT', 'WARM', 'COLD'].includes(upper)) return upper;
     return null;
+  }
+
+  normalizeDateInput(value) {
+    if (!value) return null;
+    if (value instanceof Date) {
+      const year = value.getFullYear();
+      const month = String(value.getMonth() + 1).padStart(2, '0');
+      const day = String(value.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+    if (typeof value === 'string') {
+      const datePart = value.split('T')[0];
+      if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) return datePart;
+    }
+    return null;
+  }
+
+  buildTentativeAppointmentDate(dateValue, timeValue) {
+    const datePart = this.normalizeDateInput(dateValue);
+    if (!datePart) return null;
+    const rawTime = typeof timeValue === 'string' && timeValue.trim() ? timeValue.trim() : '00:00';
+    const timePart = rawTime.length === 5 ? `${rawTime}:00` : rawTime;
+    return new Date(`${datePart}T${timePart}`);
+  }
+
+  getLeadAppointmentKeys(leadId) {
+    const safeId = String(leadId || '').trim();
+    return {
+      accountNumber: `LEAD-${safeId}`,
+      workOrderNumber: `LD-${safeId}`,
+      appointmentNumber: `SA-LEAD-${safeId}`,
+    };
+  }
+
+  async generateWorkOrderNumber(tx = prisma) {
+    const count = await tx.workOrder.count();
+    const num = count + 1;
+    return `WO-${String(num).padStart(6, '0')}`;
+  }
+
+  async generateAppointmentNumber(tx = prisma) {
+    const count = await tx.serviceAppointment.count();
+    const num = count + 1;
+    return `SA-${String(num).padStart(6, '0')}`;
+  }
+
+  async resolveWorkTypeId(workType, tx = prisma) {
+    if (!workType) return null;
+    const normalized = workType.toString().trim();
+    if (!normalized) return null;
+
+    const exact = await tx.workType.findFirst({
+      where: { name: { equals: normalized, mode: 'insensitive' } },
+      select: { id: true },
+    });
+    if (exact?.id) return exact.id;
+
+    const contains = await tx.workType.findFirst({
+      where: { name: { contains: normalized, mode: 'insensitive' } },
+      select: { id: true },
+    });
+    if (contains?.id) return contains.id;
+
+    const inspection = await tx.workType.findFirst({
+      where: { name: { contains: 'Inspection', mode: 'insensitive' } },
+      select: { id: true },
+    });
+    return inspection?.id || null;
+  }
+
+  async resolveServiceTerritoryId({ state, postalCode }, tx = prisma) {
+    if (!state && !postalCode) return null;
+    const territory = await tx.serviceTerritory.findFirst({
+      where: {
+        OR: [
+          state ? { state: { equals: state, mode: 'insensitive' } } : undefined,
+          state ? { name: { contains: state, mode: 'insensitive' } } : undefined,
+          postalCode ? { postalCodes: { has: postalCode } } : undefined,
+        ].filter(Boolean),
+      },
+      select: { id: true },
+    });
+    return territory?.id || null;
+  }
+
+  async syncLeadAppointment(lead, appointmentDateTime, appointmentTime) {
+    const { accountNumber, workOrderNumber, appointmentNumber } = this.getLeadAppointmentKeys(lead?.id);
+    if (!accountNumber) return;
+
+    const hasAppointment = Boolean(appointmentDateTime && appointmentTime);
+
+    try {
+      if (!hasAppointment) {
+        const existingAppointment = await prisma.serviceAppointment.findUnique({
+          where: { appointmentNumber },
+        });
+        if (existingAppointment) {
+          await prisma.serviceAppointment.update({
+            where: { id: existingAppointment.id },
+            data: {
+              status: 'CANCELED',
+              scheduledStart: null,
+              scheduledEnd: null,
+            },
+          });
+        }
+        return;
+      }
+
+      const leadName = `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || lead.company || 'Lead Appointment';
+
+      let account = await prisma.account.findUnique({
+        where: { accountNumber },
+      });
+      if (!account) {
+        account = await prisma.account.create({
+          data: {
+            accountNumber,
+            name: lead.company || leadName,
+            billingStreet: lead.street || null,
+            billingCity: lead.city || null,
+            billingState: lead.state || null,
+            billingPostalCode: lead.postalCode || null,
+            phone: lead.phone || lead.mobilePhone || null,
+            email: lead.email || null,
+            ownerId: lead.ownerId || null,
+            status: 'NEW',
+            type: 'RESIDENTIAL',
+          },
+        });
+      } else {
+        await prisma.account.update({
+          where: { id: account.id },
+          data: {
+            name: lead.company || leadName,
+            billingStreet: lead.street || null,
+            billingCity: lead.city || null,
+            billingState: lead.state || null,
+            billingPostalCode: lead.postalCode || null,
+            phone: lead.phone || lead.mobilePhone || null,
+            email: lead.email || null,
+            ownerId: lead.ownerId || null,
+          },
+        });
+      }
+
+      const workTypeId = await this.resolveWorkTypeId(lead.workType);
+      const territoryId = await this.resolveServiceTerritoryId({
+        state: lead.state,
+        postalCode: lead.postalCode,
+      });
+
+      let workOrder = await prisma.workOrder.findUnique({
+        where: { workOrderNumber },
+      });
+      if (!workOrder) {
+        workOrder = await prisma.workOrder.create({
+          data: {
+            workOrderNumber,
+            subject: `Lead Appointment - ${leadName}`,
+            accountId: account.id,
+            status: 'NEW',
+            priority: 'NORMAL',
+            workTypeId: workTypeId || null,
+            territoryId: territoryId || null,
+          },
+        });
+      } else {
+        await prisma.workOrder.update({
+          where: { id: workOrder.id },
+          data: {
+            subject: `Lead Appointment - ${leadName}`,
+            accountId: account.id,
+            workTypeId: workTypeId || null,
+            territoryId: territoryId || null,
+          },
+        });
+      }
+
+      const scheduledStart = appointmentDateTime;
+      const scheduledEnd = new Date(appointmentDateTime.getTime() + 2 * 60 * 60 * 1000);
+      const appointmentPayload = {
+        appointmentNumber,
+        subject: `Lead Appointment - ${leadName}`,
+        workOrderId: workOrder.id,
+        status: 'SCHEDULED',
+        scheduledStart,
+        scheduledEnd,
+        duration: 120,
+        street: lead.street || null,
+        city: lead.city || null,
+        state: lead.state || null,
+        postalCode: lead.postalCode || null,
+        work_type_id: workTypeId || null,
+      };
+
+      const existingAppointment = await prisma.serviceAppointment.findUnique({
+        where: { appointmentNumber },
+      });
+      if (!existingAppointment) {
+        await prisma.serviceAppointment.create({ data: appointmentPayload });
+      } else {
+        await prisma.serviceAppointment.update({
+          where: { id: existingAppointment.id },
+          data: appointmentPayload,
+        });
+      }
+    } catch (error) {
+      logger.error(`Failed to sync lead appointment for ${lead?.id}: ${error.message}`);
+    }
   }
 
   /**
@@ -237,32 +448,104 @@ class LeadService {
       ownerWhere.ownerId = ownerId;
     }
 
+    const baseWhereSql = Prisma.sql`is_converted = false AND deleted_at IS NULL`;
+    const ownerSql = ownerIds && ownerIds.length > 0
+      ? Prisma.sql`owner_id IN (${Prisma.join(ownerIds)})`
+      : ownerId
+        ? Prisma.sql`owner_id = ${ownerId}`
+        : null;
+    const whereSql = ownerSql
+      ? Prisma.sql`${baseWhereSql} AND ${ownerSql}`
+      : baseWhereSql;
+
     // Total unconverted leads (with owner filter if specified)
-    counts.total = await prisma.lead.count({
-      where: { isConverted: false, deleted_at: null, ...ownerWhere },
-    });
+    try {
+      counts.total = await prisma.lead.count({
+        where: { isConverted: false, deleted_at: null, ...ownerWhere },
+      });
+    } catch (error) {
+      logger.error('getLeadCounts: total count failed, falling back to raw SQL', error);
+      const totalRows = await prisma.$queryRaw`SELECT COUNT(*)::int AS count FROM leads WHERE ${whereSql}`;
+      counts.total = totalRows?.[0]?.count ?? 0;
+    }
 
     // My leads - always set this, even if 0
     if (resolvedUserId) {
-      counts.mine = await prisma.lead.count({
-        where: { isConverted: false, deleted_at: null, ownerId: resolvedUserId },
-      });
-      logger.info(`getLeadCounts: mine=${counts.mine} for resolvedUserId=${resolvedUserId}`);
+      try {
+        counts.mine = await prisma.lead.count({
+          where: { isConverted: false, deleted_at: null, ownerId: resolvedUserId },
+        });
+        logger.info(`getLeadCounts: mine=${counts.mine} for resolvedUserId=${resolvedUserId}`);
+      } catch (error) {
+        logger.error('getLeadCounts: mine count failed, falling back to raw SQL', error);
+        const mineRows = await prisma.$queryRaw`
+          SELECT COUNT(*)::int AS count
+          FROM leads
+          WHERE is_converted = false AND deleted_at IS NULL AND owner_id = ${resolvedUserId}
+        `;
+        counts.mine = mineRows?.[0]?.count ?? 0;
+      }
     } else {
       counts.mine = 0;
     }
 
     // By status (with owner filter if specified)
-    const statusCounts = await prisma.lead.groupBy({
-      by: ['status'],
-      where: { isConverted: false, deleted_at: null, ...ownerWhere },
-      _count: { id: true },
-    });
+    let statusCounts = [];
+    try {
+      statusCounts = await prisma.lead.groupBy({
+        by: ['status'],
+        where: { isConverted: false, deleted_at: null, ...ownerWhere },
+        _count: { id: true },
+      });
+    } catch (error) {
+      logger.error('getLeadCounts: status groupBy failed, falling back to raw SQL', error);
+      statusCounts = await prisma.$queryRaw`
+        SELECT status, COUNT(*)::int AS count
+        FROM leads
+        WHERE ${whereSql}
+        GROUP BY status
+      `;
+    }
 
     for (const item of statusCounts) {
-      if (item.status) {
-        counts[item.status] = item._count.id;
+      const status = item.status;
+      const count = item?._count?.id ?? item?.count ?? 0;
+      if (!status) continue;
+      const statusKey = String(status);
+      counts[statusKey] = count;
+      counts[statusKey.toLowerCase()] = count;
+    }
+
+    // Normalize expected keys for mixed consumers
+    const statusAliases = {
+      new: ['NEW', 'New'],
+      contacted: ['CONTACTED', 'Contacted'],
+      qualified: ['QUALIFIED', 'Qualified'],
+      unqualified: ['UNQUALIFIED', 'Unqualified'],
+      nurturing: ['NURTURING', 'Nurturing'],
+      converted: ['CONVERTED', 'Converted'],
+    };
+
+    Object.entries(statusAliases).forEach(([lower, keys]) => {
+      if (counts[lower] == null) {
+        for (const key of keys) {
+          if (counts[key] != null) {
+            counts[lower] = counts[key];
+            break;
+          }
+        }
       }
+      if (counts[lower] != null) {
+        for (const key of keys) {
+          if (counts[key] == null) {
+            counts[key] = counts[lower];
+          }
+        }
+      }
+    });
+
+    if (counts.myLeads == null) {
+      counts.myLeads = counts.mine ?? 0;
     }
 
     return counts;
@@ -343,15 +626,22 @@ class LeadService {
    */
   async resolveUserId(idOrCognitoId) {
     if (!idOrCognitoId) return null;
+    const rawId =
+      typeof idOrCognitoId === 'string'
+        ? idOrCognitoId
+        : typeof idOrCognitoId === 'number'
+          ? String(idOrCognitoId)
+          : null;
+    if (!rawId) return null;
 
     // If it's already a valid user ID format (user_XXX), return as-is
-    if (idOrCognitoId.startsWith('user_')) {
-      return idOrCognitoId;
+    if (rawId.startsWith('user_')) {
+      return rawId;
     }
 
     // Look up by cognitoId (UUID format from Cognito)
     const user = await prisma.user.findFirst({
-      where: { cognitoId: idOrCognitoId },
+      where: { cognitoId: rawId },
       select: { id: true }
     });
 
@@ -361,7 +651,7 @@ class LeadService {
 
     // Fallback: try direct lookup by id
     const directUser = await prisma.user.findUnique({
-      where: { id: idOrCognitoId },
+      where: { id: rawId },
       select: { id: true }
     });
 
@@ -383,6 +673,11 @@ class LeadService {
     const ownerId = await this.resolveUserId(rawOwnerId);
     const assignedById = await this.resolveUserId(rawAssignedById);
     const leadSetById = await this.resolveUserId(rawLeadSetById);
+
+    const tentativeAppointmentDate = this.buildTentativeAppointmentDate(
+      data.tentativeAppointmentDate,
+      data.tentativeAppointmentTime
+    );
 
     const lead = await prisma.lead.create({
       data: {
@@ -413,8 +708,8 @@ class LeadService {
         selfGenRepId: data.selfGenRepId,
         salesforceId: data.salesforceId,
         // Call Center - Tentative Appointment fields (per Setting A Lead SOP)
-        tentativeAppointmentDate: data.tentativeAppointmentDate ? new Date(data.tentativeAppointmentDate) : null,
-        tentativeAppointmentTime: data.tentativeAppointmentTime,
+        tentativeAppointmentDate,
+        tentativeAppointmentTime: data.tentativeAppointmentTime || null,
         leadSetById: leadSetById,
         disposition: data.disposition,
       },
@@ -445,6 +740,11 @@ class LeadService {
       userEmail: auditContext.userEmail,
       source: 'web',
     });
+
+    // Sync appointment into Production Center calendar when provided
+    if (tentativeAppointmentDate && data.tentativeAppointmentTime) {
+      await this.syncLeadAppointment(lead, tentativeAppointmentDate, data.tentativeAppointmentTime);
+    }
 
     // Push to Salesforce if sync is enabled and lead doesn't already have a Salesforce ID
     if (SALESFORCE_SYNC_ENABLED && !lead.salesforceId) {
@@ -612,11 +912,27 @@ class LeadService {
     if (data.description !== undefined) updateData.description = data.description || null;
     if (data.title !== undefined) updateData.title = data.title || null;
     if (data.salesRabbitUser !== undefined) updateData.salesRabbitUser = data.salesRabbitUser || null;
-    // Call Center - Tentative Appointment fields
-    if (data.tentativeAppointmentDate !== undefined) {
-      updateData.tentativeAppointmentDate = data.tentativeAppointmentDate ? new Date(data.tentativeAppointmentDate) : null;
+    // Call Center - Tentative Appointment fields (preserve exact entered date/time)
+    const hasAppointmentUpdate =
+      data.tentativeAppointmentDate !== undefined || data.tentativeAppointmentTime !== undefined;
+    let nextTentativeDateInput = data.tentativeAppointmentDate;
+    let nextTentativeTimeInput = data.tentativeAppointmentTime;
+
+    if (hasAppointmentUpdate) {
+      if (nextTentativeDateInput === undefined) {
+        nextTentativeDateInput = oldLead?.tentativeAppointmentDate || null;
+      }
+      if (nextTentativeTimeInput === undefined) {
+        nextTentativeTimeInput = oldLead?.tentativeAppointmentTime || null;
+      }
+
+      const nextTentativeDate = this.buildTentativeAppointmentDate(
+        nextTentativeDateInput,
+        nextTentativeTimeInput
+      );
+      updateData.tentativeAppointmentDate = nextTentativeDate;
+      updateData.tentativeAppointmentTime = nextTentativeTimeInput || null;
     }
-    if (data.tentativeAppointmentTime !== undefined) updateData.tentativeAppointmentTime = data.tentativeAppointmentTime || null;
     if (data.disposition !== undefined) updateData.disposition = data.disposition || null;
 
     const lead = await prisma.lead.update({
@@ -629,6 +945,12 @@ class LeadService {
     });
 
     logger.info(`Lead updated: ${id}`);
+
+    if (hasAppointmentUpdate) {
+      const nextAppointmentDate = updateData.tentativeAppointmentDate ?? oldLead?.tentativeAppointmentDate ?? null;
+      const nextAppointmentTime = updateData.tentativeAppointmentTime ?? oldLead?.tentativeAppointmentTime ?? null;
+      await this.syncLeadAppointment(lead, nextAppointmentDate, nextAppointmentTime);
+    }
 
     // Log audit event
     const auditContext = data._auditContext || {};
@@ -682,21 +1004,42 @@ class LeadService {
 
     // Use transaction for conversion
     const result = await prisma.$transaction(async (tx) => {
-      // Create Account
-      const account = await tx.account.create({
-        data: {
-          name: options.accountName || lead.company || `${lead.firstName} ${lead.lastName}`,
-          billingStreet: lead.street,
-          billingCity: lead.city,
-          billingState: lead.state,
-          billingPostalCode: lead.postalCode,
-          phone: lead.phone,
-          email: lead.email,
-          type: 'RESIDENTIAL',
-          status: 'NEW',
-          ownerId: lead.ownerId,
-        },
+      const leadAppointmentKeys = this.getLeadAppointmentKeys(id);
+      const baseAccountName = lead.company || `${lead.firstName} ${lead.lastName}`;
+      let account = await tx.account.findUnique({
+        where: { accountNumber: leadAppointmentKeys.accountNumber },
       });
+
+      if (account) {
+        account = await tx.account.update({
+          where: { id: account.id },
+          data: {
+            name: options.accountName || baseAccountName,
+            billingStreet: lead.street,
+            billingCity: lead.city,
+            billingState: lead.state,
+            billingPostalCode: lead.postalCode,
+            phone: lead.phone,
+            email: lead.email,
+            ownerId: lead.ownerId,
+          },
+        });
+      } else {
+        account = await tx.account.create({
+          data: {
+            name: options.accountName || baseAccountName,
+            billingStreet: lead.street,
+            billingCity: lead.city,
+            billingState: lead.state,
+            billingPostalCode: lead.postalCode,
+            phone: lead.phone,
+            email: lead.email,
+            type: 'RESIDENTIAL',
+            status: 'NEW',
+            ownerId: lead.ownerId,
+          },
+        });
+      }
 
       // Create Contact
       const contact = await tx.contact.create({
@@ -735,19 +1078,20 @@ class LeadService {
           let nextNumber;
           if (!sequences || sequences.length === 0) {
             // First job of the year - create the sequence
-            await tx.jobIdSequence.create({
+            await tx.job_id_sequences.create({
               data: {
+                id: randomUUID(),
                 year: currentYear,
-                lastNumber: JOB_ID_STARTING_NUMBER + 1,
+                last_number: JOB_ID_STARTING_NUMBER + 1,
               },
             });
             nextNumber = JOB_ID_STARTING_NUMBER + 1;
           } else {
             // Increment the sequence
             nextNumber = Number(sequences[0].last_number) + 1;
-            await tx.jobIdSequence.update({
+            await tx.job_id_sequences.update({
               where: { year: currentYear },
-              data: { lastNumber: nextNumber },
+              data: { last_number: nextNumber },
             });
           }
           jobId = `${currentYear}-${nextNumber}`;
@@ -757,9 +1101,19 @@ class LeadService {
           logger.warn(`Failed to generate Job ID: ${err.message}`);
         }
 
+        if (jobId) {
+          const desiredAccountName = `${jobId} - ${baseAccountName}`.trim();
+          if (!account.name || !account.name.includes(jobId)) {
+            account = await tx.account.update({
+              where: { id: account.id },
+              data: { name: desiredAccountName },
+            });
+          }
+        }
+
         opportunity = await tx.opportunity.create({
           data: {
-            name: options.opportunityName || `${lead.firstName} ${lead.lastName} - ${new Date().toLocaleDateString()}`,
+            name: options.opportunityName || baseAccountName,
             job_id: jobId, // Auto-assigned Job ID (using underscore field name from schema)
             accountId: account.id,
             contactId: contact.id,
@@ -788,54 +1142,94 @@ class LeadService {
           appointmentDate: new Date(options.tentativeAppointmentDate),
         }, tx);
 
-        // Find or create territory based on state
-        let territory = null;
-        if (lead.state) {
-          territory = await tx.territory.findFirst({
-            where: {
-              OR: [
-                { states: { has: lead.state } },
-                { name: { contains: lead.state, mode: 'insensitive' } },
-              ],
+        const workTypeId = await this.resolveWorkTypeId(options.workType || lead.workType, tx);
+        const territoryId = await this.resolveServiceTerritoryId({
+          state: lead.state,
+          postalCode: lead.postalCode,
+        }, tx);
+
+        // Reuse lead-based work order if it already exists
+        let workOrder = await tx.workOrder.findUnique({
+          where: { workOrderNumber: leadAppointmentKeys.workOrderNumber },
+        });
+
+        if (workOrder) {
+          workOrder = await tx.workOrder.update({
+            where: { id: workOrder.id },
+            data: {
+              subject: `${options.workType || 'Inspection'} - ${account.name}`,
+              accountId: account.id,
+              opportunityId: opportunity.id,
+              status: 'NEW',
+              priority: 'NORMAL',
+              workTypeId: workTypeId || null,
+              territoryId: territoryId || null,
+            },
+          });
+        } else {
+          const workOrderNumber = await this.generateWorkOrderNumber(tx);
+          workOrder = await tx.workOrder.create({
+            data: {
+              workOrderNumber,
+              subject: `${options.workType || 'Inspection'} - ${account.name}`,
+              accountId: account.id,
+              opportunityId: opportunity.id,
+              status: 'NEW',
+              priority: 'NORMAL',
+              workTypeId: workTypeId || null,
+              territoryId: territoryId || null,
             },
           });
         }
-
-        // Create WorkOrder with territory
-        const workOrder = await tx.workOrder.create({
-          data: {
-            subject: `${options.workType || 'Inspection'} - ${account.name}`,
-            accountId: account.id,
-            contactId: contact.id,
-            opportunityId: opportunity.id,
-            status: 'NEW',
-            workType: options.workType || 'Inspection',
-            priority: 'NORMAL',
-            territoryId: territory?.id,
-          },
-        });
 
         // Then create the Service Appointment
         const appointmentDate = new Date(options.tentativeAppointmentDate);
         const endDate = new Date(appointmentDate);
         endDate.setHours(endDate.getHours() + 2); // Default 2 hour duration
 
-        serviceAppointment = await tx.serviceAppointment.create({
-          data: {
-            subject: `${options.workType || 'Inspection'} - ${lead.firstName} ${lead.lastName}`,
-            workOrderId: workOrder.id,
-            accountId: account.id,
-            contactId: contact.id,
-            scheduledStart: appointmentDate,
-            scheduledEnd: endDate,
-            status: 'SCHEDULED',
-            appointmentType: options.workType || 'Inspection',
-            street: lead.street,
-            city: lead.city,
-            state: lead.state,
-            postalCode: lead.postalCode,
-          },
+        const existingAppointment = await tx.serviceAppointment.findUnique({
+          where: { appointmentNumber: leadAppointmentKeys.appointmentNumber },
         });
+        const appointmentNumber = existingAppointment
+          ? existingAppointment.appointmentNumber
+          : await this.generateAppointmentNumber(tx);
+
+        if (existingAppointment) {
+          serviceAppointment = await tx.serviceAppointment.update({
+            where: { id: existingAppointment.id },
+            data: {
+              appointmentNumber,
+              subject: `${options.workType || 'Inspection'} - ${lead.firstName} ${lead.lastName}`,
+              workOrderId: workOrder.id,
+              scheduledStart: appointmentDate,
+              scheduledEnd: endDate,
+              status: 'SCHEDULED',
+              duration: 120,
+              street: lead.street,
+              city: lead.city,
+              state: lead.state,
+              postalCode: lead.postalCode,
+              work_type_id: workTypeId || null,
+            },
+          });
+        } else {
+          serviceAppointment = await tx.serviceAppointment.create({
+            data: {
+              appointmentNumber,
+              subject: `${options.workType || 'Inspection'} - ${lead.firstName} ${lead.lastName}`,
+              workOrderId: workOrder.id,
+              scheduledStart: appointmentDate,
+              scheduledEnd: endDate,
+              status: 'SCHEDULED',
+              duration: 120,
+              street: lead.street,
+              city: lead.city,
+              state: lead.state,
+              postalCode: lead.postalCode,
+              work_type_id: workTypeId || null,
+            },
+          });
+        }
 
         // Assign the resource to the service appointment
         if (bestResource) {

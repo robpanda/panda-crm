@@ -244,6 +244,10 @@ class OpportunityService {
       currentUserId,
       closeDateFrom,
       closeDateTo,
+      createdFrom,
+      createdTo,
+      leadSource,
+      workType,
       invoiceStatus, // Filter by invoice workflow status (NOT_READY, READY, INVOICED, etc.)
     } = options;
 
@@ -276,6 +280,14 @@ class OpportunityService {
       where.accountId = accountId;
     }
 
+    if (leadSource) {
+      where.leadSource = leadSource;
+    }
+
+    if (workType) {
+      where.workType = workType;
+    }
+
     // Close date range filtering
     if (closeDateFrom || closeDateTo) {
       where.closeDate = {};
@@ -284,6 +296,17 @@ class OpportunityService {
       }
       if (closeDateTo) {
         where.closeDate.lte = new Date(closeDateTo);
+      }
+    }
+
+    // Created date range filtering
+    if (createdFrom || createdTo) {
+      where.createdAt = {};
+      if (createdFrom) {
+        where.createdAt.gte = new Date(createdFrom);
+      }
+      if (createdTo) {
+        where.createdAt.lte = new Date(createdTo);
       }
     }
 
@@ -1829,6 +1852,16 @@ Be factual and professional. Highlight anything that needs attention.`;
         },
       });
 
+      if (jobId && opp.account?.id) {
+        const baseAccountName = (opp.account?.name || opp.name || '').trim();
+        if (baseAccountName && !baseAccountName.includes(jobId)) {
+          await tx.account.update({
+            where: { id: opp.account.id },
+            data: { name: `${jobId} - ${baseAccountName}`.trim() },
+          });
+        }
+      }
+
       return opp;
     }, {
       isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
@@ -2047,7 +2080,7 @@ Be factual and professional. Highlight anything that needs attention.`;
   async assignJobId(id) {
     const opportunity = await prisma.opportunity.findUnique({
       where: { id },
-      select: { id: true, jobId: true, name: true },
+      select: { id: true, jobId: true, name: true, accountId: true, account: { select: { name: true } } },
     });
 
     if (!opportunity) {
@@ -2070,6 +2103,15 @@ Be factual and professional. Highlight anything that needs attention.`;
           where: { id },
           data: { jobId: newJobId },
         });
+        if (opportunity.accountId) {
+          const baseAccountName = (opportunity.account?.name || opportunity.name || '').trim();
+          if (baseAccountName && !baseAccountName.includes(newJobId)) {
+            await tx.account.update({
+              where: { id: opportunity.accountId },
+              data: { name: `${newJobId} - ${baseAccountName}`.trim() },
+            });
+          }
+        }
       }
       return newJobId;
     });

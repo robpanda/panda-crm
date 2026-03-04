@@ -24,6 +24,7 @@ class LeadScoringService {
     this.rulesCache = null;
     this.rulesCacheTime = null;
     this.CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+    this.backfillInProgress = false;
   }
 
   // ============================================================================
@@ -215,6 +216,82 @@ class LeadScoringService {
 
     const leadIds = unscoredLeads.map(l => l.id);
     return this.scoreLeadsBatch(leadIds);
+  }
+
+  /**
+   * Backfill scores for all unscored leads (batched)
+   * @param {Object} options
+   * @param {number} options.batchSize
+   * @param {number} options.maxBatches
+   * @param {boolean} options.enrichDemographics
+   * @param {boolean} options.useML
+   */
+  async backfillAllUnscoredLeads(options = {}) {
+    const {
+      batchSize = 200,
+      maxBatches = 50,
+      enrichDemographics = true,
+      useML = false,
+    } = options;
+
+    if (this.backfillInProgress) {
+      return { started: false, reason: 'backfill_in_progress' };
+    }
+
+    this.backfillInProgress = true;
+    const summary = {
+      batches: 0,
+      scored: 0,
+      failed: 0,
+      remaining: 0,
+    };
+
+    try {
+      for (let batchIndex = 0; batchIndex < maxBatches; batchIndex += 1) {
+        const unscoredLeads = await prisma.lead.findMany({
+          where: {
+            OR: [
+              { scored_at: null },
+              { lead_score: null },
+              { score: 0 },
+            ],
+            isConverted: false,
+          },
+          select: { id: true },
+          take: batchSize,
+          orderBy: { createdAt: 'desc' },
+        });
+
+        if (unscoredLeads.length === 0) {
+          break;
+        }
+
+        const leadIds = unscoredLeads.map(l => l.id);
+        const result = await this.scoreLeadsBatch(leadIds, {
+          enrichDemographics,
+          useML,
+        });
+
+        summary.batches += 1;
+        summary.scored += result?.summary?.successful || 0;
+        summary.failed += result?.summary?.failed || 0;
+      }
+
+      summary.remaining = await prisma.lead.count({
+        where: {
+          OR: [
+            { scored_at: null },
+            { lead_score: null },
+            { score: 0 },
+          ],
+          isConverted: false,
+        },
+      });
+
+      return summary;
+    } finally {
+      this.backfillInProgress = false;
+    }
   }
 
   // ============================================================================
