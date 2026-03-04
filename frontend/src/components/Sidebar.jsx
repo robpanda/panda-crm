@@ -23,6 +23,12 @@ import {
   Phone,
   CreditCard,
   LifeBuoy,
+  MessageSquare,
+  PhoneCall,
+  CalendarDays,
+  FileSignature,
+  Trash2,
+  ClipboardList,
 } from 'lucide-react';
 
 const mainNavItems = [
@@ -41,21 +47,35 @@ const secondaryNavItems = [
   { path: '/pricebooks', icon: BookOpen, label: 'Price Books' },
   { path: '/products', icon: Package, label: 'Products' },
   { path: '/campaigns', icon: Mail, label: 'Campaigns' },
-  { path: '/reports', icon: BarChart3, label: 'Reports' },
+  { path: '/analytics/reports', icon: BarChart3, label: 'Analytics Hub' },
   { path: '/support', icon: LifeBuoy, label: 'Support' },
   { path: '/help', icon: HelpCircle, label: 'Help & Support' },
 ];
 
-// Admin dropdown items - alphabetized
-// NOTE: Audit Logs, Bamboogli, Call Center, Commission Engine, Help Admin, PandaSign, Templates
-// have been moved to Setup sidebar (Admin > Setup)
+// Admin dropdown items - alphabetized (restored)
 const adminNavItems = [
+  { path: '/admin/audit', icon: ClipboardList, label: 'Audit Logs' },
+  { path: '/admin/bamboogli', icon: MessageSquare, label: 'Bamboogli' },
+  { path: '/admin/call-center', icon: PhoneCall, label: 'Call Center' },
+  { path: '/admin/commission-engine', icon: DollarSign, label: 'Commission Engine' },
+  { path: '/admin/commissions', icon: DollarSign, label: 'Commissions' },
+  { path: '/admin/deleted-records', icon: Trash2, label: 'Deleted Records' },
+  { path: '/admin/google-calendar', icon: CalendarDays, label: 'Google Calendar' },
+  { path: '/admin/help', icon: HelpCircle, label: 'Help Admin' },
+  { path: '/admin/integrations', icon: Settings, label: 'Integrations' },
+  { path: '/admin/pandasign', icon: FileSignature, label: 'PandaSign' },
   { path: '/admin/payment-engine', icon: CreditCard, label: 'Payment Center' },
   { path: '/admin/referral', icon: Gift, label: 'Referral Program' },
   { path: '/admin/ringcentral', icon: Phone, label: 'RingCentral' },
-  { path: '/admin/service-admin', icon: Wrench, label: 'Service Admin' },
+  { path: '/admin/roles', icon: Settings, label: 'Roles & Permissions' },
+  { path: '/admin/service-admin', icon: Wrench, label: 'Schedule Admin' },
   { path: '/admin/setup', icon: Settings, label: 'Setup' },
+  { path: '/admin/support', icon: LifeBuoy, label: 'Support Admin' },
+  { path: '/admin/support/tickets', icon: LifeBuoy, label: 'Support Tickets' },
+  { path: '/admin/templates', icon: FileText, label: 'Templates' },
   { path: '/admin/training-bot', icon: Bot, label: 'Training Bot' },
+  { path: '/admin/users', icon: Users, label: 'Users' },
+  { path: '/admin/workflows', icon: Settings, label: 'Workflows' },
 ];
 
 export default function Sidebar({ isOpen, onClose, isMobile }) {

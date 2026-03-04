@@ -64,7 +64,7 @@ export default function SupportTicketDetail() {
   const loadTicketDetail = async () => {
     try {
       setLoading(true);
-      const response = await api.get(`/support/tickets/${id}`);
+      const response = await api.get(`/api/support/tickets/${id}`);
       setTicket(response.data.ticket);
       setMessages(response.data.messages || []);
     } catch (error) {
@@ -95,7 +95,7 @@ export default function SupportTicketDetail() {
         })),
       };
 
-      await api.post(`/support/tickets/${id}/messages`, messageData);
+      await api.post(`/api/support/tickets/${id}/messages`, messageData);
 
       setNewMessage('');
       setAttachments([]);
@@ -119,7 +119,7 @@ export default function SupportTicketDetail() {
         const formData = new FormData();
         formData.append('file', file);
 
-        const response = await api.post('/support/upload', formData, {
+        const response = await api.post('/api/support/upload', formData, {
           headers: { 'Content-Type': 'multipart/form-data' },
         });
 
@@ -310,6 +310,40 @@ export default function SupportTicketDetail() {
                           }`}>
                             {message.message}
                           </p>
+                          {message.attachments && message.attachments.length > 0 && (
+                            <div className={`mt-3 pt-3 border-t ${
+                              isCurrentUser && !isSystemMessage ? 'border-white/20' : 'border-gray-200'
+                            }`}>
+                              <div className="flex flex-wrap gap-2">
+                                {message.attachments.map((attachment) => {
+                                  const isImage = attachment.file_type?.startsWith('image/');
+                                  return (
+                                    <a
+                                      key={attachment.id || attachment.file_url}
+                                      href={attachment.file_url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-xs transition-colors ${
+                                        isCurrentUser && !isSystemMessage
+                                          ? 'border-white/30 text-white/90 hover:bg-white/10'
+                                          : 'border-gray-200 text-gray-700 hover:bg-gray-100'
+                                      }`}
+                                    >
+                                      {isImage ? (
+                                        <ImageIcon className="w-4 h-4" />
+                                      ) : (
+                                        <Paperclip className="w-4 h-4" />
+                                      )}
+                                      <span className="max-w-[180px] truncate">
+                                        {attachment.file_name || 'Attachment'}
+                                      </span>
+                                      <ExternalLink className="w-3 h-3 opacity-70" />
+                                    </a>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
                           {message.is_resolution && (
                             <div className="mt-2 pt-2 border-t border-yellow-300">
                               <div className="flex items-center gap-2 text-xs text-yellow-800">

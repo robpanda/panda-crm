@@ -229,6 +229,9 @@ const CALL_CENTER_WORK_TYPES = [
   { value: 'Inspection', label: 'Inspection' },
 ];
 
+const INSPECTION_SUGGESTION_WINDOW_DAYS = 14;
+const APPOINTMENT_SLOT_TIMES = ['09:00', '11:00', '13:00', '15:00'];
+
 const steps = [
   { id: 1, name: 'Info', icon: User, description: 'Contact details' },
   { id: 2, name: 'Address', icon: MapPin, description: 'Location info' },
@@ -243,13 +246,43 @@ export default function LeadWizard() {
   const { clickToCall, isReady: isRingCentralReady, currentCall, setVisible: setRingCentralVisible, loadWidget } = useRingCentral();
   const isNewLead = !id || id === 'new';
 
+  const roleName = (user?.role?.name || user?.role || '').toString().toLowerCase();
+  const roleType = (user?.roleType || '').toString().toLowerCase();
+
   // Determine if user is call center based on role or department
-  const isCallCenter = user?.role?.name?.toLowerCase()?.includes('call center') ||
-                       user?.roleType === 'CALL_CENTER' || user?.roleType === 'CALL_CENTER_MANAGER' ||
+  const isCallCenter = roleName.includes('call center') ||
+                       roleName.includes('call_center') ||
+                       roleType.includes('call_center') ||
                        user?.department?.toLowerCase() === 'call center';
+
+  const disableGuidedFlow = true;
+
+  const canForceConvert = isCallCenter ||
+                          roleName === 'admin' ||
+                          roleName === 'super admin' ||
+                          roleName === 'super_admin' ||
+                          roleName === 'system admin' ||
+                          roleName === 'system_admin' ||
+                          roleType.includes('admin');
+
+  const isCallCenterManager = roleName.includes('call center manager') ||
+                              roleName.includes('call_center_manager') ||
+                              roleType.includes('call_center_manager') ||
+                              roleName.includes('manager') ||
+                              roleType.includes('manager') ||
+                              roleType.includes('admin') ||
+                              roleName.includes('admin');
+  const canOverrideOwner = isCallCenterManager;
 
   // Call center users only see Inspection, others see all work types
   const WORK_TYPES = isCallCenter ? CALL_CENTER_WORK_TYPES : ALL_WORK_TYPES;
+  const totalSteps = isCallCenter ? 3 : steps.length;
+  const visibleSteps = isCallCenter ? steps.slice(0, 3) : steps;
+  const useLeadPromptFlow = true;
+  const isSelfGenLeadSource = (value) => {
+    if (!value) return false;
+    return value.toString().toLowerCase().replace(/[^a-z]/g, '') === 'selfgen';
+  };
 
   const [currentStep, setCurrentStep] = useState(1);
   const [isLoading, setIsLoading] = useState(!isNewLead);
@@ -258,9 +291,13 @@ export default function LeadWizard() {
   const [hasError, setHasError] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [conversionResult, setConversionResult] = useState(null);
+  const [lead, setLead] = useState(null);
   const [activities, setActivities] = useState([]);
+  const [gatingState, setGatingState] = useState(null);
   const [userSearchQuery, setUserSearchQuery] = useState('');
   const [showUserDropdown, setShowUserDropdown] = useState(false);
+  const [ownerSearchQuery, setOwnerSearchQuery] = useState('');
+  const [showOwnerDropdown, setShowOwnerDropdown] = useState(false);
 
   // Lead Set By search state
   const [leadSetBySearchQuery, setLeadSetBySearchQuery] = useState('');
@@ -275,6 +312,454 @@ export default function LeadWizard() {
   const [emailBody, setEmailBody] = useState('');
   const [selectedSmsTemplate, setSelectedSmsTemplate] = useState('');
   const [selectedEmailTemplate, setSelectedEmailTemplate] = useState('');
+
+  // Inspection modal state
+  const [showInspectionModal, setShowInspectionModal] = useState(false);
+  const [wasInspected, setWasInspected] = useState(null);
+  const [selectedOpportunityType, setSelectedOpportunityType] = useState(null);
+  const [showGuidedFlowModal, setShowGuidedFlowModal] = useState(false);
+  const [guidedFlowLeadId, setGuidedFlowLeadId] = useState(null);
+  const [guidedFlowStep, setGuidedFlowStep] = useState('project-type');
+  const [guidedOwnerId, setGuidedOwnerId] = useState('');
+  const [guidedOwnerName, setGuidedOwnerName] = useState('');
+  const [guidedProjectType, setGuidedProjectType] = useState('');
+  const [guidedWasInspected, setGuidedWasInspected] = useState(null);
+  const [guidedWorkType, setGuidedWorkType] = useState('');
+  const [guidedFlowError, setGuidedFlowError] = useState('');
+  const [hasAutoStartedGuidedFlow, setHasAutoStartedGuidedFlow] = useState(false);
+  const [isGuidedFlowMandatory, setIsGuidedFlowMandatory] = useState(false);
+  const [isSuggestingAppointment, setIsSuggestingAppointment] = useState(false);
+  const [showLeadSourcePrompt, setShowLeadSourcePrompt] = useState(false);
+  const [showAppointmentPrompt, setShowAppointmentPrompt] = useState(false);
+  const [isPersistingPromptCompletion, setIsPersistingPromptCompletion] = useState(false);
+  const [hasPersistedPromptCompletion, setHasPersistedPromptCompletion] = useState(false);
+  const [leadSourcePromptError, setLeadSourcePromptError] = useState('');
+  const [appointmentPromptError, setAppointmentPromptError] = useState('');
+  const [appointmentPromptInfo, setAppointmentPromptInfo] = useState('');
+  const [pendingSuggestedSlot, setPendingSuggestedSlot] = useState(null);
+  const [hasManualAppointmentChange, setHasManualAppointmentChange] = useState(false);
+  const [lastSuggestedSlot, setLastSuggestedSlot] = useState(null);
+  const [hasInitializedCallCenterPrompts, setHasInitializedCallCenterPrompts] = useState(false);
+  const [hasAutoSavedLead, setHasAutoSavedLead] = useState(false);
+
+  const normalizeLeadId = (value) => {
+    if (!(typeof value === 'string' || typeof value === 'number')) return null;
+    const normalized = String(value).trim();
+    if (!normalized) return null;
+    if (['new', 'undefined', 'null'].includes(normalized.toLowerCase())) return null;
+    return normalized;
+  };
+
+  const resolveLeadId = (leadIdOverride) => {
+    const normalizedOverride = normalizeLeadId(leadIdOverride);
+    const normalizedRouteId = normalizeLeadId(id);
+    const normalizedGuidedId = normalizeLeadId(guidedFlowLeadId);
+    const normalizedLeadStateId = normalizeLeadId(lead?.id);
+    return normalizedOverride || normalizedGuidedId || normalizedLeadStateId || normalizedRouteId || null;
+  };
+
+  const ensureLeadId = async (leadIdOverride) => {
+    const existingLeadId = resolveLeadId(leadIdOverride);
+    if (existingLeadId) return existingLeadId;
+
+    const savedLeadId = await handleSave();
+    return resolveLeadId(savedLeadId);
+  };
+
+  const formatDateForInput = (date) => {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+
+  const isAppointmentWithinWindow = (dateValue, timeValue) => {
+    if (!dateValue || !timeValue) return false;
+    const appointment = new Date(`${dateValue}T${timeValue}:00`);
+    if (Number.isNaN(appointment.getTime())) return false;
+
+    const now = new Date();
+    const windowEnd = new Date(now);
+    windowEnd.setDate(windowEnd.getDate() + INSPECTION_SUGGESTION_WINDOW_DAYS);
+
+    return appointment >= now && appointment <= windowEnd;
+  };
+
+  const buildLocalAppointmentSuggestion = () => {
+    const now = new Date();
+    const minimumLeadTime = new Date(now.getTime() + (30 * 60 * 1000));
+
+    for (let dayOffset = 0; dayOffset < INSPECTION_SUGGESTION_WINDOW_DAYS; dayOffset += 1) {
+      const day = new Date(now);
+      day.setHours(0, 0, 0, 0);
+      day.setDate(day.getDate() + dayOffset);
+      const dateString = formatDateForInput(day);
+
+      for (const slot of APPOINTMENT_SLOT_TIMES) {
+        const candidate = new Date(`${dateString}T${slot}:00`);
+        if (candidate <= minimumLeadTime) continue;
+        return { appointmentDate: dateString, appointmentTime: slot };
+      }
+    }
+
+    return null;
+  };
+
+  const applyAppointmentSuggestionToForm = (suggestion) => {
+    if (!suggestion?.appointmentDate || !suggestion?.appointmentTime) return;
+
+    setFormData(prev => ({
+      ...prev,
+      tentativeAppointmentDate: suggestion.appointmentDate,
+      tentativeAppointmentTime: suggestion.appointmentTime,
+      ...(suggestion.ownerId && !prev.ownerId ? { ownerId: suggestion.ownerId } : {}),
+      ...(suggestion.ownerName && !prev.ownerName ? { ownerName: suggestion.ownerName } : {}),
+    }));
+    setHasManualAppointmentChange(false);
+    setPendingSuggestedSlot(null);
+    setAppointmentPromptInfo('');
+  };
+
+  const persistPromptCompletion = async (options = {}) => {
+    const { leadId: leadIdOverride } = options;
+    if (isPersistingPromptCompletion) return null;
+    setIsPersistingPromptCompletion(true);
+    try {
+      let leadId = resolveLeadId(leadIdOverride);
+      if (!leadId) {
+        leadId = await handleSave();
+      }
+      if (!leadId) return null;
+
+      const leadSetById = formData.leadSetById || user?.id || null;
+      const selfGen = isSelfGenLeadSource(formData.leadSource);
+      const updatePayload = {
+        source: formData.leadSource,
+        leadSetById,
+        ...(selfGen ? { isSelfGen: true, selfGenRepId: leadSetById || null } : {}),
+      };
+
+      const updatedLead = await leadsApi.updateLead(leadId, updatePayload);
+
+      let assignedLead = updatedLead;
+      if (selfGen && leadSetById) {
+        try {
+          assignedLead = await leadsApi.manualAssignLead(leadId, leadSetById, 'Self-Gen assignment');
+        } catch (assignError) {
+          console.error('Failed to manual-assign self-gen lead:', assignError);
+        }
+      } else if (!updatedLead?.ownerId && !formData.ownerId) {
+        try {
+          const assignmentResult = await leadsApi.autoAssignLead(leadId);
+          if (assignmentResult?.lead) {
+            assignedLead = assignmentResult.lead;
+          } else if (assignmentResult?.assigned && assignmentResult?.lead?.ownerId) {
+            assignedLead = assignmentResult.lead;
+          }
+          if (assignmentResult?.assignee) {
+            const assigneeName = `${assignmentResult.assignee.firstName || ''} ${assignmentResult.assignee.lastName || ''}`.trim();
+            setFormData(prev => ({
+              ...prev,
+              ownerId: prev.ownerId || assignmentResult.assignee.id || '',
+              ownerName: prev.ownerName || assigneeName,
+            }));
+          }
+        } catch (assignmentError) {
+          console.error('Auto-assignment failed after prompt completion:', assignmentError);
+        }
+      }
+
+      if (assignedLead) {
+        setLead(assignedLead);
+        const ownerName = assignedLead.owner
+          ? `${assignedLead.owner.firstName || ''} ${assignedLead.owner.lastName || ''}`.trim()
+          : assignedLead.ownerName || '';
+        const leadSetByName = assignedLead.leadSetBy
+          ? `${assignedLead.leadSetBy.firstName || ''} ${assignedLead.leadSetBy.lastName || ''}`.trim()
+          : assignedLead.leadSetByName || '';
+        setFormData(prev => ({
+          ...prev,
+          ownerId: prev.ownerId || assignedLead.ownerId || '',
+          ownerName: prev.ownerName || ownerName,
+          leadSetById: prev.leadSetById || assignedLead.leadSetById || '',
+          leadSetByName: prev.leadSetByName || leadSetByName,
+        }));
+      }
+
+      setHasPersistedPromptCompletion(true);
+      return assignedLead || updatedLead;
+    } finally {
+      setIsPersistingPromptCompletion(false);
+    }
+  };
+
+  const routeLeadToConfirmationQueue = async (leadId) => {
+    let ownerId = formData.ownerId || null;
+    let ownerName = formData.ownerName || '';
+
+    if (!ownerId) {
+      try {
+        const assignmentResult = await leadsApi.autoAssignLead(leadId);
+        if (assignmentResult?.assigned && assignmentResult?.lead?.ownerId) {
+          ownerId = assignmentResult.lead.ownerId;
+          ownerName = assignmentResult?.assignee
+            ? `${assignmentResult.assignee.firstName || ''} ${assignmentResult.assignee.lastName || ''}`.trim()
+            : ownerName;
+        }
+      } catch (assignmentError) {
+        console.error('Auto-assignment failed for confirmation queue fallback:', assignmentError);
+      }
+    }
+
+    if (!ownerId) {
+      ownerId = formData.leadSetById || user?.id || null;
+    }
+
+    try {
+      await leadsApi.updateLead(leadId, {
+        ownerId,
+        tentativeAppointmentDate: null,
+        tentativeAppointmentTime: null,
+      });
+    } catch (fallbackOwnerError) {
+      console.error('Failed to route lead to confirmation queue fallback:', fallbackOwnerError);
+    }
+
+    if (ownerId) {
+      setFormData(prev => ({
+        ...prev,
+        ownerId: prev.ownerId || ownerId,
+        ownerName: prev.ownerName || ownerName,
+      }));
+    }
+  };
+
+  const ensureInspectionAppointment = async (leadId, options = {}) => {
+    const {
+      force = false,
+      preferredDateTime = null,
+      allowFallback = true,
+      routeToQueue = true,
+      applySuggestion = true,
+    } = options;
+    const hasValidCurrentAppointment = isAppointmentWithinWindow(
+      formData.tentativeAppointmentDate,
+      formData.tentativeAppointmentTime
+    );
+
+    if (hasValidCurrentAppointment && !force) {
+      return {
+        ready: true,
+        suggestion: {
+          appointmentDate: formData.tentativeAppointmentDate,
+          appointmentTime: formData.tentativeAppointmentTime,
+        },
+      };
+    }
+
+    setIsSuggestingAppointment(true);
+    try {
+      let suggestion = null;
+
+      if (leadId) {
+        try {
+          suggestion = await leadsApi.suggestInspectionAppointment(leadId, {
+            workType: formData.workType || 'Inspection',
+            daysToSearch: INSPECTION_SUGGESTION_WINDOW_DAYS,
+            durationMinutes: 120,
+            preferredDateTime,
+            allowFallback,
+          });
+        } catch (suggestionError) {
+          console.error('Failed to fetch backend appointment suggestion:', suggestionError);
+        }
+      }
+
+      if (!suggestion?.found && allowFallback) {
+        const localSuggestion = buildLocalAppointmentSuggestion();
+        if (localSuggestion) {
+          suggestion = {
+            found: true,
+            ...localSuggestion,
+          };
+        }
+      }
+
+      if (suggestion?.found && suggestion?.appointmentDate && suggestion?.appointmentTime) {
+        if (applySuggestion) {
+          applyAppointmentSuggestionToForm(suggestion);
+
+          if (leadId) {
+            let resolvedOwnerId = suggestion.ownerId || null;
+            let resolvedOwnerName = suggestion.ownerName || '';
+
+            if (!resolvedOwnerId && !formData.ownerId) {
+              try {
+                const assignmentResult = await leadsApi.autoAssignLead(leadId);
+                if (assignmentResult?.assigned && assignmentResult?.lead?.ownerId) {
+                  resolvedOwnerId = assignmentResult.lead.ownerId;
+                  resolvedOwnerName = assignmentResult?.assignee
+                    ? `${assignmentResult.assignee.firstName || ''} ${assignmentResult.assignee.lastName || ''}`.trim()
+                    : resolvedOwnerName;
+                }
+              } catch (assignmentError) {
+                console.error('Auto-assignment failed after appointment suggestion:', assignmentError);
+              }
+            }
+
+            const updatePayload = {
+              tentativeAppointmentDate: suggestion.appointmentDate,
+              tentativeAppointmentTime: suggestion.appointmentTime,
+            };
+
+            if (!formData.ownerId && resolvedOwnerId) {
+              updatePayload.ownerId = resolvedOwnerId;
+            }
+
+            const updatedLead = await leadsApi.updateLead(leadId, updatePayload);
+            const updatedOwnerName = updatedLead?.owner
+              ? `${updatedLead.owner.firstName || ''} ${updatedLead.owner.lastName || ''}`.trim()
+              : '';
+            if ((!formData.ownerName || !formData.ownerId) && (updatedLead?.owner || resolvedOwnerId)) {
+              setFormData(prev => ({
+                ...prev,
+                ownerId: prev.ownerId || updatedLead?.owner?.id || resolvedOwnerId || '',
+                ownerName: prev.ownerName || updatedOwnerName || resolvedOwnerName,
+              }));
+            }
+          }
+        }
+
+        return { ready: true, suggestion };
+      }
+
+      if (leadId && allowFallback && routeToQueue) {
+        await routeLeadToConfirmationQueue(leadId);
+        return { ready: false, queued: true };
+      }
+
+      return {
+        ready: false,
+        queued: false,
+        reason: suggestion?.reason || (preferredDateTime ? 'PREFERRED_SLOT_UNAVAILABLE' : 'NO_AVAILABLE_SLOTS_IN_2_WEEKS'),
+      };
+    } finally {
+      setIsSuggestingAppointment(false);
+    }
+  };
+
+  const handleRefreshAppointmentSuggestion = async () => {
+    setErrorMessage('');
+
+    try {
+      const result = await requestAppointmentSuggestion({ allowFallback: true });
+      if (!result?.ready) {
+        alert('No appointment slot was available in the next 2 weeks. Please try another time.');
+      }
+    } catch (error) {
+      console.error('Failed to refresh appointment suggestion:', error);
+      setErrorMessage(error.message || 'Failed to refresh appointment suggestion. Please try again.');
+    }
+  };
+
+  const requestAppointmentSuggestion = async (options = {}) => {
+    const {
+      preferredDateTime = null,
+      allowFallback = true,
+      applySuggestion = true,
+      infoMessage = '',
+    } = options;
+    setAppointmentPromptError('');
+    setAppointmentPromptInfo('');
+
+    let leadId = resolveLeadId();
+    if (!leadId) {
+      leadId = await handleSave();
+    }
+    if (!leadId) {
+      setAppointmentPromptError('Please complete required lead fields before scheduling.');
+      return { ready: false };
+    }
+
+    const result = await ensureInspectionAppointment(leadId, {
+      force: true,
+      preferredDateTime,
+      allowFallback,
+      routeToQueue: false,
+      applySuggestion,
+    });
+
+    if (result?.ready) {
+      if (applySuggestion) {
+        setLastSuggestedSlot(result?.suggestion || null);
+        setPendingSuggestedSlot(null);
+        setAppointmentPromptInfo('');
+      } else {
+        setPendingSuggestedSlot(result?.suggestion || null);
+        setAppointmentPromptInfo(infoMessage || 'Suggested slot is ready. Click Use suggested time to apply it.');
+      }
+      return result;
+    }
+
+    if (result?.reason === 'PREFERRED_SLOT_UNAVAILABLE') {
+      setAppointmentPromptError('Requested time is unavailable. Try a different time or use Suggest Best Time.');
+    } else if (result?.queued) {
+      setAppointmentPromptError('No appointment slot available. Lead routed to Unconfirmed Leads for follow-up.');
+    } else {
+      setAppointmentPromptError('No appointment slot available. Please try a different time.');
+    }
+
+    return result;
+  };
+
+  const handleAppointmentPromptInputChange = (event) => {
+    handleInputChange(event);
+    setHasManualAppointmentChange(true);
+    setPendingSuggestedSlot(null);
+    setAppointmentPromptInfo('');
+  };
+
+  const handleAppointmentPromptClose = () => {
+    if (!hasCallCenterAppointment) {
+      navigate('/leads');
+      return;
+    }
+    setShowAppointmentPrompt(false);
+  };
+
+  const handleOwnerOverrideSelect = async (owner) => {
+    if (!owner) return;
+    setFormData(prev => ({
+      ...prev,
+      ownerId: owner.id || '',
+      ownerName: `${owner.firstName || ''} ${owner.lastName || ''}`.trim(),
+    }));
+    setOwnerSearchQuery('');
+    setShowOwnerDropdown(false);
+
+    const leadId = resolveLeadId();
+    if (leadId) {
+      try {
+        await leadsApi.updateLead(leadId, { ownerId: owner.id });
+      } catch (error) {
+        console.error('Failed to override owner assignment:', error);
+      }
+    }
+  };
+
+  const buildPreferredDateTime = () => {
+    if (!formData.tentativeAppointmentDate || !formData.tentativeAppointmentTime) return null;
+    const candidate = new Date(`${formData.tentativeAppointmentDate}T${formData.tentativeAppointmentTime}:00`);
+    if (Number.isNaN(candidate.getTime())) return null;
+    return `${formData.tentativeAppointmentDate}T${formData.tentativeAppointmentTime}:00`;
+  };
+
+  const buildPreferredDateTimeFromSlot = (slot) => {
+    if (!slot?.appointmentDate || !slot?.appointmentTime) return null;
+    const candidate = new Date(`${slot.appointmentDate}T${slot.appointmentTime}:00`);
+    if (Number.isNaN(candidate.getTime())) return null;
+    return `${slot.appointmentDate}T${slot.appointmentTime}:00`;
+  };
 
   // Fetch SMS templates
   const { data: smsTemplatesData } = useQuery({
@@ -349,6 +834,14 @@ export default function LeadWizard() {
     staleTime: 30000,
   });
 
+  // Fetch users for Lead Assigned (Owner) search
+  const { data: ownerUsersData } = useQuery({
+    queryKey: ['users-owner', ownerSearchQuery],
+    queryFn: () => usersApi.getUsers({ search: ownerSearchQuery, limit: 20, isActive: true }),
+    enabled: ownerSearchQuery.length >= 2,
+    staleTime: 30000,
+  });
+
   // SMS mutation
   const sendSmsMutation = useMutation({
     mutationFn: (data) => bamboogliApi.sendSms(data),
@@ -407,8 +900,34 @@ export default function LeadWizard() {
     leadSetByName: '',
     leadDisposition: '',
     // Sales Rep workflow fields
-    stage: '',
+    stage: isCallCenter ? '' : 'Prospect',
   });
+
+  const leadSetByIdForManager = formData.leadSetById || null;
+  const { data: leadSetByUserData } = useQuery({
+    queryKey: ['lead-set-by-user', leadSetByIdForManager],
+    queryFn: () => usersApi.getUser(leadSetByIdForManager),
+    enabled: !!leadSetByIdForManager,
+    staleTime: 60000,
+  });
+
+  const leadSetByManagerId =
+    leadSetByUserData?.managerId ||
+    leadSetByUserData?.manager?.id ||
+    null;
+
+  const { data: leadSetByManagerData } = useQuery({
+    queryKey: ['lead-set-by-manager', leadSetByManagerId],
+    queryFn: () => usersApi.getUser(leadSetByManagerId),
+    enabled: !!leadSetByManagerId,
+    staleTime: 60000,
+  });
+
+  const leadSetByManagerName = leadSetByManagerData
+    ? `${leadSetByManagerData.firstName || ''} ${leadSetByManagerData.lastName || ''}`.trim()
+    : leadSetByUserData?.manager
+      ? `${leadSetByUserData.manager.firstName || ''} ${leadSetByUserData.manager.lastName || ''}`.trim()
+      : '';
 
   // Helper functions for dynamic Sales Rep workflow
   const getStagesForWorkType = (workType) => {
@@ -442,21 +961,131 @@ export default function LeadWizard() {
 
   // Check if sales rep workflow applies (Insurance or Retail work type, non-call-center user)
   const showSalesRepWorkflow = !isCallCenter && (formData.workType === 'Insurance' || formData.workType === 'Retail');
+  const hasCallCenterAppointment =
+    Boolean(formData.tentativeAppointmentDate && formData.tentativeAppointmentTime);
+  const appointmentDateMin = formatDateForInput(new Date());
+  const displayedOwnerName = pendingSuggestedSlot?.ownerName || formData.ownerName || 'Unassigned';
 
-  const [lead, setLead] = useState(null);
+  // Sales rep stage is derived from owner assignment in the lead phase.
+  useEffect(() => {
+    if (isCallCenter) return;
+    const hasAssignedOwner = Boolean(formData.ownerId || (formData.ownerName || '').trim());
+    const targetStage = hasAssignedOwner ? 'Lead Assigned' : 'Prospect';
+    if (formData.stage === targetStage) return;
+    setFormData(prev => ({ ...prev, stage: targetStage }));
+  }, [isCallCenter, formData.ownerId, formData.ownerName, formData.stage]);
 
-  // Set owner and leadSetBy to current user for new leads
+  // Auto-suggest the soonest appointment in the next 2 weeks for call center flows.
+  useEffect(() => {
+    if (!useLeadPromptFlow || currentStep !== 3 || isSuggestingAppointment) return;
+    if (showLeadSourcePrompt || showAppointmentPrompt) return;
+    if (formData.tentativeAppointmentDate && formData.tentativeAppointmentTime) return;
+
+    const suggestion = buildLocalAppointmentSuggestion();
+    if (!suggestion) return;
+
+    setFormData(prev => ({
+      ...prev,
+      tentativeAppointmentDate: suggestion.appointmentDate,
+      tentativeAppointmentTime: suggestion.appointmentTime,
+    }));
+  }, [
+    currentStep,
+    formData.tentativeAppointmentDate,
+    formData.tentativeAppointmentTime,
+    isSuggestingAppointment,
+    showLeadSourcePrompt,
+    showAppointmentPrompt,
+    useLeadPromptFlow,
+  ]);
+
+  // Initialize call center prompts on step 3
+  useEffect(() => {
+    if (!useLeadPromptFlow || currentStep !== 3 || hasInitializedCallCenterPrompts) return;
+    const hasValidAppointment = Boolean(
+      formData.tentativeAppointmentDate && formData.tentativeAppointmentTime
+    );
+
+    if (!hasValidAppointment) {
+      setShowAppointmentPrompt(true);
+      setShowLeadSourcePrompt(false);
+    } else if (!formData.leadSource) {
+      setShowLeadSourcePrompt(true);
+    }
+
+    setHasInitializedCallCenterPrompts(true);
+  }, [
+    currentStep,
+    hasInitializedCallCenterPrompts,
+    formData.leadSource,
+    formData.tentativeAppointmentDate,
+    formData.tentativeAppointmentTime,
+    useLeadPromptFlow,
+  ]);
+
+  // Auto-save new lead when step 3 begins and Lead Source is set (call center flow)
+  useEffect(() => {
+    if (!useLeadPromptFlow || currentStep !== 3) return;
+    if (hasAutoSavedLead) return;
+    if (!formData.leadSource) return;
+    if (resolveLeadId()) return;
+    if (!formData.firstName || !formData.lastName) return;
+    if (!(formData.phone || formData.mobilePhone || formData.email)) return;
+
+    let isActive = true;
+    const autoSave = async () => {
+      const leadId = await handleSave();
+      if (isActive && leadId) {
+        setHasAutoSavedLead(true);
+      }
+    };
+    autoSave();
+
+    return () => {
+      isActive = false;
+    };
+  }, [
+    currentStep,
+    hasAutoSavedLead,
+    formData.leadSource,
+    formData.firstName,
+    formData.lastName,
+    formData.phone,
+    formData.mobilePhone,
+    formData.email,
+    useLeadPromptFlow,
+  ]);
+
+  useEffect(() => {
+    if (!useLeadPromptFlow || currentStep !== 3) return;
+    if (showLeadSourcePrompt || showAppointmentPrompt) return;
+    if (!formData.leadSource || !hasCallCenterAppointment) return;
+    if (hasPersistedPromptCompletion) return;
+
+    persistPromptCompletion();
+  }, [
+    currentStep,
+    formData.leadSource,
+    hasCallCenterAppointment,
+    hasPersistedPromptCompletion,
+    showLeadSourcePrompt,
+    showAppointmentPrompt,
+    useLeadPromptFlow,
+  ]);
+
+  // Set lead creator and leadSetBy to current user for new leads
   // This is critical for call center tracking - the person who creates the lead is the "setter"
   useEffect(() => {
     if (isNewLead && user) {
       const userName = user.name || `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email;
       setFormData(prev => ({
         ...prev,
-        ownerId: user.id || user.username,
-        ownerName: userName,
         // Auto-set leadSetById to current user - tracks who entered the lead
-        leadSetById: user.id || user.username,
-        leadSetByName: userName,
+        leadSetById: prev.leadSetById || user.id || user.username,
+        leadSetByName: prev.leadSetByName || userName,
+        // Lead Creator for audit/history
+        creatorId: prev.creatorId || user.id || user.username,
+        creatorName: prev.creatorName || userName,
       }));
     }
   }, [isNewLead, user]);
@@ -512,8 +1141,9 @@ export default function LeadWizard() {
         tentativeAppointmentDate: leadData.tentativeAppointmentDate || '',
         tentativeAppointmentTime: leadData.tentativeAppointmentTime || '',
         leadSetById: leadData.leadSetById || '',
-        leadSetByName: leadData.leadSetByName || '',
+        leadSetByName: leadData.leadSetBy ? `${leadData.leadSetBy.firstName || ''} ${leadData.leadSetBy.lastName || ''}`.trim() : '',
         leadDisposition: leadData.leadDisposition || '',
+        stage: leadData.stage || 'Prospect',
       });
 
       const leadActivities = [];
@@ -553,6 +1183,12 @@ export default function LeadWizard() {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
 
+    if (name === 'tentativeAppointmentDate' || name === 'tentativeAppointmentTime') {
+      setHasManualAppointmentChange(true);
+      setPendingSuggestedSlot(null);
+      setAppointmentPromptInfo('');
+    }
+
     // Check format warnings for phone and email fields
     if (name === 'phone' || name === 'mobilePhone') {
       setFormatWarnings(prev => ({ ...prev, [name]: !isValidPhoneFormat(value) }));
@@ -580,6 +1216,7 @@ export default function LeadWizard() {
         rating: formData.rating,
         description: formData.description,
         // New fields
+        stage: formData.stage,
         ownerId: formData.ownerId,
         creatorId: formData.creatorId,
         salesRabbitUser: formData.salesRabbitUser,
@@ -600,60 +1237,466 @@ export default function LeadWizard() {
         setLead(newLead);
         // Navigate with replace and state to indicate we just saved
         navigate(`/leads/${newLead.id}/wizard`, { replace: true, state: { justSaved: true } });
+        return newLead.id;
       } else {
         const updatedLead = await leadsApi.updateLead(id, saveData);
         setLead(updatedLead);
+        return updatedLead?.id || id;
       }
     } catch (error) {
       console.error('Failed to save lead:', error);
       setErrorMessage('Failed to save lead. Please try again.');
+      return null;
     } finally {
       setIsSaving(false);
     }
   };
 
-  const handleConvert = async () => {
-    if (!canConvert) return;
-    setIsConverting(true);
-    setErrorMessage('');
-    try {
-      await handleSave();
+  const convertLeadWithOpportunityType = async (opportunityType, options = {}) => {
+    const effectiveWorkType = options.workType || formData.workType;
+    const effectiveLeadStatus = options.leadStatus || formData.status;
+    const effectiveLeadDisposition = options.leadDisposition || formData.leadDisposition;
+    const effectiveTentativeAppointmentDate = options.tentativeAppointmentDate || formData.tentativeAppointmentDate;
+    const effectiveTentativeAppointmentTime = options.tentativeAppointmentTime || formData.tentativeAppointmentTime;
+    const targetLeadId = resolveLeadId(options.leadId);
 
-      // Build tentative appointment datetime if both date and time are set
-      let tentativeAppointmentDateTime = null;
-      if (formData.tentativeAppointmentDate) {
-        if (formData.tentativeAppointmentTime) {
-          tentativeAppointmentDateTime = `${formData.tentativeAppointmentDate}T${formData.tentativeAppointmentTime}:00`;
-        } else {
-          // Default to 9:00 AM if no time specified
-          tentativeAppointmentDateTime = `${formData.tentativeAppointmentDate}T09:00:00`;
+    if (!targetLeadId) {
+      throw new Error('Lead ID is missing. Please save the lead and try again.');
+    }
+
+    // Build tentative appointment datetime if both date and time are set
+    let tentativeAppointmentDateTime = null;
+    if (effectiveTentativeAppointmentDate) {
+      if (effectiveTentativeAppointmentTime) {
+        tentativeAppointmentDateTime = `${effectiveTentativeAppointmentDate}T${effectiveTentativeAppointmentTime}:00`;
+      } else {
+        // Default to 9:00 AM if no time specified
+        tentativeAppointmentDateTime = `${effectiveTentativeAppointmentDate}T09:00:00`;
+      }
+    }
+
+    const conversionData = {
+      accountName: formData.company || `${formData.firstName} ${formData.lastName}`,
+      // Note: opportunityName not sent - backend auto-generates using job number
+      opportunityType,
+      createOpportunity: true,
+      // Pass work type and appointment for Service Appointment creation
+      workType: effectiveWorkType,
+      tentativeAppointmentDate: tentativeAppointmentDateTime,
+      createServiceAppointment: !!tentativeAppointmentDateTime,
+      leadSetById: formData.leadSetById,
+      leadStatus: effectiveLeadStatus,
+      leadDisposition: effectiveLeadDisposition,
+    };
+
+    const result = await leadsApi.convertLead(targetLeadId, conversionData);
+
+    setConversionResult({
+      accountId: result.account?.id,
+      accountName: result.account?.name,
+      contactId: result.contact?.id,
+      contactName: result.contact ? `${result.contact.firstName} ${result.contact.lastName}` : '',
+      opportunityId: result.opportunity?.id,
+      opportunityName: result.opportunity?.name,
+    });
+  };
+
+  const openGuidedFlowModal = (leadIdOverride, options = {}) => {
+    if (disableGuidedFlow) return false;
+    const { mandatory = false } = options;
+    const targetLeadId = resolveLeadId(leadIdOverride);
+    if (!targetLeadId) {
+      setErrorMessage('Please save the lead before starting qualification prompts.');
+      return false;
+    }
+
+    setGuidedFlowLeadId(targetLeadId);
+    setGuidedOwnerId('');
+    setGuidedOwnerName('');
+    setGuidedProjectType(formData.propertyType || '');
+    setGuidedWorkType(formData.workType === 'Retail' || formData.workType === 'Insurance' ? formData.workType : '');
+    setGuidedWasInspected(null);
+    setGuidedFlowStep('project-type');
+    setGuidedFlowError('');
+    setOwnerSearchQuery('');
+    setShowOwnerDropdown(false);
+    setIsGuidedFlowMandatory(mandatory);
+    setShowGuidedFlowModal(true);
+    return true;
+  };
+
+  const closeGuidedFlowModal = () => {
+    if (isConverting || isGuidedFlowMandatory) return;
+    setShowGuidedFlowModal(false);
+    setGuidedFlowLeadId(null);
+    setGuidedFlowStep('project-type');
+    setGuidedFlowError('');
+    setGuidedWasInspected(null);
+  };
+
+  const persistGuidedSelections = async ({ inspected, workType, leadId: leadIdOverride }) => {
+    const targetLeadId = resolveLeadId(leadIdOverride);
+    if (!targetLeadId) {
+      throw new Error('Lead ID is missing. Please save the lead first.');
+    }
+    const updateData = {
+      propertyType: guidedProjectType,
+      leadNotes: formData.leadNotes,
+      description: formData.description,
+    };
+
+    if (workType) {
+      updateData.workType = workType;
+      updateData.jobNotes = formData.jobNotes;
+    }
+
+    if (inspected === true) {
+      updateData.disposition = 'INSPECTED';
+    }
+
+    if (inspected === false) {
+      updateData.disposition = 'NO_INSPECTION';
+    }
+
+    const updatedLead = await leadsApi.updateLead(targetLeadId, updateData);
+    setLead(updatedLead);
+    setFormData(prev => ({
+      ...prev,
+      ownerId: guidedOwnerId || '',
+      ownerName: guidedOwnerName || '',
+      propertyType: guidedProjectType,
+      stage: nextStage,
+      ...(workType ? { workType } : {}),
+      ...(inspected === true ? { leadDisposition: 'INSPECTED' } : {}),
+      ...(inspected === false ? { leadDisposition: 'NO_INSPECTION' } : {}),
+    }));
+    return updatedLead;
+  };
+
+  const handleStartGuidedFlow = async (options = {}) => {
+    const { mandatory = false } = options;
+    setErrorMessage('');
+    setGuidedFlowError('');
+
+    try {
+      let targetLeadId = resolveLeadId();
+      if (!targetLeadId) {
+        const savedLeadId = await handleSave();
+        if (!savedLeadId) {
+          setIsGuidedFlowMandatory(false);
+          return false;
+        }
+        targetLeadId = savedLeadId;
+      }
+      const opened = openGuidedFlowModal(targetLeadId, { mandatory });
+      if (!opened) {
+        setIsGuidedFlowMandatory(false);
+      }
+      return opened;
+    } catch (error) {
+      console.error('Failed to start guided flow:', error);
+      setIsGuidedFlowMandatory(false);
+      setErrorMessage(error.message || 'Failed to start guided prompts. Please try again.');
+      return false;
+    }
+  };
+
+  // Launch guided prompts automatically the first time sales reps land on Step 3.
+  useEffect(() => {
+    if (disableGuidedFlow) return;
+    if (isCallCenter || currentStep !== 3 || showGuidedFlowModal || hasAutoStartedGuidedFlow) return;
+    if (useLeadPromptFlow && (showLeadSourcePrompt || showAppointmentPrompt)) return;
+    let isActive = true;
+    const autoStartGuidedFlow = async () => {
+      setHasAutoStartedGuidedFlow(true);
+      const started = await handleStartGuidedFlow({ mandatory: true });
+      if (!started && isActive) {
+        setIsGuidedFlowMandatory(false);
+      }
+    };
+    autoStartGuidedFlow();
+    return () => {
+      isActive = false;
+    };
+  }, [isCallCenter, currentStep, showGuidedFlowModal, hasAutoStartedGuidedFlow]);
+
+  // Call center workflow stops at step 3
+  useEffect(() => {
+    if (isCallCenter && currentStep > 3) {
+      setCurrentStep(3);
+    }
+  }, [isCallCenter, currentStep]);
+
+  const handleGuidedProjectTypeNext = () => {
+    if (!guidedProjectType) {
+      setGuidedFlowError('Project Type is required.');
+      return;
+    }
+    setGuidedFlowError('');
+    setGuidedFlowStep('inspection');
+  };
+
+  const handleGuidedInspectionChoice = async (inspected) => {
+    setGuidedWasInspected(inspected);
+    setGuidedFlowError('');
+
+    if (inspected) {
+      setGuidedFlowStep('work-type');
+      return;
+    }
+
+    setGuidedFlowStep('no-inspection-notes');
+  };
+
+  const handleGuidedNoInspectionSubmit = async () => {
+    const targetLeadId = await ensureLeadId();
+    if (!targetLeadId) {
+      setGuidedFlowError('Lead ID is missing. Please save and retry.');
+      return;
+    }
+
+    setIsConverting(true);
+    setGuidedFlowError('');
+    try {
+      await persistGuidedSelections({ inspected: false, leadId: targetLeadId });
+
+      const transitionResult = await leadsApi.applyGatingTransition(targetLeadId, 'NO_INSPECTION');
+      const transitionSucceeded = transitionResult?.data?.success !== false;
+      if (!transitionSucceeded) {
+        await leadsApi.updateLead(targetLeadId, { disposition: 'NO_INSPECTION' });
+      }
+
+      const gatingStateResponse = await leadsApi.getGatingState(targetLeadId);
+      const currentGatingState = gatingStateResponse?.data || gatingStateResponse;
+      setGatingState(currentGatingState);
+
+      setIsGuidedFlowMandatory(false);
+      setShowGuidedFlowModal(false);
+      alert('Lead set to No Inspection. Allowed next statuses: Reschedule — Scheduled, Reschedule — Unscheduled, Closed Lost.');
+      setCurrentStep(3);
+    } catch (error) {
+      console.error('Failed to process No Inspection flow:', error);
+      setGuidedFlowError(error.message || 'Failed to set No Inspection. Please try again.');
+    } finally {
+      setIsConverting(false);
+    }
+  };
+
+  const handleGuidedConvert = async () => {
+    const targetLeadId = await ensureLeadId();
+    if (!targetLeadId) {
+      setGuidedFlowError('Lead ID is missing. Please save and retry.');
+      return;
+    }
+
+    if (!guidedWorkType) {
+      setGuidedFlowError('Work Type is required.');
+      return;
+    }
+
+    const salesPath = guidedWorkType === 'Retail' ? 'RETAIL' : 'INSURANCE';
+    setIsConverting(true);
+    setGuidedFlowError('');
+
+    try {
+      await persistGuidedSelections({ inspected: true, workType: guidedWorkType, leadId: targetLeadId });
+
+      const gatingStateResponse = await leadsApi.getGatingState(targetLeadId);
+      const currentGatingState = gatingStateResponse?.data || gatingStateResponse;
+      if (currentGatingState?.salesPath !== salesPath) {
+        await leadsApi.selectSalesPath(targetLeadId, salesPath);
+      }
+
+      if (!canForceConvert) {
+        const gatingResult = await leadsApi.validatePreConversion(targetLeadId);
+        const preConversion = gatingResult?.data || gatingResult;
+        if (!gatingResult?.success || preConversion?.allowed === false) {
+          const blockers = preConversion?.blockers || ['Lead cannot be converted. Please check all gating requirements.'];
+          alert(blockers.join('\n'));
+          return;
         }
       }
 
-      const conversionData = {
-        accountName: formData.company || `${formData.firstName} ${formData.lastName}`,
-        opportunityName: `${formData.company || formData.lastName} - Project`,
-        opportunityType: formData.workType === 'Inspection' ? 'INSPECTION' : 'INSURANCE',
-        createOpportunity: true,
-        // Pass work type and appointment for Service Appointment creation
-        workType: formData.workType,
-        tentativeAppointmentDate: tentativeAppointmentDateTime,
-        createServiceAppointment: !!tentativeAppointmentDateTime,
-        leadSetById: formData.leadSetById,
-        leadStatus: formData.status,
-        leadDisposition: formData.leadDisposition,
-      };
-
-      const result = await leadsApi.convertLead(id, conversionData);
-
-      setConversionResult({
-        accountId: result.account?.id,
-        accountName: result.account?.name,
-        contactId: result.contact?.id,
-        contactName: result.contact ? `${result.contact.firstName} ${result.contact.lastName}` : '',
-        opportunityId: result.opportunity?.id,
-        opportunityName: result.opportunity?.name,
+      await convertLeadWithOpportunityType(salesPath, {
+        leadId: targetLeadId,
+        workType: guidedWorkType,
+        leadDisposition: 'INSPECTED',
       });
+
+      setCurrentStep(4);
+      setIsGuidedFlowMandatory(false);
+      setShowGuidedFlowModal(false);
+    } catch (error) {
+      console.error('Failed guided conversion:', error);
+      setGuidedFlowError(error.message || 'Failed to convert lead. Please try again.');
+    } finally {
+      setIsConverting(false);
+    }
+  };
+
+  const handleInspectionDecision = async (inspected) => {
+    const targetLeadId = await ensureLeadId();
+    if (!targetLeadId) {
+      setErrorMessage('Lead ID is missing. Please save and retry.');
+      return;
+    }
+
+    // "No Inspection" moves the lead to reschedule funnel and exits conversion.
+    if (!inspected) {
+      setWasInspected(false);
+      setSelectedOpportunityType(null);
+      setShowInspectionModal(false);
+      setIsConverting(true);
+      setErrorMessage('');
+
+      try {
+        const transitionResult = await leadsApi.applyGatingTransition(targetLeadId, 'NO_INSPECTION');
+        const transitionSucceeded = transitionResult?.data?.success !== false;
+
+        // Fallback: some environments reject NO_INSPECTION from INSPECTED via transition API.
+        // Persist the no-inspection decision directly so users can continue to reschedule flow.
+        if (!transitionSucceeded) {
+          await leadsApi.updateLead(targetLeadId, { disposition: 'NO_INSPECTION' });
+        }
+
+        const gatingStateResponse = await leadsApi.getGatingState(targetLeadId);
+        const currentGatingState = gatingStateResponse?.data || gatingStateResponse;
+        setGatingState(currentGatingState);
+
+        if (currentGatingState?.funnelStatus !== 'NO_INSPECTION') {
+          throw new Error('Could not route lead to No Inspection.');
+        }
+
+        alert('Lead moved to No Inspection. Please reschedule or close the lead before converting.');
+        setCurrentStep(3);
+      } catch (error) {
+        console.error('Failed to update lead status:', error);
+        setErrorMessage(error.message || 'Failed to set No Inspection status. Please try again.');
+      } finally {
+        setIsConverting(false);
+      }
+      return;
+    }
+
+    // If inspected, proceed to sales-path selection.
+    setWasInspected(true);
+    setSelectedOpportunityType(null);
+  };
+
+  const handleSalesPathSelection = async (salesPath) => {
+    const targetLeadId = await ensureLeadId();
+    if (!targetLeadId) {
+      setErrorMessage('Lead ID is missing. Please save and retry.');
+      return;
+    }
+
+    setSelectedOpportunityType(salesPath);
+    setIsConverting(true);
+    setErrorMessage('');
+
+    try {
+      // Persist sales path decision gate before conversion.
+      const gatingStateResponse = await leadsApi.getGatingState(targetLeadId);
+      const currentGatingState = gatingStateResponse?.data || gatingStateResponse;
+      if (currentGatingState?.salesPath !== salesPath) {
+        await leadsApi.selectSalesPath(targetLeadId, salesPath);
+      }
+
+      // Final blocker check before conversion.
+      if (!canForceConvert) {
+        const gatingResult = await leadsApi.validatePreConversion(targetLeadId);
+        const preConversion = gatingResult?.data || gatingResult;
+        if (!gatingResult?.success || preConversion?.allowed === false) {
+          const blockers = preConversion?.blockers || ['Lead cannot be converted. Please check all gating requirements.'];
+          alert(blockers.join('\n'));
+          return;
+        }
+      }
+
+      await convertLeadWithOpportunityType(salesPath, { leadId: targetLeadId });
+      setShowInspectionModal(false);
+    } catch (error) {
+      console.error('Failed to convert lead:', error);
+      setErrorMessage(error.message || 'Failed to convert lead. Please try again.');
+    } finally {
+      setIsConverting(false);
+    }
+  };
+
+  const handleInspectionModalClose = () => {
+    setShowInspectionModal(false);
+    setWasInspected(null);
+    setSelectedOpportunityType(null);
+  };
+
+  const handleConvert = async () => {
+    if (!canConvert) return;
+
+    setIsConverting(true);
+    setErrorMessage('');
+    try {
+      const leadId = await handleSave();
+      if (!leadId) return;
+
+      let appointmentResult = null;
+      if (isCallCenter && !canForceConvert) {
+        appointmentResult = await ensureInspectionAppointment(leadId);
+        if (!appointmentResult?.ready) {
+          alert('Could not secure an inspection appointment in the next 2 weeks. Lead was routed to Unconfirmed Leads for RingCentral confirmation calls.');
+          return;
+        }
+      } else {
+        appointmentResult = {
+          ready: true,
+          suggestion: {
+            appointmentDate: formData.tentativeAppointmentDate || null,
+            appointmentTime: formData.tentativeAppointmentTime || null,
+          },
+        };
+      }
+
+      // Gating: validate pre-conversion rules.
+      // Allow the flow to continue when the only blocker is missing Sales Path,
+      // because the modal handles that decision.
+      if (!canForceConvert) {
+        const gatingResult = await leadsApi.validatePreConversion(leadId);
+        const preConversion = gatingResult?.data || gatingResult;
+        const blockers = preConversion?.blockers || [];
+        const nonSalesPathBlockers = blockers.filter((msg) => !msg.toLowerCase().includes('sales path'));
+        if (!gatingResult?.success || (preConversion?.allowed === false && nonSalesPathBlockers.length > 0)) {
+          const blockerMessages = blockers.length > 0
+            ? blockers
+            : ['Lead cannot be converted. Please check all gating requirements.'];
+          alert(blockerMessages.join('\n'));
+          return;
+        }
+      }
+      const gatingStateResponse = await leadsApi.getGatingState(leadId);
+      const currentGatingState = gatingStateResponse?.data || gatingStateResponse;
+      setGatingState(currentGatingState);
+
+      // Decision gate is only required for INSPECTED leads that do not yet have a sales path.
+      if (currentGatingState?.funnelStatus === 'INSPECTED' && !currentGatingState?.salesPath) {
+        setWasInspected(null);
+        setSelectedOpportunityType(null);
+        setShowInspectionModal(true);
+        return;
+      }
+
+      // When sales path is already set (or lead is not at decision gate), convert directly.
+      const resolvedOpportunityType = currentGatingState?.salesPath === 'RETAIL'
+        ? 'RETAIL'
+        : currentGatingState?.salesPath === 'INSURANCE'
+          ? 'INSURANCE'
+        : formData.workType === 'Retail'
+          ? 'RETAIL'
+          : 'INSURANCE';
+      await convertLeadWithOpportunityType(resolvedOpportunityType, {
+        leadId,
+        tentativeAppointmentDate: appointmentResult?.suggestion?.appointmentDate,
+        tentativeAppointmentTime: appointmentResult?.suggestion?.appointmentTime,
+      });
+      return;
     } catch (error) {
       console.error('Failed to convert lead:', error);
       setErrorMessage(error.message || 'Failed to convert lead. Please try again.');
@@ -663,13 +1706,54 @@ export default function LeadWizard() {
   };
 
   const goToStep = (step) => {
-    if (step >= 1 && step <= 4) {
+    if (isCallCenter && step > 3) return;
+    if (step >= 1 && step <= totalSteps) {
       setCurrentStep(step);
     }
   };
 
-  const handleNext = () => {
-    if (currentStep < 4) {
+  const handleNext = async () => {
+    if (currentStep === 3) {
+      try {
+        const leadId = await handleSave();
+        if (!leadId) return;
+
+        if (!hasCallCenterAppointment) {
+          setShowAppointmentPrompt(true);
+          return;
+        }
+
+        if (!formData.leadSource) {
+          setShowLeadSourcePrompt(true);
+          return;
+        }
+
+        const preferredDateTime = buildPreferredDateTime();
+
+        if (preferredDateTime && !hasManualAppointmentChange) {
+          const appointmentResult = await requestAppointmentSuggestion({
+            preferredDateTime,
+            allowFallback: false,
+          });
+          if (!appointmentResult?.ready) {
+            setShowAppointmentPrompt(true);
+            return;
+          }
+        }
+
+        if (isCallCenter) {
+          alert('Call Center Process Complete! The Sales Rep will take the lead from here.');
+          setCurrentStep(3);
+          return;
+        }
+
+        openGuidedFlowModal(leadId);
+        return;
+      } catch (err) {
+        console.error('[LeadWizard] Gating check failed:', err);
+        alert('Unable to validate lead gating rules. Please try again.');
+      }
+    } else if (currentStep < 4) {
       setCurrentStep(currentStep + 1);
     }
   };
@@ -703,26 +1787,25 @@ export default function LeadWizard() {
   const completionScore = calculateCompletionScore();
 
   // Validation differs for call center vs sales reps
-  // Call center: firstName, lastName, phone/email, workType, status, leadSource
-  // Sales reps: firstName, lastName, phone/email, leadSource, propertyType, workType
+  // Call center: firstName, lastName, phone/email, workType, status, leadSource, appointment
+  // Sales reps: firstName, lastName, phone/email, leadSource
   const hasRequiredFields = isCallCenter
     ? (formData.firstName &&
        formData.lastName &&
        formData.workType &&
        formData.status &&
        formData.leadSource &&
+       hasCallCenterAppointment &&
        (formData.phone || formData.mobilePhone || formData.email))
     : (formData.firstName &&
        formData.lastName &&
        formData.leadSource &&
-       formData.propertyType &&
-       formData.workType &&
        (formData.phone || formData.mobilePhone || formData.email));
 
   // canConvert should match hasRequiredFields validation
   const canConvert = lead &&
     !lead.isConverted &&
-    hasRequiredFields;
+    (hasRequiredFields || canForceConvert);
 
   const getStatusStyle = (status) => {
     const found = LEAD_STATUSES.find(s => s.value === status);
@@ -757,7 +1840,7 @@ export default function LeadWizard() {
   }
 
   return (
-    <div className="space-y-6 pb-8">
+    <div className="space-y-6 pb-28 sm:pb-32">
       {/* Header */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
         <div className="flex items-center justify-between">
@@ -805,7 +1888,7 @@ export default function LeadWizard() {
       {/* Progress Steps */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
         <div className="flex items-center justify-between">
-          {steps.map((step, index) => (
+          {visibleSteps.map((step, index) => (
             <div key={step.id} className="flex items-center flex-1">
               <button
                 onClick={() => goToStep(step.id)}
@@ -836,7 +1919,7 @@ export default function LeadWizard() {
                   <div className="text-xs text-gray-500">{step.description}</div>
                 </div>
               </button>
-              {index < steps.length - 1 && (
+              {index < visibleSteps.length - 1 && (
                 <div className={`w-8 h-0.5 mx-2 ${
                   currentStep > step.id ? 'bg-green-500' : 'bg-gray-200'
                 }`}></div>
@@ -994,98 +2077,108 @@ export default function LeadWizard() {
               Property Address
             </h2>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
-              {/* Street - with Google Places Autocomplete */}
-              <div className="lg:col-span-2">
-                <label className="block text-sm font-medium text-gray-700 mb-1">Street Address</label>
-                <AddressAutocomplete
-                  value={formData.street}
-                  onChange={(street) => setFormData(prev => ({ ...prev, street }))}
-                  onAddressSelect={(address) => {
-                    // Auto-fill city, state, and ZIP when an address is selected
-                    setFormData(prev => ({
-                      ...prev,
-                      street: address.street,
-                      city: address.city || prev.city,
-                      state: address.state || prev.state,
-                      postalCode: address.postalCode || prev.postalCode,
-                    }));
-                  }}
-                  placeholder="Start typing an address..."
-                />
-              </div>
 
-              {/* City */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">City</label>
-                <input
-                  type="text"
-                  name="city"
-                  value={formData.city}
-                  onChange={handleInputChange}
-                  placeholder="Baltimore"
-                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
-                />
-              </div>
+      {/* Two-column layout: fields left, map right */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* LEFT COLUMN - Form Fields */}
+        <div className="space-y-4">
+          {/* Street Address */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Street Address</label>
+            <AddressAutocomplete
+              value={formData.street}
+              onChange={(street) => setFormData(prev => ({ ...prev, street }))}
+              onAddressSelect={(address) => {
+                setFormData(prev => ({
+                  ...prev,
+                  street: address.street,
+                  city: address.city || prev.city,
+                  state: address.state || prev.state,
+                  postalCode: address.postalCode || prev.postalCode,
+                }));
+              }}
+              placeholder="Start typing an address..."
+            />
+          </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                {/* State */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">State</label>
-                  <select
-                    name="state"
-                    value={formData.state}
-                    onChange={handleInputChange}
-                    className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
-                  >
-                    <option value="">Select</option>
-                    {US_STATES.map(state => (
-                      <option key={state.value} value={state.value}>{state.value}</option>
-                    ))}
-                  </select>
-                </div>
+          {/* City */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">City</label>
+            <input
+              type="text"
+              name="city"
+              value={formData.city}
+              onChange={handleInputChange}
+              placeholder="Baltimore"
+              className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+            />
+          </div>
 
-                {/* ZIP */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">ZIP Code</label>
-                  <input
-                    type="text"
-                    name="postalCode"
-                    value={formData.postalCode}
-                    onChange={handleInputChange}
-                    placeholder="21201"
-                    maxLength={5}
-                    className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
-                  />
-                </div>
-              </div>
+          {/* State and ZIP in grid */}
+          <div className="grid grid-cols-2 gap-4">
+            {/* State */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">State</label>
+              <select
+                name="state"
+                value={formData.state}
+                onChange={handleInputChange}
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+              >
+                <option value="">Select</option>
+                {US_STATES.map(state => (
+                  <option key={state.value} value={state.value}>{state.value}</option>
+                ))}
+              </select>
             </div>
 
-            {/* Map Preview */}
-            {formData.street && formData.city && formData.state && (
-              <div className="space-y-2">
-                <p className="text-sm font-medium text-gray-700">Map Preview</p>
-                <div className="relative rounded-xl overflow-hidden h-48 bg-gray-100">
-                  <img
-                    src={`https://maps.googleapis.com/maps/api/staticmap?center=${encodeURIComponent(`${formData.street}, ${formData.city}, ${formData.state} ${formData.postalCode}`)}&zoom=10&size=600x200&scale=2&maptype=roadmap&markers=color:red%7C${encodeURIComponent(`${formData.street}, ${formData.city}, ${formData.state} ${formData.postalCode}`)}&key=${import.meta.env.VITE_GOOGLE_MAPS_API_KEY || ''}`}
-                    alt="Property location"
-                    className="w-full h-full object-cover"
-                    onError={(e) => {
-                      e.target.style.display = 'none';
-                      e.target.nextSibling.style.display = 'flex';
-                    }}
-                  />
-                  <div className="absolute inset-0 items-center justify-center hidden" style={{display: 'none'}}>
-                    <div className="text-center text-gray-500">
-                      <MapPin className="w-8 h-8 mx-auto mb-2" />
-                      <p className="text-sm font-medium">Map Preview</p>
-                      <p className="text-xs">{formData.street}, {formData.city}, {formData.state} {formData.postalCode}</p>
-                    </div>
-                  </div>
+            {/* ZIP */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">ZIP Code</label>
+              <input
+                type="text"
+                name="postalCode"
+                value={formData.postalCode}
+                onChange={handleInputChange}
+                placeholder="21201"
+                maxLength={5}
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+              />
+            </div>
+          </div>
+        </div>
+
+          {/* RIGHT COLUMN - Map Display */}
+          <div className="flex items-center justify-center">
+            {!formData.street ? (
+              <div className="w-full h-[400px] bg-gray-50 border-2 border-dashed border-gray-300 rounded-lg flex flex-col items-center justify-center">
+                <div className="text-gray-400 mb-2">
+                  <svg className="w-16 h-16 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+                  </svg>
                 </div>
-                <p className="text-xs text-gray-500">{formData.street}, {formData.city}, {formData.state} {formData.postalCode}</p>
+                <p className="text-sm text-gray-500 font-medium">Map Preview</p>
+                <p className="text-xs text-gray-400 mt-1">Enter an address to see location</p>
+              </div>
+            ) : (
+              <div className="w-full h-[400px] bg-gray-100 rounded-lg overflow-hidden shadow-sm">
+                <img
+                  src={`https://maps.googleapis.com/maps/api/staticmap?center=${encodeURIComponent(
+                    `${formData.street}, ${formData.city}, ${formData.state} ${formData.postalCode}`
+                  )}&zoom=15&size=600x400&markers=color:red%7C${encodeURIComponent(
+                    `${formData.street}, ${formData.city}, ${formData.state} ${formData.postalCode}`
+                  )}&key=AIzaSyDYWtN_izjZbVQaazwNykvyv3YAe6Rs7c4`}
+                  alt="Location Map"
+                  className="w-full h-full object-cover"
+                  onError={(e) => {
+                    e.target.style.display = "none";
+                    e.target.parentElement.innerHTML = `<div class="flex items-center justify-center h-full text-gray-400"><p>Map unavailable</p></div>`;
+                  }}
+                />
               </div>
             )}
+          </div>
+          </div>
           </div>
         )}
 
@@ -1097,6 +2190,31 @@ export default function LeadWizard() {
               Lead Qualification
             </h2>
 
+            {useLeadPromptFlow && (
+              <div className={`border rounded-xl p-4 text-sm ${
+                hasCallCenterAppointment && formData.leadSource
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                  : 'bg-gray-50 border-gray-200 text-gray-600'
+              }`}>
+                {hasCallCenterAppointment && formData.leadSource ? (
+                  <div className="space-y-1">
+                    <p className="font-semibold">Call Center Process Complete! The Sales Rep will take the lead from here.</p>
+                    <p className="text-xs">
+                      {formData.ownerName
+                        ? `Assigned to ${formData.ownerName}.`
+                        : isPersistingPromptCompletion
+                          ? 'Assigning the best-fit rep...'
+                          : 'Assigning the best-fit rep...'}
+                    </p>
+                  </div>
+                ) : (
+                  'Qualification is handled in the prompts. Set the appointment and lead source to continue.'
+                )}
+              </div>
+            )}
+
+            {!useLeadPromptFlow && (
+              <>
             {/* Call Center ONLY Section - Only visible to call center users */}
             {isCallCenter && (
             <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 sm:p-6">
@@ -1104,12 +2222,28 @@ export default function LeadWizard() {
                 <Phone className="w-4 h-4 mr-2" />
                 Call Center ONLY
               </h3>
+              <p className="text-xs text-orange-700 mb-4">
+                Call Center Process Complete! The Sales Rep will take the lead from here.
+              </p>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
                 {/* Tentative Appointment Date */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Tentative Appointment Date
+                    Tentative Appointment Date & Time <span className="text-red-500">*</span>
                   </label>
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-xs text-gray-500">
+                      Auto-suggested to the soonest available slot in the next {INSPECTION_SUGGESTION_WINDOW_DAYS} days.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleRefreshAppointmentSuggestion}
+                      disabled={isSuggestingAppointment}
+                      className="text-xs px-2 py-1 bg-white border border-orange-300 rounded hover:bg-orange-50 disabled:opacity-60"
+                    >
+                      {isSuggestingAppointment ? 'Finding...' : 'Re-suggest'}
+                    </button>
+                  </div>
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <label className="block text-xs text-gray-500 mb-1">Date</label>
@@ -1118,6 +2252,7 @@ export default function LeadWizard() {
                         name="tentativeAppointmentDate"
                         value={formData.tentativeAppointmentDate}
                         onChange={handleInputChange}
+                        min={appointmentDateMin}
                         placeholder="mm/dd/yyyy"
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent text-sm"
                       />
@@ -1133,6 +2268,11 @@ export default function LeadWizard() {
                       />
                     </div>
                   </div>
+                  {!hasCallCenterAppointment && (
+                    <p className="text-xs text-red-600 mt-2">
+                      Appointment date and time are required.
+                    </p>
+                  )}
                 </div>
 
                 {/* Lead Set By - User Search */}
@@ -1194,6 +2334,19 @@ export default function LeadWizard() {
                       ))}
                     </div>
                   )}
+                </div>
+
+                {/* Manager (auto-populated from Lead Set By) */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Manager
+                  </label>
+                  <input
+                    type="text"
+                    value={leadSetByManagerName || 'Unassigned'}
+                    readOnly
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-sm"
+                  />
                 </div>
 
                 {/* Lead Status - Call Center uses specific statuses */}
@@ -1308,19 +2461,7 @@ export default function LeadWizard() {
 
             {/* Lead Details Section - Hidden for Call Center users */}
             {!isCallCenter && (
-            <>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
-              {/* Lead Owner (read-only, shows logged in user) */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Lead Owner
-                </label>
-                <div className="flex items-center px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg">
-                  <User className="w-4 h-4 text-gray-400 mr-2" />
-                  <span className="text-gray-700">{formData.ownerName || user?.email || 'Current User'}</span>
-                </div>
-              </div>
-
+              <>
               {/* Lead Source */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -1401,9 +2542,9 @@ export default function LeadWizard() {
               </div>
 
               {/* Property Type */}
-              <div>
+              <div className="hidden">
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Property Type <span className="text-red-500">*</span>
+                  Property Type <span className="text-gray-400">(guided prompt)</span>
                 </label>
                 <div className="relative">
                   <Home className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -1422,9 +2563,9 @@ export default function LeadWizard() {
               </div>
 
               {/* Work Type */}
-              <div>
+              <div className="hidden">
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Work Type <span className="text-red-500">*</span>
+                  Work Type <span className="text-gray-400">(guided prompt)</span>
                 </label>
                 <div className="relative">
                   <Briefcase className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
@@ -1437,7 +2578,7 @@ export default function LeadWizard() {
                       setFormData(prev => ({
                         ...prev,
                         workType: e.target.value,
-                        stage: '',
+                        stage: 'Prospect',
                         status: 'New',
                         leadDisposition: '',
                       }));
@@ -1466,96 +2607,20 @@ export default function LeadWizard() {
                   className="w-full px-4 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
                 />
               </div>
-            </div>
-
-            {/* Sales Rep Workflow - Dynamic Stage/Status/Disposition for Insurance and Retail */}
+            </>
+            )}
+            {/* Sales Rep Workflow - Stage is fixed in lead phase */}
             {showSalesRepWorkflow && (
               <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 sm:p-6 mt-6">
-                <h3 className="text-sm font-semibold text-blue-800 mb-4 flex items-center">
+                <h3 className="text-sm font-semibold text-blue-800 mb-2 flex items-center">
                   <Target className="w-4 h-4 mr-2" />
-                  {formData.workType} Lead Workflow
+                  Lead Workflow
                 </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  {/* Stage */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Stage <span className="text-red-500">*</span>
-                    </label>
-                    <select
-                      name="stage"
-                      value={formData.stage}
-                      onChange={(e) => {
-                        // Reset status and disposition when stage changes
-                        setFormData(prev => ({
-                          ...prev,
-                          stage: e.target.value,
-                          status: 'New',
-                          leadDisposition: '',
-                        }));
-                      }}
-                      className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
-                    >
-                      <option value="">Select stage...</option>
-                      {getStagesForWorkType(formData.workType).map(stage => (
-                        <option key={stage.value} value={stage.value}>{stage.label}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* Status - Dynamic based on Stage */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Status <span className="text-red-500">*</span>
-                    </label>
-                    <select
-                      name="status"
-                      value={formData.status}
-                      onChange={(e) => {
-                        // Reset disposition when status changes
-                        setFormData(prev => ({
-                          ...prev,
-                          status: e.target.value,
-                          leadDisposition: '',
-                        }));
-                      }}
-                      disabled={!formData.stage}
-                      className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
-                    >
-                      <option value="New">Select status...</option>
-                      {getStatusesForStage(formData.workType, formData.stage).map(status => (
-                        <option key={status.value} value={status.value}>{status.label}</option>
-                      ))}
-                    </select>
-                    {formData.status && formData.status !== 'New' && (
-                      <span className={`inline-block mt-2 px-3 py-1 rounded-full text-xs font-medium ${getStatusStyle(formData.status)}`}>
-                        {formData.status}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Disposition - Dynamic based on Status */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Disposition <span className="text-red-500">*</span>
-                    </label>
-                    <select
-                      name="leadDisposition"
-                      value={formData.leadDisposition}
-                      onChange={handleInputChange}
-                      disabled={!formData.status || formData.status === 'New'}
-                      className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
-                    >
-                      {getDispositionsForStatus(formData.workType, formData.status).map(disp => (
-                        <option key={disp.value} value={disp.value}>{disp.label}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                {/* Workflow Help Text */}
-                <p className="text-xs text-blue-600 mt-3">
-                  {formData.workType === 'Insurance' && 'Insurance leads follow: Lead Assigned → Prospect with claim filing workflow.'}
-                  {formData.workType === 'Retail' && 'Retail leads follow: Lead Assigned → Prospect with scheduling workflow.'}
+                <p className="text-sm text-blue-700">
+                  Stage is automatically <span className="font-semibold">Lead Assigned</span> when owner is set, otherwise <span className="font-semibold">Prospect</span>.
+                </p>
+                <p className="text-xs text-blue-600 mt-2">
+                  Conversion decisions (assign rep, project type, inspected, work type) are guided through prompts.
                 </p>
               </div>
             )}
@@ -1609,15 +2674,17 @@ export default function LeadWizard() {
                 <p className="text-xs text-gray-400 mt-1">{(formData.description || '').length}/5000</p>
               </div>
             </div>
-            </>
-            )}
+
 
             {/* Validation Warning for Qualify Step */}
             {!hasRequiredFields && (
               <div className="flex items-center space-x-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
                 <AlertCircle className="w-5 h-5 text-yellow-600 flex-shrink-0" />
                 <p className="text-sm text-yellow-700">
-                  Required fields: Lead Source, Property Type, and Work Type must be completed before saving.
+                  {isCallCenter
+                    ? 'Required fields: Lead Source, Property Type, Work Type, and Appointment Date/Time must be completed before saving.'
+                    : 'Required fields: Lead Source plus basic contact information must be completed before saving.'
+                  }
                 </p>
               </div>
             )}
@@ -1662,6 +2729,8 @@ export default function LeadWizard() {
                   ))}
                 </div>
               </div>
+            )}
+              </>
             )}
           </div>
         )}
@@ -1809,7 +2878,7 @@ export default function LeadWizard() {
                     <div className="p-4 bg-gray-50 rounded-xl border-2 border-dashed border-gray-200">
                       <Target className="w-6 h-6 text-gray-400 mb-2" />
                       <p className="text-sm text-gray-500">Job</p>
-                      <p className="font-medium text-gray-900 text-sm">{formData.company || formData.lastName} - Project</p>
+                      <p className="font-medium text-gray-900 text-sm">{formData.company || `${formData.firstName} ${formData.lastName}`} - <span className="text-gray-400 italic">Job # auto-assigned</span></p>
                     </div>
                   </div>
                 </div>
@@ -1827,7 +2896,7 @@ export default function LeadWizard() {
                       { label: 'Lead Status', check: !!formData.status, step: 3, field: 'status' },
                       { label: 'Lead Source', check: !!formData.leadSource, step: 4, field: 'leadSource' },
                       { label: 'Lead Set By', check: !!formData.leadSetById, optional: true, step: 3, field: 'leadSetBy' },
-                      { label: 'Appointment Date', check: !!formData.tentativeAppointmentDate, optional: true, step: 3, field: 'tentativeAppointmentDate' },
+                      { label: 'Appointment Date/Time', check: hasCallCenterAppointment, step: 3, field: 'tentativeAppointmentDate' },
                     ] : [
                       // Sales Rep required fields
                       { label: 'First Name', check: !!formData.firstName, step: 1, field: 'firstName' },
@@ -1836,8 +2905,8 @@ export default function LeadWizard() {
                       { label: 'Company', check: !!formData.company, optional: true, step: 1, field: 'company' },
                       { label: 'Address', check: !!(formData.street && formData.city), optional: true, step: 2, field: 'street' },
                       { label: 'Lead Source', check: !!formData.leadSource, step: 3, field: 'leadSource' },
-                      { label: 'Property Type', check: !!formData.propertyType, step: 3, field: 'propertyType' },
-                      { label: 'Work Type', check: !!formData.workType, step: 3, field: 'workType' },
+                      { label: 'Project Type', check: !!formData.propertyType, optional: true, step: 4, field: 'propertyType' },
+                      { label: 'Work Type', check: !!formData.workType, optional: true, step: 4, field: 'workType' },
                     ]).map((item, idx) => (
                       <button
                         key={idx}
@@ -1901,8 +2970,8 @@ export default function LeadWizard() {
                 {!canConvert && !isNewLead && (
                   <p className="text-center text-sm text-red-500">
                     {isCallCenter
-                      ? 'Please complete all required fields (First Name, Last Name, Phone/Email, Work Type, and Lead Status) before converting'
-                      : 'Please complete all required fields (First Name, Last Name, Phone/Email, Lead Source, Property Type, and Work Type) before converting'
+                      ? 'Please complete all required fields (First Name, Last Name, Phone/Email, Work Type, Lead Status, Lead Source, and Appointment Date/Time) before converting'
+                      : 'Please complete all required fields (First Name, Last Name, Phone/Email, and Lead Source) before converting'
                     }
                   </p>
                 )}
@@ -1921,58 +2990,446 @@ export default function LeadWizard() {
 
       {/* Navigation Buttons */}
       {!conversionResult && (
-        <div className="flex items-center justify-between bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-          <button
-            onClick={handlePrevious}
-            disabled={currentStep === 1}
-            className={`inline-flex items-center px-4 py-2 rounded-lg transition-colors ${
-              currentStep === 1
-                ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
-          >
-            <ChevronLeft className="w-5 h-5 mr-1" />
-            Previous
-          </button>
+        <div className="fixed inset-x-0 bottom-0 z-50 px-3 pb-3 sm:px-6 sm:pb-4">
+          <div className="mx-auto max-w-screen-2xl">
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white/95 p-3 shadow-lg backdrop-blur sm:p-4">
+              <button
+                onClick={handlePrevious}
+                disabled={currentStep === 1}
+                className={`inline-flex items-center px-4 py-2 rounded-lg transition-colors ${
+                  currentStep === 1
+                    ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                <ChevronLeft className="w-5 h-5 mr-1" />
+                Previous
+              </button>
 
-          <div className="flex items-center space-x-3">
+              <div className="flex items-center space-x-2 sm:space-x-3">
+                <button
+                  onClick={() => navigate(-1)}
+                  className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
+                >
+                  Cancel
+                </button>
+                {currentStep < totalSteps ? (
+                  <button
+                    onClick={handleNext}
+                    className="inline-flex items-center px-6 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90 transition-colors"
+                  >
+                    Next
+                    <ChevronRight className="w-5 h-5 ml-1" />
+                  </button>
+                ) : isNewLead ? (
+                  <button
+                    onClick={handleSave}
+                    disabled={isSaving || !hasRequiredFields}
+                    className={`inline-flex items-center px-6 py-2 rounded-lg transition-colors ${
+                      isSaving || !hasRequiredFields
+                        ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                        : 'bg-green-500 text-white hover:bg-green-600'
+                    }`}
+                  >
+                    {isSaving ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Creating...
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle className="w-5 h-5 mr-2" />
+                        Create Lead
+                      </>
+                    )}
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Call Center Lead Source Prompt */}
+      {useLeadPromptFlow && showLeadSourcePrompt && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 px-4">
+          <div className="w-full max-w-lg rounded-xl bg-white shadow-xl border border-gray-200 p-6">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Lead Source (Required)</h3>
+                <p className="text-sm text-gray-600 mt-1">Select a lead source to continue qualification.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowLeadSourcePrompt(false)}
+                className="p-1 rounded hover:bg-gray-100"
+                aria-label="Close"
+              >
+                <X className="w-5 h-5 text-gray-400" />
+              </button>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Lead Source <span className="text-red-500">*</span>
+              </label>
+              <select
+                name="leadSource"
+                value={formData.leadSource}
+                onChange={(e) => {
+                  setFormData(prev => ({ ...prev, leadSource: e.target.value }));
+                  setLeadSourcePromptError('');
+                }}
+                className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+              >
+                <option value="">Select source...</option>
+                {LEAD_SOURCES.map(source => (
+                  <option key={source.value} value={source.value}>{source.label}</option>
+                ))}
+              </select>
+              {leadSourcePromptError && (
+                <p className="text-xs text-red-600 mt-2">{leadSourcePromptError}</p>
+              )}
+            </div>
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowLeadSourcePrompt(false)}
+                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!formData.leadSource) {
+                    setLeadSourcePromptError('Lead source is required.');
+                    return;
+                  }
+                  setLeadSourcePromptError('');
+                  setShowLeadSourcePrompt(false);
+                  persistPromptCompletion();
+                  if (!hasCallCenterAppointment) {
+                    setHasManualAppointmentChange(false);
+                    setPendingSuggestedSlot(null);
+                    setAppointmentPromptInfo('');
+                    setShowAppointmentPrompt(true);
+                    requestAppointmentSuggestion({ allowFallback: true, applySuggestion: true });
+                  }
+                }}
+                className="px-4 py-2 text-sm bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90"
+              >
+                Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Call Center Appointment Prompt */}
+      {useLeadPromptFlow && showAppointmentPrompt && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 px-4">
+          <div className="w-full max-w-2xl rounded-xl bg-white shadow-xl border border-gray-200 p-6">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Inspection Appointment</h3>
+                <p className="text-sm text-gray-600 mt-1">
+                  Suggest the optimal time from Production Center and allow customers to request a specific slot.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleAppointmentPromptClose}
+                className="p-1 rounded hover:bg-gray-100"
+                aria-label="Close"
+              >
+                <X className="w-5 h-5 text-gray-400" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
+                <input
+                  type="date"
+                  name="tentativeAppointmentDate"
+                  value={formData.tentativeAppointmentDate}
+                  onChange={handleAppointmentPromptInputChange}
+                  min={appointmentDateMin}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Time</label>
+                <input
+                  type="time"
+                  name="tentativeAppointmentTime"
+                  value={formData.tentativeAppointmentTime}
+                  onChange={handleAppointmentPromptInputChange}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent text-sm"
+                />
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-wide text-gray-500">Assigned Owner</p>
+                  <p className="text-sm font-semibold text-gray-900">{displayedOwnerName}</p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Changes require Call Center Manager or higher.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!canOverrideOwner) return;
+                    setShowOwnerDropdown((prev) => !prev);
+                  }}
+                  disabled={!canOverrideOwner}
+                  className="px-3 py-2 text-xs bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50"
+                >
+                  Change Owner
+                </button>
+              </div>
+
+              {showOwnerDropdown && canOverrideOwner && (
+                <div className="mt-3">
+                  <input
+                    type="text"
+                    value={ownerSearchQuery}
+                    onChange={(e) => {
+                      setOwnerSearchQuery(e.target.value);
+                      setShowOwnerDropdown(true);
+                    }}
+                    placeholder="Search users..."
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+                  />
+                  <div className="mt-2 max-h-40 overflow-y-auto border border-gray-200 rounded-lg bg-white">
+                    {(ownerUsersData?.data || ownerUsersData || []).length === 0 ? (
+                      <p className="px-3 py-2 text-xs text-gray-500">No matching users</p>
+                    ) : (
+                      (ownerUsersData?.data || ownerUsersData || []).map((owner) => (
+                        <button
+                          type="button"
+                          key={owner.id}
+                          onClick={() => handleOwnerOverrideSelect(owner)}
+                          className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
+                        >
+                          {(owner.firstName || '')} {(owner.lastName || '')}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => requestAppointmentSuggestion({
+                  allowFallback: true,
+                  applySuggestion: false,
+                  infoMessage: 'Suggested slot is ready. Click Use suggested time to apply it.',
+                })}
+                disabled={isSuggestingAppointment || !hasManualAppointmentChange}
+                className="px-3 py-2 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-60"
+              >
+                {isSuggestingAppointment ? 'Finding...' : 'Suggest Best Time'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const preferredDateTime = buildPreferredDateTime();
+                  if (!preferredDateTime) {
+                    setAppointmentPromptError('Select a valid date and time to check availability.');
+                    return;
+                  }
+                  requestAppointmentSuggestion({
+                    preferredDateTime,
+                    allowFallback: false,
+                    applySuggestion: false,
+                    infoMessage: 'Requested time is available. Click Confirm Appointment to lock it in.',
+                  });
+                }}
+                disabled={isSuggestingAppointment}
+                className="px-3 py-2 text-sm bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-60"
+              >
+                Check Requested Time
+              </button>
+            </div>
+
+            {pendingSuggestedSlot?.appointmentDate && pendingSuggestedSlot?.appointmentTime && (
+              <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 flex flex-wrap items-center justify-between gap-2">
+                <span>
+                  Suggested slot: {pendingSuggestedSlot.appointmentDate} at {pendingSuggestedSlot.appointmentTime}
+                </span>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const preferredDateTime = buildPreferredDateTimeFromSlot(pendingSuggestedSlot);
+                    if (!preferredDateTime) {
+                      setAppointmentPromptError('Suggested slot is invalid. Please request again.');
+                      return;
+                    }
+                    const result = await requestAppointmentSuggestion({
+                      preferredDateTime,
+                      allowFallback: false,
+                      applySuggestion: true,
+                    });
+                    if (result?.ready) {
+                      setPendingSuggestedSlot(null);
+                      setAppointmentPromptInfo('Suggested time applied.');
+                    }
+                  }}
+                  className="px-3 py-2 text-xs bg-white border border-amber-300 rounded-lg hover:bg-amber-100"
+                >
+                  Use suggested time
+                </button>
+              </div>
+            )}
+
+            {appointmentPromptInfo && (
+              <div className="mt-3 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-700">
+                {appointmentPromptInfo}
+              </div>
+            )}
+
+            {appointmentPromptError && (
+              <div className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                {appointmentPromptError}
+              </div>
+            )}
+
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowAppointmentPrompt(false)}
+                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const preferredDateTime = buildPreferredDateTime();
+                  if (!preferredDateTime) {
+                    setAppointmentPromptError('Select a valid date and time before confirming.');
+                    return;
+                  }
+                  const result = await requestAppointmentSuggestion({ preferredDateTime, allowFallback: false });
+                  if (result?.ready) {
+                    setShowAppointmentPrompt(false);
+                    if (!formData.leadSource) {
+                      setShowLeadSourcePrompt(true);
+                    }
+                  }
+                }}
+                disabled={isSuggestingAppointment}
+                className="px-4 py-2 text-sm bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90 disabled:opacity-60"
+              >
+                Confirm Appointment
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Inspection conversion gate */}
+      {showInspectionModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[70] p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6">
+            <div className="text-center mb-5">
+              <div className="w-14 h-14 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                <Target className="w-7 h-7 text-blue-600" />
+              </div>
+              <h3 className="text-xl font-semibold text-gray-900">
+                {wasInspected ? 'Select Sales Path' : 'Was this Inspected?'}
+              </h3>
+              <p className="text-sm text-gray-600 mt-1">
+                {wasInspected
+                  ? 'Choose Insurance or Retail before conversion.'
+                  : 'No Inspection moves the lead to the reschedule path.'}
+              </p>
+            </div>
+
+            {wasInspected ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => handleSalesPathSelection('INSURANCE')}
+                  disabled={isConverting}
+                  className="flex items-center justify-center gap-2 px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>Insurance</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSalesPathSelection('RETAIL')}
+                  disabled={isConverting}
+                  className="flex items-center justify-center gap-2 px-4 py-3 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>Retail</span>
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => handleInspectionDecision(true)}
+                  disabled={isConverting}
+                  className="flex items-center justify-center gap-2 px-4 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>Yes, Inspected</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleInspectionDecision(false)}
+                  disabled={isConverting}
+                  className="flex items-center justify-center gap-2 px-4 py-3 bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                  <span>No Inspection</span>
+                </button>
+              </div>
+            )}
+
+            {selectedOpportunityType && (
+              <p className="mt-3 text-xs text-center text-gray-500">
+                Selected opportunity type: {selectedOpportunityType}
+              </p>
+            )}
+            {wasInspected !== null && !wasInspected && (
+              <p className="mt-1 text-xs text-center text-gray-500">
+                Inspection status: No Inspection
+              </p>
+            )}
+
+            {wasInspected && (
+              <button
+                type="button"
+                onClick={() => {
+                  setWasInspected(null);
+                  setSelectedOpportunityType(null);
+                }}
+                disabled={isConverting}
+                className="w-full mt-3 px-4 py-2 text-sm text-gray-600 hover:text-gray-900 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                Back
+              </button>
+            )}
+
             <button
-              onClick={() => navigate(-1)}
-              className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
+              type="button"
+              onClick={handleInspectionModalClose}
+              disabled={isConverting}
+              className="w-full mt-4 px-4 py-2 text-sm text-gray-600 hover:text-gray-900 disabled:opacity-60 disabled:cursor-not-allowed"
             >
               Cancel
             </button>
-            {currentStep < steps.length ? (
-              <button
-                onClick={handleNext}
-                className="inline-flex items-center px-6 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90 transition-colors"
-              >
-                Next
-                <ChevronRight className="w-5 h-5 ml-1" />
-              </button>
-            ) : isNewLead ? (
-              <button
-                onClick={handleSave}
-                disabled={isSaving || !hasRequiredFields}
-                className={`inline-flex items-center px-6 py-2 rounded-lg transition-colors ${
-                  isSaving || !hasRequiredFields
-                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                    : 'bg-green-500 text-white hover:bg-green-600'
-                }`}
-              >
-                {isSaving ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Creating...
-                  </>
-                ) : (
-                  <>
-                    <CheckCircle className="w-5 h-5 mr-2" />
-                    Create Lead
-                  </>
-                )}
-              </button>
-            ) : null}
           </div>
         </div>
       )}

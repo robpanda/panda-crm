@@ -1,8 +1,10 @@
-import { useState, useEffect } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useState, useEffect, useRef, useContext } from 'react';
+import { useParams, Link, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { leadsApi, usersApi, bamboogliApi, ringCentralApi } from '../services/api';
+import { leadsApi, bamboogliApi, usersApi } from '../services/api';
+import AuthContext from '../context/AuthContext';
 import { useRingCentral } from '../context/RingCentralContext';
+import { addRecentItem } from '../utils/recentItems';
 import {
   UserPlus, ArrowLeft, Phone, Mail, Building2, Edit, ArrowRight,
   Save, X, MapPin, Calendar, Star, FileText, Clock, User, Tag,
@@ -12,7 +14,10 @@ import {
 import { LeadRankBadge, LeadScoreCard } from '../components/LeadRankBadge';
 import LoadingSpinner from '../components/LoadingSpinner';
 import MentionTextarea from '../components/MentionTextarea';
-import LeadNotesSidebar from '../components/LeadNotesSidebar';
+import InternalNotesTabs from '../components/InternalNotesTabs';
+import InternalComments from '../components/InternalComments';
+import CommunicationsTab from '../components/CommunicationsTab';
+import UserSearchDropdown from '../components/UserSearchDropdown';
 
 // SMS Modal Component with Canned Responses
 function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {} }) {
@@ -403,525 +408,15 @@ function EmailModal({ isOpen, onClose, email, recipientName, onSent, mergeData =
   );
 }
 
-// Activity Tab Component - Shows communication history (SMS, Email, Phone Calls)
-function ActivityTab({ phone, email, leadName, leadId }) {
-  const [filter, setFilter] = useState('all'); // all, sms, email, phone
-  const [expandedId, setExpandedId] = useState(null);
-  const [replyText, setReplyText] = useState('');
-  const [isSendingReply, setIsSendingReply] = useState(false);
-  const queryClient = useQueryClient();
-
-  // Fetch SMS conversation by phone number
-  const { data: phoneConversation, isLoading: phoneConvLoading } = useQuery({
-    queryKey: ['lead-phone-conversation', phone],
-    queryFn: async () => {
-      try {
-        if (!phone) return null;
-        const data = await bamboogliApi.getConversationByIdentifier(phone);
-        return data;
-      } catch (err) {
-        console.error('Failed to fetch phone conversation:', err);
-        return null;
-      }
-    },
-    enabled: !!phone,
-  });
-
-  // Fetch Email conversation by email address
-  const { data: emailConversation, isLoading: emailConvLoading } = useQuery({
-    queryKey: ['lead-email-conversation', email],
-    queryFn: async () => {
-      try {
-        if (!email) return null;
-        const data = await bamboogliApi.getConversationByIdentifier(email);
-        return data;
-      } catch (err) {
-        console.error('Failed to fetch email conversation:', err);
-        return null;
-      }
-    },
-    enabled: !!email,
-  });
-
-  // Fetch SMS messages for the phone conversation
-  const { data: smsMessagesData, isLoading: smsMessagesLoading } = useQuery({
-    queryKey: ['lead-sms-messages', phoneConversation?.id],
-    queryFn: async () => {
-      if (!phoneConversation?.id) return { data: [] };
-      const data = await bamboogliApi.getMessagesByConversation(phoneConversation.id, { limit: 100 });
-      return data;
-    },
-    enabled: !!phoneConversation?.id,
-  });
-
-  // Fetch Email messages for the email conversation
-  const { data: emailMessagesData, isLoading: emailMessagesLoading } = useQuery({
-    queryKey: ['lead-email-messages', emailConversation?.id],
-    queryFn: async () => {
-      if (!emailConversation?.id) return { data: [] };
-      const data = await bamboogliApi.getMessagesByConversation(emailConversation.id, { limit: 100 });
-      return data;
-    },
-    enabled: !!emailConversation?.id,
-  });
-
-  // Fetch RingCentral call logs for this phone number
-  const { data: callLogsData, isLoading: callsLoading } = useQuery({
-    queryKey: ['lead-call-logs', phone],
-    queryFn: async () => {
-      if (!phone) return { data: [] };
-      try {
-        const data = await ringCentralApi.getCallLogs({ phoneNumber: phone, limit: 100 });
-        return data;
-      } catch (err) {
-        console.error('Failed to fetch call logs:', err);
-        return { data: [] };
-      }
-    },
-    enabled: !!phone,
-  });
-
-  const smsMessagesRaw = smsMessagesData?.data || smsMessagesData || [];
-  const emailMessagesRaw = emailMessagesData?.data || emailMessagesData || [];
-  const callLogs = callLogsData?.data || callLogsData || [];
-
-  // Filter SMS and Email messages from their respective conversations
-  const smsMessages = Array.isArray(smsMessagesRaw) ? smsMessagesRaw.filter(m => m.channel === 'SMS' || m.type === 'sms') : [];
-  const emailMessages = Array.isArray(emailMessagesRaw) ? emailMessagesRaw.filter(m => m.channel === 'EMAIL' || m.type === 'email') : [];
-  const phoneCalls = Array.isArray(callLogs) ? callLogs : [];
-
-  // Combine all activities into a unified timeline
-  const allActivities = [
-    ...smsMessages.map(m => ({
-      id: m.id,
-      type: 'sms',
-      direction: m.direction || (m.from ? 'inbound' : 'outbound'),
-      timestamp: new Date(m.createdAt || m.timestamp || m.sentAt),
-      content: m.body || m.content || m.message,
-      status: m.status,
-      conversationId: m.conversationId || phoneConversation?.id,
-      sentBy: m.sentBy || m.sentById,
-      sentByName: m.sentByName || m.sentBy?.fullName,
-    })),
-    ...emailMessages.map(m => ({
-      id: m.id,
-      type: 'email',
-      direction: m.direction || (m.from ? 'inbound' : 'outbound'),
-      timestamp: new Date(m.createdAt || m.timestamp || m.sentAt),
-      subject: m.subject,
-      content: m.body || m.content,
-      bodyHtml: m.bodyHtml,
-      status: m.status,
-      conversationId: m.conversationId || emailConversation?.id,
-      sentBy: m.sentBy || m.sentById,
-      sentByName: m.sentByName || m.sentBy?.fullName,
-    })),
-    ...phoneCalls.map(c => ({
-      id: c.id,
-      type: 'phone',
-      direction: c.direction?.toLowerCase() || 'outbound',
-      timestamp: new Date(c.startTime || c.createdAt || c.timestamp),
-      duration: c.duration,
-      result: c.result || c.callResult,
-      status: c.status,
-      from: c.from?.phoneNumber || c.from,
-      to: c.to?.phoneNumber || c.to,
-    })),
-  ].sort((a, b) => b.timestamp - a.timestamp);
-
-  // Filter activities
-  const filteredActivities = filter === 'all'
-    ? allActivities
-    : allActivities.filter(a => a.type === filter);
-
-  const isLoading = phoneConvLoading || emailConvLoading || smsMessagesLoading || emailMessagesLoading || callsLoading;
-
-  // Format duration in minutes:seconds
-  const formatDuration = (seconds) => {
-    if (!seconds) return '0:00';
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  // Get icon for activity type
-  const getActivityIcon = (activity) => {
-    if (activity.type === 'sms') {
-      return activity.direction === 'inbound' || activity.direction === 'incoming' || activity.direction === 'INBOUND'
-        ? <MessageCircle className="w-4 h-4 text-purple-500" />
-        : <MessageSquare className="w-4 h-4 text-purple-600" />;
-    }
-    if (activity.type === 'email') {
-      return activity.direction === 'inbound' || activity.direction === 'incoming' || activity.direction === 'INBOUND'
-        ? <MailOpen className="w-4 h-4 text-orange-500" />
-        : <Mail className="w-4 h-4 text-orange-600" />;
-    }
-    if (activity.type === 'phone') {
-      if (activity.result === 'Missed' || activity.result === 'missed') {
-        return <PhoneMissed className="w-4 h-4 text-red-500" />;
-      }
-      return activity.direction === 'inbound' || activity.direction === 'incoming'
-        ? <PhoneIncoming className="w-4 h-4 text-green-500" />
-        : <PhoneOutgoing className="w-4 h-4 text-blue-500" />;
-    }
-    return <Activity className="w-4 h-4 text-gray-500" />;
-  };
-
-  // Get badge color for activity type
-  const getActivityBadge = (activity) => {
-    const badges = {
-      sms: 'bg-purple-100 text-purple-700',
-      email: 'bg-orange-100 text-orange-700',
-      phone: 'bg-blue-100 text-blue-700',
-    };
-    return badges[activity.type] || 'bg-gray-100 text-gray-700';
-  };
-
-  // Handle sending a reply
-  const handleSendReply = async (activity) => {
-    if (!replyText.trim()) return;
-
-    setIsSendingReply(true);
-    try {
-      if (activity.type === 'sms') {
-        await bamboogliApi.replyToMessage(activity.id, {
-          body: replyText.trim(),
-          leadId,
-        });
-      } else if (activity.type === 'email') {
-        await bamboogliApi.replyToMessage(activity.id, {
-          body: replyText.trim(),
-          subject: activity.subject?.startsWith('Re:') ? activity.subject : `Re: ${activity.subject || ''}`,
-          leadId,
-        });
-      }
-
-      setReplyText('');
-      setExpandedId(null);
-      // Refresh messages
-      queryClient.invalidateQueries(['lead-sms-messages']);
-      queryClient.invalidateQueries(['lead-email-messages']);
-    } catch (err) {
-      console.error('Failed to send reply:', err);
-    } finally {
-      setIsSendingReply(false);
-    }
-  };
-
-  // Check if direction is inbound
-  const isInbound = (direction) => {
-    return direction === 'inbound' || direction === 'incoming' || direction === 'INBOUND';
-  };
-
+// Activity Tab Component - Threaded SMS/Email + call logs (conversation view)
+function ActivityTab({ phone, email, leadName }) {
   return (
-    <div className="flex gap-6">
-      {/* Left Sidebar - Filter Options */}
-      <div className="w-48 flex-shrink-0 hidden md:block">
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 sticky top-4">
-          <h3 className="text-sm font-semibold text-gray-700 mb-3">Filter By Type</h3>
-          <div className="space-y-1">
-            <button
-              onClick={() => setFilter('all')}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-colors ${
-                filter === 'all'
-                  ? 'bg-panda-primary text-white'
-                  : 'hover:bg-gray-100 text-gray-700'
-              }`}
-            >
-              <span className="flex items-center">
-                <Activity className="w-4 h-4 mr-2" />
-                All Activity
-              </span>
-              <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
-                filter === 'all' ? 'bg-white/20' : 'bg-gray-200'
-              }`}>
-                {allActivities.length}
-              </span>
-            </button>
-
-            <button
-              onClick={() => setFilter('phone')}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-colors ${
-                filter === 'phone'
-                  ? 'bg-blue-500 text-white'
-                  : 'hover:bg-gray-100 text-gray-700'
-              }`}
-            >
-              <span className="flex items-center">
-                <PhoneCall className="w-4 h-4 mr-2" />
-                Phone Calls
-              </span>
-              <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
-                filter === 'phone' ? 'bg-white/20' : 'bg-blue-100 text-blue-700'
-              }`}>
-                {phoneCalls.length}
-              </span>
-            </button>
-
-            <button
-              onClick={() => setFilter('sms')}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-colors ${
-                filter === 'sms'
-                  ? 'bg-purple-500 text-white'
-                  : 'hover:bg-gray-100 text-gray-700'
-              }`}
-            >
-              <span className="flex items-center">
-                <MessageSquare className="w-4 h-4 mr-2" />
-                SMS
-              </span>
-              <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
-                filter === 'sms' ? 'bg-white/20' : 'bg-purple-100 text-purple-700'
-              }`}>
-                {smsMessages.length}
-              </span>
-            </button>
-
-            <button
-              onClick={() => setFilter('email')}
-              className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-sm transition-colors ${
-                filter === 'email'
-                  ? 'bg-orange-500 text-white'
-                  : 'hover:bg-gray-100 text-gray-700'
-              }`}
-            >
-              <span className="flex items-center">
-                <Mail className="w-4 h-4 mr-2" />
-                Email
-              </span>
-              <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
-                filter === 'email' ? 'bg-white/20' : 'bg-orange-100 text-orange-700'
-              }`}>
-                {emailMessages.length}
-              </span>
-            </button>
-          </div>
-
-          {/* Direction filter */}
-          <div className="mt-4 pt-4 border-t border-gray-100">
-            <h3 className="text-sm font-semibold text-gray-700 mb-2">Quick Stats</h3>
-            <div className="space-y-2 text-sm text-gray-600">
-              <div className="flex justify-between">
-                <span>Inbound</span>
-                <span className="font-medium">{allActivities.filter(a => isInbound(a.direction)).length}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Outbound</span>
-                <span className="font-medium">{allActivities.filter(a => !isInbound(a.direction)).length}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Main Content */}
-      <div className="flex-1 min-w-0">
-        {/* Mobile Filter Buttons */}
-        <div className="md:hidden flex gap-2 mb-4 overflow-x-auto pb-2">
-          <button
-            onClick={() => setFilter('all')}
-            className={`flex items-center px-3 py-2 rounded-lg text-sm whitespace-nowrap ${
-              filter === 'all' ? 'bg-panda-primary text-white' : 'bg-white border border-gray-200'
-            }`}
-          >
-            <Activity className="w-4 h-4 mr-1" />
-            All ({allActivities.length})
-          </button>
-          <button
-            onClick={() => setFilter('phone')}
-            className={`flex items-center px-3 py-2 rounded-lg text-sm whitespace-nowrap ${
-              filter === 'phone' ? 'bg-blue-500 text-white' : 'bg-white border border-gray-200'
-            }`}
-          >
-            <PhoneCall className="w-4 h-4 mr-1" />
-            Calls ({phoneCalls.length})
-          </button>
-          <button
-            onClick={() => setFilter('sms')}
-            className={`flex items-center px-3 py-2 rounded-lg text-sm whitespace-nowrap ${
-              filter === 'sms' ? 'bg-purple-500 text-white' : 'bg-white border border-gray-200'
-            }`}
-          >
-            <MessageSquare className="w-4 h-4 mr-1" />
-            SMS ({smsMessages.length})
-          </button>
-          <button
-            onClick={() => setFilter('email')}
-            className={`flex items-center px-3 py-2 rounded-lg text-sm whitespace-nowrap ${
-              filter === 'email' ? 'bg-orange-500 text-white' : 'bg-white border border-gray-200'
-            }`}
-          >
-            <Mail className="w-4 h-4 mr-1" />
-            Email ({emailMessages.length})
-          </button>
-        </div>
-
-        {/* Activity Timeline */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-gray-900 flex items-center">
-              <Activity className="w-5 h-5 mr-2 text-panda-primary" />
-              Activity Timeline
-            </h2>
-            <span className="text-sm text-gray-500">
-              {filteredActivities.length} {filter === 'all' ? 'activities' : filter === 'phone' ? 'calls' : filter === 'sms' ? 'messages' : 'emails'}
-            </span>
-          </div>
-
-          {isLoading ? (
-            <div className="flex items-center justify-center py-12">
-              <Loader2 className="w-8 h-8 animate-spin text-panda-primary" />
-            </div>
-          ) : filteredActivities.length === 0 ? (
-            <div className="text-center py-12">
-              <Activity className="w-12 h-12 mx-auto text-gray-300 mb-4" />
-              <p className="text-gray-500">No activity recorded yet</p>
-              <p className="text-sm text-gray-400 mt-1">
-                {!phone && !email ? 'No phone or email on record' : 'Communications will appear here'}
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {filteredActivities.map((activity, index) => {
-                const isExpanded = expandedId === activity.id;
-                const canReply = activity.type === 'sms' || activity.type === 'email';
-
-                return (
-                  <div
-                    key={activity.id || index}
-                    className={`rounded-lg border transition-all ${
-                      isExpanded
-                        ? 'border-panda-primary bg-panda-primary/5'
-                        : 'border-gray-100 bg-gray-50 hover:bg-gray-100'
-                    }`}
-                  >
-                    {/* Message Header - Clickable to expand */}
-                    <div
-                      onClick={() => canReply && setExpandedId(isExpanded ? null : activity.id)}
-                      className={`flex items-start space-x-4 p-4 ${canReply ? 'cursor-pointer' : ''}`}
-                    >
-                      <div className="flex-shrink-0 mt-1">
-                        {getActivityIcon(activity)}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center space-x-2 mb-1">
-                          <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${getActivityBadge(activity)}`}>
-                            {activity.type.toUpperCase()}
-                          </span>
-                          <span className="text-xs text-gray-500 capitalize">
-                            {isInbound(activity.direction) ? 'Incoming' : 'Outgoing'}
-                          </span>
-                          {activity.sentByName && !isInbound(activity.direction) && (
-                            <span className="text-xs text-gray-400">
-                              by {activity.sentByName}
-                            </span>
-                          )}
-                          {activity.type === 'phone' && activity.result && (
-                            <span className={`text-xs px-2 py-0.5 rounded-full ${
-                              activity.result === 'Missed' || activity.result === 'missed'
-                                ? 'bg-red-100 text-red-700'
-                                : activity.result === 'Answered' || activity.result === 'answered'
-                                ? 'bg-green-100 text-green-700'
-                                : 'bg-gray-100 text-gray-700'
-                            }`}>
-                              {activity.result}
-                            </span>
-                          )}
-                          {activity.type === 'phone' && activity.duration > 0 && (
-                            <span className="text-xs text-gray-500">
-                              {formatDuration(activity.duration)}
-                            </span>
-                          )}
-                        </div>
-                        {activity.type === 'email' && activity.subject && (
-                          <p className="text-sm font-medium text-gray-900 truncate">
-                            {activity.subject}
-                          </p>
-                        )}
-                        {activity.content && (
-                          <p className={`text-sm text-gray-600 ${isExpanded ? '' : 'line-clamp-2'}`}>
-                            {activity.content}
-                          </p>
-                        )}
-                        {activity.type === 'phone' && !activity.content && (
-                          <p className="text-sm text-gray-600">
-                            {isInbound(activity.direction)
-                              ? `Call from ${activity.from || 'unknown'}`
-                              : `Call to ${activity.to || 'unknown'}`}
-                          </p>
-                        )}
-                      </div>
-                      <div className="flex-shrink-0 text-right">
-                        <p className="text-xs text-gray-500">
-                          {activity.timestamp.toLocaleDateString()}
-                        </p>
-                        <p className="text-xs text-gray-400">
-                          {activity.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </p>
-                        {canReply && (
-                          <div className="mt-2">
-                            <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Expanded Reply Section */}
-                    {isExpanded && canReply && (
-                      <div className="px-4 pb-4 border-t border-gray-200 mt-2 pt-4">
-                        {/* Full message content if email with HTML */}
-                        {activity.type === 'email' && activity.bodyHtml && (
-                          <div
-                            className="mb-4 p-3 bg-white rounded border border-gray-200 text-sm prose prose-sm max-w-none"
-                            dangerouslySetInnerHTML={{ __html: activity.bodyHtml }}
-                          />
-                        )}
-
-                        {/* Reply input */}
-                        <div className="space-y-3">
-                          <label className="block text-sm font-medium text-gray-700">
-                            Reply to this {activity.type === 'sms' ? 'message' : 'email'}
-                          </label>
-                          <textarea
-                            value={replyText}
-                            onChange={(e) => setReplyText(e.target.value)}
-                            placeholder={`Type your ${activity.type === 'sms' ? 'SMS' : 'email'} reply...`}
-                            rows={3}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-panda-primary text-sm"
-                          />
-                          <div className="flex justify-end space-x-2">
-                            <button
-                              onClick={() => {
-                                setExpandedId(null);
-                                setReplyText('');
-                              }}
-                              className="px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
-                            >
-                              Cancel
-                            </button>
-                            <button
-                              onClick={() => handleSendReply(activity)}
-                              disabled={!replyText.trim() || isSendingReply}
-                              className="flex items-center px-4 py-1.5 text-sm bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                            >
-                              {isSendingReply ? (
-                                <Loader2 className="w-4 h-4 mr-1 animate-spin" />
-                              ) : (
-                                <Send className="w-4 h-4 mr-1" />
-                              )}
-                              Send Reply
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </div>
+    <div className="bg-white rounded-xl shadow-sm border border-gray-100">
+      <CommunicationsTab
+        phone={phone}
+        email={email}
+        contactName={leadName}
+      />
     </div>
   );
 }
@@ -1000,70 +495,240 @@ export default function LeadDetail() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { clickToCall } = useRingCentral();
+  const authContext = useContext(AuthContext);
+  const user = authContext?.user || null;
+  const roleName = (user?.role?.name || user?.role || '').toString().toLowerCase();
+  const roleType = (user?.roleType || '').toString().toLowerCase();
+  const isCallCenter = roleName.includes('call center') ||
+    roleName.includes('call_center') ||
+    roleType.includes('call_center') ||
+    user?.department?.toLowerCase() === 'call center';
+  const canEditContactAddress = isCallCenter;
   const [isEditing, setIsEditing] = useState(false);
   const [formData, setFormData] = useState({});
   const [showSmsModal, setShowSmsModal] = useState(false);
   const [showEmailModal, setShowEmailModal] = useState(false);
-  const [activeTab, setActiveTab] = useState('details'); // details | activity
+  const [activeTab, setActiveTab] = useState('details'); // details | activity | internal | internalComments
+  const location = useLocation();
   const [isScoreExpanded, setIsScoreExpanded] = useState(false); // AI Score card collapsed by default
+  const [leadActionStep, setLeadActionStep] = useState(null);
+  const [noInspectionSuggestion, setNoInspectionSuggestion] = useState(null);
+  const [isSuggestingInspectionSlot, setIsSuggestingInspectionSlot] = useState(false);
+  const hasShownLeadPromptRef = useRef(false);
 
   const { data: lead, isLoading } = useQuery({
     queryKey: ['lead', id],
     queryFn: () => leadsApi.getLead(id),
     enabled: !!id,
-    onSuccess: (data) => {
-      if (!isEditing) {
-        setFormData({
-          firstName: data.firstName || '',
-          lastName: data.lastName || '',
-          email: data.email || '',
-          phone: data.phone || '',
-          mobilePhone: data.mobilePhone || '',
-          company: data.company || '',
-          street: data.street || '',
-          city: data.city || '',
-          state: data.state || '',
-          postalCode: data.postalCode || '',
-          status: data.status || 'NEW',
-          leadSource: data.leadSource || '',
-          rating: data.rating || '',
-          description: data.description || '',
-          propertyType: data.propertyType || '',
-          workType: data.workType || '',
-          leadNotes: data.leadNotes || '',
-          jobNotes: data.jobNotes || '',
-          salesRabbitUser: data.salesRabbitUser || '',
-          tentativeAppointmentDate: data.tentativeAppointmentDate ? data.tentativeAppointmentDate.split('T')[0] : '',
-          tentativeAppointmentTime: data.tentativeAppointmentTime || '',
-          leadSetById: data.leadSetById || '',
-          leadDisposition: data.leadDisposition || '',
-          ownerId: data.ownerId || '',
-        });
-      }
-    },
   });
 
-  const { data: usersData } = useQuery({
-    queryKey: ['users'],
-    queryFn: () => usersApi.getUsers(),
+  const leadSetByIdForManager = (isEditing ? formData.leadSetById : lead?.leadSetById) || null;
+  const { data: leadSetByUserData } = useQuery({
+    queryKey: ['lead-set-by-user', leadSetByIdForManager],
+    queryFn: () => usersApi.getUser(leadSetByIdForManager),
+    enabled: !!leadSetByIdForManager,
+    staleTime: 60000,
   });
-  const users = usersData?.data || [];
+
+  const leadSetByManagerId =
+    leadSetByUserData?.managerId ||
+    leadSetByUserData?.manager?.id ||
+    lead?.leadSetBy?.managerId ||
+    lead?.leadSetBy?.manager?.id ||
+    null;
+
+  const { data: leadSetByManagerData } = useQuery({
+    queryKey: ['lead-set-by-manager', leadSetByManagerId],
+    queryFn: () => usersApi.getUser(leadSetByManagerId),
+    enabled: !!leadSetByManagerId,
+    staleTime: 60000,
+  });
+
+  const leadSetByManagerName = leadSetByManagerData
+    ? `${leadSetByManagerData.firstName || ''} ${leadSetByManagerData.lastName || ''}`.trim()
+    : leadSetByUserData?.manager
+      ? `${leadSetByUserData.manager.firstName || ''} ${leadSetByUserData.manager.lastName || ''}`.trim()
+      : '';
+
+  useEffect(() => {
+    const tabParam = new URLSearchParams(location.search).get('tab');
+    if (!tabParam) return;
+    if (tabParam === 'internal-communications') {
+      setActiveTab('internalComments');
+      return;
+    }
+    if (tabParam === 'notes') {
+      setActiveTab('internal');
+      return;
+    }
+    if (tabParam === 'internal' || tabParam === 'internalComments' || tabParam === 'activity' || tabParam === 'details') {
+      setActiveTab(tabParam);
+    }
+  }, [location.search]);
+
+  useEffect(() => {
+    if (!lead?.id || !user?.id) return;
+    const name = [lead.firstName, lead.lastName].filter(Boolean).join(' ');
+    const title = name || lead.company || 'Lead';
+    const subtitle = lead.email || lead.phone || lead.city || lead.street || '';
+    addRecentItem('leads', user.id, {
+      id: lead.id,
+      title,
+      subtitle,
+      url: `/leads/${lead.id}`,
+    });
+  }, [lead?.id, user?.id]);
+
+  const isSelfGenSource = (value) => {
+    if (!value) return false;
+    return value.toString().toLowerCase().replace(/[^a-z]/g, '') === 'selfgen';
+  };
+
+  const isOwner = Boolean(user?.id && (lead?.ownerId === user.id || lead?.owner?.id === user.id));
+  const isLeadReadyForOwnerAction = Boolean(
+    lead &&
+    !lead.isConverted &&
+    (lead.source || lead.leadSource) &&
+    (lead.tentativeAppointmentDate || lead.tentativeAppointmentTime || isSelfGenSource(lead.source))
+  );
+
+  useEffect(() => {
+    if (!lead || !isLeadReadyForOwnerAction || !isOwner) return;
+    if (hasShownLeadPromptRef.current) return;
+    setLeadActionStep('action');
+    hasShownLeadPromptRef.current = true;
+  }, [lead, isLeadReadyForOwnerAction, isOwner]);
+
+  useEffect(() => {
+    if (!lead || leadActionStep !== 'noInspection') return;
+    if (isSuggestingInspectionSlot) return;
+    setIsSuggestingInspectionSlot(true);
+    leadsApi.suggestInspectionAppointment(id, {
+      allowFallback: true,
+      workType: lead.workType || 'Inspection',
+      daysToSearch: 14,
+      durationMinutes: 120,
+    })
+      .then((result) => setNoInspectionSuggestion(result))
+      .catch((error) => {
+        console.error('Failed to suggest inspection slot:', error);
+        setNoInspectionSuggestion(null);
+      })
+      .finally(() => setIsSuggestingInspectionSlot(false));
+  }, [leadActionStep, lead, id, isSuggestingInspectionSlot]);
+
+  // Sync formData when lead data loads/changes (replaces removed onSuccess)
+  useEffect(() => {
+    if (lead && !isEditing) {
+      setFormData({
+        firstName: lead.firstName || '',
+        lastName: lead.lastName || '',
+        email: lead.email || '',
+        phone: lead.phone || '',
+        mobilePhone: lead.mobilePhone || '',
+        company: lead.company || '',
+        street: lead.street || '',
+        city: lead.city || '',
+        state: lead.state || '',
+        postalCode: lead.postalCode || '',
+        status: lead.status || 'NEW',
+        leadSource: lead.source || lead.leadSource || '',
+        rating: lead.rating || '',
+        description: lead.description || '',
+        propertyType: lead.propertyType || '',
+        workType: lead.workType || '',
+        leadNotes: lead.leadNotes || '',
+        jobNotes: lead.jobNotes || '',
+        salesRabbitUser: lead.salesRabbitUser || '',
+        tentativeAppointmentDate: lead.tentativeAppointmentDate ? lead.tentativeAppointmentDate.split('T')[0] : '',
+        tentativeAppointmentTime: lead.tentativeAppointmentTime || '',
+        leadSetById: lead.leadSetById || '',
+        disposition: lead.disposition || '',
+        ownerId: lead.ownerId || '',
+        ownerName: lead.owner ? `${lead.owner.firstName || ''} ${lead.owner.lastName || ''}`.trim() : '',
+        leadSetByName: lead.leadSetBy ? `${lead.leadSetBy.firstName || ''} ${lead.leadSetBy.lastName || ''}`.trim() : '',
+      });
+    }
+  }, [lead]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const updateMutation = useMutation({
     mutationFn: (data) => leadsApi.updateLead(id, data),
-    onSuccess: () => {
+    onSuccess: async () => {
+      setIsEditing(false);
       queryClient.invalidateQueries(['lead', id]);
       queryClient.invalidateQueries(['leads']);
-      setIsEditing(false);
+      // Sales Path Gating: refresh gating state after update
+      try { await leadsApi.getGatingState(id); } catch (e) { /* non-blocking */ }
     },
   });
 
   const convertMutation = useMutation({
-    mutationFn: () => leadsApi.convertLead(id, {}),
-    onSuccess: () => {
+    mutationFn: async (conversionOverrides = {}) => {
+      // Sales Path Gating: validate before conversion
+      const gatingResult = await leadsApi.validatePreConversion(id);
+      if (!gatingResult?.success || gatingResult?.data?.blocked) {
+        const messages = gatingResult?.data?.messages || ['Lead cannot be converted. Please check all gating requirements.'];
+        throw new Error(messages.join('\n'));
+      }
+      const conversionData = { ...conversionOverrides };
+      // Pass tentative date/time so backend creates a ServiceAppointment
+      if (lead?.tentativeAppointmentDate) {
+        conversionData.createServiceAppointment = true;
+        const dateStr = lead.tentativeAppointmentDate.split('T')[0];
+        if (lead.tentativeAppointmentTime) {
+          conversionData.tentativeAppointmentDate = `${dateStr}T${lead.tentativeAppointmentTime}:00`;
+          conversionData.tentativeAppointmentTime = lead.tentativeAppointmentTime;
+        } else {
+          conversionData.tentativeAppointmentDate = `${dateStr}T09:00:00`;
+        }
+      }
+      return leadsApi.convertLead(id, conversionData);
+    },
+    onSuccess: (result) => {
       queryClient.invalidateQueries(['lead', id]);
+      const opportunityId =
+        result?.opportunity?.id ||
+        result?.opportunityId ||
+        result?.job?.id ||
+        result?.jobId;
+      if (opportunityId) {
+        navigate(`/jobs/${opportunityId}`);
+      }
+    },
+    onError: (error) => {
+      alert(error.message);
     },
   });
+
+  const handleConvert = async (overrides = {}) => {
+    await convertMutation.mutateAsync(overrides);
+    setLeadActionStep(null);
+  };
+
+  const handleMarkInspected = async () => {
+    await leadsApi.updateLead(id, {
+      disposition: 'INSPECTED',
+      inspectionDate: new Date().toISOString(),
+      inspectionById: user?.id || null,
+      inspectionNotes: 'Inspection confirmed via quick action',
+    });
+    queryClient.invalidateQueries(['lead', id]);
+    setLeadActionStep('salesPath');
+  };
+
+  const handleSelectSalesPath = async (path) => {
+    try {
+      await leadsApi.selectSalesPath(id, path);
+      queryClient.invalidateQueries(['lead', id]);
+      const workType = path === 'RETAIL' ? 'Retail' : 'Insurance';
+      await handleConvert({
+        opportunityType: path,
+        workType,
+      });
+    } catch (error) {
+      alert(error?.message || 'Unable to select sales path.');
+    }
+  };
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -1094,7 +759,7 @@ export default function LeadDetail() {
       state: lead.state || '',
       postalCode: lead.postalCode || '',
       status: lead.status || 'NEW',
-      leadSource: lead.leadSource || '',
+      leadSource: lead.source || lead.leadSource || '',
       rating: lead.rating || '',
       description: lead.description || '',
       propertyType: lead.propertyType || '',
@@ -1105,8 +770,10 @@ export default function LeadDetail() {
       tentativeAppointmentDate: lead.tentativeAppointmentDate ? lead.tentativeAppointmentDate.split('T')[0] : '',
       tentativeAppointmentTime: lead.tentativeAppointmentTime || '',
       leadSetById: lead.leadSetById || '',
-      leadDisposition: lead.leadDisposition || '',
+      leadSetByName: lead.leadSetBy ? `${lead.leadSetBy.firstName || ''} ${lead.leadSetBy.lastName || ''}`.trim() : '',
+      disposition: lead.disposition || '',
       ownerId: lead.ownerId || '',
+      ownerName: lead.owner ? `${lead.owner.firstName || ''} ${lead.owner.lastName || ''}`.trim() : '',
     });
     setIsEditing(false);
   };
@@ -1124,7 +791,7 @@ export default function LeadDetail() {
       state: lead.state || '',
       postalCode: lead.postalCode || '',
       status: lead.status || 'NEW',
-      leadSource: lead.leadSource || '',
+      leadSource: lead.source || lead.leadSource || '',
       rating: lead.rating || '',
       description: lead.description || '',
       propertyType: lead.propertyType || '',
@@ -1135,8 +802,10 @@ export default function LeadDetail() {
       tentativeAppointmentDate: lead.tentativeAppointmentDate ? lead.tentativeAppointmentDate.split('T')[0] : '',
       tentativeAppointmentTime: lead.tentativeAppointmentTime || '',
       leadSetById: lead.leadSetById || '',
-      leadDisposition: lead.leadDisposition || '',
+      leadSetByName: lead.leadSetBy ? `${lead.leadSetBy.firstName || ''} ${lead.leadSetBy.lastName || ''}`.trim() : '',
+      disposition: lead.disposition || '',
       ownerId: lead.ownerId || '',
+      ownerName: lead.owner ? `${lead.owner.firstName || ''} ${lead.owner.lastName || ''}`.trim() : '',
     });
     setIsEditing(true);
   };
@@ -1160,8 +829,6 @@ export default function LeadDetail() {
       </div>
     );
   }
-
-  const activeUsers = users.filter(u => u.isActive);
 
   return (
     <div className="space-y-6">
@@ -1341,9 +1008,13 @@ export default function LeadDetail() {
               {/* Convert to Job Button */}
               {lead.status !== 'CONVERTED' && !lead.isConverted && (
                 <button
-                  onClick={() => convertMutation.mutate()}
-                  disabled={convertMutation.isPending}
-                  className="flex items-center space-x-2 px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-lg hover:opacity-90 disabled:opacity-50"
+                  onClick={() => setLeadActionStep('inspection')}
+                  disabled={convertMutation.isPending || !isOwner}
+                  className={`flex items-center space-x-2 px-4 py-2 rounded-lg ${
+                    convertMutation.isPending || !isOwner
+                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                      : 'bg-gradient-to-r from-green-500 to-emerald-500 text-white hover:opacity-90'
+                  }`}
                 >
                   <ArrowRight className="w-4 h-4" />
                   <span>{convertMutation.isPending ? 'Converting...' : 'Convert to Job'}</span>
@@ -1378,6 +1049,28 @@ export default function LeadDetail() {
           <Activity className="w-4 h-4" />
           <span>Activity</span>
         </button>
+        <button
+          onClick={() => setActiveTab('internal')}
+          className={`flex-1 flex items-center justify-center space-x-2 px-4 py-3 rounded-lg font-medium transition-all ${
+            activeTab === 'internal'
+              ? 'bg-panda-primary text-white'
+              : 'text-gray-600 hover:bg-gray-100'
+          }`}
+        >
+          <FileText className="w-4 h-4" />
+          <span>Notes</span>
+        </button>
+        <button
+          onClick={() => setActiveTab('internalComments')}
+          className={`flex-1 flex items-center justify-center space-x-2 px-4 py-3 rounded-lg font-medium transition-all ${
+            activeTab === 'internalComments'
+              ? 'bg-panda-primary text-white'
+              : 'text-gray-600 hover:bg-gray-100'
+          }`}
+        >
+          <MessageCircle className="w-4 h-4" />
+          <span>Internal Comments</span>
+        </button>
       </div>
 
       {/* Activity Tab Content */}
@@ -1388,6 +1081,14 @@ export default function LeadDetail() {
           leadName={`${lead.firstName} ${lead.lastName}`}
           leadId={lead.id}
         />
+      )}
+
+      {activeTab === 'internal' && (
+        <InternalNotesTabs entityType="lead" entityId={id} />
+      )}
+
+      {activeTab === 'internalComments' && (
+        <InternalComments entityType="lead" entityId={id} />
       )}
 
       {/* Details Tab Content */}
@@ -1443,6 +1144,11 @@ export default function LeadDetail() {
 
           {isEditing ? (
             <div className="space-y-4">
+              {!canEditContactAddress && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  Contact details are read-only for your role. Call Center can update contact info and address.
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">First Name *</label>
@@ -1451,7 +1157,10 @@ export default function LeadDetail() {
                     name="firstName"
                     value={formData.firstName}
                     onChange={handleInputChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+                    disabled={!canEditContactAddress}
+                    className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent ${
+                      !canEditContactAddress ? 'bg-gray-100 text-gray-500' : 'border-gray-300'
+                    }`}
                     required
                   />
                 </div>
@@ -1462,7 +1171,10 @@ export default function LeadDetail() {
                     name="lastName"
                     value={formData.lastName}
                     onChange={handleInputChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+                    disabled={!canEditContactAddress}
+                    className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent ${
+                      !canEditContactAddress ? 'bg-gray-100 text-gray-500' : 'border-gray-300'
+                    }`}
                     required
                   />
                 </div>
@@ -1475,31 +1187,40 @@ export default function LeadDetail() {
                   name="email"
                   value={formData.email}
                   onChange={handleInputChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+                  disabled={!canEditContactAddress}
+                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent ${
+                    !canEditContactAddress ? 'bg-gray-100 text-gray-500' : 'border-gray-300'
+                  }`}
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
-                  <input
-                    type="tel"
-                    name="phone"
-                    value={formData.phone}
-                    onChange={handleInputChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Mobile Phone</label>
-                  <input
-                    type="tel"
-                    name="mobilePhone"
-                    value={formData.mobilePhone}
-                    onChange={handleInputChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
-                  />
-                </div>
+                <input
+                  type="tel"
+                  name="phone"
+                  value={formData.phone}
+                  onChange={handleInputChange}
+                  disabled={!canEditContactAddress}
+                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent ${
+                    !canEditContactAddress ? 'bg-gray-100 text-gray-500' : 'border-gray-300'
+                  }`}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Mobile Phone</label>
+                <input
+                  type="tel"
+                  name="mobilePhone"
+                  value={formData.mobilePhone}
+                  onChange={handleInputChange}
+                  disabled={!canEditContactAddress}
+                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent ${
+                    !canEditContactAddress ? 'bg-gray-100 text-gray-500' : 'border-gray-300'
+                  }`}
+                />
+              </div>
               </div>
 
               <div>
@@ -1509,7 +1230,10 @@ export default function LeadDetail() {
                   name="company"
                   value={formData.company}
                   onChange={handleInputChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+                  disabled={!canEditContactAddress}
+                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent ${
+                    !canEditContactAddress ? 'bg-gray-100 text-gray-500' : 'border-gray-300'
+                  }`}
                 />
               </div>
             </div>
@@ -1555,7 +1279,10 @@ export default function LeadDetail() {
                   name="street"
                   value={formData.street}
                   onChange={handleInputChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+                  disabled={!canEditContactAddress}
+                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent ${
+                    !canEditContactAddress ? 'bg-gray-100 text-gray-500' : 'border-gray-300'
+                  }`}
                 />
               </div>
 
@@ -1567,7 +1294,10 @@ export default function LeadDetail() {
                     name="city"
                     value={formData.city}
                     onChange={handleInputChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+                    disabled={!canEditContactAddress}
+                    className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent ${
+                      !canEditContactAddress ? 'bg-gray-100 text-gray-500' : 'border-gray-300'
+                    }`}
                   />
                 </div>
                 <div>
@@ -1576,7 +1306,10 @@ export default function LeadDetail() {
                     name="state"
                     value={formData.state}
                     onChange={handleInputChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+                    disabled={!canEditContactAddress}
+                    className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent ${
+                      !canEditContactAddress ? 'bg-gray-100 text-gray-500' : 'border-gray-300'
+                    }`}
                   >
                     <option value="">Select State</option>
                     {US_STATES.map(s => (
@@ -1593,7 +1326,10 @@ export default function LeadDetail() {
                   name="postalCode"
                   value={formData.postalCode}
                   onChange={handleInputChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+                  disabled={!canEditContactAddress}
+                  className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent ${
+                    !canEditContactAddress ? 'bg-gray-100 text-gray-500' : 'border-gray-300'
+                  }`}
                 />
               </div>
             </div>
@@ -1645,8 +1381,8 @@ export default function LeadDetail() {
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Disposition</label>
                   <select
-                    name="leadDisposition"
-                    value={formData.leadDisposition}
+                    name="disposition"
+                    value={formData.disposition}
                     onChange={handleInputChange}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
                   >
@@ -1670,20 +1406,6 @@ export default function LeadDetail() {
                     <option value="">Select Source</option>
                     {LEAD_SOURCES.map(s => (
                       <option key={s.value} value={s.value}>{s.label}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Rating</label>
-                  <select
-                    name="rating"
-                    value={formData.rating}
-                    onChange={handleInputChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
-                  >
-                    <option value="">Select Rating</option>
-                    {RATINGS.map(r => (
-                      <option key={r.value} value={r.value}>{r.label}</option>
                     ))}
                   </select>
                 </div>
@@ -1739,11 +1461,11 @@ export default function LeadDetail() {
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">Disposition</span>
-                <span className="text-gray-900">{lead.leadDisposition || '-'}</span>
+                <span className="text-gray-900">{lead.disposition || '-'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">Lead Source</span>
-                <span className="text-gray-900">{lead.leadSource || '-'}</span>
+                <span className="text-gray-900">{lead.source || lead.leadSource || '-'}</span>
               </div>
               {lead.isChampionReferral && (
                 <div className="mt-3 p-3 bg-amber-50 rounded-lg border border-amber-200">
@@ -1761,14 +1483,6 @@ export default function LeadDetail() {
                   </div>
                 </div>
               )}
-              <div className="flex justify-between">
-                <span className="text-gray-500">Rating</span>
-                <span className={`${
-                  lead.rating === 'Hot' ? 'text-red-500' :
-                  lead.rating === 'Warm' ? 'text-orange-500' :
-                  lead.rating === 'Cold' ? 'text-blue-500' : 'text-gray-900'
-                }`}>{lead.rating || '-'}</span>
-              </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">Property Type</span>
                 <span className="text-gray-900">{lead.propertyType || '-'}</span>
@@ -1796,32 +1510,36 @@ export default function LeadDetail() {
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Owner (Assigned Rep)</label>
-                <select
-                  name="ownerId"
-                  value={formData.ownerId}
-                  onChange={handleInputChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
-                >
-                  <option value="">Unassigned</option>
-                  {activeUsers.map(u => (
-                    <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
-                  ))}
-                </select>
+                <UserSearchDropdown
+                  value={formData.ownerName || ''}
+                  onChange={(name, user) => {
+                    setFormData(prev => ({ ...prev, ownerId: user ? user.id : '', ownerName: name }));
+                  }}
+                  placeholder="Search for a user..."
+                  showClear
+                />
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Lead Set By</label>
-                <select
-                  name="leadSetById"
-                  value={formData.leadSetById}
-                  onChange={handleInputChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
-                >
-                  <option value="">Select User</option>
-                  {activeUsers.map(u => (
-                    <option key={u.id} value={u.id}>{u.firstName} {u.lastName}</option>
-                  ))}
-                </select>
+                <UserSearchDropdown
+                  value={formData.leadSetByName || ''}
+                  onChange={(name, user) => {
+                    setFormData(prev => ({ ...prev, leadSetById: user ? user.id : '', leadSetByName: name }));
+                  }}
+                  placeholder="Search for a user..."
+                  showClear
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Manager</label>
+                <input
+                  type="text"
+                  value={leadSetByManagerName || 'Unassigned'}
+                  readOnly
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
+                />
               </div>
 
               <div className="grid grid-cols-2 gap-4">
@@ -1852,20 +1570,28 @@ export default function LeadDetail() {
               <div className="flex justify-between">
                 <span className="text-gray-500">Owner</span>
                 <span className="text-gray-900">
-                  {lead.owner ? `${lead.owner.firstName} ${lead.owner.lastName}` : 'Unassigned'}
+                  {lead.owner
+                    ? `${lead.owner.firstName} ${lead.owner.lastName}`
+                    : lead.ownerName || 'Unassigned'}
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">Lead Set By</span>
                 <span className="text-gray-900">
-                  {lead.leadSetBy ? `${lead.leadSetBy.firstName} ${lead.leadSetBy.lastName}` : '-'}
+                  {lead.leadSetBy
+                    ? `${lead.leadSetBy.firstName} ${lead.leadSetBy.lastName}`
+                    : lead.leadSetByName || '-'}
                 </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Manager</span>
+                <span className="text-gray-900">{leadSetByManagerName || '-'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">Tentative Date</span>
                 <span className="text-gray-900">
                   {lead.tentativeAppointmentDate
-                    ? new Date(lead.tentativeAppointmentDate).toLocaleDateString()
+                    ? lead.tentativeAppointmentDate.split('T')[0]
                     : '-'}
                 </span>
               </div>
@@ -1878,19 +1604,16 @@ export default function LeadDetail() {
         </div>
       </div>
 
-      {/* Notes & Comments Section - Full Width Interactive */}
-      <LeadNotesSidebar leadId={id} />
-
       {/* Metadata */}
       <div className="bg-gray-50 rounded-xl p-4 text-sm text-gray-500">
         <div className="flex flex-wrap gap-x-6 gap-y-2">
           <div className="flex items-center">
             <Clock className="w-4 h-4 mr-1" />
-            Created: {new Date(lead.createdAt).toLocaleString()}
+            Created: {new Date(lead.createdAt).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })}
           </div>
           <div className="flex items-center">
             <Clock className="w-4 h-4 mr-1" />
-            Updated: {new Date(lead.updatedAt).toLocaleString()}
+            Updated: {new Date(lead.updatedAt).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' })}
           </div>
           {lead.creator && (
             <div className="flex items-center">
@@ -1959,6 +1682,188 @@ export default function LeadDetail() {
           // Optionally refresh data or show success toast
         }}
       />
+
+      {/* Owner Action Prompt */}
+      {leadActionStep === 'action' && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl border border-gray-200">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Make a Selection</h3>
+                <p className="text-sm text-gray-600 mt-1">
+                  Choose how you want to continue this lead.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLeadActionStep(null)}
+                className="p-1 rounded hover:bg-gray-100"
+                aria-label="Close"
+              >
+                <X className="w-5 h-5 text-gray-400" />
+              </button>
+            </div>
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setLeadActionStep(null);
+                  setActiveTab('details');
+                  startEditing();
+                }}
+                className="w-full px-4 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50"
+              >
+                Edit Lead
+              </button>
+              <button
+                type="button"
+                onClick={() => setLeadActionStep('inspection')}
+                disabled={!isOwner}
+                className={`w-full px-4 py-2 rounded-lg ${
+                  isOwner
+                    ? 'bg-green-600 text-white hover:bg-green-700'
+                    : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                }`}
+              >
+                Convert to Job
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Inspection Prompt */}
+      {leadActionStep === 'inspection' && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl border border-gray-200">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Was Property Inspected?</h3>
+                <p className="text-sm text-gray-600 mt-1">
+                  Confirm inspection status to continue conversion.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLeadActionStep(null)}
+                className="p-1 rounded hover:bg-gray-100"
+                aria-label="Close"
+              >
+                <X className="w-5 h-5 text-gray-400" />
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => setLeadActionStep('noInspection')}
+                className="px-4 py-2 rounded-lg border border-amber-300 text-amber-700 hover:bg-amber-50"
+              >
+                No
+              </button>
+              <button
+                type="button"
+                onClick={handleMarkInspected}
+                className="px-4 py-2 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700"
+              >
+                Yes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* No Inspection Notice */}
+      {leadActionStep === 'noInspection' && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl border border-gray-200">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Inspection Required</h3>
+                <p className="text-sm text-gray-600 mt-1">
+                  Unable to convert to a job until an inspection is complete.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLeadActionStep(null)}
+                className="p-1 rounded hover:bg-gray-100"
+                aria-label="Close"
+              >
+                <X className="w-5 h-5 text-gray-400" />
+              </button>
+            </div>
+            <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-700">
+              {isSuggestingInspectionSlot && 'Finding the next available inspection slot...'}
+              {!isSuggestingInspectionSlot && noInspectionSuggestion?.found && (
+                <span>
+                  Suggested slot: {noInspectionSuggestion.appointmentDate} at {noInspectionSuggestion.appointmentTime}
+                </span>
+              )}
+              {!isSuggestingInspectionSlot && noInspectionSuggestion && !noInspectionSuggestion.found && (
+                <span>No inspection slots available in the next two weeks.</span>
+              )}
+            </div>
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setLeadActionStep(null)}
+                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setLeadActionStep(null);
+                  navigate('/production-center?view=dispatch');
+                }}
+                className="px-4 py-2 text-sm bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90"
+              >
+                Open Scheduling
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sales Path Selection */}
+      {leadActionStep === 'salesPath' && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl border border-gray-200">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Select Sales Path</h3>
+                <p className="text-sm text-gray-600 mt-1">Choose Insurance or Retail.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLeadActionStep(null)}
+                className="p-1 rounded hover:bg-gray-100"
+                aria-label="Close"
+              >
+                <X className="w-5 h-5 text-gray-400" />
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => handleSelectSalesPath('INSURANCE')}
+                className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+              >
+                Insurance
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSelectSalesPath('RETAIL')}
+                className="px-4 py-2 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700"
+              >
+                Retail
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

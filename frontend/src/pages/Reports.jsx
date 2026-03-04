@@ -1,167 +1,155 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Link, useNavigate } from 'react-router-dom';
-import { opportunitiesApi, leadsApi, accountsApi, reportsApi } from '../services/api';
-import { formatNumber, formatCurrency as formatCurrencyUtil } from '../utils/formatters';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { reportsApi } from '../services/api';
+import { deriveDataSource } from '../utils/analyticsSource';
+import { toAnalyticsDateParams } from '../utils/analyticsDateRange';
+import DataSourceBadge from '../components/analytics/DataSourceBadge';
+import VerifiedBadge from '../components/analytics/VerifiedBadge';
 import {
   GlobalDateRangePicker,
   KPICard,
   BarChartWidget,
-  LineChartWidget,
-  parseDateRange
 } from '../components/reports';
 import {
   Target,
   DollarSign,
-  Users,
-  TrendingUp,
-  Building2,
   FileText,
   Plus,
   Star,
-  Clock,
   BarChart3,
-  ChevronRight,
-  Download,
-  Filter,
-  Calendar,
-  PauseCircle,
   LayoutGrid,
+  List,
 } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { useAnalyticsBadgeContext } from '../components/analytics/AnalyticsBadgeContext';
 
-// Sample data generators for demo (will be replaced by actual API data)
-const generateTimeSeriesData = () => {
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  return months.map((month, index) => ({
-    date: `2025-${String(index + 1).padStart(2, '0')}-01`,
-    month,
-    count: Math.floor(Math.random() * 50) + 20,
-    amount: Math.floor(Math.random() * 500000) + 100000,
-  }));
-};
-
-export default function Reports() {
+export default function Reports({ embedded = false }) {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const { user } = useAuth();
   const [dateRange, setDateRange] = useState({ preset: 'THIS_MONTH' });
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [savedView, setSavedView] = useState('grid');
+  const [savedPageSize, setSavedPageSize] = useState(25);
+  const [savedPage, setSavedPage] = useState(1);
+  const analyticsBadges = useAnalyticsBadgeContext();
+  const verification = analyticsBadges?.verification || { status: 'unknown', reason: 'Verification unavailable.' };
 
-  // Fetch opportunity stage counts
-  const { data: stageCounts, isLoading: stageLoading } = useQuery({
-    queryKey: ['opportunityStageCounts', dateRange],
-    queryFn: () => opportunitiesApi.getStageCounts(),
+  const reportTabParam = searchParams.get('reportTab');
+  const categoryParam = searchParams.get('category');
+
+  useEffect(() => {
+    if (reportTabParam && reportTabParam !== activeTab) {
+      setActiveTab(reportTabParam);
+      return;
+    }
+    if (categoryParam && activeTab !== 'saved') {
+      setActiveTab('saved');
+    }
+  }, [reportTabParam, categoryParam, activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== 'saved') return;
+    const storedView = typeof window !== 'undefined' ? window.localStorage.getItem('reportsSavedView') : null;
+    if (storedView === 'grid' || storedView === 'list') {
+      setSavedView(storedView);
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== 'saved') return;
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('reportsSavedView', savedView);
+  }, [activeTab, savedView]);
+
+  useEffect(() => {
+    if (activeTab !== 'saved') return;
+    setSavedPage(1);
+  }, [activeTab, savedPageSize]);
+
+  const analyticsDateParams = useMemo(() => toAnalyticsDateParams(dateRange), [dateRange]);
+
+  const { data: kpiResponse, isLoading: kpiLoading } = useQuery({
+    queryKey: ['analytics-kpis', analyticsDateParams],
+    queryFn: () => reportsApi.getAnalyticsKpis(analyticsDateParams),
+    retry: false,
   });
 
-  // Fetch lead counts
-  const { data: leadCounts, isLoading: leadLoading } = useQuery({
-    queryKey: ['leadCounts', dateRange],
-    queryFn: () => leadsApi.getLeadCounts(),
+  const { data: pipelineResponse, isLoading: pipelineLoading } = useQuery({
+    queryKey: ['analytics-pipeline', analyticsDateParams],
+    queryFn: () => reportsApi.getPipelineMetrics(analyticsDateParams),
+    retry: false,
   });
 
-  // Fetch opportunity list for aggregations
-  const { data: opportunitiesData, isLoading: oppsLoading } = useQuery({
-    queryKey: ['opportunities', 'all', dateRange],
-    queryFn: () => opportunitiesApi.getOpportunities({ limit: 1000 }),
+  const { data: performanceResponse, isLoading: performanceLoading } = useQuery({
+    queryKey: ['analytics-performance', analyticsDateParams],
+    queryFn: () => reportsApi.getPerformanceMetrics(analyticsDateParams, {
+      groupBy: 'ownerId',
+      metric: 'sum',
+      field: 'amount',
+      limit: 10,
+    }),
+    retry: false,
   });
 
-  // Fetch accounts for aggregations
-  const { data: accountsData } = useQuery({
-    queryKey: ['accounts', 'all', dateRange],
-    queryFn: () => accountsApi.getAccounts({ limit: 1000 }),
+  const { data: stateResponse, isLoading: stateLoading } = useQuery({
+    queryKey: ['analytics-states', analyticsDateParams],
+    queryFn: () => reportsApi.getStateMetrics(analyticsDateParams, {
+      entity: 'opportunities',
+      metric: 'count',
+    }),
+    retry: false,
   });
 
-  // Compute KPI metrics from actual data
-  const kpiMetrics = useMemo(() => {
-    const opps = opportunitiesData?.data || [];
-    const totalCount = opps.length;
-    const totalAmount = opps.reduce((sum, opp) => sum + (opp.amount || 0), 0);
+  const { data: leadMetricsResponse, isLoading: leadLoading } = useQuery({
+    queryKey: ['analytics-leads', analyticsDateParams],
+    queryFn: () => reportsApi.getLeadMetrics(analyticsDateParams),
+    retry: false,
+  });
 
-    // Count by stage
-    const closedWon = opps.filter(o => o.stage === 'CLOSED_WON').length;
-    const closedLost = opps.filter(o => o.stage === 'CLOSED_LOST').length;
-    const openOpps = opps.filter(o => !['CLOSED_WON', 'CLOSED_LOST'].includes(o.stage));
-    const onHold = opps.filter(o => o.stage === 'ON_HOLD' || o.status === 'ON_HOLD').length;
+  const kpiData = kpiResponse?.data || {};
+  const kpiMetrics = kpiData.metrics || {};
+  const kpiMeta = kpiData.meta || {};
 
-    // Balance due (simplified - sum of open opportunity amounts)
-    const balanceDue = openOpps.reduce((sum, opp) => sum + (opp.amount || 0), 0);
+  const pipelineData = pipelineResponse?.data || {};
 
-    // Conversion rate
-    const conversionRate = totalCount > 0 ? ((closedWon / (closedWon + closedLost)) * 100) || 0 : 0;
-
-    return {
-      totalCount,
-      totalAmount,
-      balanceDue,
-      onHoldCount: onHold,
-      closedWon,
-      closedLost,
-      conversionRate: conversionRate.toFixed(1),
-      openCount: openOpps.length,
-    };
-  }, [opportunitiesData]);
-
-  // Transform stage data for bar chart
   const stageChartData = useMemo(() => {
-    if (!stageCounts) return [];
+    const stages = pipelineData.byStage || [];
+    return stages.map((stage) => ({
+      name: stage.stage || 'Unknown',
+      count: stage.count || 0,
+      value: stage.value || 0,
+    }));
+  }, [pipelineData]);
 
-    const stageLabels = {
-      leadUnassigned: 'Lead Unassigned',
-      leadAssigned: 'Lead Assigned',
-      scheduled: 'Scheduled',
-      inspected: 'Inspected',
-      claimFiled: 'Claim Filed',
-      approved: 'Approved',
-      contractSigned: 'Contract Signed',
-      inProduction: 'In Production',
-      completed: 'Completed',
-    };
-
-    return Object.entries(stageLabels).map(([key, label]) => ({
-      name: label,
-      count: stageCounts[key] || 0,
-    })).filter(item => item.count > 0);
-  }, [stageCounts]);
-
-  // Generate owner/rep chart data from opportunities
   const repChartData = useMemo(() => {
-    const opps = opportunitiesData?.data || [];
-    const byOwner = {};
+    const reps = performanceResponse?.data?.results || [];
+    return reps.map((rep) => ({
+      name: rep.label || rep.key || 'Unassigned',
+      count: rep.count || 0,
+      value: rep.totalValue || 0,
+    }));
+  }, [performanceResponse]);
 
-    opps.forEach(opp => {
-      const ownerName = opp.owner?.name || 'Unassigned';
-      if (!byOwner[ownerName]) {
-        byOwner[ownerName] = { name: ownerName, count: 0, value: 0 };
-      }
-      byOwner[ownerName].count += 1;
-      byOwner[ownerName].value += opp.amount || 0;
-    });
-
-    return Object.values(byOwner)
-      .sort((a, b) => b.value - a.value)
-      .slice(0, 10);
-  }, [opportunitiesData]);
-
-  // Generate state chart data from accounts
   const stateChartData = useMemo(() => {
-    const accts = accountsData?.data || [];
-    const byState = {};
+    const states = stateResponse?.data?.states || [];
+    return states.map((state) => ({
+      name: state.state || 'Unknown',
+      count: state.count || 0,
+      value: state.value || 0,
+    }));
+  }, [stateResponse]);
 
-    accts.forEach(acct => {
-      const state = acct.billingState || acct.shippingState || 'Unknown';
-      if (!byState[state]) {
-        byState[state] = { name: state, count: 0 };
-      }
-      byState[state].count += 1;
-    });
+  const leadMetrics = leadMetricsResponse?.data || {};
+  const leadStatusCounts = useMemo(() => {
+    return (leadMetrics.byStatus || []).reduce((acc, item) => {
+      const key = item.status || 'UNKNOWN';
+      acc[key] = item.count || 0;
+      return acc;
+    }, {});
+  }, [leadMetrics]);
 
-    return Object.values(byState)
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 10);
-  }, [accountsData]);
-
-  // Time series data (using generated data for now)
-  const timeSeriesData = useMemo(() => generateTimeSeriesData(), []);
-
-  // Format currency
   const formatCurrency = (value) => {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
@@ -170,7 +158,6 @@ export default function Reports() {
     }).format(value || 0);
   };
 
-  // Get display label for current date range
   const getDateRangeLabel = () => {
     const labels = {
       ALL_DATA: 'All Data',
@@ -190,40 +177,93 @@ export default function Reports() {
     return labels[dateRange.preset] || dateRange.preset || 'Custom Range';
   };
 
-  const isLoading = stageLoading || leadLoading || oppsLoading;
+  const buildEmptyStateContext = (title, extra = {}) => ({
+    title,
+    source: kpiMeta.source || 'native',
+    verifiedStatus: verification.status,
+    verifiedReason: verification.reason,
+    failedChecks: verification.failedChecks || [],
+    rowCount: kpiMeta.rowCount ?? kpiMetrics.pipelineCount ?? 0,
+    filters: {
+      'Date Range': getDateRangeLabel(),
+    },
+    ...extra,
+  });
+
+  const isLoading = kpiLoading || pipelineLoading || performanceLoading || stateLoading || leadLoading;
+  const isAdmin =
+    user?.role?.roleType?.toLowerCase?.() === 'admin' ||
+    user?.role?.roleType?.toLowerCase?.() === 'super_admin' ||
+    user?.roleType?.toLowerCase?.() === 'admin' ||
+    user?.roleType?.toLowerCase?.() === 'super_admin';
+
+  const { data: savedReportsData, isLoading: savedReportsLoading } = useQuery({
+    queryKey: ['saved-reports', 'reports-page', savedPage, savedPageSize, isAdmin],
+    queryFn: () => reportsApi.getSavedReports({
+      limit: savedPageSize,
+      offset: (savedPage - 1) * savedPageSize,
+      includeAll: isAdmin ? 'true' : undefined,
+    }),
+    enabled: activeTab === 'saved',
+  });
+
+  const savedReports = Array.isArray(savedReportsData)
+    ? savedReportsData
+    : (savedReportsData?.data?.reports || savedReportsData?.data || []);
+  const savedPagination = savedReportsData?.data?.pagination || {};
+  const savedTotal = savedPagination.total ?? savedReports.length;
+  const savedTotalPages = Math.max(1, Math.ceil(savedTotal / savedPageSize));
+  const savedStart = savedTotal === 0 ? 0 : (savedPage - 1) * savedPageSize + 1;
+  const savedEnd = Math.min(savedPage * savedPageSize, savedTotal);
+
+  useEffect(() => {
+    if (activeTab !== 'saved') return;
+    if (savedPage > savedTotalPages) {
+      setSavedPage(savedTotalPages);
+    }
+  }, [activeTab, savedPage, savedTotalPages]);
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Reports & Analytics</h1>
-          <p className="text-gray-500">Track performance and business metrics</p>
+      {/* Header - hidden when embedded */}
+      {!embedded && (
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Reports & Analytics</h1>
+            <p className="text-gray-500">Track performance and business metrics</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <GlobalDateRangePicker
+              value={dateRange}
+              onChange={setDateRange}
+              showComparison={true}
+            />
+            <button
+              onClick={() => navigate('/analytics/reports/new')}
+              className="flex items-center space-x-2 px-4 py-2.5 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg hover:opacity-90 transition-opacity shadow-md"
+            >
+              <Plus className="w-4 h-4" />
+              <span className="hidden sm:inline">Create Report</span>
+            </button>
+            <button
+              onClick={() => navigate('/analytics/reports/advanced/new')}
+              className="flex items-center space-x-2 px-4 py-2.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 transition-colors"
+            >
+              <FileText className="w-4 h-4" />
+              <span className="hidden sm:inline">Advanced Editor</span>
+            </button>
+          </div>
         </div>
-        <div className="flex items-center gap-3">
-          <GlobalDateRangePicker
-            value={dateRange}
-            onChange={setDateRange}
-            showComparison={true}
-          />
-          <button
-            onClick={() => navigate('/reports/builder')}
-            className="flex items-center space-x-2 px-4 py-2.5 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg hover:opacity-90 transition-opacity shadow-md"
-          >
-            <Plus className="w-4 h-4" />
-            <span className="hidden sm:inline">Create Report</span>
-          </button>
-        </div>
-      </div>
+      )}
 
       {/* Tab Navigation */}
       <div className="flex space-x-1 bg-gray-100 p-1 rounded-xl w-fit">
         {[
           { id: 'dashboard', label: 'Dashboard', icon: BarChart3 },
-          { id: 'dashboards', label: 'Dashboards', icon: LayoutGrid, link: '/dashboards' },
+          !embedded ? { id: 'dashboards', label: 'Dashboards', icon: LayoutGrid, link: '/analytics/dashboards' } : null,
           { id: 'saved', label: 'Saved Reports', icon: FileText },
           { id: 'favorites', label: 'Favorites', icon: Star },
-        ].map((tab) => {
+        ].filter(Boolean).map((tab) => {
           const Icon = tab.icon;
           if (tab.link) {
             return (
@@ -256,49 +296,59 @@ export default function Reports() {
 
       {activeTab === 'dashboard' && (
         <>
-          {/* KPI Cards - AccuLynx style */}
+          {/* KPI Cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <KPICard
               title="Pipeline Count"
-              value={kpiMetrics.openCount || stageCounts?.open || 0}
+              value={kpiMetrics.activeDeals || kpiMetrics.pipelineCount || 0}
               format="number"
               icon={Target}
               iconColor="from-blue-500 to-blue-600"
-              loading={isLoading}
               subtitle={getDateRangeLabel()}
+              source={kpiMeta.source || 'native'}
+              verifiedStatus={verification.status}
+              verifiedReason={verification.reason}
+              emptyStateContext={buildEmptyStateContext('Pipeline Count')}
             />
             <KPICard
               title="Pipeline Volume"
-              value={kpiMetrics.totalAmount || 0}
+              value={kpiMetrics.pipelineVolume || 0}
               format="currency"
               icon={DollarSign}
               iconColor="from-green-500 to-emerald-600"
-              loading={isLoading}
               subtitle={getDateRangeLabel()}
+              source={kpiMeta.source || 'native'}
+              verifiedStatus={verification.status}
+              verifiedReason={verification.reason}
+              emptyStateContext={buildEmptyStateContext('Pipeline Volume')}
             />
             <KPICard
               title="Balance Due"
               value={kpiMetrics.balanceDue || 0}
               format="currency"
-              icon={Building2}
+              icon={DollarSign}
               iconColor="from-purple-500 to-purple-600"
-              loading={isLoading}
               subtitle={getDateRangeLabel()}
+              source={kpiMeta.source || 'native'}
+              verifiedStatus={verification.status}
+              verifiedReason={verification.reason}
+              emptyStateContext={buildEmptyStateContext('Balance Due')}
             />
             <KPICard
               title="Jobs on Hold"
               value={kpiMetrics.onHoldCount || 0}
               format="number"
-              icon={PauseCircle}
+              icon={Target}
               iconColor="from-orange-500 to-orange-600"
-              loading={isLoading}
               subtitle={getDateRangeLabel()}
+              source={kpiMeta.source || 'native'}
+              verifiedStatus={verification.status}
+              verifiedReason={verification.reason}
+              emptyStateContext={buildEmptyStateContext('Jobs on Hold')}
             />
           </div>
 
-          {/* Charts Grid - Row 1 */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Pipeline by Status */}
             <BarChartWidget
               data={stageChartData}
               dataKey="count"
@@ -307,10 +357,8 @@ export default function Reports() {
               subtitle={getDateRangeLabel()}
               layout="vertical"
               height={350}
-              loading={isLoading}
+              emptyStateContext={buildEmptyStateContext('Pipeline by Status', { rowCount: stageChartData.length })}
             />
-
-            {/* Pipeline by Sales Rep */}
             <BarChartWidget
               data={repChartData}
               dataKey="value"
@@ -320,149 +368,156 @@ export default function Reports() {
               formatValue={formatCurrency}
               layout="vertical"
               height={350}
-              loading={isLoading}
+              emptyStateContext={buildEmptyStateContext('Pipeline by Sales Rep', { rowCount: repChartData.length })}
             />
-          </div>
-
-          {/* Time Series Chart */}
-          <LineChartWidget
-            data={timeSeriesData}
-            lines={[
-              { dataKey: 'count', name: 'Job Count', color: 'primary' },
-              { dataKey: 'amount', name: 'Volume ($)', color: 'success' },
-            ]}
-            xAxisKey="month"
-            formatXAxis={(v) => v}
-            title="Monthly Trends"
-            subtitle="Jobs created and volume over time"
-            formatValue={(v) => typeof v === 'number' && v > 1000 ? formatCurrency(v) : v}
-            height={300}
-            showArea
-            loading={isLoading}
-          />
-
-          {/* More Charts Row */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* By State */}
-            <BarChartWidget
-              data={stateChartData}
-              dataKey="count"
-              nameKey="name"
-              title="Jobs by State"
-              height={250}
-              loading={isLoading}
-            />
-
-            {/* Quick Stats - 2 column span */}
-            <div className="lg:col-span-2 bg-white rounded-xl shadow-sm border border-gray-100 p-5">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">Quick Stats</h3>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {[
-                  { label: 'New Leads', value: leadCounts?.NEW || 0, color: 'bg-blue-100 text-blue-700' },
-                  { label: 'Closed Won', value: kpiMetrics.closedWon || 0, color: 'bg-green-100 text-green-700' },
-                  { label: 'Closed Lost', value: kpiMetrics.closedLost || 0, color: 'bg-red-100 text-red-700' },
-                  { label: 'Conversion Rate', value: `${kpiMetrics.conversionRate || 0}%`, color: 'bg-purple-100 text-purple-700', isFormatted: true },
-                ].map((stat) => (
-                  <div key={stat.label} className="text-center p-4 rounded-xl bg-gray-50 hover:bg-gray-100 transition-colors">
-                    <p className="text-2xl font-bold text-gray-900">{stat.isFormatted ? stat.value : formatNumber(stat.value)}</p>
-                    <p className="text-xs font-medium text-gray-500 mt-1">{stat.label}</p>
-                  </div>
-                ))}
-              </div>
-
-              {/* Lead Funnel Summary */}
-              <div className="mt-6 pt-6 border-t border-gray-100">
-                <h4 className="text-sm font-semibold text-gray-700 mb-3">Lead Status Breakdown</h4>
-                <div className="flex flex-wrap gap-3">
-                  {[
-                    { label: 'New', value: leadCounts?.NEW || 0, bg: 'bg-blue-500' },
-                    { label: 'Contacted', value: leadCounts?.CONTACTED || 0, bg: 'bg-indigo-500' },
-                    { label: 'Qualified', value: leadCounts?.QUALIFIED || 0, bg: 'bg-purple-500' },
-                    { label: 'Nurturing', value: leadCounts?.NURTURING || 0, bg: 'bg-orange-500' },
-                    { label: 'Converted', value: leadCounts?.CONVERTED || 0, bg: 'bg-green-500' },
-                  ].map((item) => (
-                    <div key={item.label} className="flex items-center space-x-2">
-                      <div className={`w-3 h-3 rounded-full ${item.bg}`} />
-                      <span className="text-sm text-gray-600">{item.label}:</span>
-                      <span className="text-sm font-semibold text-gray-900">{formatNumber(item.value)}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
           </div>
         </>
       )}
 
       {activeTab === 'saved' && (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100">
-          <div className="p-5 border-b border-gray-100 flex items-center justify-between">
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-gray-900">Saved Reports</h2>
-            <div className="flex items-center space-x-2">
-              <button className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
-                <Filter className="w-4 h-4 text-gray-500" />
-              </button>
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2 text-sm text-gray-500">
+                <span>Rows</span>
+                <select
+                  value={savedPageSize}
+                  onChange={(event) => setSavedPageSize(parseInt(event.target.value, 10))}
+                  className="rounded-lg border border-gray-200 bg-white px-2 py-1 text-sm text-gray-700"
+                >
+                  {[25, 50, 100].map((size) => (
+                    <option key={size} value={size}>{size}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center gap-2 text-sm text-gray-500">
+                <span>{savedStart}-{savedEnd} of {savedTotal}</span>
+                <button
+                  type="button"
+                  onClick={() => setSavedPage((prev) => Math.max(1, prev - 1))}
+                  disabled={savedPage === 1 || savedReportsLoading}
+                  className="px-2 py-1 rounded-lg border border-gray-200 text-gray-600 disabled:opacity-50"
+                >
+                  Prev
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSavedPage((prev) => Math.min(savedTotalPages, prev + 1))}
+                  disabled={savedPage >= savedTotalPages || savedReportsLoading}
+                  className="px-2 py-1 rounded-lg border border-gray-200 text-gray-600 disabled:opacity-50"
+                >
+                  Next
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSavedView('grid')}
+                  className={`p-2 rounded-lg ${savedView === 'grid' ? 'bg-indigo-100 text-indigo-700' : 'text-gray-500 hover:bg-gray-100'}`}
+                >
+                  <LayoutGrid className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSavedView('list')}
+                  className={`p-2 rounded-lg ${savedView === 'list' ? 'bg-indigo-100 text-indigo-700' : 'text-gray-500 hover:bg-gray-100'}`}
+                >
+                  <List className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           </div>
 
-          {/* Placeholder for saved reports */}
-          <div className="divide-y divide-gray-100">
-            {[
-              { id: '1', name: 'Pipeline Overview', category: 'Sales', lastRun: '2 hours ago' },
-              { id: '2', name: 'Monthly Revenue', category: 'Financial', lastRun: 'Yesterday' },
-              { id: '3', name: 'Lead Conversion', category: 'Marketing', lastRun: '3 days ago' },
-              { id: '4', name: 'Sales Performance', category: 'Sales', lastRun: 'Last week' },
-            ].map((report) => (
-              <Link
-                key={report.id}
-                to={`/reports/${report.id}`}
-                className="flex items-center justify-between p-4 hover:bg-gray-50 transition-colors"
+          {savedReportsLoading ? (
+            <div className="text-sm text-gray-500">Loading saved reports...</div>
+          ) : savedReports.length === 0 ? (
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-12 text-center">
+              <FileText className="w-12 h-12 mx-auto mb-4 text-gray-300" />
+              <h3 className="text-lg font-medium text-gray-900">No saved reports yet</h3>
+              <p className="text-sm text-gray-500 mt-2">Create your first report to get started</p>
+              <button
+                onClick={() => navigate('/analytics/reports/new')}
+                className="mt-4 px-6 py-2 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg hover:opacity-90"
               >
-                <div className="flex items-center space-x-4">
-                  <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-panda-primary to-panda-secondary flex items-center justify-center">
-                    <BarChart3 className="w-5 h-5 text-white" />
+                Create Report
+              </button>
+            </div>
+          ) : savedView === 'list' ? (
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+              <table className="w-full">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider px-4 py-3">Report</th>
+                    <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider px-4 py-3">Source</th>
+                    <th className="text-left text-xs font-semibold text-gray-500 uppercase tracking-wider px-4 py-3">Status</th>
+                    <th className="text-right text-xs font-semibold text-gray-500 uppercase tracking-wider px-4 py-3">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {savedReports.map((report) => (
+                    <tr key={report.id} className="border-t border-gray-100">
+                      <td className="px-4 py-3">
+                        <div className="font-medium text-gray-900">{report.name}</div>
+                        {report.description && (
+                          <div className="text-xs text-gray-500 line-clamp-1">{report.description}</div>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <DataSourceBadge source={deriveDataSource(report)} />
+                      </td>
+                      <td className="px-4 py-3">
+                        <VerifiedBadge status={verification.status} reason={verification.reason} />
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <button
+                          onClick={() => navigate(`/analytics/reports/${report.id}`)}
+                          className="text-sm text-indigo-600 hover:text-indigo-700"
+                        >
+                          View
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {savedReports.map((report) => (
+                <div key={report.id} className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h3 className="font-semibold text-gray-900">{report.name}</h3>
+                      {report.description && (
+                        <p className="text-sm text-gray-500 mt-1 line-clamp-2">{report.description}</p>
+                      )}
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="font-medium text-gray-900">{report.name}</h3>
-                    <p className="text-sm text-gray-500">{report.category}</p>
+                  <div className="mt-3 flex flex-wrap gap-1">
+                    <DataSourceBadge source={deriveDataSource(report)} />
+                    <VerifiedBadge status={verification.status} reason={verification.reason} />
+                  </div>
+                  <div className="mt-4">
+                    <button
+                      onClick={() => navigate(`/analytics/reports/${report.id}`)}
+                      className="text-sm text-indigo-600 hover:text-indigo-700"
+                    >
+                      View Report
+                    </button>
                   </div>
                 </div>
-                <div className="flex items-center space-x-4">
-                  <div className="text-right">
-                    <p className="text-xs text-gray-400">Last run</p>
-                    <p className="text-sm text-gray-600">{report.lastRun}</p>
-                  </div>
-                  <button className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
-                    <Download className="w-4 h-4 text-gray-400" />
-                  </button>
-                  <ChevronRight className="w-4 h-4 text-gray-400" />
-                </div>
-              </Link>
-            ))}
-          </div>
-
-          <div className="p-4 border-t border-gray-100 bg-gray-50">
-            <button
-              onClick={() => navigate('/reports/builder')}
-              className="w-full py-2 text-sm text-panda-primary font-medium hover:underline"
-            >
-              + Create New Report
-            </button>
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
       {activeTab === 'favorites' && (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-12 text-center">
-          <Star className="w-12 h-12 mx-auto mb-4 text-gray-300" />
-          <h3 className="text-lg font-medium text-gray-900">No favorite reports yet</h3>
-          <p className="text-sm text-gray-500 mt-2">Star reports to add them here for quick access</p>
-          <button
-            onClick={() => setActiveTab('saved')}
-            className="mt-4 px-4 py-2 text-sm text-panda-primary font-medium hover:underline"
-          >
-            Browse saved reports
-          </button>
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-8 text-center">
+          <Star className="w-10 h-10 text-gray-300 mx-auto mb-3" />
+          <h3 className="text-lg font-medium text-gray-900">Favorites coming soon</h3>
+          <p className="text-sm text-gray-500">Pin key reports to access them quickly.</p>
         </div>
       )}
     </div>

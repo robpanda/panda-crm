@@ -10,6 +10,14 @@ const api = axios.create({
   },
 });
 
+// Public (no-auth) API instance for customer portal and other public endpoints
+const publicApi = axios.create({
+  baseURL: API_BASE,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
 // Track refresh state to prevent loops
 let isRefreshing = false;
 let refreshSubscribers = [];
@@ -493,6 +501,13 @@ export const leadsApi = {
     return response.data.data;
   },
 
+  // Create a reply to a lead note
+  async createNoteReply(leadId, noteId, data) {
+    // data: { body, mentions? }
+    const response = await api.post(`/api/leads/${leadId}/notes/${noteId}/replies`, data);
+    return response.data.data;
+  },
+
   // Update a note
   async updateNote(leadId, noteId, data) {
     // data: { title?, body?, isPinned? }
@@ -504,6 +519,54 @@ export const leadsApi = {
   async deleteNote(leadId, noteId) {
     const response = await api.delete(`/api/leads/${leadId}/notes/${noteId}`);
     return response.data.data;
+  },
+
+  // Delete a reply from a lead note
+  async deleteNoteReply(leadId, noteId, replyId) {
+    const response = await api.delete(`/api/leads/${leadId}/notes/${noteId}/replies/${replyId}`);
+    return response.data.data;
+  },
+
+  // Lead Internal Comments
+  async getInternalComments(leadId, params = {}) {
+    const response = await api.get(`/api/leads/${leadId}/internal-comments`, { params });
+    return response.data.data || [];
+  },
+
+  async getInternalCommentsCount(leadId, params = {}) {
+    const response = await api.get(`/api/leads/${leadId}/internal-comments`, { params });
+    const comments = response.data.data || [];
+    return { count: comments.length };
+  },
+
+  async createInternalComment(leadId, data) {
+    const response = await api.post(`/api/leads/${leadId}/internal-comments`, data);
+    return response.data.data;
+  },
+
+  async updateInternalComment(leadId, commentId, data) {
+    const response = await api.put(`/api/leads/${leadId}/internal-comments/${commentId}`, data);
+    return response.data.data;
+  },
+
+  async deleteInternalComment(leadId, commentId) {
+    const response = await api.delete(`/api/leads/${leadId}/internal-comments/${commentId}`);
+    return response.data;
+  },
+
+  async resolveInternalComment(leadId, commentId) {
+    const response = await api.put(`/api/leads/${leadId}/internal-comments/${commentId}`, { isResolved: true });
+    return response.data.data;
+  },
+
+  async unresolveInternalComment(leadId, commentId) {
+    const response = await api.put(`/api/leads/${leadId}/internal-comments/${commentId}`, { isResolved: false });
+    return response.data.data;
+  },
+
+  async getCommentDepartments() {
+    const response = await api.get('/api/leads/comment-departments');
+    return response.data.data || [];
   },
 
   // Toggle pin status on a note (only one pinned at a time)
@@ -875,6 +938,48 @@ export const opportunitiesApi = {
   async toggleNotePin(opportunityId, noteId) {
     const response = await api.post(`/api/opportunities/${opportunityId}/notes/${noteId}/pin`);
     return response.data.data;
+  },
+
+  // Internal Comments
+  async getInternalComments(opportunityId, params = {}) {
+    const response = await api.get(`/api/opportunities/${opportunityId}/internal-comments`, { params });
+    return response.data.data || [];
+  },
+
+  async getInternalCommentsCount(opportunityId, params = {}) {
+    const response = await api.get(`/api/opportunities/${opportunityId}/internal-comments`, { params });
+    const comments = response.data.data || [];
+    return { count: comments.length };
+  },
+
+  async createInternalComment(opportunityId, data) {
+    const response = await api.post(`/api/opportunities/${opportunityId}/internal-comments`, data);
+    return response.data.data;
+  },
+
+  async updateInternalComment(opportunityId, commentId, data) {
+    const response = await api.put(`/api/opportunities/${opportunityId}/internal-comments/${commentId}`, data);
+    return response.data.data;
+  },
+
+  async deleteInternalComment(opportunityId, commentId) {
+    const response = await api.delete(`/api/opportunities/${opportunityId}/internal-comments/${commentId}`);
+    return response.data;
+  },
+
+  async resolveInternalComment(opportunityId, commentId) {
+    const response = await api.put(`/api/opportunities/${opportunityId}/internal-comments/${commentId}`, { isResolved: true });
+    return response.data.data;
+  },
+
+  async unresolveInternalComment(opportunityId, commentId) {
+    const response = await api.put(`/api/opportunities/${opportunityId}/internal-comments/${commentId}`, { isResolved: false });
+    return response.data.data;
+  },
+
+  async getCommentDepartments() {
+    const response = await api.get('/api/opportunities/comment-departments');
+    return response.data.data || [];
   },
 
   // ============================================================================
@@ -2870,10 +2975,92 @@ export const reportsApi = {
     return response.data;
   },
 
+  async getStateMetrics(dateRange = {}, options = {}) {
+    const response = await api.get('/api/analytics/states', {
+      params: { ...dateRange, ...options },
+    });
+    return response.data;
+  },
+
+  async getAnalyticsKpis(dateRange = {}) {
+    try {
+      const [pipeline, revenue, leads] = await Promise.all([
+        api.get('/api/analytics/pipeline', { params: dateRange }),
+        api.get('/api/analytics/revenue', { params: dateRange }),
+        api.get('/api/analytics/leads', { params: dateRange }),
+      ]);
+
+      const pipelineData = pipeline?.data?.data || {};
+      const revenueData = revenue?.data?.data || {};
+      const leadsData = leads?.data?.data || {};
+
+      const pipelineMetrics = pipelineData.metrics || {};
+      const revenueMetrics = revenueData.metrics || {};
+      const leadMetrics = leadsData.metrics || {};
+
+      const onHoldCount = Array.isArray(pipelineData.byStage)
+        ? pipelineData.byStage.reduce((sum, stage) => {
+            if (!stage?.stage) return sum;
+            const key = String(stage.stage).toUpperCase();
+            return key.includes('HOLD') ? sum + (stage.count || 0) : sum;
+          }, 0)
+        : 0;
+
+      return {
+        success: true,
+        data: {
+          metrics: {
+            pipelineCount: pipelineMetrics.totalCount || 0,
+            pipelineVolume: pipelineMetrics.totalAmount || 0,
+            activeDeals: pipelineMetrics.totalCount || 0,
+            balanceDue: revenueMetrics.outstandingBalance || 0,
+            onHoldCount,
+            closedWon: revenueMetrics.closedWonDeals || 0,
+            closedLost: 0,
+            newLeads: leadMetrics.totalCount || 0,
+            winRate: leadMetrics.conversionRate || 0,
+            avgDealSize: revenueMetrics.averageDealSize || 0,
+          },
+          comparison: pipelineData.comparison || null,
+          period: { label: pipelineData.period || 'This Month' },
+          meta: {
+            source: 'native',
+            rowCount: pipelineMetrics.totalCount || 0,
+            computedAt: new Date().toISOString(),
+          },
+        },
+      };
+    } catch (error) {
+      return {
+        success: false,
+        data: {
+          metrics: {},
+          comparison: null,
+          period: { label: 'Unknown' },
+          meta: {
+            source: 'unknown',
+            rowCount: 0,
+            computedAt: new Date().toISOString(),
+          },
+        },
+      };
+    }
+  },
+
   // Saved reports
   async getSavedReports(params = {}) {
-    const response = await api.get('/api/reports', { params });
-    return response.data;
+    try {
+      const response = await api.get('/api/reports/', { params });
+      return response.data;
+    } catch (error) {
+      const status = error?.response?.status;
+      if (status === 403 && params?.includeAll) {
+        const { includeAll, ...safeParams } = params;
+        const fallback = await api.get('/api/reports/', { params: safeParams });
+        return fallback.data;
+      }
+      throw error;
+    }
   },
 
   async getSavedReport(id) {
@@ -2906,18 +3093,18 @@ export const reportsApi = {
     return response.data;
   },
 
-  async exportReport(id, format = 'csv') {
+  async exportReport(id, format = 'csv', params = {}) {
     const response = await api.get(`/api/reports/${id}/export`, {
-      params: { format },
+      params: { format, ...params },
       responseType: 'blob',
     });
     return response.data;
   },
 
   // Dashboards - gracefully handle when backend not deployed yet
-  async getDashboards() {
+  async getDashboards(params = {}) {
     try {
-      const response = await api.get('/api/dashboards');
+      const response = await api.get('/api/dashboards', { params });
       return response.data;
     } catch (error) {
       // Return empty data if API not available
@@ -2929,7 +3116,7 @@ export const reportsApi = {
   async getDashboard(id) {
     try {
       const response = await api.get(`/api/dashboards/${id}`);
-      return response.data.data;
+      return response.data;
     } catch (error) {
       // Return null if API not available
       console.warn('Dashboard API not available');
@@ -2949,6 +3136,70 @@ export const reportsApi = {
 
   async deleteDashboard(id) {
     const response = await api.delete(`/api/dashboards/${id}`);
+    return response.data;
+  },
+};
+
+export const analyticsHealthApi = {
+  async getHealth() {
+    try {
+      const response = await api.get('/api/analytics/health');
+      return response.data;
+    } catch (error) {
+      return {
+        status: 'unknown',
+        summary: { criticalCount: 0, warningCount: 0, lastRunAt: null },
+        checks: [],
+        storage: {
+          available: false,
+          reason: error?.response?.data?.message || error?.message || 'Health unavailable',
+        },
+      };
+    }
+  },
+};
+
+export const insightSchedulesApi = {
+  async getSchedules() {
+    try {
+      const response = await api.get('/api/insight-schedules');
+      return response.data;
+    } catch (error) {
+      return { success: false, data: [] };
+    }
+  },
+};
+
+export const metabaseApi = {
+  async getStatus() {
+    try {
+      const response = await api.get('/api/metabase/status');
+      return response.data;
+    } catch (error) {
+      return { success: false, data: { connected: false } };
+    }
+  },
+
+  async getDashboards() {
+    try {
+      const response = await api.get('/api/metabase/dashboards');
+      return response.data;
+    } catch (error) {
+      return { success: false, data: [] };
+    }
+  },
+
+  async getSettings() {
+    try {
+      const response = await api.get('/api/metabase/settings');
+      return response.data;
+    } catch (error) {
+      return { success: false, data: {} };
+    }
+  },
+
+  async getGuestToken(payload) {
+    const response = await api.post('/api/metabase/guest-token', payload);
     return response.data;
   },
 };
@@ -5684,6 +5935,438 @@ export const orphanedRecordsApi = {
   async getPotentialMatches(id) {
     const response = await api.get(`/api/workflows/orphaned-records/${id}/potential-matches`);
     return response.data;
+  },
+};
+
+// ==========================================
+// PM PORTAL API
+// ==========================================
+export const pmPortalApi = {
+  async getCalendar(month, year) {
+    const response = await api.get('/api/pm-portal/calendar', { params: { month, year } });
+    return response.data;
+  },
+
+  async getProjects(params = {}) {
+    const response = await api.get('/api/pm-portal/projects', { params });
+    return response.data;
+  },
+
+  async getProject(id) {
+    const response = await api.get(`/api/pm-portal/projects/${id}`);
+    return response.data;
+  },
+
+  async getWorkflow(id) {
+    const response = await api.get(`/api/pm-portal/projects/${id}/stages`);
+    return response.data;
+  },
+
+  async updateWorkflowStage(projectId, stageId, data = {}) {
+    const response = await api.put(`/api/pm-portal/projects/${projectId}/stages`, {
+      stage: stageId,
+      ...data,
+    });
+    return response.data;
+  },
+
+  async getMessages(opportunityId, params = {}) {
+    try {
+      const response = await api.get('/api/messages', { params: { opportunityId, ...params } });
+      return response.data;
+    } catch (error) {
+      return { success: false, data: [] };
+    }
+  },
+
+  async sendMessage(opportunityId, data) {
+    const response = await api.post(`/api/opportunities/${opportunityId}/messages`, data);
+    return response.data;
+  },
+
+  async getMaterials() {
+    return { success: true, data: [] };
+  },
+
+  async getPhotos(opportunityId) {
+    try {
+      const project = await api.get(`/api/photocam/projects/opportunity/${opportunityId}`);
+      const projectId = project?.data?.data?.id;
+      if (!projectId) return { success: true, data: [] };
+      const response = await api.get(`/api/photocam/photos/project/${projectId}`);
+      return response.data;
+    } catch (error) {
+      return { success: false, data: [] };
+    }
+  },
+
+  async getFinancials() {
+    return { success: true, data: [] };
+  },
+};
+
+// ==========================================
+// SUBCONTRACTOR PORTAL API
+// ==========================================
+export const subcontractorPortalApi = {
+  async getPortal(token) {
+    const response = await api.get(`/api/subcontractor-portal/${token}`);
+    return response.data;
+  },
+
+  async getWorkOrders(token) {
+    const response = await api.get(`/api/subcontractor-portal/${token}/work-orders`);
+    return response.data;
+  },
+
+  async getPayments(token) {
+    const response = await api.get(`/api/subcontractor-portal/${token}/payments`);
+    return response.data;
+  },
+
+  async getCrews(token) {
+    const response = await api.get(`/api/subcontractor-portal/${token}/crews`);
+    return response.data;
+  },
+
+  async getInvoices(token) {
+    const response = await api.get(`/api/subcontractor-portal/${token}/invoices`);
+    return response.data;
+  },
+
+  async getUnreadCount(token) {
+    const response = await api.get(`/api/subcontractor-portal/${token}/messages/unread`);
+    return response.data;
+  },
+
+  async getMessages(token, laborOrderId) {
+    const response = await api.get(`/api/subcontractor-portal/${token}/work-orders/${laborOrderId}/messages`);
+    return response.data;
+  },
+
+  async getPhotos(token) {
+    const response = await api.get(`/api/subcontractor-portal/${token}/photos`);
+    return response.data;
+  },
+
+  async getWorkOrderDocuments(token, laborOrderId) {
+    const response = await api.get(`/api/subcontractor-portal/${token}/work-orders/${laborOrderId}/documents`);
+    return response.data;
+  },
+
+  async getRates(token) {
+    const response = await api.get(`/api/subcontractor-portal/${token}/rates`);
+    return response.data;
+  },
+
+  async getStandardPricing(token) {
+    const response = await api.get(`/api/subcontractor-portal/${token}/standard-pricing`);
+    return response.data;
+  },
+
+  async getRateChangeRequests(token) {
+    const response = await api.get(`/api/subcontractor-portal/${token}/rate-change-requests`);
+    return response.data;
+  },
+
+  async acceptOrder(token, laborOrderId) {
+    const response = await api.post(`/api/subcontractor-portal/${token}/work-orders/${laborOrderId}/accept`);
+    return response.data;
+  },
+
+  async declineOrder(token, laborOrderId, reason) {
+    const response = await api.post(`/api/subcontractor-portal/${token}/work-orders/${laborOrderId}/decline`, { reason });
+    return response.data;
+  },
+
+  async completeOrder(token, laborOrderId) {
+    const response = await api.post(`/api/subcontractor-portal/${token}/work-orders/${laborOrderId}/complete`);
+    return response.data;
+  },
+
+  async updateCrew(token, crewId, data) {
+    const response = await api.put(`/api/subcontractor-portal/${token}/crews/${crewId}`, data);
+    return response.data;
+  },
+
+  async createCrew(token, data) {
+    const response = await api.post(`/api/subcontractor-portal/${token}/crews`, data);
+    return response.data;
+  },
+
+  async deleteCrew(token, crewId) {
+    const response = await api.delete(`/api/subcontractor-portal/${token}/crews/${crewId}`);
+    return response.data;
+  },
+
+  async assignCrew(token, laborOrderId, crewId) {
+    const response = await api.post(`/api/subcontractor-portal/${token}/work-orders/${laborOrderId}/assign-crew`, { crewId });
+    return response.data;
+  },
+
+  async createInvoice(token, data) {
+    const response = await api.post(`/api/subcontractor-portal/${token}/invoices`, data);
+    return response.data;
+  },
+
+  async submitInvoice(token, invoiceId) {
+    const response = await api.post(`/api/subcontractor-portal/${token}/invoices/${invoiceId}/submit`);
+    return response.data;
+  },
+
+  async sendMessage(token, laborOrderId, message) {
+    const response = await api.post(`/api/subcontractor-portal/${token}/work-orders/${laborOrderId}/messages`, { message });
+    return response.data;
+  },
+
+  async uploadPhotos(token, laborOrderId, files, metadata = {}) {
+    const formData = new FormData();
+    files.forEach((file) => formData.append('photos', file));
+    Object.keys(metadata).forEach((key) => formData.append(key, metadata[key]));
+
+    const response = await api.post(
+      `/api/subcontractor-portal/${token}/work-orders/${laborOrderId}/photos`,
+      formData,
+      {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      }
+    );
+    return response.data;
+  },
+
+  async deletePhoto(token, photoId) {
+    const response = await api.delete(`/api/subcontractor-portal/${token}/photos/${photoId}`);
+    return response.data;
+  },
+
+  async uploadWorkOrderDocument(token, laborOrderId, file, metadata = {}) {
+    const formData = new FormData();
+    formData.append('file', file);
+    Object.keys(metadata).forEach((key) => formData.append(key, metadata[key]));
+
+    const response = await api.post(
+      `/api/subcontractor-portal/${token}/work-orders/${laborOrderId}/documents`,
+      formData,
+      {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      }
+    );
+    return response.data;
+  },
+
+  async submitRateChangeRequest(token, data) {
+    const response = await api.post(`/api/subcontractor-portal/${token}/rate-change-requests`, data);
+    return response.data;
+  },
+
+  async withdrawRateChangeRequest(token, requestId) {
+    const response = await api.post(`/api/subcontractor-portal/${token}/rate-change-requests/${requestId}/withdraw`);
+    return response.data;
+  },
+
+  async respondToCounterOffer(token, requestId, data) {
+    const response = await api.post(`/api/subcontractor-portal/${token}/rate-change-requests/${requestId}/counter`, data);
+    return response.data;
+  },
+};
+
+// Customer Portal API (Public - No Auth Required)
+export const customerPortalApi = {
+  // Get project info by portal token
+  async getProject(token) {
+    try {
+      const response = await publicApi.get(`/api/portal/${token}`);
+      return response.data;
+    } catch (error) {
+      if (error?.response?.status === 404) {
+        const response = await publicApi.get(`/api/opportunities/portal/${token}`);
+        return response.data;
+      }
+      throw error;
+    }
+  },
+
+  // Get project info by job id (fallback for legacy links)
+  async getProjectByJobId(jobId) {
+    const response = await publicApi.get(`/api/portal/job/${jobId}`);
+    return response.data;
+  },
+
+  // Get workflow stages for timeline
+  async getStages(token) {
+    try {
+      const response = await publicApi.get(`/api/portal/${token}/stages`);
+      return response.data;
+    } catch (error) {
+      if (error?.response?.status === 404) {
+        const response = await publicApi.get(`/api/opportunities/portal/${token}/stages`);
+        return response.data;
+      }
+      throw error;
+    }
+  },
+
+  // Get photo galleries
+  async getGalleries(token) {
+    try {
+      const response = await publicApi.get(`/api/portal/${token}/galleries`);
+      return response.data;
+    } catch (error) {
+      if (error?.response?.status === 404) {
+        const response = await publicApi.get(`/api/opportunities/portal/${token}/galleries`);
+        return response.data;
+      }
+      throw error;
+    }
+  },
+
+  // Send message to PM
+  async sendMessage(token, message, senderName, senderPhone) {
+    try {
+      const response = await publicApi.post(`/api/portal/${token}/message`, {
+        message,
+        senderName,
+        senderPhone,
+      });
+      return response.data;
+    } catch (error) {
+      if (error?.response?.status === 404) {
+        const response = await publicApi.post(`/api/opportunities/portal/${token}/message`, {
+          message,
+          senderName,
+          senderPhone,
+        });
+        return response.data;
+      }
+      throw error;
+    }
+  },
+
+  // Get customer's appointments
+  async getAppointments(token) {
+    try {
+      const response = await publicApi.get(`/api/portal/${token}/appointments`);
+      return response.data;
+    } catch (error) {
+      if (error?.response?.status === 404) {
+        const response = await publicApi.get(`/api/opportunities/portal/${token}/appointments`);
+        return response.data;
+      }
+      throw error;
+    }
+  },
+
+  // Get available time slots
+  async getAvailableSlots(token, startDate, endDate, workTypeId) {
+    const params = startDate && typeof startDate === 'object'
+      ? startDate
+      : { startDate, endDate, workTypeId };
+    try {
+      const response = await publicApi.get(`/api/portal/${token}/available-slots`, { params });
+      return response.data;
+    } catch (error) {
+      if ([404, 401, 403].includes(error?.response?.status)) {
+        const response = await publicApi.get(`/api/opportunities/portal/${token}/available-slots`, { params });
+        return response.data;
+      }
+      throw error;
+    }
+  },
+
+  // Book a new appointment
+  async bookAppointment(token, bookingData) {
+    try {
+      const response = await publicApi.post(`/api/portal/${token}/book`, bookingData);
+      return response.data;
+    } catch (error) {
+      if (error?.response?.status === 404) {
+        const response = await publicApi.post(`/api/opportunities/portal/${token}/book`, bookingData);
+        return response.data;
+      }
+      throw error;
+    }
+  },
+
+  // Reschedule existing appointment
+  async rescheduleAppointment(token, appointmentId, rescheduleData) {
+    try {
+      const response = await publicApi.post(
+        `/api/portal/${token}/appointments/${appointmentId}/reschedule`,
+        rescheduleData
+      );
+      return response.data;
+    } catch (error) {
+      if (error?.response?.status === 404) {
+        const response = await publicApi.post(
+          `/api/opportunities/portal/${token}/appointments/${appointmentId}/reschedule`,
+          rescheduleData
+        );
+        return response.data;
+      }
+      throw error;
+    }
+  },
+
+  // Cancel appointment
+  async cancelAppointment(token, appointmentId, reason) {
+    try {
+      const response = await publicApi.post(
+        `/api/portal/${token}/appointments/${appointmentId}/cancel`,
+        { reason }
+      );
+      return response.data;
+    } catch (error) {
+      if (error?.response?.status === 404) {
+        const response = await publicApi.post(
+          `/api/opportunities/portal/${token}/appointments/${appointmentId}/cancel`,
+          { reason }
+        );
+        return response.data;
+      }
+      throw error;
+    }
+  },
+
+  // Get Stripe payment link
+  async getPaymentLink(token) {
+    try {
+      const response = await publicApi.get(`/api/portal/${token}/payment-link`);
+      return response.data;
+    } catch (error) {
+      if (error?.response?.status === 404) {
+        const response = await publicApi.get(`/api/opportunities/portal/${token}/payment-link`);
+        return response.data;
+      }
+      throw error;
+    }
+  },
+
+  // Get invoices + payments summary
+  async getInvoices(token) {
+    try {
+      const response = await publicApi.get(`/api/portal/${token}/payments`);
+      return response.data;
+    } catch (error) {
+      if (error?.response?.status === 404) {
+        const response = await publicApi.get(`/api/opportunities/portal/${token}/payments`);
+        return response.data;
+      }
+      throw error;
+    }
+  },
+
+  // Get payments info
+  async getPayments(token) {
+    try {
+      const response = await publicApi.get(`/api/portal/${token}/payments`);
+      return response.data;
+    } catch (error) {
+      if (error?.response?.status === 404) {
+        const response = await publicApi.get(`/api/opportunities/portal/${token}/payments`);
+        return response.data;
+      }
+      throw error;
+    }
   },
 };
 

@@ -18,6 +18,12 @@ import {
   FileText,
   Users,
   Shield,
+  CalendarDays,
+  CreditCard,
+  Wrench,
+  Bot,
+  Gift,
+  LifeBuoy,
   PanelLeftClose,
   PanelLeft,
 } from 'lucide-react';
@@ -25,18 +31,27 @@ import {
 // Setup categories with their routes - alphabetized
 const SETUP_CATEGORIES = [
   { id: 'audit', name: 'Audit Logs', icon: ClipboardList, description: 'System activity and change tracking', path: '/admin/audit' },
-  { id: 'workflows', name: 'Workflows', icon: Workflow, description: 'Automated business processes and triggers', path: '/admin/workflows' },
   { id: 'bamboogli', name: 'Bamboogli', icon: MessageSquare, description: 'SMS and email messaging', path: '/admin/bamboogli' },
   { id: 'callcenter', name: 'Call Center', icon: Phone, description: 'Call center configuration', path: '/admin/call-center' },
-  { id: 'commissions', name: 'Commission Engine', icon: DollarSign, description: 'Commission rules and calculations', path: '/admin/commissions' },
+  { id: 'commission-engine', name: 'Commission Engine', icon: DollarSign, description: 'Commission rules and calculations', path: '/admin/commission-engine' },
+  { id: 'commissions', name: 'Commissions', icon: DollarSign, description: 'Commission reporting and payouts', path: '/admin/commissions' },
   { id: 'deleted', name: 'Deleted Records', icon: Trash2, description: 'Restore deleted records', path: '/admin/deleted-records' },
+  { id: 'google-calendar', name: 'Google Calendar', icon: CalendarDays, description: 'Calendar sync settings', path: '/admin/google-calendar' },
   { id: 'help', name: 'Help Admin', icon: HelpCircle, description: 'Help articles and documentation', path: '/admin/help' },
   { id: 'integrations', name: 'Integrations', icon: Link2, description: 'Third-party integrations', path: '/admin/integrations' },
   { id: 'modules', name: 'Module Manager', icon: Layers, description: 'Configure system modules', path: '/admin/setup' },
   { id: 'pandasign', name: 'PandaSign', icon: FileSignature, description: 'E-signature settings', path: '/admin/pandasign' },
+  { id: 'payment', name: 'Payment Center', icon: CreditCard, description: 'Payments and invoice workflows', path: '/admin/payment-engine' },
+  { id: 'referral', name: 'Referral Program', icon: Gift, description: 'Referral settings and payouts', path: '/admin/referral' },
   { id: 'ringcentral', name: 'RingCentral', icon: PhoneCall, description: 'Phone system integration', path: '/admin/ringcentral' },
+  { id: 'roles', name: 'Roles & Permissions', icon: Shield, description: 'Access control and roles', path: '/admin/roles' },
+  { id: 'service-admin', name: 'Schedule Admin', icon: Wrench, description: 'Scheduling and service controls', path: '/admin/service-admin' },
+  { id: 'support', name: 'Support Admin', icon: LifeBuoy, description: 'Support ticket management', path: '/admin/support' },
+  { id: 'support-tickets', name: 'Support Tickets', icon: LifeBuoy, description: 'Ticket inbox and responses', path: '/admin/support/tickets' },
   { id: 'templates', name: 'Templates', icon: FileText, description: 'Email and SMS templates', path: '/admin/templates' },
-  { id: 'users', name: 'Users & Permissions', icon: Users, description: 'User management and roles', path: '/admin/users' },
+  { id: 'training-bot', name: 'Training Bot', icon: Bot, description: 'Training bot analytics', path: '/admin/training-bot' },
+  { id: 'users', name: 'Users', icon: Users, description: 'User management', path: '/admin/users' },
+  { id: 'workflows', name: 'Workflows', icon: Workflow, description: 'Automated business processes and triggers', path: '/admin/workflows' },
 ];
 
 

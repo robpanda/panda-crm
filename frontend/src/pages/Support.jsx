@@ -62,7 +62,7 @@ export default function Support() {
   const loadTickets = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/support/tickets');
+      const response = await api.get('/api/support/tickets');
       const ticketData = response.data.tickets || [];
       setTickets(ticketData);
 
@@ -83,7 +83,7 @@ export default function Support() {
 
   const handleCreateTicket = async (ticketData) => {
     try {
-      await api.post('/support/tickets', ticketData);
+      await api.post('/api/support/tickets', ticketData);
       setShowCreateModal(false);
       loadTickets();
     } catch (error) {

@@ -2,12 +2,13 @@ import {
   PieChart,
   Pie,
   Cell,
-  Tooltip,
   ResponsiveContainer,
-  Legend,
+  Tooltip,
+  Legend
 } from 'recharts';
 import { ExternalLink } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import EmptyStateDiagnosticsLink from '../../analytics/EmptyStateDiagnosticsLink';
 
 const COLORS = [
   '#667eea', '#764ba2', '#4ade80', '#f59e0b', '#ef4444',
@@ -22,15 +23,13 @@ export default function PieChartWidget({
   title,
   subtitle,
   formatValue = (v) => v,
-  height = 300,
   showLegend = true,
-  innerRadius = 0,
-  outerRadius = '80%',
+  height = 300,
+  innerRadius = 0,  // 0 for pie, >0 for donut
   loading = false,
-  showLabels = false,
   reportId,  // Optional report ID for "View Report" link
   reportFilter, // Optional filter to apply when navigating
-  onSliceClick, // Optional click handler for individual slices
+  emptyStateContext,
 }) {
   const navigate = useNavigate();
 
@@ -43,46 +42,20 @@ export default function PieChartWidget({
       });
     }
     const queryString = params.toString();
-    navigate(`/reports/${reportId}${queryString ? `?${queryString}` : ''}`);
+    navigate(`/analytics/reports/${reportId}${queryString ? `?${queryString}` : ''}`);
   };
+
   const CustomTooltip = ({ active, payload }) => {
     if (!active || !payload?.length) return null;
 
-    const entry = payload[0];
-    const total = data.reduce((sum, item) => sum + (item[dataKey] || 0), 0);
-    const percentage = total > 0 ? ((entry.value / total) * 100).toFixed(1) : 0;
-
+    const data = payload[0];
     return (
       <div className="bg-white p-3 rounded-lg shadow-xl border border-gray-100">
-        <p className="text-sm font-semibold text-gray-900 mb-1">{entry.name}</p>
+        <p className="text-sm font-semibold text-gray-900 mb-1">{data.name}</p>
         <p className="text-sm text-gray-600">
-          Value: <span className="font-medium">{formatValue(entry.value)}</span>
-        </p>
-        <p className="text-sm text-gray-600">
-          Share: <span className="font-medium">{percentage}%</span>
+          {formatValue(data.value)} ({data.payload.percentage}%)
         </p>
       </div>
-    );
-  };
-
-  const renderLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent, name }) => {
-    if (percent < 0.05) return null; // Don't show labels for small slices
-    const RADIAN = Math.PI / 180;
-    const radius = innerRadius + (outerRadius - innerRadius) * 0.5;
-    const x = cx + radius * Math.cos(-midAngle * RADIAN);
-    const y = cy + radius * Math.sin(-midAngle * RADIAN);
-
-    return (
-      <text
-        x={x}
-        y={y}
-        fill="white"
-        textAnchor="middle"
-        dominantBaseline="central"
-        className="text-xs font-medium"
-      >
-        {`${(percent * 100).toFixed(0)}%`}
-      </text>
     );
   };
 
@@ -95,8 +68,8 @@ export default function PieChartWidget({
             <div className="h-4 bg-gray-100 rounded w-1/2" />
           </div>
         )}
-        <div className="p-5 flex items-center justify-center">
-          <div className="w-48 h-48 bg-gray-100 rounded-full" />
+        <div className="p-5">
+          <div className="h-64 bg-gray-100 rounded-full" />
         </div>
       </div>
     );
@@ -111,12 +84,22 @@ export default function PieChartWidget({
             {subtitle && <p className="text-sm text-gray-500 mt-1">{subtitle}</p>}
           </div>
         )}
-        <div className="p-5 flex items-center justify-center h-64">
+        <div className="p-5 flex flex-col items-center justify-center h-64 gap-2">
           <p className="text-gray-400">No data available</p>
+          {emptyStateContext && (
+            <EmptyStateDiagnosticsLink context={emptyStateContext} />
+          )}
         </div>
       </div>
     );
   }
+
+  // Calculate percentages
+  const total = data.reduce((sum, item) => sum + (item[dataKey] || 0), 0);
+  const dataWithPercentages = data.map(item => ({
+    ...item,
+    percentage: total > 0 ? ((item[dataKey] || 0) / total * 100).toFixed(1) : 0
+  }));
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-100">
@@ -141,33 +124,31 @@ export default function PieChartWidget({
         <ResponsiveContainer width="100%" height={height}>
           <PieChart>
             <Pie
-              data={data}
+              data={dataWithPercentages}
               cx="50%"
               cy="50%"
               innerRadius={innerRadius}
-              outerRadius={outerRadius}
+              outerRadius={height / 2.5}
+              fill="#8884d8"
               dataKey={dataKey}
               nameKey={nameKey}
-              label={showLabels ? renderLabel : false}
-              labelLine={false}
+              paddingAngle={2}
             >
-              {data.map((entry, index) => (
+              {dataWithPercentages.map((entry, index) => (
                 <Cell
                   key={`cell-${index}`}
-                  fill={entry.color || COLORS[index % COLORS.length]}
+                  fill={COLORS[index % COLORS.length]}
                 />
               ))}
             </Pie>
             <Tooltip content={<CustomTooltip />} />
             {showLegend && (
               <Legend
-                layout="vertical"
-                align="right"
-                verticalAlign="middle"
-                iconType="circle"
-                iconSize={10}
+                wrapperStyle={{ paddingTop: 20 }}
                 formatter={(value, entry) => (
-                  <span className="text-sm text-gray-700">{value}</span>
+                  <span style={{ color: '#374151' }}>
+                    {value} ({entry.payload.percentage}%)
+                  </span>
                 )}
               />
             )}
