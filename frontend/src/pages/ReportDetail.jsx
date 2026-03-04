@@ -1,20 +1,27 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { reportsApi } from '../services/api';
-import { GlobalDateRangePicker, parseDateRange, KPICard, BarChartWidget, LineChartWidget } from '../components/reports';
+import { GlobalDateRangePicker } from '../components/reports';
+import { useAnalyticsBadgeContext } from '../components/analytics/AnalyticsBadgeContext';
+import { deriveDataSource } from '../utils/analyticsSource';
+import { toAnalyticsDateParams } from '../utils/analyticsDateRange';
+import { formatDateMDY } from '../utils/formatters';
+import KPICard from '../components/reports/KPICard';
+import BarChartWidget from '../components/reports/charts/BarChartWidget';
+import LineChartWidget from '../components/reports/charts/LineChartWidget';
+import TableWidget from '../components/reports/charts/TableWidget';
 
 export default function ReportDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const analyticsBadges = useAnalyticsBadgeContext();
+  const verification = analyticsBadges?.verification || { status: 'unknown', reason: 'Verification unavailable.' };
 
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [report, setReport] = useState(null);
   const [data, setData] = useState(null);
-  const [dateRange, setDateRange] = useState('thisMonth');
-  const [customStart, setCustomStart] = useState(null);
-  const [customEnd, setCustomEnd] = useState(null);
-  const [includeComparison, setIncludeComparison] = useState(false);
+  const [dateRange, setDateRange] = useState({ preset: 'THIS_MONTH' });
 
   useEffect(() => {
     loadReport();
@@ -23,14 +30,10 @@ export default function ReportDetail() {
   const loadReport = async () => {
     try {
       setLoading(true);
-      const response = await reportsApi.getReport(id);
-      if (response.success) {
-        setReport(response.data);
-        // Auto-run report if it has a default date range
-        if (response.data.defaultDateRange) {
-          setDateRange(response.data.defaultDateRange);
-          runReport(response.data);
-        }
+      const response = await reportsApi.getSavedReport(id);
+      const reportData = response?.data || response;
+      if (reportData) {
+        setReport(reportData);
       }
     } catch (error) {
       console.error('Failed to load report:', error);
@@ -44,15 +47,14 @@ export default function ReportDetail() {
 
     try {
       setRunning(true);
+      const params = toAnalyticsDateParams(dateRange);
       const response = await reportsApi.runReport(reportConfig.id, {
-        dateRange,
-        customStart: dateRange === 'custom' ? customStart : undefined,
-        customEnd: dateRange === 'custom' ? customEnd : undefined,
-        includeComparison,
+        ...params,
+        includeComparison: Boolean(dateRange?.comparison),
       });
 
-      if (response.success) {
-        setData(response.data);
+      if (response?.success || response?.data) {
+        setData(response.data || response);
       }
     } catch (error) {
       console.error('Failed to run report:', error);
@@ -63,7 +65,8 @@ export default function ReportDetail() {
 
   const handleExport = async (format) => {
     try {
-      await reportsApi.exportReport(id, format, { dateRange, customStart, customEnd });
+      const params = toAnalyticsDateParams(dateRange);
+      await reportsApi.exportReport(id, format, params);
     } catch (error) {
       console.error('Failed to export report:', error);
     }
@@ -78,11 +81,30 @@ export default function ReportDetail() {
     }
   };
 
-  const handleDateRangeChange = (newRange, start, end) => {
-    setDateRange(newRange);
-    setCustomStart(start);
-    setCustomEnd(end);
-  };
+  const dateRangeLabel = useMemo(() => {
+    const presets = {
+      ALL_DATA: 'All Data',
+      TODAY: 'Today',
+      YESTERDAY: 'Yesterday',
+      THIS_WEEK: 'This Week',
+      LAST_WEEK: 'Last Week',
+      THIS_MONTH: 'This Month',
+      LAST_MONTH: 'Last Month',
+      THIS_YEAR: 'This Year',
+      LAST_YEAR: 'Last Year',
+      ROLLING_7: 'Rolling 7 Days',
+      ROLLING_30: 'Rolling 30 Days',
+      ROLLING_90: 'Rolling 90 Days',
+      ROLLING_365: 'Rolling 365 Days',
+    };
+    if (dateRange?.preset === 'CUSTOM' && dateRange?.startDate && dateRange?.endDate) {
+      return `${formatDateMDY(dateRange.startDate)} - ${formatDateMDY(dateRange.endDate)}`;
+    }
+    if (dateRange?.preset === 'ROLLING_CUSTOM' && dateRange?.rollingDays) {
+      return `Rolling ${dateRange.rollingDays} Days`;
+    }
+    return presets[dateRange?.preset] || 'Custom Range';
+  }, [dateRange]);
 
   if (loading) {
     return (
@@ -97,7 +119,7 @@ export default function ReportDetail() {
       <div className="p-6 text-center">
         <div className="text-gray-500 mb-4">Report not found</div>
         <button
-          onClick={() => navigate('/reports')}
+          onClick={() => navigate('/analytics/reports')}
           className="text-panda-primary hover:underline"
         >
           Back to Reports
@@ -106,7 +128,17 @@ export default function ReportDetail() {
     );
   }
 
-  const dateRangeInfo = parseDateRange(dateRange, { customStart, customEnd });
+  const emptyStateContext = {
+    title: report?.name || 'Report',
+    source: deriveDataSource(report),
+    verifiedStatus: verification.status,
+    verifiedReason: verification.reason,
+    failedChecks: verification.failedChecks || [],
+    rowCount: data?.rowCount ?? data?.rows?.length ?? 0,
+    filters: {
+      'Date Range': dateRangeLabel,
+    },
+  };
 
   return (
     <div className="p-6">
@@ -115,7 +147,7 @@ export default function ReportDetail() {
         <div>
           <div className="flex items-center gap-3 mb-2">
             <button
-              onClick={() => navigate('/reports')}
+              onClick={() => navigate('/analytics/reports')}
               className="text-gray-400 hover:text-gray-600"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -139,10 +171,16 @@ export default function ReportDetail() {
 
         <div className="flex items-center gap-3">
           <button
-            onClick={() => navigate(`/reports/builder/${id}`)}
+            onClick={() => navigate(`/analytics/reports/${id}/edit`)}
             className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
           >
             Edit
+          </button>
+          <button
+            onClick={() => navigate(`/analytics/reports/advanced/${id}`)}
+            className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
+          >
+            Advanced
           </button>
           <div className="relative group">
             <button className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50">
@@ -172,20 +210,9 @@ export default function ReportDetail() {
           <div className="flex items-center gap-4">
             <GlobalDateRangePicker
               value={dateRange}
-              onChange={handleDateRangeChange}
-              customStart={customStart}
-              customEnd={customEnd}
+              onChange={setDateRange}
+              showComparison={true}
             />
-
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={includeComparison}
-                onChange={(e) => setIncludeComparison(e.target.checked)}
-                className="rounded text-panda-primary focus:ring-panda-primary"
-              />
-              <span className="text-sm text-gray-600">Compare to previous period</span>
-            </label>
           </div>
 
           <button
@@ -207,22 +234,20 @@ export default function ReportDetail() {
       {/* Results */}
       {data && (
         <div className="space-y-6">
-          {/* Date range label */}
           <div className="text-sm text-gray-500">
-            Showing data for: {dateRangeInfo.label}
+            Showing data for: {dateRangeLabel}
           </div>
 
-          {/* Chart or Table based on report type */}
           {report.chartType === 'KPI' && (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              {data.metrics?.map((metric, index) => (
+              {(data.metrics || []).map((metric, index) => (
                 <KPICard
                   key={index}
                   title={metric.label}
                   value={metric.value}
-                  previousValue={includeComparison ? metric.previousValue : undefined}
+                  previousValue={metric.previousValue}
                   format={metric.format || 'number'}
-                  icon={metric.icon}
+                  emptyStateContext={emptyStateContext}
                 />
               ))}
             </div>
@@ -235,6 +260,7 @@ export default function ReportDetail() {
               dataKey="value"
               nameKey="name"
               loading={running}
+              emptyStateContext={emptyStateContext}
             />
           )}
 
@@ -242,66 +268,22 @@ export default function ReportDetail() {
             <LineChartWidget
               title={report.name}
               data={data.chartData || []}
-              lines={data.series || [{ dataKey: 'value', name: 'Value', color: '#667eea' }]}
+              lines={data.series || [{ dataKey: 'value', name: 'Value', color: 'primary' }]}
               xAxisKey="date"
               loading={running}
               showArea={report.chartType === 'AREA'}
+              emptyStateContext={emptyStateContext}
             />
           )}
 
           {report.chartType === 'TABLE' && (
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      {report.selectedFields.map(field => (
-                        <th key={field} className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          {field}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-200">
-                    {(data.rows || []).map((row, index) => (
-                      <tr key={index} className="hover:bg-gray-50">
-                        {report.selectedFields.map(field => (
-                          <td key={field} className="px-4 py-3 text-sm text-gray-900">
-                            {row[field] ?? '-'}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                    {(!data.rows || data.rows.length === 0) && (
-                      <tr>
-                        <td colSpan={report.selectedFields.length} className="px-4 py-8 text-center text-gray-500">
-                          No data found for the selected criteria
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-              {data.rows && data.rows.length > 0 && (
-                <div className="px-4 py-3 border-t border-gray-200 bg-gray-50 text-sm text-gray-500">
-                  Showing {data.rows.length} rows
-                </div>
-              )}
-            </div>
+            <TableWidget
+              data={data.rows || []}
+              columns={(report.selectedFields || []).map((field) => ({ key: field, label: field }))}
+              emptyStateContext={emptyStateContext}
+              loading={running}
+            />
           )}
-        </div>
-      )}
-
-      {!data && !running && (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
-          <div className="text-gray-400 mb-4">
-            <svg className="w-12 h-12 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-            </svg>
-          </div>
-          <h3 className="text-lg font-medium text-gray-900 mb-2">Ready to run</h3>
-          <p className="text-gray-500 mb-4">Select your filters and click "Run Report" to see results</p>
         </div>
       )}
     </div>

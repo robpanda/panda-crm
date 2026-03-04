@@ -273,7 +273,7 @@ export default function ReportBuilder() {
       }
 
       if (response) {
-        navigate(`/reports/${response.id || id}`);
+        navigate(`/analytics/reports/${response.id || id}`);
       }
     } catch (error) {
       console.error('Failed to save report:', error);
@@ -473,7 +473,7 @@ export default function ReportBuilder() {
           <p className="text-gray-500 mt-1">Step {step} of 4</p>
         </div>
         <button
-          onClick={() => navigate('/reports')}
+          onClick={() => navigate('/analytics/reports')}
           className="text-gray-500 hover:text-gray-700"
         >
           Cancel

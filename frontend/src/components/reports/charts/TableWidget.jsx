@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { ChevronUp, ChevronDown, ArrowUpDown, ExternalLink } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import EmptyStateDiagnosticsLink from '../../analytics/EmptyStateDiagnosticsLink';
 
 export default function TableWidget({
   data,
@@ -16,6 +17,7 @@ export default function TableWidget({
   compact = false,
   reportId,  // Optional report ID for "View All" link
   reportFilter, // Optional filter to apply when navigating
+  emptyStateContext,
 }) {
   const navigate = useNavigate();
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
@@ -138,7 +140,7 @@ export default function TableWidget({
       });
     }
     const queryString = params.toString();
-    navigate(`/reports/${reportId}${queryString ? `?${queryString}` : ''}`);
+    navigate(`/analytics/reports/${reportId}${queryString ? `?${queryString}` : ''}`);
   };
 
   return (
@@ -189,7 +191,12 @@ export default function TableWidget({
                   colSpan={columns.length}
                   className="px-4 py-8 text-center text-gray-400"
                 >
-                  {emptyMessage}
+                  <div className="flex flex-col items-center gap-2">
+                    <span>{emptyMessage}</span>
+                    {emptyStateContext && (
+                      <EmptyStateDiagnosticsLink context={emptyStateContext} />
+                    )}
+                  </div>
                 </td>
               </tr>
             ) : (

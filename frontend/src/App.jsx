@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { useAuth } from './context/AuthContext';
 import Layout from './components/Layout';
 import Login from './pages/Login';
@@ -31,6 +31,13 @@ import Dashboards from './pages/Dashboards';
 import DashboardView from './pages/DashboardView';
 import ExecutiveDashboards from './pages/ExecutiveDashboards';
 import ClaimsOnboarding from './pages/ClaimsOnboarding';
+import AdvancedReportEditor from './pages/AdvancedReportEditor';
+import AnalyticsShell from './pages/analytics/AnalyticsShell';
+import AnalyticsOverview from './pages/analytics/AnalyticsOverview';
+import AnalyticsSchedules from './pages/analytics/AnalyticsSchedules';
+import AnalyticsHealth from './pages/analytics/AnalyticsHealth';
+import AnalyticsMetabase from './pages/analytics/AnalyticsMetabase';
+import AnalyticsRedirect from './pages/analytics/AnalyticsRedirect';
 import More from './pages/More';
 import PriceBooks from './pages/PriceBooks';
 import PriceBookDetail from './pages/PriceBookDetail';
@@ -47,6 +54,10 @@ import Cases from './pages/Cases';
 import Emails from './pages/Emails';
 import MyCommissions from './pages/MyCommissions';
 import SalesRepDashboard from './pages/SalesRepDashboard';
+import AIInsightsFeed from './pages/AIInsightsFeed';
+import CustomerPortal from './pages/CustomerPortal';
+import PMPortal from './pages/PMPortal';
+import SubcontractorPortal from './pages/SubcontractorPortal';
 
 // Management Pages
 import TasksPage from './pages/management/TasksPage';
@@ -112,6 +123,14 @@ function ProtectedRoute({ children }) {
   return children;
 }
 
+function RedirectWithId({ basePath, suffix = '' }) {
+  const { id } = useParams();
+  if (!id) {
+    return <Navigate to={basePath} replace />;
+  }
+  return <Navigate to={`${basePath}/${id}${suffix}`} replace />;
+}
+
 export default function App() {
   return (
     <Routes>
@@ -120,6 +139,12 @@ export default function App() {
       {/* Public Champion Routes */}
       <Route path="/champion/register" element={<ChampionRegister />} />
       <Route path="/champion/join/:token" element={<ChampionJoin />} />
+
+      {/* Public Customer Portal Routes */}
+      <Route path="/portal/:token" element={<CustomerPortal />} />
+
+      {/* Public Contractor Portal Routes */}
+      <Route path="/contractor-portal/:token" element={<SubcontractorPortal />} />
 
       <Route
         path="/"
@@ -130,6 +155,7 @@ export default function App() {
         }
       >
         <Route index element={<Dashboard />} />
+        <Route path="pm-portal" element={<PMPortal />} />
         <Route path="accounts" element={<AccountsDashboard />} />
         <Route path="accounts/list" element={<AccountList />} />
         <Route path="accounts/new" element={<AccountWizard />} />
@@ -158,17 +184,19 @@ export default function App() {
         <Route path="opportunities/:id" element={<OpportunityDetail />} />
         <Route path="opportunities/:id/wizard" element={<OpportunityWizard />} />
         <Route path="attention" element={<AttentionQueue />} />
-        <Route path="reports" element={<Reports />} />
-        <Route path="reports/builder" element={<ReportBuilder />} />
-        <Route path="reports/builder/:id" element={<ReportBuilder />} />
-        <Route path="reports/:id" element={<ReportDetail />} />
-        <Route path="dashboards" element={<ExecutiveDashboards />} />
-        <Route path="dashboards/default" element={<ExecutiveDashboards />} />
-        <Route path="dashboards/custom" element={<Dashboards />} />
-        <Route path="dashboards/claims-onboarding" element={<ClaimsOnboarding />} />
-        <Route path="dashboards/builder" element={<DashboardBuilder />} />
-        <Route path="dashboards/builder/:id" element={<DashboardBuilder />} />
-        <Route path="dashboards/:id" element={<DashboardView />} />
+        <Route path="reports" element={<Navigate to="/analytics/reports" replace />} />
+        <Route path="reports/builder" element={<Navigate to="/analytics/reports/new" replace />} />
+        <Route path="reports/builder/:id" element={<RedirectWithId basePath="/analytics/reports" suffix="/edit" />} />
+        <Route path="reports/advanced" element={<Navigate to="/analytics/reports/advanced/new" replace />} />
+        <Route path="reports/advanced/:id" element={<RedirectWithId basePath="/analytics/reports/advanced" />} />
+        <Route path="reports/:id" element={<RedirectWithId basePath="/analytics/reports" />} />
+        <Route path="dashboards" element={<Navigate to="/analytics/dashboards" replace />} />
+        <Route path="dashboards/default" element={<Navigate to="/analytics/dashboards/executive" replace />} />
+        <Route path="dashboards/custom" element={<Navigate to="/analytics/dashboards" replace />} />
+        <Route path="dashboards/claims-onboarding" element={<Navigate to="/analytics/dashboards/claims-onboarding" replace />} />
+        <Route path="dashboards/builder" element={<Navigate to="/analytics/dashboards/new" replace />} />
+        <Route path="dashboards/builder/:id" element={<RedirectWithId basePath="/analytics/dashboards" suffix="/edit" />} />
+        <Route path="dashboards/:id" element={<RedirectWithId basePath="/analytics/dashboards" />} />
         <Route path="pricebooks" element={<PriceBooks />} />
         <Route path="pricebooks/:id" element={<PriceBookDetail />} />
         <Route path="products" element={<Products />} />
@@ -196,6 +224,28 @@ export default function App() {
         <Route path="help" element={<Help />} />
         <Route path="support" element={<Support />} />
         <Route path="support/:id" element={<SupportTicketDetail />} />
+
+        {/* Analytics Hub */}
+        <Route path="analytics" element={<AnalyticsShell />}>
+          <Route index element={<AnalyticsRedirect />} />
+          <Route path="overview" element={<AnalyticsOverview />} />
+          <Route path="reports" element={<Reports />} />
+          <Route path="reports/new" element={<ReportBuilder />} />
+          <Route path="reports/advanced/new" element={<AdvancedReportEditor />} />
+          <Route path="reports/advanced/:id" element={<AdvancedReportEditor />} />
+          <Route path="reports/:id" element={<ReportDetail />} />
+          <Route path="reports/:id/edit" element={<ReportBuilder />} />
+          <Route path="dashboards" element={<Dashboards />} />
+          <Route path="dashboards/new" element={<DashboardBuilder />} />
+          <Route path="dashboards/executive" element={<ExecutiveDashboards />} />
+          <Route path="dashboards/claims-onboarding" element={<ClaimsOnboarding />} />
+          <Route path="dashboards/:id" element={<DashboardView />} />
+          <Route path="dashboards/:id/edit" element={<DashboardBuilder />} />
+          <Route path="schedules" element={<AnalyticsSchedules />} />
+          <Route path="ai" element={<AIInsightsFeed />} />
+          <Route path="health" element={<AnalyticsHealth />} />
+          <Route path="metabase" element={<AnalyticsMetabase />} />
+        </Route>
 
         {/* Admin Routes */}
         <Route path="admin/workflows" element={<Workflows />} />

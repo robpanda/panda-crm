@@ -1,7 +1,10 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { reportsApi, opportunitiesApi, leadsApi, accountsApi } from '../services/api';
+import { reportsApi, opportunitiesApi } from '../services/api';
+import { deriveDataSource } from '../utils/analyticsSource';
+import { useAnalyticsBadgeContext } from '../components/analytics/AnalyticsBadgeContext';
+import { toAnalyticsDateParams } from '../utils/analyticsDateRange';
 import {
   GlobalDateRangePicker,
   KPICard,
@@ -11,13 +14,7 @@ import {
 import {
   ArrowLeft,
   Edit,
-  Share2,
-  MoreVertical,
-  Maximize2,
   RefreshCw,
-  Download,
-  Star,
-  Clock,
   Target,
   DollarSign,
   Building2,
@@ -36,11 +33,57 @@ const iconMap = {
   PauseCircle,
 };
 
+// Convert preset to { startDate, endDate } for API filters
+function parseDateRange(dateRange) {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  let startDate, endDate;
+
+  switch (dateRange?.preset) {
+    case 'TODAY':
+      startDate = today; endDate = new Date(today.getTime() + 86400000); break;
+    case 'YESTERDAY':
+      startDate = new Date(today.getTime() - 86400000); endDate = today; break;
+    case 'THIS_WEEK': {
+      const day = today.getDay();
+      startDate = new Date(today.getTime() - day * 86400000);
+      endDate = new Date(startDate.getTime() + 7 * 86400000); break;
+    }
+    case 'LAST_WEEK': {
+      const day = today.getDay();
+      const thisWeekStart = new Date(today.getTime() - day * 86400000);
+      startDate = new Date(thisWeekStart.getTime() - 7 * 86400000);
+      endDate = thisWeekStart; break;
+    }
+    case 'THIS_MONTH':
+      startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+      endDate = new Date(now.getFullYear(), now.getMonth() + 1, 1); break;
+    case 'LAST_MONTH':
+      startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      endDate = new Date(now.getFullYear(), now.getMonth(), 1); break;
+    case 'THIS_YEAR':
+      startDate = new Date(now.getFullYear(), 0, 1);
+      endDate = new Date(now.getFullYear() + 1, 0, 1); break;
+    case 'ALL_DATA':
+    default:
+      return {};
+  }
+
+  return {
+    startDate: startDate.toISOString().split('T')[0],
+    endDate: endDate.toISOString().split('T')[0],
+  };
+}
+
 export default function DashboardView() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [dateRange, setDateRange] = useState({ preset: 'THIS_MONTH' });
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const filters = useMemo(() => parseDateRange(dateRange), [dateRange]);
+  const analyticsDateParams = useMemo(() => toAnalyticsDateParams(dateRange), [dateRange]);
+  const analyticsBadges = useAnalyticsBadgeContext();
+  const verification = analyticsBadges?.verification || { status: 'unknown', reason: 'Verification unavailable.' };
 
   // Fetch dashboard with widgets
   const { data: dashboardData, isLoading: dashboardLoading, refetch } = useQuery({
@@ -49,98 +92,73 @@ export default function DashboardView() {
     enabled: !!id,
   });
 
-  // Fetch opportunity stage counts for widgets
-  const { data: stageCounts } = useQuery({
-    queryKey: ['opportunityStageCounts', dateRange],
-    queryFn: () => opportunitiesApi.getStageCounts(),
+  const { data: kpiResponse } = useQuery({
+    queryKey: ['analytics-kpis', analyticsDateParams],
+    queryFn: () => reportsApi.getAnalyticsKpis(analyticsDateParams),
+    retry: false,
   });
 
-  // Fetch opportunities for aggregations
-  const { data: opportunitiesData } = useQuery({
-    queryKey: ['opportunities', 'all', dateRange],
-    queryFn: () => opportunitiesApi.getOpportunities({ limit: 1000 }),
+  const { data: pipelineResponse } = useQuery({
+    queryKey: ['analytics-pipeline', analyticsDateParams],
+    queryFn: () => reportsApi.getPipelineMetrics(analyticsDateParams),
+    retry: false,
   });
 
-  // Fetch leads
-  const { data: leadCounts } = useQuery({
-    queryKey: ['leadCounts', dateRange],
-    queryFn: () => leadsApi.getLeadCounts(),
-  });
-
-  // Fetch accounts
-  const { data: accountsData } = useQuery({
-    queryKey: ['accounts', 'all', dateRange],
-    queryFn: () => accountsApi.getAccounts({ limit: 1000 }),
+  const { data: performanceResponse } = useQuery({
+    queryKey: ['analytics-performance', analyticsDateParams],
+    queryFn: () => reportsApi.getPerformanceMetrics(analyticsDateParams, {
+      groupBy: 'ownerId',
+      metric: 'sum',
+      field: 'amount',
+      limit: 10,
+    }),
+    retry: false,
   });
 
   const dashboard = dashboardData?.data;
 
-  // Compute metrics from data
-  const metrics = useMemo(() => {
-    const opps = opportunitiesData?.data || [];
-    const totalCount = opps.length;
-    const totalAmount = opps.reduce((sum, opp) => sum + (opp.amount || 0), 0);
-    const closedWon = opps.filter(o => o.stage === 'CLOSED_WON').length;
-    const closedLost = opps.filter(o => o.stage === 'CLOSED_LOST').length;
-    const openOpps = opps.filter(o => !['CLOSED_WON', 'CLOSED_LOST'].includes(o.stage));
-    const onHold = opps.filter(o => o.stage === 'ON_HOLD' || o.status === 'ON_HOLD').length;
-    const balanceDue = openOpps.reduce((sum, opp) => sum + (opp.amount || 0), 0);
+  const kpiData = kpiResponse?.data || {};
+  const kpiMetrics = kpiData.metrics || {};
+  const kpiMeta = kpiData.meta || {};
 
+  // Derive metrics from unified KPI snapshot
+  const metrics = useMemo(() => {
     return {
-      pipelineCount: openOpps.length,
-      pipelineVolume: totalAmount,
-      balanceDue,
-      onHoldCount: onHold,
-      closedWon,
-      closedLost,
-      newLeads: leadCounts?.NEW || 0,
+      pipelineCount: kpiMetrics.activeDeals || kpiMetrics.pipelineCount || 0,
+      pipelineVolume: kpiMetrics.pipelineVolume || 0,
+      balanceDue: kpiMetrics.balanceDue || 0,
+      onHoldCount: kpiMetrics.onHoldCount || 0,
+      closedWon: kpiMetrics.closedWon || 0,
+      closedLost: kpiMetrics.closedLost || 0,
+      newLeads: kpiMetrics.newLeads || 0,
     };
-  }, [opportunitiesData, leadCounts]);
+  }, [kpiMetrics]);
 
   // Stage chart data
   const stageChartData = useMemo(() => {
-    if (!stageCounts) return [];
-    const stageLabels = {
-      leadUnassigned: 'Lead Unassigned',
-      leadAssigned: 'Lead Assigned',
-      scheduled: 'Scheduled',
-      inspected: 'Inspected',
-      claimFiled: 'Claim Filed',
-      approved: 'Approved',
-      contractSigned: 'Contract Signed',
-      inProduction: 'In Production',
-      completed: 'Completed',
-    };
-    return Object.entries(stageLabels).map(([key, label]) => ({
-      name: label,
-      count: stageCounts[key] || 0,
-    })).filter(item => item.count > 0);
-  }, [stageCounts]);
-
-  // Rep chart data
-  const repChartData = useMemo(() => {
-    const opps = opportunitiesData?.data || [];
-    const byOwner = {};
-    opps.forEach(opp => {
-      const ownerName = opp.owner?.name || 'Unassigned';
-      if (!byOwner[ownerName]) {
-        byOwner[ownerName] = { name: ownerName, count: 0, value: 0 };
-      }
-      byOwner[ownerName].count += 1;
-      byOwner[ownerName].value += opp.amount || 0;
-    });
-    return Object.values(byOwner).sort((a, b) => b.value - a.value).slice(0, 10);
-  }, [opportunitiesData]);
-
-  // Time series data (sample)
-  const timeSeriesData = useMemo(() => {
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return months.map((month, index) => ({
-      month,
-      count: Math.floor(Math.random() * 50) + 20,
-      amount: Math.floor(Math.random() * 500000) + 100000,
+    const stages = pipelineResponse?.data?.byStage || [];
+    return stages.map((stage) => ({
+      name: stage.stage || 'Unknown',
+      count: stage.count || 0,
+      value: stage.value || 0,
     }));
-  }, []);
+  }, [pipelineResponse]);
+
+  const repChartData = useMemo(() => {
+    const reps = performanceResponse?.data?.results || [];
+    return reps.map((rep) => ({
+      name: rep.label || rep.key || 'Unassigned',
+      count: rep.count || 0,
+      value: rep.totalValue || 0,
+    }));
+  }, [performanceResponse]);
+
+  // Monthly trends (server-side aggregation)
+  const { data: monthlyTrendsData } = useQuery({
+    queryKey: ['monthlyTrends', filters],
+    queryFn: () => opportunitiesApi.getMonthlyTrends(filters),
+  });
+  const timeSeriesData = monthlyTrendsData?.data || [];
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -195,6 +213,10 @@ export default function DashboardView() {
             icon={IconComponent}
             iconColor={widget.iconColor || 'from-blue-500 to-blue-600'}
             subtitle={widget.subtitle || getDateRangeLabel()}
+            source={dashboardSource}
+            verifiedStatus={verification.status}
+            verifiedReason={verification.reason}
+            emptyStateContext={buildEmptyStateContext(widget.title, { rowCount: value, isEmpty: value === 0 })}
           />
         );
 
@@ -210,6 +232,7 @@ export default function DashboardView() {
             subtitle={widget.subtitle}
             layout="vertical"
             height={350}
+            emptyStateContext={buildEmptyStateContext(widget.title, { rowCount: barData.length })}
           />
         );
 
@@ -227,6 +250,7 @@ export default function DashboardView() {
             subtitle={widget.subtitle}
             height={300}
             showArea
+            emptyStateContext={buildEmptyStateContext(widget.title, { rowCount: timeSeriesData.length, source: 'legacy' })}
           />
         );
 
@@ -258,6 +282,19 @@ export default function DashboardView() {
   };
 
   const hasWidgets = displayDashboard.widgets?.length > 0;
+  const dashboardSource = kpiMeta?.source || (dashboard ? deriveDataSource(displayDashboard) : 'native');
+  const buildEmptyStateContext = (title, extra = {}) => ({
+    title,
+    source: extra.source || dashboardSource,
+    verifiedStatus: verification.status,
+    verifiedReason: verification.reason,
+    failedChecks: verification.failedChecks || [],
+    rowCount: extra.rowCount ?? kpiMeta?.rowCount ?? kpiMetrics.pipelineCount ?? 0,
+    filters: {
+      'Date Range': getDateRangeLabel(),
+    },
+    ...extra,
+  });
 
   return (
     <div className="space-y-6">
@@ -265,7 +302,7 @@ export default function DashboardView() {
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div className="flex items-start gap-4">
           <button
-            onClick={() => navigate('/dashboards')}
+            onClick={() => navigate('/analytics/dashboards')}
             className="p-2 hover:bg-gray-100 rounded-lg transition-colors mt-0.5"
           >
             <ArrowLeft className="w-5 h-5 text-gray-600" />
@@ -300,7 +337,7 @@ export default function DashboardView() {
             <RefreshCw className={`w-4 h-4 text-gray-600 ${isRefreshing ? 'animate-spin' : ''}`} />
           </button>
           <button
-            onClick={() => navigate(`/dashboards/builder/${displayDashboard.id}`)}
+            onClick={() => navigate(`/analytics/dashboards/${displayDashboard.id}/edit`)}
             className="flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 text-sm font-medium"
           >
             <Edit className="w-4 h-4" />
@@ -340,6 +377,10 @@ export default function DashboardView() {
               icon={Target}
               iconColor="from-blue-500 to-blue-600"
               subtitle={getDateRangeLabel()}
+              source={dashboardSource}
+              verifiedStatus={verification.status}
+              verifiedReason={verification.reason}
+              emptyStateContext={buildEmptyStateContext('Pipeline Count', { rowCount: metrics.pipelineCount, isEmpty: metrics.pipelineCount === 0 })}
             />
             <KPICard
               title="Pipeline Volume"
@@ -348,6 +389,10 @@ export default function DashboardView() {
               icon={DollarSign}
               iconColor="from-green-500 to-emerald-600"
               subtitle={getDateRangeLabel()}
+              source={dashboardSource}
+              verifiedStatus={verification.status}
+              verifiedReason={verification.reason}
+              emptyStateContext={buildEmptyStateContext('Pipeline Volume', { rowCount: metrics.pipelineVolume, isEmpty: metrics.pipelineVolume === 0 })}
             />
             <KPICard
               title="Balance Due"
@@ -356,6 +401,10 @@ export default function DashboardView() {
               icon={Building2}
               iconColor="from-purple-500 to-purple-600"
               subtitle={getDateRangeLabel()}
+              source={dashboardSource}
+              verifiedStatus={verification.status}
+              verifiedReason={verification.reason}
+              emptyStateContext={buildEmptyStateContext('Balance Due', { rowCount: metrics.balanceDue, isEmpty: metrics.balanceDue === 0 })}
             />
             <KPICard
               title="Jobs on Hold"
@@ -364,6 +413,10 @@ export default function DashboardView() {
               icon={PauseCircle}
               iconColor="from-orange-500 to-orange-600"
               subtitle={getDateRangeLabel()}
+              source={dashboardSource}
+              verifiedStatus={verification.status}
+              verifiedReason={verification.reason}
+              emptyStateContext={buildEmptyStateContext('Jobs on Hold', { rowCount: metrics.onHoldCount, isEmpty: metrics.onHoldCount === 0 })}
             />
           </div>
 
@@ -377,6 +430,7 @@ export default function DashboardView() {
               subtitle={getDateRangeLabel()}
               layout="vertical"
               height={350}
+              emptyStateContext={buildEmptyStateContext('Pipeline by Status', { rowCount: stageChartData.length })}
             />
             <BarChartWidget
               data={repChartData}
@@ -387,6 +441,7 @@ export default function DashboardView() {
               formatValue={formatCurrency}
               layout="vertical"
               height={350}
+              emptyStateContext={buildEmptyStateContext('Pipeline by Sales Rep', { rowCount: repChartData.length })}
             />
           </div>
 
@@ -403,6 +458,7 @@ export default function DashboardView() {
             formatValue={(v) => typeof v === 'number' && v > 1000 ? formatCurrency(v) : v}
             height={300}
             showArea
+            emptyStateContext={buildEmptyStateContext('Monthly Trends', { rowCount: timeSeriesData.length, source: 'legacy' })}
           />
 
           {/* Quick Stats */}

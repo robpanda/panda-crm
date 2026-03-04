@@ -13,6 +13,7 @@ import {
 import { format, parseISO } from 'date-fns';
 import { ExternalLink } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import EmptyStateDiagnosticsLink from '../../analytics/EmptyStateDiagnosticsLink';
 
 const COLORS = {
   primary: '#667eea',
@@ -45,6 +46,7 @@ export default function LineChartWidget({
   loading = false,
   reportId,  // Optional report ID for "View Report" link
   reportFilter, // Optional filter to apply when navigating
+  emptyStateContext,
 }) {
   const navigate = useNavigate();
 
@@ -57,7 +59,7 @@ export default function LineChartWidget({
       });
     }
     const queryString = params.toString();
-    navigate(`/reports/${reportId}${queryString ? `?${queryString}` : ''}`);
+    navigate(`/analytics/reports/${reportId}${queryString ? `?${queryString}` : ''}`);
   };
   const CustomTooltip = ({ active, payload, label }) => {
     if (!active || !payload?.length) return null;
@@ -111,8 +113,11 @@ export default function LineChartWidget({
             {subtitle && <p className="text-sm text-gray-500 mt-1">{subtitle}</p>}
           </div>
         )}
-        <div className="p-5 flex items-center justify-center h-64">
+        <div className="p-5 flex flex-col items-center justify-center h-64 gap-2">
           <p className="text-gray-400">No data available</p>
+          {emptyStateContext && (
+            <EmptyStateDiagnosticsLink context={emptyStateContext} />
+          )}
         </div>
       </div>
     );

@@ -2,6 +2,9 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { reportsApi } from '../services/api';
+import { deriveDataSource } from '../utils/analyticsSource';
+import DataSourceBadge from '../components/analytics/DataSourceBadge';
+import VerifiedBadge from '../components/analytics/VerifiedBadge';
 import {
   Plus,
   LayoutGrid,
@@ -11,25 +14,25 @@ import {
   Edit,
   Trash2,
   Copy,
-  ExternalLink,
   ChevronRight,
   BarChart3,
   FileText,
   Search,
-  Filter,
   Users,
   Lock,
   Globe,
   FolderOpen,
-  TrendingUp,
   Shield,
 } from 'lucide-react';
+import { useAnalyticsBadgeContext } from '../components/analytics/AnalyticsBadgeContext';
 
-export default function Dashboards() {
+export default function Dashboards({ embedded = false }) {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [showMenu, setShowMenu] = useState(null);
+  const analyticsBadges = useAnalyticsBadgeContext();
+  const verification = analyticsBadges?.verification || { status: 'unknown', reason: 'Verification unavailable.' };
 
   // Fetch dashboards
   const { data: dashboardsData, isLoading, refetch } = useQuery({
@@ -53,52 +56,6 @@ export default function Dashboards() {
     }
     return matchesSearch;
   });
-
-  // Placeholder dashboards for demo
-  const placeholderDashboards = [
-    {
-      id: 'default',
-      name: 'Sales Overview',
-      description: 'Track pipeline, revenue, and team performance',
-      widgetCount: 8,
-      isDefault: true,
-      isPublic: true,
-      updatedAt: new Date().toISOString(),
-      createdBy: { name: 'System' },
-    },
-    {
-      id: 'executive',
-      name: 'Executive Summary',
-      description: 'High-level KPIs and business metrics',
-      widgetCount: 6,
-      isDefault: false,
-      isPublic: true,
-      updatedAt: new Date(Date.now() - 86400000).toISOString(),
-      createdBy: { name: 'Admin' },
-    },
-    {
-      id: 'ops',
-      name: 'Operations Dashboard',
-      description: 'Jobs in progress, scheduling, and resource allocation',
-      widgetCount: 10,
-      isDefault: false,
-      isPublic: false,
-      updatedAt: new Date(Date.now() - 172800000).toISOString(),
-      createdBy: { name: 'Operations Manager' },
-    },
-    {
-      id: 'marketing',
-      name: 'Marketing Performance',
-      description: 'Lead sources, campaign effectiveness, and ROI',
-      widgetCount: 5,
-      isDefault: false,
-      isPublic: false,
-      updatedAt: new Date(Date.now() - 259200000).toISOString(),
-      createdBy: { name: 'Marketing Team' },
-    },
-  ];
-
-  const displayDashboards = dashboards.length > 0 ? filteredDashboards : placeholderDashboards;
 
   const handleDelete = async (dashboardId) => {
     if (window.confirm('Are you sure you want to delete this dashboard?')) {
@@ -141,78 +98,84 @@ export default function Dashboards() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">Dashboards</h1>
-          <p className="text-gray-500">Create and manage custom dashboards</p>
+      {/* Header - hidden when embedded */}
+      {!embedded && (
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Dashboards</h1>
+            <p className="text-gray-500">Create and manage custom dashboards</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => navigate('/analytics/dashboards/new')}
+              className="flex items-center space-x-2 px-4 py-2.5 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg hover:opacity-90 transition-opacity shadow-md"
+            >
+              <Plus className="w-4 h-4" />
+              <span className="hidden sm:inline">Create Dashboard</span>
+            </button>
+          </div>
         </div>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => navigate('/dashboards/builder')}
-            className="flex items-center space-x-2 px-4 py-2.5 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg hover:opacity-90 transition-opacity shadow-md"
-          >
-            <Plus className="w-4 h-4" />
-            <span className="hidden sm:inline">Create Dashboard</span>
-          </button>
-        </div>
-      </div>
+      )}
 
-      {/* Executive Dashboards Banner */}
-      <Link
-        to="/dashboards/executive"
-        className="block bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-xl p-4 hover:border-amber-300 hover:shadow-md transition-all group"
-      >
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shadow-lg">
-              <FolderOpen className="w-6 h-6 text-white" />
+      {/* Executive Dashboards Banner - hidden when embedded */}
+      {!embedded && (
+        <Link
+          to="/analytics/dashboards/executive"
+          className="block bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-xl p-4 hover:border-amber-300 hover:shadow-md transition-all group"
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shadow-lg">
+                <FolderOpen className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-900 group-hover:text-amber-700 transition-colors">
+                  Executive Dashboards
+                </h3>
+                <p className="text-sm text-gray-500">
+                  Pre-built dashboards for Sales, Production, Insurance, Interiors, and CAT teams
+                </p>
+              </div>
             </div>
-            <div>
-              <h3 className="font-semibold text-gray-900 group-hover:text-amber-700 transition-colors">
-                Executive Dashboards
-              </h3>
-              <p className="text-sm text-gray-500">
-                Pre-built dashboards for Sales, Production, Insurance, Interiors, and CAT teams
-              </p>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium text-amber-600 bg-amber-100 px-2 py-1 rounded-full">
+                6 Dashboards
+              </span>
+              <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-amber-600 group-hover:translate-x-1 transition-all" />
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-amber-600 bg-amber-100 px-2 py-1 rounded-full">
-              6 Dashboards
-            </span>
-            <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-amber-600 group-hover:translate-x-1 transition-all" />
-          </div>
-        </div>
-      </Link>
+        </Link>
+      )}
 
-      {/* Claims Operations Dashboard Banner */}
-      <Link
-        to="/dashboards/claims-onboarding"
-        className="block bg-gradient-to-r from-teal-50 to-cyan-50 border border-teal-200 rounded-xl p-4 hover:border-teal-300 hover:shadow-md transition-all group"
-      >
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-teal-500 to-cyan-600 flex items-center justify-center shadow-lg">
-              <Shield className="w-6 h-6 text-white" />
+      {/* Claims Operations Dashboard Banner - hidden when embedded */}
+      {!embedded && (
+        <Link
+          to="/analytics/dashboards/claims-onboarding"
+          className="block bg-gradient-to-r from-teal-50 to-cyan-50 border border-teal-200 rounded-xl p-4 hover:border-teal-300 hover:shadow-md transition-all group"
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-teal-500 to-cyan-600 flex items-center justify-center shadow-lg">
+                <Shield className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-900 group-hover:text-teal-700 transition-colors">
+                  Claims Operations
+                </h3>
+                <p className="text-sm text-gray-500">
+                  PandaClaims onboarding workflow, photo review queue, and claims pipeline tracking
+                </p>
+              </div>
             </div>
-            <div>
-              <h3 className="font-semibold text-gray-900 group-hover:text-teal-700 transition-colors">
-                Claims Operations
-              </h3>
-              <p className="text-sm text-gray-500">
-                PandaClaims onboarding workflow, photo review queue, and claims pipeline tracking
-              </p>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium text-teal-600 bg-teal-100 px-2 py-1 rounded-full">
+                3 Dashboards
+              </span>
+              <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-teal-600 group-hover:translate-x-1 transition-all" />
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-teal-600 bg-teal-100 px-2 py-1 rounded-full">
-              3 Dashboards
-            </span>
-            <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-teal-600 group-hover:translate-x-1 transition-all" />
-          </div>
-        </div>
-      </Link>
+        </Link>
+      )}
 
       {/* Tab Navigation + Search */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -239,13 +202,15 @@ export default function Dashboards() {
             );
           })}
           {/* Link back to Reports */}
-          <Link
-            to="/reports"
-            className="flex items-center space-x-2 px-4 py-2 rounded-lg transition-all text-gray-600 hover:text-gray-900"
-          >
-            <BarChart3 className="w-4 h-4" />
-            <span className="text-sm font-medium">Reports</span>
-          </Link>
+          {!embedded && (
+            <Link
+              to="/analytics/reports"
+              className="flex items-center space-x-2 px-4 py-2 rounded-lg transition-all text-gray-600 hover:text-gray-900"
+            >
+              <BarChart3 className="w-4 h-4" />
+              <span className="text-sm font-medium">Reports</span>
+            </Link>
+          )}
         </div>
 
         {/* Search */}
@@ -272,7 +237,7 @@ export default function Dashboards() {
             </div>
           ))}
         </div>
-      ) : displayDashboards.length === 0 ? (
+      ) : filteredDashboards.length === 0 ? (
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-12 text-center">
           <LayoutGrid className="w-12 h-12 mx-auto mb-4 text-gray-300" />
           <h3 className="text-lg font-medium text-gray-900">No dashboards found</h3>
@@ -282,7 +247,7 @@ export default function Dashboards() {
               : 'Create your first dashboard to get started'}
           </p>
           <button
-            onClick={() => navigate('/dashboards/builder')}
+            onClick={() => navigate('/analytics/dashboards/new')}
             className="mt-4 px-6 py-2 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg hover:opacity-90"
           >
             Create Dashboard
@@ -290,7 +255,7 @@ export default function Dashboards() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {displayDashboards.map((dashboard) => (
+          {filteredDashboards.map((dashboard) => (
             <div
               key={dashboard.id}
               className="bg-white rounded-xl shadow-sm border border-gray-100 hover:shadow-md hover:border-gray-200 transition-all group"
@@ -328,6 +293,10 @@ export default function Dashboards() {
                           </span>
                         )}
                       </div>
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        <DataSourceBadge source={deriveDataSource(dashboard)} />
+                        <VerifiedBadge status={verification.status} reason={verification.reason} />
+                      </div>
                     </div>
                   </div>
 
@@ -347,7 +316,7 @@ export default function Dashboards() {
                       <div className="absolute right-0 top-8 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-10">
                         <button
                           onClick={() => {
-                            navigate(`/dashboards/builder/${dashboard.id}`);
+                            navigate(`/analytics/dashboards/${dashboard.id}/edit`);
                             setShowMenu(null);
                           }}
                           className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
@@ -398,7 +367,7 @@ export default function Dashboards() {
                 </div>
 
                 <Link
-                  to={`/dashboards/${dashboard.id}`}
+                  to={`/analytics/dashboards/${dashboard.id}`}
                   className="flex items-center text-sm font-medium text-panda-primary hover:text-panda-secondary"
                 >
                   View
@@ -429,7 +398,7 @@ export default function Dashboards() {
               return (
                 <button
                   key={template.name}
-                  onClick={() => navigate('/dashboards/builder', { state: { template: template.name } })}
+                  onClick={() => navigate('/analytics/dashboards/new', { state: { template: template.name } })}
                   className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-lg hover:border-panda-primary hover:shadow-sm transition-all text-sm"
                 >
                   <Icon className="w-4 h-4 text-panda-primary" />

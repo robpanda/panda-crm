@@ -132,6 +132,22 @@ export function formatPhoneNumber(phone) {
   return phone; // Return original if can't format
 }
 
+/**
+ * Format date as MM/DD/YYYY
+ * @param {string|Date} value
+ * @returns {string}
+ */
+export function formatDateMDY(value) {
+  if (!value) return '-';
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleDateString('en-US', {
+    month: '2-digit',
+    day: '2-digit',
+    year: 'numeric',
+  });
+}
+
 export default {
   formatNumber,
   formatCurrency,
@@ -141,4 +157,5 @@ export default {
   isValidPhoneFormat,
   isValidEmailFormat,
   formatPhoneNumber,
+  formatDateMDY,
 };
