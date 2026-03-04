@@ -91,39 +91,226 @@ class LeadService {
   }
 
   /**
+   * Scheduling timezone used when date/time payloads arrive without an explicit timezone offset.
+   */
+  getSchedulingTimeZone() {
+    return process.env.APPOINTMENT_TIMEZONE || process.env.BUSINESS_TIMEZONE || 'America/New_York';
+  }
+
+  /**
+   * Build a UTC Date that represents a wall-clock time in a target IANA timezone.
+   */
+  buildZonedDate({ year, month, day, hour = 0, minute = 0, second = 0, timeZone = this.getSchedulingTimeZone() }) {
+    const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hour12: false,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    const parts = formatter.formatToParts(utcGuess).reduce((acc, part) => {
+      if (part.type !== 'literal') acc[part.type] = part.value;
+      return acc;
+    }, {});
+
+    const asUtc = Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      Number(parts.hour),
+      Number(parts.minute),
+      Number(parts.second)
+    );
+    const offsetMs = asUtc - utcGuess.getTime();
+
+    return new Date(Date.UTC(year, month - 1, day, hour, minute, second) - offsetMs);
+  }
+
+  formatDateForTimeZone(date, timeZone = this.getSchedulingTimeZone()) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(date).reduce((acc, part) => {
+      if (part.type !== 'literal') acc[part.type] = part.value;
+      return acc;
+    }, {});
+    return `${parts.year}-${parts.month}-${parts.day}`;
+  }
+
+  formatTimeForTimeZone(date, timeZone = this.getSchedulingTimeZone()) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+    }).formatToParts(date).reduce((acc, part) => {
+      if (part.type !== 'literal') acc[part.type] = part.value;
+      return acc;
+    }, {});
+    return `${parts.hour}:${parts.minute}`;
+  }
+
+  async generateWorkOrderNumber(tx = prisma) {
+    const lastWorkOrder = await tx.workOrder.findFirst({
+      orderBy: { createdAt: 'desc' },
+      select: { workOrderNumber: true },
+    });
+
+    const lastNumber = lastWorkOrder?.workOrderNumber
+      ? Number((String(lastWorkOrder.workOrderNumber).match(/WO-(\d+)/i) || [])[1] || 0)
+      : 0;
+
+    const nextNumber = Number.isFinite(lastNumber) ? lastNumber + 1 : 1;
+    return `WO-${String(nextNumber).padStart(6, '0')}`;
+  }
+
+  async generateAppointmentNumber(tx = prisma) {
+    const lastAppointment = await tx.serviceAppointment.findFirst({
+      orderBy: { createdAt: 'desc' },
+      select: { appointmentNumber: true },
+    });
+
+    const lastNumber = lastAppointment?.appointmentNumber
+      ? Number((String(lastAppointment.appointmentNumber).match(/SA-(\d+)/i) || [])[1] || 0)
+      : 0;
+
+    const nextNumber = Number.isFinite(lastNumber) ? lastNumber + 1 : 1;
+    return `SA-${String(nextNumber).padStart(6, '0')}`;
+  }
+
+  /**
    * Parse tentative appointment date/time into a stable Date.
    * Accepts full ISO strings (preferred) and date-only + time fallback.
    */
   parseTentativeAppointmentDate(dateValue, timeValue = null) {
     if (!dateValue) return null;
 
-    let raw;
     if (dateValue instanceof Date) {
       if (Number.isNaN(dateValue.getTime())) return null;
-      raw = dateValue.toISOString();
-    } else {
-      raw = String(dateValue).trim();
+      return new Date(dateValue.getTime());
     }
+
+    let raw = String(dateValue).trim();
     if (!raw) return null;
 
-    const hasTime = raw.includes('T');
     const hasTimezone = /(?:Z|[+-]\d{2}:\d{2})$/i.test(raw);
-
-    let normalized = raw;
-    if (!hasTime) {
-      const time = typeof timeValue === 'string' && /^\d{2}:\d{2}$/.test(timeValue.trim())
-        ? `${timeValue.trim()}:00`
-        : '00:00:00';
-      normalized = `${raw}T${time}`;
+    if (hasTimezone) {
+      const parsedWithTimezone = new Date(raw);
+      return Number.isNaN(parsedWithTimezone.getTime()) ? null : parsedWithTimezone;
     }
 
-    // If no timezone is provided, pin to UTC so server timezone cannot shift it.
-    if (!hasTimezone && !/(?:Z|[+-]\d{2}:\d{2})$/i.test(normalized)) {
-      normalized = `${normalized}Z`;
+    const [datePart, rawTimePart] = raw.split('T');
+    const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(datePart);
+    if (!dateMatch) return null;
+
+    let timePart = rawTimePart || '';
+    if (!timePart && typeof timeValue === 'string' && /^\d{2}:\d{2}$/.test(timeValue.trim())) {
+      timePart = `${timeValue.trim()}:00`;
     }
 
-    const parsed = new Date(normalized);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
+    const timeMatch = /^(\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d{1,3})?$/.exec(timePart || '00:00:00');
+    if (!timeMatch) return null;
+
+    const [, y, m, d] = dateMatch;
+    const [, hh, mm, ss = '00'] = timeMatch;
+
+    const zonedDate = this.buildZonedDate({
+      year: Number(y),
+      month: Number(m),
+      day: Number(d),
+      hour: Number(hh),
+      minute: Number(mm),
+      second: Number(ss),
+    });
+
+    return Number.isNaN(zonedDate.getTime()) ? null : zonedDate;
+  }
+
+  async suggestInspectionAppointment(id, options = {}) {
+    const lead = await prisma.lead.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        ownerId: true,
+        leadSetById: true,
+        owner: { select: { id: true, firstName: true, lastName: true } },
+        leadSetBy: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+
+    if (!lead) {
+      const error = new Error(`Lead not found: ${id}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const daysToSearchInput = Number.parseInt(options.daysToSearch, 10);
+    const daysToSearch = Number.isFinite(daysToSearchInput)
+      ? Math.min(Math.max(daysToSearchInput, 1), 30)
+      : 14;
+    const allowFallback = options.allowFallback !== false;
+    const slotTimes = Array.isArray(options.slotTimes) && options.slotTimes.length > 0
+      ? options.slotTimes.filter(slot => /^\d{2}:\d{2}$/.test(String(slot)))
+      : ['09:00', '11:00', '13:00', '15:00'];
+
+    const now = new Date();
+    const minLeadTime = new Date(now.getTime() + (30 * 60 * 1000));
+    const windowEnd = new Date(now.getTime() + (daysToSearch * 24 * 60 * 60 * 1000));
+    const schedulingTimeZone = this.getSchedulingTimeZone();
+
+    const preferredDate = options.preferredDateTime
+      ? this.parseTentativeAppointmentDate(options.preferredDateTime)
+      : null;
+
+    if (preferredDate && preferredDate >= minLeadTime && preferredDate <= windowEnd) {
+      return {
+        found: true,
+        appointmentDate: this.formatDateForTimeZone(preferredDate, schedulingTimeZone),
+        appointmentTime: this.formatTimeForTimeZone(preferredDate, schedulingTimeZone),
+        ownerId: lead.owner?.id || lead.ownerId || lead.leadSetBy?.id || lead.leadSetById || null,
+        ownerName: lead.owner
+          ? `${lead.owner.firstName || ''} ${lead.owner.lastName || ''}`.trim()
+          : (lead.leadSetBy ? `${lead.leadSetBy.firstName || ''} ${lead.leadSetBy.lastName || ''}`.trim() : ''),
+      };
+    }
+
+    if (preferredDate && !allowFallback) {
+      return {
+        found: false,
+        reason: 'PREFERRED_SLOT_UNAVAILABLE',
+      };
+    }
+
+    for (let dayOffset = 0; dayOffset < daysToSearch; dayOffset += 1) {
+      const day = new Date(now.getTime() + (dayOffset * 24 * 60 * 60 * 1000));
+      const dateString = this.formatDateForTimeZone(day, schedulingTimeZone);
+
+      for (const slot of slotTimes) {
+        const candidate = this.parseTentativeAppointmentDate(dateString, slot);
+        if (!candidate || candidate < minLeadTime || candidate > windowEnd) continue;
+
+        return {
+          found: true,
+          appointmentDate: dateString,
+          appointmentTime: slot,
+          ownerId: lead.owner?.id || lead.ownerId || lead.leadSetBy?.id || lead.leadSetById || null,
+          ownerName: lead.owner
+            ? `${lead.owner.firstName || ''} ${lead.owner.lastName || ''}`.trim()
+            : (lead.leadSetBy ? `${lead.leadSetBy.firstName || ''} ${lead.leadSetBy.lastName || ''}`.trim() : ''),
+        };
+      }
+    }
+
+    return {
+      found: false,
+      reason: preferredDate ? 'PREFERRED_SLOT_UNAVAILABLE' : 'NO_AVAILABLE_SLOTS_IN_2_WEEKS',
+    };
   }
 
   /**
@@ -810,20 +997,20 @@ class LeadService {
           let nextNumber;
           if (!sequences || sequences.length === 0) {
             // First job of the year - create the sequence
-            await tx.jobIdSequence.create({
-              data: {
-                year: currentYear,
-                lastNumber: JOB_ID_STARTING_NUMBER + 1,
-              },
-            });
+            const newSequenceId = `job-seq-${currentYear}`;
+            await tx.$executeRaw`
+              INSERT INTO job_id_sequences (id, year, last_number, created_at, updated_at)
+              VALUES (${newSequenceId}, ${currentYear}, ${JOB_ID_STARTING_NUMBER + 1}, NOW(), NOW())
+            `;
             nextNumber = JOB_ID_STARTING_NUMBER + 1;
           } else {
             // Increment the sequence
             nextNumber = Number(sequences[0].last_number) + 1;
-            await tx.jobIdSequence.update({
-              where: { year: currentYear },
-              data: { lastNumber: nextNumber },
-            });
+            await tx.$executeRaw`
+              UPDATE job_id_sequences
+              SET last_number = ${nextNumber}, updated_at = NOW()
+              WHERE year = ${currentYear}
+            `;
           }
           jobId = `${currentYear}-${nextNumber}`;
           logger.info(`Generated Job ID: ${jobId} for lead conversion`);
@@ -855,38 +1042,50 @@ class LeadService {
       let serviceAppointment = null;
       let assignedResource = null;
       if (shouldCreateServiceAppointment && opportunity) {
+        const requestedWorkType = this.normalizeOptionalText(options.workType) || this.normalizeOptionalText(lead.workType);
+        const workTypeRecord = requestedWorkType
+          ? await tx.workType.findFirst({
+            where: { name: { contains: requestedWorkType, mode: 'insensitive' } },
+            select: { id: true, name: true },
+          })
+          : null;
+
         // First, find the best available resource based on territory and skills
         const bestResource = await this.findBestResource({
           state: lead.state,
           postalCode: lead.postalCode,
-          workType: options.workType || 'Inspection',
+          workType: requestedWorkType || 'Inspection',
           appointmentDate: resolvedTentativeAppointmentDate,
         }, tx);
 
         // Find or create territory based on state
         let territory = null;
         if (lead.state) {
-          territory = await tx.territory.findFirst({
+          territory = await tx.serviceTerritory.findFirst({
             where: {
+              isActive: true,
               OR: [
-                { states: { has: lead.state } },
+                { state: { equals: lead.state, mode: 'insensitive' } },
                 { name: { contains: lead.state, mode: 'insensitive' } },
+                ...(lead.postalCode ? [{ postalCodes: { has: lead.postalCode } }] : []),
               ],
             },
           });
         }
 
+        const workOrderNumber = await this.generateWorkOrderNumber(tx);
+
         // Create WorkOrder with territory
         const workOrder = await tx.workOrder.create({
           data: {
-            subject: `${options.workType || 'Inspection'} - ${account.name}`,
+            workOrderNumber,
+            subject: `${requestedWorkType || 'Inspection'} - ${account.name}`,
             accountId: account.id,
-            contactId: contact.id,
             opportunityId: opportunity.id,
             status: 'NEW',
-            workType: options.workType || 'Inspection',
             priority: 'NORMAL',
             territoryId: territory?.id,
+            workTypeId: workTypeRecord?.id,
           },
         });
 
@@ -894,21 +1093,23 @@ class LeadService {
         const appointmentDate = new Date(resolvedTentativeAppointmentDate.getTime());
         const endDate = new Date(appointmentDate);
         endDate.setHours(endDate.getHours() + 2); // Default 2 hour duration
+        const appointmentNumber = await this.generateAppointmentNumber(tx);
 
         serviceAppointment = await tx.serviceAppointment.create({
           data: {
-            subject: `${options.workType || 'Inspection'} - ${lead.firstName} ${lead.lastName}`,
+            appointmentNumber,
+            subject: `${requestedWorkType || 'Inspection'} - ${lead.firstName} ${lead.lastName}`,
             workOrderId: workOrder.id,
-            accountId: account.id,
-            contactId: contact.id,
             scheduledStart: appointmentDate,
             scheduledEnd: endDate,
             status: 'SCHEDULED',
-            appointmentType: options.workType || 'Inspection',
+            duration: 120,
+            dueDate: endDate,
             street: lead.street,
             city: lead.city,
             state: lead.state,
             postalCode: lead.postalCode,
+            work_type_id: workTypeRecord?.id,
           },
         });
 
@@ -1309,14 +1510,20 @@ class LeadService {
     try {
       // Step 1: Find territory by state
       let territory = null;
-      if (state) {
-        territory = await tx.territory.findFirst({
+      if (state || postalCode) {
+        const territoryOr = [];
+        if (state) {
+          territoryOr.push({ state: { equals: state, mode: 'insensitive' } });
+          territoryOr.push({ name: { contains: state, mode: 'insensitive' } });
+        }
+        if (postalCode) {
+          territoryOr.push({ postalCodes: { has: postalCode } });
+        }
+
+        territory = await tx.serviceTerritory.findFirst({
           where: {
             isActive: true,
-            OR: [
-              { states: { has: state } },
-              { name: { contains: state, mode: 'insensitive' } },
-            ],
+            OR: territoryOr,
           },
         });
       }
@@ -1350,15 +1557,12 @@ class LeadService {
           absences: {
             where: {
               // Check for absences on the appointment date
-              startTime: { lte: appointmentDate },
-              endTime: { gte: appointmentDate },
+              start: { lte: appointmentDate },
+              end: { gte: appointmentDate },
             },
           },
         },
-        orderBy: [
-          { lastAppointmentAssignedAt: 'asc' }, // Prefer resources who haven't been assigned recently
-          { name: 'asc' },
-        ],
+        orderBy: { name: 'asc' },
       });
 
       if (resources.length === 0) {
@@ -1367,9 +1571,6 @@ class LeadService {
       }
 
       // Step 4: Filter and score resources
-      const appointmentDay = appointmentDate.getDay();
-      const isWeekend = appointmentDay === 0 || appointmentDay === 6;
-
       const scoredResources = resources
         .filter(resource => {
           // Exclude resources with absences on the appointment date
@@ -1392,21 +1593,6 @@ class LeadService {
             score += 30;
           }
 
-          // Score: Not assigned recently (+20 points for each day since last assignment)
-          if (resource.lastAppointmentAssignedAt) {
-            const daysSinceAssigned = Math.floor(
-              (Date.now() - new Date(resource.lastAppointmentAssignedAt).getTime()) / (1000 * 60 * 60 * 24)
-            );
-            score += Math.min(daysSinceAssigned * 5, 20);
-          } else {
-            score += 20; // Never assigned = high priority
-          }
-
-          // Score: Prefers weekend work (if applicable) (+10 points)
-          if (isWeekend && resource.worksWeekends) {
-            score += 10;
-          }
-
           return { resource, score };
         })
         .sort((a, b) => b.score - a.score); // Sort by score descending
@@ -1418,12 +1604,6 @@ class LeadService {
 
       const bestResource = scoredResources[0].resource;
       logger.info(`Best resource found: ${bestResource.name} (score: ${scoredResources[0].score}) for ${workType} in ${territory?.name || state}`);
-
-      // Update last assigned timestamp
-      await tx.serviceResource.update({
-        where: { id: bestResource.id },
-        data: { lastAppointmentAssignedAt: new Date() },
-      });
 
       return bestResource;
     } catch (error) {

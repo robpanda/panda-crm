@@ -378,6 +378,11 @@ export const leadsApi = {
     return response.data;
   },
 
+  async suggestInspectionAppointment(leadId, options = {}) {
+    const response = await api.post(`/api/leads/${leadId}/appointment/suggest`, options);
+    return response.data?.data || response.data;
+  },
+
   async getLeadCounts(ownerIdOrParams, ownerIds) {
     const params = {};
     // Handle both calling conventions:

@@ -30,7 +30,11 @@ const handleValidation = async (req, res, next) => {
 const validateCreate = [
   body('firstName').trim().notEmpty().withMessage('First name is required'),
   body('lastName').trim().notEmpty().withMessage('Last name is required'),
-  body('email').optional({ checkFalsy: true }).isEmail().withMessage('Invalid email format'),
+  body('email')
+    .customSanitizer((value) => (typeof value === 'string' ? value.trim() : value))
+    .optional({ checkFalsy: true })
+    .isEmail()
+    .withMessage('Invalid email format'),
   body('phone').custom((value, { req }) => {
     const email = (req.body.email || '').trim();
     const phone = (value || '').trim();
@@ -587,6 +591,23 @@ const handleGatingTransition = async (req, res, next) => {
 };
 router.post('/:id/gating/apply-transition', handleGatingTransition);
 router.post('/:id/gating/transition', handleGatingTransition);
+
+// Suggest an inspection appointment slot for the lead wizard
+router.post('/:id/appointment/suggest', async (req, res, next) => {
+  try {
+    const suggestion = await leadService.suggestInspectionAppointment(req.params.id, {
+      workType: req.body?.workType,
+      daysToSearch: req.body?.daysToSearch,
+      durationMinutes: req.body?.durationMinutes,
+      preferredDateTime: req.body?.preferredDateTime,
+      allowFallback: req.body?.allowFallback,
+      slotTimes: req.body?.slotTimes,
+    });
+    res.json({ success: true, data: suggestion });
+  } catch (error) {
+    next(error);
+  }
+});
 
 // Get lead by ID
 router.get('/:id', async (req, res, next) => {
