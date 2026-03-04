@@ -11,6 +11,7 @@ const lambdaClient = new LambdaClient({ region: 'us-east-2' });
 const JOB_ID_STARTING_NUMBER = 999;
 const INTERNAL_COMMENT_TITLE_PREFIX = 'INTERNAL_COMMENT|';
 const INTERNAL_COMMENT_REPLY_TITLE_PREFIX = 'INTERNAL_COMMENT_REPLY|';
+const LEGACY_INTERNAL_COMMENT_JSON_PREFIX = '__internal_comment__:';
 const NOTIFICATION_SERVICE_URL = process.env.NOTIFICATION_SERVICE_URL || 'http://localhost:3011';
 const MENTION_DISPATCH_ENDPOINT = `${NOTIFICATION_SERVICE_URL}/api/notifications/mentions/dispatch`;
 
@@ -68,6 +69,39 @@ function parseLegacyReplyTitle(title) {
   return { parentCommentId };
 }
 
+function parseLegacyInternalCommentJsonTitle(title) {
+  if (typeof title !== 'string') return null;
+  const trimmed = title.trim();
+  if (!trimmed.toLowerCase().startsWith(LEGACY_INTERNAL_COMMENT_JSON_PREFIX)) {
+    return null;
+  }
+
+  const rawPayload = trimmed.slice(LEGACY_INTERNAL_COMMENT_JSON_PREFIX.length);
+  if (!rawPayload) {
+    return {
+      departmentTag: 'general',
+      isResolved: false,
+      parentCommentId: null,
+    };
+  }
+
+  try {
+    const payload = JSON.parse(rawPayload);
+    return {
+      departmentTag: normalizeDepartmentTag(payload.departmentTag || payload.department || 'general'),
+      isResolved: Boolean(payload.isResolved ?? payload.resolved ?? false),
+      parentCommentId: payload.parentCommentId || payload.parentId || null,
+    };
+  } catch (error) {
+    logger.warn(`Failed to parse legacy internal comment title "${trimmed}": ${error.message}`);
+    return {
+      departmentTag: 'general',
+      isResolved: false,
+      parentCommentId: null,
+    };
+  }
+}
+
 function isLegacyInternalCommentTitle(title) {
   if (typeof title !== 'string') return false;
   const normalized = title.trim().toUpperCase().replace(/\s+/g, '_');
@@ -90,6 +124,15 @@ function parseInternalCommentMeta(title) {
       ...internalMeta,
       parentCommentId: null,
       isReply: false,
+      isInternal: true,
+    };
+  }
+
+  const legacyJsonMeta = parseLegacyInternalCommentJsonTitle(title);
+  if (legacyJsonMeta) {
+    return {
+      ...legacyJsonMeta,
+      isReply: Boolean(legacyJsonMeta.parentCommentId),
       isInternal: true,
     };
   }
@@ -2431,6 +2474,7 @@ class LeadService {
         OR: [
           { title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } },
           { title: { startsWith: INTERNAL_COMMENT_REPLY_TITLE_PREFIX } },
+          { title: { startsWith: LEGACY_INTERNAL_COMMENT_JSON_PREFIX } },
           { title: { startsWith: 'REPLY|' } },
           { title: { contains: 'INTERNAL_COMMENT', mode: 'insensitive' } },
           { title: { equals: 'Internal Comment', mode: 'insensitive' } },
@@ -2513,6 +2557,7 @@ class LeadService {
           OR: [
             { title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } },
             { title: { startsWith: INTERNAL_COMMENT_REPLY_TITLE_PREFIX } },
+            { title: { startsWith: LEGACY_INTERNAL_COMMENT_JSON_PREFIX } },
             { title: { startsWith: 'REPLY|' } },
             { title: { contains: 'INTERNAL_COMMENT', mode: 'insensitive' } },
             { title: { equals: 'Internal Comment', mode: 'insensitive' } },
@@ -2546,6 +2591,17 @@ class LeadService {
     }
     if (!createdById) {
       createdById = lead.ownerId || lead.leadSetById || null;
+    }
+    if (!createdById) {
+      const latestAuthor = await prisma.note.findFirst({
+        where: {
+          leadId,
+          createdById: { not: null },
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { createdById: true },
+      });
+      createdById = latestAuthor?.createdById || null;
     }
     if (!createdById) {
       const error = new Error('Unable to resolve a valid author for this internal comment');
@@ -2611,6 +2667,7 @@ class LeadService {
         OR: [
           { title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } },
           { title: { startsWith: INTERNAL_COMMENT_REPLY_TITLE_PREFIX } },
+          { title: { startsWith: LEGACY_INTERNAL_COMMENT_JSON_PREFIX } },
           { title: { startsWith: 'REPLY|' } },
           { title: { contains: 'INTERNAL_COMMENT', mode: 'insensitive' } },
           { title: { equals: 'Internal Comment', mode: 'insensitive' } },
@@ -2710,6 +2767,7 @@ class LeadService {
         OR: [
           { title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } },
           { title: { startsWith: INTERNAL_COMMENT_REPLY_TITLE_PREFIX } },
+          { title: { startsWith: LEGACY_INTERNAL_COMMENT_JSON_PREFIX } },
           { title: { startsWith: 'REPLY|' } },
           { title: { contains: 'INTERNAL_COMMENT', mode: 'insensitive' } },
           { title: { equals: 'Internal Comment', mode: 'insensitive' } },

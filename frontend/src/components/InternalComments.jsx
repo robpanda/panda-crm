@@ -20,6 +20,14 @@ const apiByEntity = {
   opportunity: opportunitiesApi,
 };
 
+function normalizeCommentsPayload(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.comments)) return payload.comments;
+  if (Array.isArray(payload?.items)) return payload.items;
+  if (Array.isArray(payload?.data)) return payload.data;
+  return [];
+}
+
 function normalizeDepartment(dept) {
   if (!dept) return null;
   if (typeof dept === 'string') {
@@ -50,7 +58,8 @@ export default function InternalComments({ entityType, entityId }) {
     queryKey: ['internalComments', entityType, entityId],
     queryFn: async () => {
       try {
-        return await api?.getInternalComments?.(entityId);
+        const payload = await api?.getInternalComments?.(entityId);
+        return normalizeCommentsPayload(payload);
       } catch (err) {
         // Some older backend routes return 404 for empty/unwired internal comments.
         // Treat this as empty state instead of hard failure so the tab remains usable.
@@ -82,7 +91,7 @@ export default function InternalComments({ entityType, entityId }) {
   const createMutation = useMutation({
     mutationFn: (data) => api.createInternalComment(entityId, data),
     onSuccess: () => {
-      queryClient.invalidateQueries(['internalComments', entityType, entityId]);
+      queryClient.invalidateQueries({ queryKey: ['internalComments', entityType, entityId] });
       setNewContent('');
       setNewMentions([]);
       setNewDepartment('general');
@@ -92,7 +101,7 @@ export default function InternalComments({ entityType, entityId }) {
   const createReplyMutation = useMutation({
     mutationFn: ({ parentCommentId, data }) => api.createInternalComment(entityId, { ...data, parentCommentId }),
     onSuccess: () => {
-      queryClient.invalidateQueries(['internalComments', entityType, entityId]);
+      queryClient.invalidateQueries({ queryKey: ['internalComments', entityType, entityId] });
       setReplyingToId(null);
       setReplyContent('');
       setReplyMentions([]);
@@ -102,7 +111,7 @@ export default function InternalComments({ entityType, entityId }) {
   const updateMutation = useMutation({
     mutationFn: ({ commentId, data }) => api.updateInternalComment(entityId, commentId, data),
     onSuccess: () => {
-      queryClient.invalidateQueries(['internalComments', entityType, entityId]);
+      queryClient.invalidateQueries({ queryKey: ['internalComments', entityType, entityId] });
       setEditingId(null);
       setEditContent('');
       setEditMentions([]);
@@ -112,14 +121,14 @@ export default function InternalComments({ entityType, entityId }) {
   const deleteMutation = useMutation({
     mutationFn: (commentId) => api.deleteInternalComment(entityId, commentId),
     onSuccess: () => {
-      queryClient.invalidateQueries(['internalComments', entityType, entityId]);
+      queryClient.invalidateQueries({ queryKey: ['internalComments', entityType, entityId] });
     },
   });
 
   const toggleResolvedMutation = useMutation({
     mutationFn: ({ commentId, isResolved }) => api.updateInternalComment(entityId, commentId, { isResolved }),
     onSuccess: () => {
-      queryClient.invalidateQueries(['internalComments', entityType, entityId]);
+      queryClient.invalidateQueries({ queryKey: ['internalComments', entityType, entityId] });
     },
   });
 
@@ -334,7 +343,7 @@ export default function InternalComments({ entityType, entityId }) {
             </div>
           )}
         </div>
-        {comment.replies && comment.replies.length > 0 && (
+        {Array.isArray(comment.replies) && comment.replies.length > 0 && (
           <div className="mt-4 space-y-4">
             {comment.replies.map((reply) => renderComment(reply, depth + 1))}
           </div>

@@ -38,6 +38,7 @@ const DISPOSITION_STAGE_MAP = {
 
 const INTERNAL_COMMENT_TITLE_PREFIX = 'INTERNAL_COMMENT|';
 const INTERNAL_COMMENT_REPLY_TITLE_PREFIX = 'INTERNAL_COMMENT_REPLY|';
+const LEGACY_INTERNAL_COMMENT_JSON_PREFIX = '__internal_comment__:';
 
 function hasOwnField(obj, key) {
   return Object.prototype.hasOwnProperty.call(obj, key);
@@ -94,6 +95,48 @@ function parseInternalCommentReplyTitle(title) {
   };
 }
 
+function parseLegacyReplyTitle(title) {
+  if (typeof title !== 'string' || !title.startsWith('REPLY|')) {
+    return null;
+  }
+  const parentCommentId = title.slice('REPLY|'.length).split('|')[0];
+  if (!parentCommentId) return null;
+  return { parentCommentId };
+}
+
+function parseLegacyInternalCommentJsonTitle(title) {
+  if (typeof title !== 'string') return null;
+  const trimmed = title.trim();
+  if (!trimmed.toLowerCase().startsWith(LEGACY_INTERNAL_COMMENT_JSON_PREFIX)) {
+    return null;
+  }
+
+  const rawPayload = trimmed.slice(LEGACY_INTERNAL_COMMENT_JSON_PREFIX.length);
+  if (!rawPayload) {
+    return {
+      departmentTag: 'general',
+      isResolved: false,
+      parentCommentId: null,
+    };
+  }
+
+  try {
+    const payload = JSON.parse(rawPayload);
+    return {
+      departmentTag: normalizeDepartmentTag(payload.departmentTag || payload.department || 'general'),
+      isResolved: Boolean(payload.isResolved ?? payload.resolved ?? false),
+      parentCommentId: payload.parentCommentId || payload.parentId || null,
+    };
+  } catch (error) {
+    logger.warn(`Failed to parse legacy internal comment title "${trimmed}": ${error.message}`);
+    return {
+      departmentTag: 'general',
+      isResolved: false,
+      parentCommentId: null,
+    };
+  }
+}
+
 function isLegacyInternalCommentTitle(title) {
   if (typeof title !== 'string') return false;
   const normalized = title.trim().toUpperCase().replace(/\s+/g, '_');
@@ -116,6 +159,15 @@ function parseInternalCommentMeta(title) {
       ...internalMeta,
       parentCommentId: null,
       isReply: false,
+      isInternal: true,
+    };
+  }
+
+  const legacyJsonMeta = parseLegacyInternalCommentJsonTitle(title);
+  if (legacyJsonMeta) {
+    return {
+      ...legacyJsonMeta,
+      isReply: Boolean(legacyJsonMeta.parentCommentId),
       isInternal: true,
     };
   }
@@ -4119,6 +4171,8 @@ Be factual and professional. Highlight anything that needs attention.`;
         OR: [
           { title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } },
           { title: { startsWith: INTERNAL_COMMENT_REPLY_TITLE_PREFIX } },
+          { title: { startsWith: LEGACY_INTERNAL_COMMENT_JSON_PREFIX } },
+          { title: { startsWith: 'REPLY|' } },
           { title: { contains: 'INTERNAL_COMMENT', mode: 'insensitive' } },
           { title: { equals: 'Internal Comment', mode: 'insensitive' } },
           { title: { equals: 'Internal Comments', mode: 'insensitive' } },
@@ -4134,13 +4188,14 @@ Be factual and professional. Highlight anything that needs attention.`;
 
     const normalized = comments.map((comment) => {
       const meta = parseInternalCommentMeta(comment.title);
+      const legacyReply = parseLegacyReplyTitle(comment.title);
       return {
         id: comment.id,
         content: comment.body,
         body: comment.body,
         departmentTag: meta.departmentTag,
         isResolved: meta.isResolved,
-        parentCommentId: meta.parentCommentId || null,
+        parentCommentId: meta.parentCommentId || legacyReply?.parentCommentId || null,
         createdAt: comment.createdAt,
         updatedAt: comment.updatedAt,
         author: comment.createdBy
@@ -4180,7 +4235,15 @@ Be factual and professional. Highlight anything that needs attention.`;
 
     const opportunity = await prisma.opportunity.findUnique({
       where: { id: opportunityId },
-      select: { id: true, name: true, jobId: true, ownerId: true },
+      select: {
+        id: true,
+        name: true,
+        jobId: true,
+        ownerId: true,
+        account: {
+          select: { ownerId: true },
+        },
+      },
     });
     if (!opportunity) {
       const error = new Error(`Opportunity not found: ${opportunityId}`);
@@ -4198,6 +4261,8 @@ Be factual and professional. Highlight anything that needs attention.`;
           OR: [
             { title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } },
             { title: { startsWith: INTERNAL_COMMENT_REPLY_TITLE_PREFIX } },
+            { title: { startsWith: LEGACY_INTERNAL_COMMENT_JSON_PREFIX } },
+            { title: { startsWith: 'REPLY|' } },
             { title: { contains: 'INTERNAL_COMMENT', mode: 'insensitive' } },
             { title: { equals: 'Internal Comment', mode: 'insensitive' } },
             { title: { equals: 'Internal Comments', mode: 'insensitive' } },
@@ -4242,7 +4307,18 @@ Be factual and professional. Highlight anything that needs attention.`;
       createdById = emailUser?.id || null;
     }
     if (!createdById) {
-      createdById = opportunity.ownerId || null;
+      createdById = opportunity.ownerId || opportunity.account?.ownerId || null;
+    }
+    if (!createdById) {
+      const latestAuthor = await prisma.note.findFirst({
+        where: {
+          opportunityId,
+          createdById: { not: null },
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { createdById: true },
+      });
+      createdById = latestAuthor?.createdById || null;
     }
     if (!createdById) {
       const error = new Error('Unable to resolve a valid author for this internal comment');
@@ -4309,6 +4385,8 @@ Be factual and professional. Highlight anything that needs attention.`;
         OR: [
           { title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } },
           { title: { startsWith: INTERNAL_COMMENT_REPLY_TITLE_PREFIX } },
+          { title: { startsWith: LEGACY_INTERNAL_COMMENT_JSON_PREFIX } },
+          { title: { startsWith: 'REPLY|' } },
           { title: { contains: 'INTERNAL_COMMENT', mode: 'insensitive' } },
           { title: { equals: 'Internal Comment', mode: 'insensitive' } },
           { title: { equals: 'Internal Comments', mode: 'insensitive' } },
@@ -4328,8 +4406,9 @@ Be factual and professional. Highlight anything that needs attention.`;
     }
 
     const meta = parseInternalCommentMeta(existing.title);
+    const legacyReply = parseLegacyReplyTitle(existing.title);
     const fallbackMeta = { departmentTag: 'general', isResolved: false };
-    const effectiveParentCommentId = meta.parentCommentId || null;
+    const effectiveParentCommentId = meta.parentCommentId || legacyReply?.parentCommentId || null;
     const nextDepartment = hasOwnField(payload, 'departmentTag') || hasOwnField(payload, 'department')
       ? normalizeDepartmentTag(payload.departmentTag || payload.department)
       : (meta.departmentTag || fallbackMeta.departmentTag);
@@ -4402,6 +4481,8 @@ Be factual and professional. Highlight anything that needs attention.`;
         OR: [
           { title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } },
           { title: { startsWith: INTERNAL_COMMENT_REPLY_TITLE_PREFIX } },
+          { title: { startsWith: LEGACY_INTERNAL_COMMENT_JSON_PREFIX } },
+          { title: { startsWith: 'REPLY|' } },
           { title: { contains: 'INTERNAL_COMMENT', mode: 'insensitive' } },
           { title: { equals: 'Internal Comment', mode: 'insensitive' } },
           { title: { equals: 'Internal Comments', mode: 'insensitive' } },
