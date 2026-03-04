@@ -51,7 +51,7 @@ export const pdfService = {
         account: true,
         lineItems: true,
         payments: {
-          where: { status: 'COMPLETED' },
+          where: { status: 'SETTLED' },
           orderBy: { paymentDate: 'desc' },
         },
       },
@@ -568,7 +568,7 @@ export const pdfService = {
           orderBy: { invoiceDate: 'desc' },
           include: {
             payments: {
-              where: { status: 'COMPLETED' },
+              where: { status: 'SETTLED' },
             },
           },
         },

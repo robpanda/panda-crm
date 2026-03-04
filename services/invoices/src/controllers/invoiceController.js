@@ -356,7 +356,7 @@ export async function sendInvoice(req, res, next) {
         account: true,
         lineItems: true,
         payments: {
-          where: { status: 'COMPLETED' },
+          where: { status: 'SETTLED' },
           orderBy: { paymentDate: 'desc' },
         },
       },
@@ -592,8 +592,8 @@ ${Buffer.from(pdfResult.pdfBytes).toString('base64')}`;
         // Store payment link for reference
         ...(paymentLink && { stripePaymentLinkUrl: paymentLink }),
         ...(pdfResult && {
-          pdfUrl: pdfResult.downloadUrl,
-          pdfKey: pdfResult.key,
+          pdf_url: pdfResult.downloadUrl,
+          pdf_key: pdfResult.key,
         }),
       },
       include: {
@@ -881,7 +881,7 @@ export async function generateInvoicePdf(req, res, next) {
         account: true,
         lineItems: true,
         payments: {
-          where: { status: 'COMPLETED' },
+          where: { status: 'SETTLED' },
           orderBy: { paymentDate: 'desc' },
         },
       },
@@ -898,8 +898,8 @@ export async function generateInvoicePdf(req, res, next) {
     await prisma.invoice.update({
       where: { id },
       data: {
-        pdfUrl: pdfResult.downloadUrl,
-        pdfKey: pdfResult.key,
+        pdf_url: pdfResult.downloadUrl,
+        pdf_key: pdfResult.key,
       },
     });
 
@@ -926,7 +926,7 @@ export async function getInvoicePdf(req, res, next) {
         account: true,
         lineItems: true,
         payments: {
-          where: { status: 'COMPLETED' },
+          where: { status: 'SETTLED' },
           orderBy: { paymentDate: 'desc' },
         },
       },
@@ -937,11 +937,11 @@ export async function getInvoicePdf(req, res, next) {
     }
 
     // Return existing PDF URL if available and not regenerating
-    if (invoice.pdfUrl && regenerate !== 'true') {
+    if (invoice.pdf_url && regenerate !== 'true') {
       return res.json({
         invoiceNumber: invoice.invoiceNumber,
-        pdfUrl: invoice.pdfUrl,
-        pdfKey: invoice.pdfKey,
+        pdfUrl: invoice.pdf_url,
+        pdfKey: invoice.pdf_key,
         cached: true,
       });
     }
@@ -953,8 +953,8 @@ export async function getInvoicePdf(req, res, next) {
     await prisma.invoice.update({
       where: { id },
       data: {
-        pdfUrl: pdfResult.downloadUrl,
-        pdfKey: pdfResult.key,
+        pdf_url: pdfResult.downloadUrl,
+        pdf_key: pdfResult.key,
       },
     });
 
