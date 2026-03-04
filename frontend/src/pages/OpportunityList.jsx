@@ -210,13 +210,16 @@ export default function OpportunityList() {
 
   // Bulk mutations
   const bulkReassignMutation = useMutation({
-    mutationFn: ({ opportunityIds, newOwnerId }) => opportunitiesApi.bulkReassign(opportunityIds, newOwnerId),
+    mutationFn: ({ opportunityIds, newOwnerId }) => opportunitiesApi.bulkReassignJobs(opportunityIds, newOwnerId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['opportunities'] });
       setShowReassignModal(false);
       setSelectedJobs([]);
       setSelectionMode(false);
       setSelectedNewOwner('');
+    },
+    onError: (error) => {
+      alert(`Failed to reassign jobs: ${error?.response?.data?.error?.message || error.message}`);
     },
   });
 
@@ -232,12 +235,16 @@ export default function OpportunityList() {
   });
 
   const bulkDeleteMutation = useMutation({
-    mutationFn: ({ opportunityIds }) => opportunitiesApi.bulkDelete(opportunityIds),
+    mutationFn: ({ opportunityIds }) => opportunitiesApi.bulkDeleteOpportunities(opportunityIds),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['opportunities'] });
+      queryClient.invalidateQueries({ queryKey: ['deleted-opportunities'] });
       setShowDeleteModal(false);
       setSelectedJobs([]);
       setSelectionMode(false);
+    },
+    onError: (error) => {
+      alert(`Failed to delete jobs: ${error?.response?.data?.error?.message || error.message}`);
     },
   });
 
@@ -842,7 +849,7 @@ export default function OpportunityList() {
           <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md">
             <h3 className="text-lg font-semibold mb-4 text-red-600">Delete {selectedJobs.length} Job(s)?</h3>
             <p className="text-gray-600 mb-4">
-              This will mark the selected jobs as Closed Lost. This action can be undone by changing the stage back.
+              This will move the selected jobs to Deleted Records for 30 days and mark them Closed Lost.
             </p>
             <div className="flex justify-end space-x-3">
               <button

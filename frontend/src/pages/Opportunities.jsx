@@ -729,10 +729,10 @@ export default function Opportunities() {
                 <div>
                   <p className="text-sm text-gray-700">
                     You are about to delete <strong>{selectedJobs.length}</strong> job(s).
-                    This will mark them as <strong>Closed Lost</strong> and remove them from active views.
+                    This will move them to <strong>Deleted Records</strong> for 30 days, mark them <strong>Closed Lost</strong>, and remove them from active views.
                   </p>
                   <p className="text-xs text-gray-500 mt-2">
-                    This action cannot be easily undone.
+                    You can restore them from Admin Settings during that 30-day window.
                   </p>
                 </div>
               </div>

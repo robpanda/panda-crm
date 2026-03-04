@@ -3972,8 +3972,11 @@ Be factual and professional. Highlight anything that needs attention.`;
       total: opportunityIds.length,
     };
 
+    const appointmentStatusesToCancel = ['SCHEDULED', 'DISPATCHED', 'IN_PROGRESS'];
+
     for (const oppId of opportunityIds) {
       try {
+        const deletionTimestamp = new Date();
         const oldOpp = await prisma.opportunity.findUnique({
           where: { id: oppId },
           select: { id: true, name: true, stage: true },
@@ -3989,11 +3992,28 @@ Be factual and professional. Highlight anything that needs attention.`;
           where: { id: oppId },
           data: {
             stage: 'CLOSED_LOST',
-            closeDate: new Date(),
+            closeDate: deletionTimestamp,
             lostReason: 'Bulk Deleted',
-            deletedAt: new Date(),
+            deletedAt: deletionTimestamp,
           },
         });
+
+        // Cancel any active/scheduled service appointments tied to this opportunity.
+        // This keeps Production Center from surfacing appointments for deleted jobs.
+        const appointmentsToCancel = await prisma.serviceAppointment.findMany({
+          where: {
+            status: { in: appointmentStatusesToCancel },
+            workOrder: { opportunityId: oppId },
+          },
+          select: { id: true },
+        });
+
+        if (appointmentsToCancel.length > 0) {
+          await prisma.serviceAppointment.updateMany({
+            where: { id: { in: appointmentsToCancel.map((appointment) => appointment.id) } },
+            data: { status: 'CANCELED' },
+          });
+        }
 
         // Log audit
         await prisma.auditLog.create({
@@ -4002,7 +4022,12 @@ Be factual and professional. Highlight anything that needs attention.`;
             recordId: oppId,
             action: 'BULK_DELETE',
             oldValues: { stage: oldOpp.stage },
-            newValues: { stage: 'CLOSED_LOST', lostReason: 'Bulk Deleted', deletedAt: new Date() },
+            newValues: {
+              stage: 'CLOSED_LOST',
+              lostReason: 'Bulk Deleted',
+              deletedAt: deletionTimestamp,
+              canceledAppointments: appointmentsToCancel.length,
+            },
             changedFields: ['stage', 'closeDate', 'lostReason', 'deletedAt'],
             userId: auditContext.userId,
             userEmail: auditContext.userEmail,
@@ -4011,7 +4036,7 @@ Be factual and professional. Highlight anything that needs attention.`;
         }).catch((err) => logger.error('Audit log failed:', err));
 
         results.success.push(oppId);
-        logger.info(`Soft deleted opportunity: ${oldOpp.name}`);
+        logger.info(`Soft deleted opportunity: ${oldOpp.name} (appointments canceled: ${appointmentsToCancel.length})`);
       } catch (error) {
         logger.error(`Failed to delete opportunity ${oppId}:`, error);
         results.failed.push({ id: oppId, error: error.message });
