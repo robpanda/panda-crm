@@ -3650,6 +3650,147 @@ Be factual and professional. Highlight anything that needs attention.`;
   }
 
   /**
+   * Transfer a single opportunity to a different owner.
+   * Compatibility endpoint for clients posting to /:id/transfer.
+   * @param {string} opportunityId - Opportunity ID
+   * @param {string} newOwnerId - New owner user ID
+   * @param {Object} auditContext - Context for audit logging
+   */
+  async transferOpportunity(opportunityId, newOwnerId, auditContext = {}) {
+    if (!opportunityId) {
+      const error = new Error('Opportunity ID is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    if (!newOwnerId) {
+      const error = new Error('New owner ID is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const [opportunity, newOwner] = await Promise.all([
+      prisma.opportunity.findUnique({
+        where: { id: opportunityId },
+        include: {
+          owner: {
+            select: { id: true, firstName: true, lastName: true, email: true },
+          },
+          account: {
+            select: { id: true, name: true, billingCity: true, billingState: true },
+          },
+          contact: {
+            select: { id: true, firstName: true, lastName: true, phone: true, email: true },
+          },
+          _count: {
+            select: { quotes: true, workOrders: true },
+          },
+        },
+      }),
+      prisma.user.findUnique({
+        where: { id: newOwnerId },
+        select: { id: true, firstName: true, lastName: true, email: true, isActive: true },
+      }),
+    ]);
+
+    if (!opportunity) {
+      const error = new Error(`Opportunity not found: ${opportunityId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    if (!newOwner) {
+      const error = new Error(`User not found: ${newOwnerId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    if (!newOwner.isActive) {
+      const error = new Error('Cannot transfer to inactive user');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const previousOwnerName = opportunity.owner
+      ? `${opportunity.owner.firstName} ${opportunity.owner.lastName}`
+      : 'Unassigned';
+    const newOwnerName = `${newOwner.firstName} ${newOwner.lastName}`;
+
+    if (opportunity.ownerId === newOwnerId) {
+      return {
+        transferred: false,
+        reason: 'ALREADY_ASSIGNED',
+        opportunity: this.createOpportunityWrapper(opportunity),
+        previousOwner: opportunity.owner
+          ? {
+              id: opportunity.owner.id,
+              name: previousOwnerName,
+              email: opportunity.owner.email,
+            }
+          : null,
+        newOwner: {
+          id: newOwner.id,
+          name: newOwnerName,
+          email: newOwner.email,
+        },
+      };
+    }
+
+    const updatedOpportunity = await prisma.opportunity.update({
+      where: { id: opportunityId },
+      data: {
+        ownerId: newOwnerId,
+        assignedById: auditContext.userId || null,
+        assignedAt: new Date(),
+      },
+      include: {
+        account: {
+          select: { id: true, name: true, billingCity: true, billingState: true },
+        },
+        contact: {
+          select: { id: true, firstName: true, lastName: true, phone: true, email: true },
+        },
+        owner: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+        _count: {
+          select: { quotes: true, workOrders: true },
+        },
+      },
+    });
+
+    await prisma.note.create({
+      data: {
+        title: 'Job Reassigned',
+        body: `Job reassigned from ${previousOwnerName} to ${newOwnerName}.${auditContext.userEmail ? ` Reassigned by: ${auditContext.userEmail}` : ''}`,
+        opportunityId,
+        createdById: auditContext.userId || null,
+      },
+    }).catch((error) => {
+      logger.warn(`Failed to create reassignment note for ${opportunityId}: ${error.message}`);
+    });
+
+    logger.info(`Job ${opportunityId} transferred from ${previousOwnerName} to ${newOwnerName}`);
+
+    return {
+      transferred: true,
+      opportunity: this.createOpportunityWrapper(updatedOpportunity),
+      previousOwner: opportunity.owner
+        ? {
+            id: opportunity.owner.id,
+            name: previousOwnerName,
+            email: opportunity.owner.email,
+          }
+        : null,
+      newOwner: {
+        id: newOwner.id,
+        name: newOwnerName,
+        email: newOwner.email,
+      },
+    };
+  }
+
+  /**
    * Bulk update stage for multiple opportunities
    * @param {string[]} opportunityIds - Array of opportunity IDs
    * @param {string} stage - New stage

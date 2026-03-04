@@ -792,6 +792,12 @@ export const opportunitiesApi = {
     return response.data;
   },
 
+  // Transfer a job/opportunity to a different owner
+  async transferOpportunity(id, newOwnerId) {
+    const response = await api.post(`/api/opportunities/${id}/transfer`, { newOwnerId });
+    return response.data;
+  },
+
   // ============================================================================
   // CALL CENTER ENDPOINTS
   // ============================================================================

@@ -504,6 +504,38 @@ router.post('/:id/portal-link', async (req, res, next) => {
   }
 });
 
+// Transfer an opportunity/job to another owner
+router.post('/:id/transfer', async (req, res, next) => {
+  try {
+    const newOwnerId = req.body?.newOwnerId
+      || req.body?.ownerId
+      || req.body?.toOwnerId
+      || req.body?.assignedToId
+      || req.body?.userId;
+
+    if (!newOwnerId) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'newOwnerId is required',
+        },
+      });
+    }
+
+    const result = await opportunityService.transferOpportunity(req.params.id, newOwnerId, {
+      userId: req.user?.id,
+      userEmail: req.user?.email,
+      ipAddress: req.ip || req.headers['x-forwarded-for']?.split(',')[0],
+      userAgent: req.headers['user-agent'],
+    });
+
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ============================================================================
 // OPPORTUNITY HUB ENDPOINTS
 // These endpoints power the Opportunity Hub view - the central project dashboard
