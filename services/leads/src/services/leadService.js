@@ -82,6 +82,51 @@ class LeadService {
   }
 
   /**
+   * Normalize optional text field to trimmed string or null
+   */
+  normalizeOptionalText(value) {
+    if (value === undefined || value === null) return null;
+    const trimmed = String(value).trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  /**
+   * Parse tentative appointment date/time into a stable Date.
+   * Accepts full ISO strings (preferred) and date-only + time fallback.
+   */
+  parseTentativeAppointmentDate(dateValue, timeValue = null) {
+    if (!dateValue) return null;
+
+    let raw;
+    if (dateValue instanceof Date) {
+      if (Number.isNaN(dateValue.getTime())) return null;
+      raw = dateValue.toISOString();
+    } else {
+      raw = String(dateValue).trim();
+    }
+    if (!raw) return null;
+
+    const hasTime = raw.includes('T');
+    const hasTimezone = /(?:Z|[+-]\d{2}:\d{2})$/i.test(raw);
+
+    let normalized = raw;
+    if (!hasTime) {
+      const time = typeof timeValue === 'string' && /^\d{2}:\d{2}$/.test(timeValue.trim())
+        ? `${timeValue.trim()}:00`
+        : '00:00:00';
+      normalized = `${raw}T${time}`;
+    }
+
+    // If no timezone is provided, pin to UTC so server timezone cannot shift it.
+    if (!hasTimezone && !/(?:Z|[+-]\d{2}:\d{2})$/i.test(normalized)) {
+      normalized = `${normalized}Z`;
+    }
+
+    const parsed = new Date(normalized);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  /**
    * Get leads with filtering and pagination
    * Replicates: getLeads()
    */
@@ -397,9 +442,9 @@ class LeadService {
       data: {
         firstName: data.firstName,
         lastName: data.lastName,
-        email: data.email,
-        phone: data.phone,
-        mobilePhone: data.mobilePhone,
+        email: this.normalizeOptionalText(data.email),
+        phone: this.normalizeOptionalText(data.phone),
+        mobilePhone: this.normalizeOptionalText(data.mobilePhone),
         company: data.company,
         street: data.street,
         city: data.city,
@@ -422,8 +467,8 @@ class LeadService {
         selfGenRepId: data.selfGenRepId,
         salesforceId: data.salesforceId,
         // Call Center - Tentative Appointment fields (per Setting A Lead SOP)
-        tentativeAppointmentDate: data.tentativeAppointmentDate ? new Date(data.tentativeAppointmentDate) : null,
-        tentativeAppointmentTime: data.tentativeAppointmentTime,
+        tentativeAppointmentDate: this.parseTentativeAppointmentDate(data.tentativeAppointmentDate, data.tentativeAppointmentTime),
+        tentativeAppointmentTime: this.normalizeOptionalText(data.tentativeAppointmentTime),
         leadSetById: leadSetById,
         disposition: data.disposition,
       },
@@ -600,9 +645,9 @@ class LeadService {
 
     if (data.firstName !== undefined) updateData.firstName = data.firstName;
     if (data.lastName !== undefined) updateData.lastName = data.lastName;
-    if (data.email !== undefined) updateData.email = data.email || null;
-    if (data.phone !== undefined) updateData.phone = data.phone || null;
-    if (data.mobilePhone !== undefined) updateData.mobilePhone = data.mobilePhone || null;
+    if (data.email !== undefined) updateData.email = this.normalizeOptionalText(data.email);
+    if (data.phone !== undefined) updateData.phone = this.normalizeOptionalText(data.phone);
+    if (data.mobilePhone !== undefined) updateData.mobilePhone = this.normalizeOptionalText(data.mobilePhone);
     if (data.company !== undefined) updateData.company = data.company || null;
     if (data.street !== undefined) updateData.street = data.street || null;
     if (data.city !== undefined) updateData.city = data.city || null;
@@ -622,9 +667,12 @@ class LeadService {
     if (data.salesRabbitUser !== undefined) updateData.salesRabbitUser = data.salesRabbitUser || null;
     // Call Center - Tentative Appointment fields
     if (data.tentativeAppointmentDate !== undefined) {
-      updateData.tentativeAppointmentDate = data.tentativeAppointmentDate ? new Date(data.tentativeAppointmentDate) : null;
+      updateData.tentativeAppointmentDate = this.parseTentativeAppointmentDate(
+        data.tentativeAppointmentDate,
+        data.tentativeAppointmentTime
+      );
     }
-    if (data.tentativeAppointmentTime !== undefined) updateData.tentativeAppointmentTime = data.tentativeAppointmentTime || null;
+    if (data.tentativeAppointmentTime !== undefined) updateData.tentativeAppointmentTime = this.normalizeOptionalText(data.tentativeAppointmentTime);
     if (data.disposition !== undefined) updateData.disposition = data.disposition || null;
 
     const lead = await prisma.lead.update({
@@ -687,6 +735,25 @@ class LeadService {
       error.name = 'ValidationError';
       throw error;
     }
+
+    const resolvedTentativeAppointmentTime =
+      options.tentativeAppointmentTime !== undefined
+        ? this.normalizeOptionalText(options.tentativeAppointmentTime)
+        : lead.tentativeAppointmentTime;
+
+    const tentativeAppointmentInput = options.tentativeAppointmentDate ?? lead.tentativeAppointmentDate;
+    const resolvedTentativeAppointmentDate = this.parseTentativeAppointmentDate(
+      tentativeAppointmentInput,
+      resolvedTentativeAppointmentTime
+    );
+
+    if (tentativeAppointmentInput && !resolvedTentativeAppointmentDate) {
+      const error = new Error('Invalid tentative appointment date/time');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const shouldCreateServiceAppointment = options.createServiceAppointment !== false && !!resolvedTentativeAppointmentDate;
 
     // Use transaction for conversion
     const result = await prisma.$transaction(async (tx) => {
@@ -779,7 +846,7 @@ class LeadService {
             closeDate: options.closeDate ? new Date(options.closeDate) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
             // Store work type and appointment date on opportunity
             workType: options.workType,
-            appointmentDate: options.tentativeAppointmentDate ? new Date(options.tentativeAppointmentDate) : null,
+            appointmentDate: resolvedTentativeAppointmentDate,
           },
         });
       }
@@ -787,13 +854,13 @@ class LeadService {
       // Create Service Appointment if tentative appointment date is provided
       let serviceAppointment = null;
       let assignedResource = null;
-      if (options.createServiceAppointment && options.tentativeAppointmentDate && opportunity) {
+      if (shouldCreateServiceAppointment && opportunity) {
         // First, find the best available resource based on territory and skills
         const bestResource = await this.findBestResource({
           state: lead.state,
           postalCode: lead.postalCode,
           workType: options.workType || 'Inspection',
-          appointmentDate: new Date(options.tentativeAppointmentDate),
+          appointmentDate: resolvedTentativeAppointmentDate,
         }, tx);
 
         // Find or create territory based on state
@@ -824,7 +891,7 @@ class LeadService {
         });
 
         // Then create the Service Appointment
-        const appointmentDate = new Date(options.tentativeAppointmentDate);
+        const appointmentDate = new Date(resolvedTentativeAppointmentDate.getTime());
         const endDate = new Date(appointmentDate);
         endDate.setHours(endDate.getHours() + 2); // Default 2 hour duration
 
@@ -871,6 +938,8 @@ class LeadService {
           convertedAccountId: account.id,
           convertedContactId: contact.id,
           convertedOpportunityId: opportunity?.id,
+          tentativeAppointmentDate: resolvedTentativeAppointmentDate || lead.tentativeAppointmentDate,
+          tentativeAppointmentTime: resolvedTentativeAppointmentTime,
         },
       });
 

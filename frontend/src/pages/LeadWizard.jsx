@@ -366,10 +366,15 @@ export default function LeadWizard() {
     return resolveLeadId(savedLeadId);
   };
 
-  const formatDateForInput = (date) => {
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const d = String(date.getDate()).padStart(2, '0');
+  const formatDateForInput = (value) => {
+    if (!value) return '';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return typeof value === 'string' ? value.slice(0, 10) : '';
+    }
+    const y = parsed.getFullYear();
+    const m = String(parsed.getMonth() + 1).padStart(2, '0');
+    const d = String(parsed.getDate()).padStart(2, '0');
     return `${y}-${m}-${d}`;
   };
 
@@ -608,7 +613,10 @@ export default function LeadWizard() {
             }
 
             const updatePayload = {
-              tentativeAppointmentDate: suggestion.appointmentDate,
+              tentativeAppointmentDate: buildAppointmentDateTimeIso(
+                suggestion.appointmentDate,
+                suggestion.appointmentTime || '09:00'
+              ),
               tentativeAppointmentTime: suggestion.appointmentTime,
             };
 
@@ -747,18 +755,36 @@ export default function LeadWizard() {
     }
   };
 
+  const formatTimeForInput = (value) => {
+    if (!value) return '';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return '';
+    const hours = String(parsed.getHours()).padStart(2, '0');
+    const minutes = String(parsed.getMinutes()).padStart(2, '0');
+    return `${hours}:${minutes}`;
+  };
+
+  const buildAppointmentDateTimeIso = (dateValue, timeValue = '00:00') => {
+    if (!dateValue) return null;
+    const normalizedTime = /^\d{2}:\d{2}$/.test(String(timeValue || '').trim())
+      ? String(timeValue).trim()
+      : '00:00';
+    const parsed = new Date(`${dateValue}T${normalizedTime}:00`);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed.toISOString();
+  };
+
   const buildPreferredDateTime = () => {
     if (!formData.tentativeAppointmentDate || !formData.tentativeAppointmentTime) return null;
-    const candidate = new Date(`${formData.tentativeAppointmentDate}T${formData.tentativeAppointmentTime}:00`);
-    if (Number.isNaN(candidate.getTime())) return null;
-    return `${formData.tentativeAppointmentDate}T${formData.tentativeAppointmentTime}:00`;
+    return buildAppointmentDateTimeIso(
+      formData.tentativeAppointmentDate,
+      formData.tentativeAppointmentTime
+    );
   };
 
   const buildPreferredDateTimeFromSlot = (slot) => {
     if (!slot?.appointmentDate || !slot?.appointmentTime) return null;
-    const candidate = new Date(`${slot.appointmentDate}T${slot.appointmentTime}:00`);
-    if (Number.isNaN(candidate.getTime())) return null;
-    return `${slot.appointmentDate}T${slot.appointmentTime}:00`;
+    return buildAppointmentDateTimeIso(slot.appointmentDate, slot.appointmentTime);
   };
 
   // Fetch SMS templates
@@ -1138,8 +1164,8 @@ export default function LeadWizard() {
         leadNotes: leadData.leadNotes || '',
         jobNotes: leadData.jobNotes || '',
         // Call Center ONLY fields - preserve defaults
-        tentativeAppointmentDate: leadData.tentativeAppointmentDate || '',
-        tentativeAppointmentTime: leadData.tentativeAppointmentTime || '',
+        tentativeAppointmentDate: formatDateForInput(leadData.tentativeAppointmentDate),
+        tentativeAppointmentTime: leadData.tentativeAppointmentTime || formatTimeForInput(leadData.tentativeAppointmentDate),
         leadSetById: leadData.leadSetById || '',
         leadSetByName: leadData.leadSetBy ? `${leadData.leadSetBy.firstName || ''} ${leadData.leadSetBy.lastName || ''}`.trim() : '',
         leadDisposition: leadData.leadDisposition || '',
@@ -1200,6 +1226,11 @@ export default function LeadWizard() {
   const handleSave = async () => {
     setIsSaving(true);
     try {
+      const tentativeAppointmentDateTime = buildAppointmentDateTimeIso(
+        formData.tentativeAppointmentDate,
+        formData.tentativeAppointmentTime || '00:00'
+      );
+
       const saveData = {
         firstName: formData.firstName,
         lastName: formData.lastName,
@@ -1226,7 +1257,7 @@ export default function LeadWizard() {
         jobNotes: formData.jobNotes,
         // Call Center tracking - who entered/set this lead
         leadSetById: formData.leadSetById,
-        tentativeAppointmentDate: formData.tentativeAppointmentDate || null,
+        tentativeAppointmentDate: tentativeAppointmentDateTime,
         tentativeAppointmentTime: formData.tentativeAppointmentTime || null,
         disposition: formData.leadDisposition || null,
       };
@@ -1264,14 +1295,20 @@ export default function LeadWizard() {
       throw new Error('Lead ID is missing. Please save the lead and try again.');
     }
 
-    // Build tentative appointment datetime if both date and time are set
+    // Build timezone-safe appointment datetime for conversion
     let tentativeAppointmentDateTime = null;
     if (effectiveTentativeAppointmentDate) {
       if (effectiveTentativeAppointmentTime) {
-        tentativeAppointmentDateTime = `${effectiveTentativeAppointmentDate}T${effectiveTentativeAppointmentTime}:00`;
+        tentativeAppointmentDateTime = buildAppointmentDateTimeIso(
+          effectiveTentativeAppointmentDate,
+          effectiveTentativeAppointmentTime
+        );
       } else {
         // Default to 9:00 AM if no time specified
-        tentativeAppointmentDateTime = `${effectiveTentativeAppointmentDate}T09:00:00`;
+        tentativeAppointmentDateTime = buildAppointmentDateTimeIso(
+          effectiveTentativeAppointmentDate,
+          '09:00'
+        );
       }
     }
 
@@ -1283,6 +1320,7 @@ export default function LeadWizard() {
       // Pass work type and appointment for Service Appointment creation
       workType: effectiveWorkType,
       tentativeAppointmentDate: tentativeAppointmentDateTime,
+      tentativeAppointmentTime: effectiveTentativeAppointmentTime || null,
       createServiceAppointment: !!tentativeAppointmentDateTime,
       leadSetById: formData.leadSetById,
       leadStatus: effectiveLeadStatus,
