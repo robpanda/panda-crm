@@ -105,8 +105,11 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
           SERVICE_NAME: ${{ matrix.service.name }}
         run: |
+          BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           # Build Docker image
           docker build \
+            --build-arg BUILD_SHA=$IMAGE_TAG \
+            --build-arg BUILD_TIME="$BUILD_TIME" \
             -t $ECR_REGISTRY/panda-crm/$SERVICE_NAME:$IMAGE_TAG \
             -t $ECR_REGISTRY/panda-crm/$SERVICE_NAME:latest \
             -f services/$SERVICE_NAME/Dockerfile \

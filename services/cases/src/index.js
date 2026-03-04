@@ -19,7 +19,7 @@ app.use(express.json());
 
 // Health check
 app.get('/health', (req, res) => {
-  res.json({ status: 'healthy', service: 'cases' });
+  res.json({ status: 'healthy', service: 'cases', buildSha: process.env.BUILD_SHA || process.env.GITHUB_SHA || 'unknown', buildTime: process.env.BUILD_TIME || process.env.GITHUB_RUN_ID || null });
 });
 
 // Routes

@@ -1,6 +1,12 @@
 # Documents Service Dockerfile
 FROM node:20-slim
 
+ARG BUILD_SHA=unknown
+ARG BUILD_TIME=unknown
+ENV BUILD_SHA=$BUILD_SHA
+ENV BUILD_TIME=$BUILD_TIME
+
+
 # Install OpenSSL for Prisma and dependencies for sharp (image processing)
 RUN apt-get update -y && apt-get install -y openssl libvips-dev && rm -rf /var/lib/apt/lists/*
 

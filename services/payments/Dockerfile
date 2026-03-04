@@ -1,5 +1,11 @@
 FROM node:20-alpine
 
+ARG BUILD_SHA=unknown
+ARG BUILD_TIME=unknown
+ENV BUILD_SHA=$BUILD_SHA
+ENV BUILD_TIME=$BUILD_TIME
+
+
 WORKDIR /app
 
 # Install OpenSSL for Prisma native binaries

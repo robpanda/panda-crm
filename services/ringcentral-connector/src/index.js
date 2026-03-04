@@ -61,11 +61,9 @@ app.use('/api/ringcentral', router);
 
 // Also handle root paths for direct access
 app.get('/health', (req, res) => {
-  res.json({
-    status: 'healthy',
+  res.json({ status: 'healthy',
     service: 'ringcentral-connector',
-    version: manifest.version
-  });
+    version: manifest.version, buildSha: process.env.BUILD_SHA || process.env.GITHUB_SHA || 'unknown', buildTime: process.env.BUILD_TIME || process.env.GITHUB_RUN_ID || null });
 });
 
 // ============================================

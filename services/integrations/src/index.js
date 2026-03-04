@@ -83,8 +83,7 @@ app.use(express.json());
 
 // Health check
 app.get('/health', (req, res) => {
-  res.json({
-    status: 'healthy',
+  res.json({ status: 'healthy',
     service: 'integrations',
     timestamp: new Date().toISOString(),
     features: [
@@ -98,8 +97,7 @@ app.get('/health', (req, res) => {
       'scheduling',
       'mobile',
       'field-service',
-    ],
-  });
+    ], buildSha: process.env.BUILD_SHA || process.env.GITHUB_SHA || 'unknown', buildTime: process.env.BUILD_TIME || process.env.GITHUB_RUN_ID || null });
 });
 
 // Diagnostic endpoint to check integration configuration
