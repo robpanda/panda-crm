@@ -619,6 +619,16 @@ router.post('/:id/notes', async (req, res, next) => {
   }
 });
 
+// Add a reply to a lead note
+router.post('/:id/notes/:noteId/replies', async (req, res, next) => {
+  try {
+    const result = await leadService.addLeadNoteReply(req.params.id, req.params.noteId, req.body, req.user);
+    res.status(201).json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Update a note
 router.put('/:id/notes/:noteId', async (req, res, next) => {
   try {
@@ -644,10 +654,65 @@ router.delete('/:id/notes/:noteId', async (req, res, next) => {
   }
 });
 
+// Delete a reply from a lead note
+router.delete('/:id/notes/:noteId/replies/:replyId', async (req, res, next) => {
+  try {
+    const result = await leadService.deleteLeadNoteReply(req.params.id, req.params.noteId, req.params.replyId);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Toggle pin status of a note
 router.post('/:id/notes/:noteId/pin', async (req, res, next) => {
   try {
     const result = await leadService.toggleLeadNotePin(req.params.id, req.params.noteId);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Get internal comments for a lead
+router.get('/:id/internal-comments', async (req, res, next) => {
+  try {
+    const comments = await leadService.getLeadInternalComments(req.params.id);
+    res.json({ success: true, data: comments });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Create internal comment for a lead
+router.post('/:id/internal-comments', async (req, res, next) => {
+  try {
+    const comment = await leadService.createLeadInternalComment(req.params.id, req.body, req.user);
+    res.status(201).json({ success: true, data: comment });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Update internal comment for a lead
+router.put('/:id/internal-comments/:commentId', async (req, res, next) => {
+  try {
+    const comment = await leadService.updateLeadInternalComment(
+      req.params.id,
+      req.params.commentId,
+      req.body,
+      req.user
+    );
+    res.json({ success: true, data: comment });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Delete internal comment for a lead
+router.delete('/:id/internal-comments/:commentId', async (req, res, next) => {
+  try {
+    const result = await leadService.deleteLeadInternalComment(req.params.id, req.params.commentId);
     res.json({ success: true, data: result });
   } catch (error) {
     next(error);
