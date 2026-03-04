@@ -74,6 +74,8 @@ export const CATEGORIES = {
     color: 'rose',
     subTabs: [
       { id: 'conversations', label: 'Conversations' },
+      { id: 'internalNotes', label: 'Inter Notes' },
+      { id: 'internalComments', label: 'Internal Comments' },
       { id: 'communications', label: 'Communications' },
       { id: 'notifications', label: 'Notifications' },
       { id: 'activity', label: 'Activity' },
@@ -96,6 +98,8 @@ export const TAB_TO_CATEGORY = {
   comparisons: 'photos',
   documents: 'documents',
   activity: 'messages',
+  internalNotes: 'messages',
+  internalComments: 'messages',
   workOrders: 'team',
   cases: 'team',
   approvals: 'team',

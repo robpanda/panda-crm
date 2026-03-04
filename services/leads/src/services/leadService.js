@@ -9,6 +9,39 @@ const lambdaClient = new LambdaClient({ region: 'us-east-2' });
 
 // Job ID starting number (first job ID will be YYYY-1000)
 const JOB_ID_STARTING_NUMBER = 999;
+const INTERNAL_COMMENT_TITLE_PREFIX = 'INTERNAL_COMMENT|';
+
+function normalizeDepartmentTag(value) {
+  const normalized = String(value || 'general')
+    .trim()
+    .toLowerCase()
+    .replace(/\|/g, '')
+    .replace(/\s+/g, '_');
+  return normalized || 'general';
+}
+
+function toInternalCommentTitle(departmentTag = 'general', isResolved = false) {
+  return `${INTERNAL_COMMENT_TITLE_PREFIX}${normalizeDepartmentTag(departmentTag)}|${isResolved ? '1' : '0'}`;
+}
+
+function parseInternalCommentTitle(title) {
+  if (typeof title !== 'string' || !title.startsWith(INTERNAL_COMMENT_TITLE_PREFIX)) {
+    return null;
+  }
+
+  const remainder = title.slice(INTERNAL_COMMENT_TITLE_PREFIX.length);
+  const [departmentTagRaw = 'general', resolvedRaw = '0'] = remainder.split('|');
+  return {
+    departmentTag: normalizeDepartmentTag(departmentTagRaw),
+    isResolved: resolvedRaw === '1' || String(resolvedRaw).toLowerCase() === 'true',
+  };
+}
+
+function extractMentionUserId(mention) {
+  if (!mention) return null;
+  if (typeof mention === 'string') return mention;
+  return mention.userId || mention.id || null;
+}
 
 // Audit logging helper
 const logAudit = async ({ tableName, recordId, action, oldValues, newValues, userId, userEmail, source = 'api' }) => {
@@ -2098,6 +2131,334 @@ class LeadService {
       updatedAt: newNote.updatedAt,
       createdBy: newNote.createdBy,
     };
+  }
+
+  async notifyLeadMentions({ leadId, content, mentions = [], actor = null, leadName = null }) {
+    const mentionUserIds = [...new Set((mentions || [])
+      .map(extractMentionUserId)
+      .filter(Boolean))];
+
+    if (mentionUserIds.length === 0) {
+      return 0;
+    }
+
+    const users = await prisma.user.findMany({
+      where: { id: { in: mentionUserIds } },
+      select: { id: true },
+    });
+    const existingUserIds = new Set(users.map((u) => u.id));
+    const actorName = actor?.email || 'Someone';
+    const preview = (content || '').substring(0, 100);
+    const targetName = leadName || 'a lead';
+
+    for (const userId of mentionUserIds) {
+      if (!existingUserIds.has(userId)) continue;
+      await prisma.notification.create({
+        data: {
+          userId,
+          type: 'MENTION',
+          title: `${actorName} mentioned you`,
+          message: `You were mentioned on ${targetName}: "${preview}${(content || '').length > 100 ? '...' : ''}"`,
+          leadId,
+          actionUrl: `/leads/${leadId}`,
+          actionLabel: 'View Lead',
+          sourceType: 'LEAD',
+          sourceId: leadId,
+          status: 'UNREAD',
+        },
+      });
+    }
+
+    return mentionUserIds.length;
+  }
+
+  async addLeadNoteReply(leadId, noteId, payload = {}, actor = null) {
+    const content = String(payload.body || payload.content || '').trim();
+    if (!content) {
+      const error = new Error('Reply body is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const [lead, parentNote] = await Promise.all([
+      prisma.lead.findUnique({
+        where: { id: leadId },
+        select: { id: true, firstName: true, lastName: true },
+      }),
+      prisma.note.findFirst({
+        where: { id: noteId, leadId },
+        select: { id: true, title: true },
+      }),
+    ]);
+
+    if (!lead) {
+      const error = new Error(`Lead not found: ${leadId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    if (!parentNote) {
+      const error = new Error(`Note not found: ${noteId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const reply = await prisma.note.create({
+      data: {
+        leadId,
+        title: `REPLY|${noteId}`,
+        body: content,
+        createdById: actor?.id,
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+    });
+
+    const mentionsNotified = await this.notifyLeadMentions({
+      leadId,
+      content,
+      mentions: payload.mentions || [],
+      actor,
+      leadName: `${lead.firstName || ''} ${lead.lastName || ''}`.trim(),
+    });
+
+    return {
+      id: reply.id,
+      noteId,
+      body: reply.body,
+      createdAt: reply.createdAt,
+      updatedAt: reply.updatedAt,
+      createdBy: reply.createdBy,
+      mentionsNotified,
+    };
+  }
+
+  async deleteLeadNoteReply(leadId, noteId, replyId) {
+    const reply = await prisma.note.findFirst({
+      where: { id: replyId, leadId, title: `REPLY|${noteId}` },
+      select: { id: true },
+    });
+
+    if (!reply) {
+      const error = new Error(`Reply not found: ${replyId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    await prisma.note.delete({ where: { id: replyId } });
+    return { success: true, deletedId: replyId };
+  }
+
+  async getLeadInternalComments(leadId) {
+    const comments = await prisma.note.findMany({
+      where: {
+        leadId,
+        title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return comments.map((comment) => {
+      const meta = parseInternalCommentTitle(comment.title) || {
+        departmentTag: 'general',
+        isResolved: false,
+      };
+      return {
+        id: comment.id,
+        content: comment.body,
+        body: comment.body,
+        departmentTag: meta.departmentTag,
+        isResolved: meta.isResolved,
+        createdAt: comment.createdAt,
+        updatedAt: comment.updatedAt,
+        author: comment.createdBy
+          ? {
+              id: comment.createdBy.id,
+              firstName: comment.createdBy.firstName,
+              lastName: comment.createdBy.lastName,
+              email: comment.createdBy.email,
+            }
+          : null,
+        replies: [],
+        attachmentUrls: [],
+      };
+    });
+  }
+
+  async createLeadInternalComment(leadId, payload = {}, actor = null) {
+    const content = String(payload.content || payload.body || '').trim();
+    if (!content) {
+      const error = new Error('Comment content is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const lead = await prisma.lead.findUnique({
+      where: { id: leadId },
+      select: { id: true, firstName: true, lastName: true },
+    });
+    if (!lead) {
+      const error = new Error(`Lead not found: ${leadId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const departmentTag = normalizeDepartmentTag(payload.departmentTag || payload.department || 'general');
+    const isResolved = Boolean(payload.isResolved);
+
+    const comment = await prisma.note.create({
+      data: {
+        leadId,
+        title: toInternalCommentTitle(departmentTag, isResolved),
+        body: content,
+        createdById: actor?.id,
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+    });
+
+    const mentionsNotified = await this.notifyLeadMentions({
+      leadId,
+      content,
+      mentions: payload.mentions || [],
+      actor,
+      leadName: `${lead.firstName || ''} ${lead.lastName || ''}`.trim(),
+    });
+
+    return {
+      id: comment.id,
+      content: comment.body,
+      body: comment.body,
+      departmentTag,
+      isResolved,
+      createdAt: comment.createdAt,
+      updatedAt: comment.updatedAt,
+      author: comment.createdBy
+        ? {
+            id: comment.createdBy.id,
+            firstName: comment.createdBy.firstName,
+            lastName: comment.createdBy.lastName,
+            email: comment.createdBy.email,
+          }
+        : null,
+      replies: [],
+      attachmentUrls: [],
+      mentionsNotified,
+    };
+  }
+
+  async updateLeadInternalComment(leadId, commentId, payload = {}, actor = null) {
+    const existing = await prisma.note.findFirst({
+      where: {
+        id: commentId,
+        leadId,
+        title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+    });
+
+    if (!existing) {
+      const error = new Error(`Internal comment not found: ${commentId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const has = (key) => Object.prototype.hasOwnProperty.call(payload, key);
+    const meta = parseInternalCommentTitle(existing.title) || {
+      departmentTag: 'general',
+      isResolved: false,
+    };
+    const nextDepartment = has('departmentTag') || has('department')
+      ? normalizeDepartmentTag(payload.departmentTag || payload.department)
+      : meta.departmentTag;
+    const nextResolved = has('isResolved')
+      ? Boolean(payload.isResolved)
+      : meta.isResolved;
+    const nextContent = has('content') || has('body')
+      ? String(payload.content || payload.body || '').trim()
+      : existing.body;
+
+    if (!nextContent) {
+      const error = new Error('Comment content is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const updated = await prisma.note.update({
+      where: { id: commentId },
+      data: {
+        title: toInternalCommentTitle(nextDepartment, nextResolved),
+        body: nextContent,
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+    });
+
+    const mentionsNotified = await this.notifyLeadMentions({
+      leadId,
+      content: nextContent,
+      mentions: payload.mentions || [],
+      actor,
+    });
+
+    return {
+      id: updated.id,
+      content: updated.body,
+      body: updated.body,
+      departmentTag: nextDepartment,
+      isResolved: nextResolved,
+      createdAt: updated.createdAt,
+      updatedAt: updated.updatedAt,
+      author: updated.createdBy
+        ? {
+            id: updated.createdBy.id,
+            firstName: updated.createdBy.firstName,
+            lastName: updated.createdBy.lastName,
+            email: updated.createdBy.email,
+          }
+        : null,
+      replies: [],
+      attachmentUrls: [],
+      mentionsNotified,
+    };
+  }
+
+  async deleteLeadInternalComment(leadId, commentId) {
+    const existing = await prisma.note.findFirst({
+      where: {
+        id: commentId,
+        leadId,
+        title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+      },
+      select: { id: true },
+    });
+
+    if (!existing) {
+      const error = new Error(`Internal comment not found: ${commentId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    await prisma.note.delete({ where: { id: commentId } });
+    return { success: true, deletedId: commentId };
   }
 
   /**
