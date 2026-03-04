@@ -66,6 +66,111 @@ router.get('/sources', (req, res) => {
   res.json({ success: true, data: leadService.getLeadSources() });
 });
 
+// Internal comment departments (static list until dedicated comment service is wired)
+const internalCommentDepartments = [
+  { value: 'general', label: 'General' },
+  { value: 'sales', label: 'Sales' },
+  { value: 'production', label: 'Production' },
+  { value: 'admin', label: 'Admin' },
+  { value: 'finance', label: 'Finance' },
+];
+
+router.get('/comment-departments', (req, res) => {
+  res.json({
+    success: true,
+    data: internalCommentDepartments,
+  });
+});
+
+// Backward-compatible alias for clients that include lead id in the path
+router.get('/:id/comment-departments', (req, res) => {
+  res.json({
+    success: true,
+    data: internalCommentDepartments,
+  });
+});
+
+const resolveLeadIdFromRequest = (req) => (
+  req.params?.id
+  || req.query?.leadId
+  || req.query?.id
+  || req.body?.leadId
+  || req.body?.id
+);
+
+// Backward-compatible aliases for clients that call /internal-comments without /:id
+router.get('/internal-comments', async (req, res, next) => {
+  try {
+    const leadId = resolveLeadIdFromRequest(req);
+    if (!leadId) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'leadId is required' },
+      });
+    }
+    const comments = await leadService.getLeadInternalComments(leadId);
+    res.json({ success: true, data: comments });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/internal-comments', async (req, res, next) => {
+  try {
+    const leadId = resolveLeadIdFromRequest(req);
+    if (!leadId) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'leadId is required' },
+      });
+    }
+    const correlationId = req.headers['x-correlation-id'] || req.headers['x-request-id'] || null;
+    const payload = { ...req.body, correlationId };
+    const comment = await leadService.createLeadInternalComment(leadId, payload, req.user);
+    res.status(201).json({ success: true, data: comment });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/internal-comments/:commentId', async (req, res, next) => {
+  try {
+    const leadId = resolveLeadIdFromRequest(req);
+    if (!leadId) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'leadId is required' },
+      });
+    }
+    const correlationId = req.headers['x-correlation-id'] || req.headers['x-request-id'] || null;
+    const payload = { ...req.body, correlationId };
+    const comment = await leadService.updateLeadInternalComment(
+      leadId,
+      req.params.commentId,
+      payload,
+      req.user
+    );
+    res.json({ success: true, data: comment });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete('/internal-comments/:commentId', async (req, res, next) => {
+  try {
+    const leadId = resolveLeadIdFromRequest(req);
+    if (!leadId) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'leadId is required' },
+      });
+    }
+    const result = await leadService.deleteLeadInternalComment(leadId, req.params.commentId);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
 // Get lead counts
 router.get('/counts', async (req, res, next) => {
   try {
