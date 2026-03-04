@@ -492,6 +492,18 @@ router.get('/:id/contacts', async (req, res, next) => {
   }
 });
 
+// Generate customer portal link
+router.post('/:id/portal-link', async (req, res, next) => {
+  try {
+    const result = await opportunityService.generatePortalLink(req.params.id, {
+      expiresInDays: req.body?.expiresInDays,
+    });
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ============================================================================
 // OPPORTUNITY HUB ENDPOINTS
 // These endpoints power the Opportunity Hub view - the central project dashboard

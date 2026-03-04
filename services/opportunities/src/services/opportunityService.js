@@ -5,6 +5,7 @@ import { PrismaClient, Prisma } from '@prisma/client';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import crypto from 'crypto';
 import { logger } from '../middleware/logger.js';
 
 const prisma = new PrismaClient();
@@ -634,6 +635,120 @@ class OpportunityService {
       mailingState: c.mailingState,
       mailingPostalCode: c.mailingPostalCode,
     }));
+  }
+
+  /**
+   * Generate or refresh a shareable customer portal link for an opportunity.
+   * Uses galleries.publicToken as the backing token store.
+   */
+  async generatePortalLink(opportunityId, options = {}) {
+    const opportunity = await prisma.opportunity.findUnique({
+      where: { id: opportunityId },
+      select: { id: true, name: true, jobId: true },
+    });
+
+    if (!opportunity) {
+      const error = new Error(`Opportunity not found: ${opportunityId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const requestedDays = Number(options.expiresInDays);
+    const expiresInDays = Number.isFinite(requestedDays) && requestedDays > 0
+      ? Math.floor(requestedDays)
+      : null;
+    const expiresAt = expiresInDays
+      ? new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000)
+      : null;
+    const now = new Date();
+
+    const generateToken = () => crypto.randomBytes(24).toString('hex');
+    const shouldRetryToken = (error) => {
+      if (error?.code !== 'P2002') return false;
+      const target = Array.isArray(error?.meta?.target) ? error.meta.target.join(',') : '';
+      return target.includes('publicToken') || target.includes('public_token');
+    };
+
+    const withUniqueToken = async (action, attempts = 5) => {
+      let lastError = null;
+      for (let i = 0; i < attempts; i += 1) {
+        try {
+          return await action(generateToken());
+        } catch (error) {
+          if (!shouldRetryToken(error)) throw error;
+          lastError = error;
+        }
+      }
+      throw lastError || new Error('Failed to generate unique portal token');
+    };
+
+    const existingGallery = await prisma.gallery.findFirst({
+      where: { opportunityId },
+      orderBy: { updatedAt: 'desc' },
+      select: {
+        id: true,
+        name: true,
+        publicToken: true,
+        isPublic: true,
+        expiresAt: true,
+      },
+    });
+
+    const hasUsableToken = !!(
+      existingGallery?.publicToken
+      && existingGallery?.isPublic
+      && (!existingGallery.expiresAt || existingGallery.expiresAt > now)
+    );
+
+    let gallery;
+    if (!existingGallery) {
+      gallery = await withUniqueToken((token) => prisma.gallery.create({
+        data: {
+          opportunityId,
+          name: 'Customer Portal',
+          isPublic: true,
+          publicToken: token,
+          expiresAt,
+        },
+        select: { id: true, publicToken: true, expiresAt: true },
+      }));
+    } else if (hasUsableToken) {
+      if (expiresInDays !== null) {
+        gallery = await prisma.gallery.update({
+          where: { id: existingGallery.id },
+          data: { expiresAt },
+          select: { id: true, publicToken: true, expiresAt: true },
+        });
+      } else {
+        gallery = {
+          id: existingGallery.id,
+          publicToken: existingGallery.publicToken,
+          expiresAt: existingGallery.expiresAt,
+        };
+      }
+    } else {
+      gallery = await withUniqueToken((token) => prisma.gallery.update({
+        where: { id: existingGallery.id },
+        data: {
+          isPublic: true,
+          publicToken: token,
+          expiresAt,
+          name: existingGallery.name || 'Customer Portal',
+        },
+        select: { id: true, publicToken: true, expiresAt: true },
+      }));
+    }
+
+    const frontendBaseUrl = (process.env.FRONTEND_URL || 'https://crm.pandaadmin.com').replace(/\/$/, '');
+
+    return {
+      opportunityId: opportunity.id,
+      jobId: opportunity.jobId,
+      token: gallery.publicToken,
+      url: `${frontendBaseUrl}/portal/${gallery.publicToken}`,
+      expiresAt: gallery.expiresAt,
+      galleryId: gallery.id,
+    };
   }
 
   /**

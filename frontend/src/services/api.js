@@ -786,6 +786,12 @@ export const opportunitiesApi = {
     return response.data.data;
   },
 
+  // Generate a shareable customer portal link
+  async generatePortalLink(id, options = {}) {
+    const response = await api.post(`/api/opportunities/${id}/portal-link`, options);
+    return response.data;
+  },
+
   // ============================================================================
   // CALL CENTER ENDPOINTS
   // ============================================================================
