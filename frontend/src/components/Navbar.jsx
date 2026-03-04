@@ -3,6 +3,7 @@ import { Link, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../context/AuthContext';
 import { useRingCentral } from '../context/RingCentralContext';
+import { getRecentItems } from '../utils/recentItems';
 import { usersApi, attentionApi, notificationsApi } from '../services/api';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import CreateTicketModal from './CreateTicketModal';
@@ -55,6 +56,9 @@ import {
   FileSignature,
   CalendarDays,
   ClipboardCheck,
+  Trash2,
+  Gift,
+  Bot,
 } from 'lucide-react';
 
 const leadsNavItems = [
@@ -91,7 +95,7 @@ const moreNavItems = [
   { path: '/help', icon: HelpCircle, label: 'Help & Support' },
   { path: '/pricebooks', icon: BookOpen, label: 'Price Books' },
   { path: '/products', icon: Package, label: 'Products' },
-  { path: '/reports', icon: BarChart3, label: 'Reports' },
+  { path: '/analytics/reports', icon: BarChart3, label: 'Analytics Hub' },
   { path: '/schedule', icon: Calendar, label: 'Schedule' },
 ];
 
@@ -107,15 +111,30 @@ const managementNavItems = [
   { path: '/management/work-orders', icon: ClipboardCheck, label: 'Work Orders', pageId: 'workOrders' },
 ];
 
-// Admin dropdown items - alphabetized
-// NOTE: Audit Logs, Bamboogli, Call Center, Help Admin, PandaSign, Templates
-// have been moved to Setup sidebar (Admin > Setup)
+// Admin dropdown items - alphabetized (restored)
 const adminNavItems = [
-  { path: '/admin/commissions', icon: Calculator, label: 'Commission Engine' },
+  { path: '/admin/audit', icon: FileText, label: 'Audit Logs' },
+  { path: '/admin/bamboogli', icon: MessageCircle, label: 'Bamboogli' },
+  { path: '/admin/call-center', icon: PhoneCall, label: 'Call Center' },
+  { path: '/admin/commission-engine', icon: Calculator, label: 'Commission Engine' },
+  { path: '/admin/commissions', icon: DollarSign, label: 'Commissions' },
+  { path: '/admin/deleted-records', icon: Trash2, label: 'Deleted Records' },
+  { path: '/admin/google-calendar', icon: CalendarDays, label: 'Google Calendar' },
+  { path: '/admin/help', icon: HelpCircle, label: 'Help Admin' },
+  { path: '/admin/integrations', icon: ExternalLink, label: 'Integrations' },
+  { path: '/admin/pandasign', icon: FileSignature, label: 'PandaSign' },
   { path: '/admin/payment-engine', icon: CreditCard, label: 'Payment Center' },
+  { path: '/admin/referral', icon: Gift, label: 'Referral Program' },
   { path: '/admin/ringcentral', icon: Phone, label: 'RingCentral' },
-  { path: '/admin/service-admin', icon: Calendar, label: 'Service Admin' },
+  { path: '/admin/roles', icon: Settings, label: 'Roles & Permissions' },
+  { path: '/admin/service-admin', icon: Calendar, label: 'Schedule Admin' },
   { path: '/admin/setup', icon: Cog, label: 'Setup' },
+  { path: '/admin/support', icon: LifeBuoy, label: 'Support Admin' },
+  { path: '/admin/support/tickets', icon: Ticket, label: 'Support Tickets' },
+  { path: '/admin/templates', icon: FileText, label: 'Templates' },
+  { path: '/admin/training-bot', icon: Bot, label: 'Training Bot' },
+  { path: '/admin/users', icon: Users, label: 'Users' },
+  { path: '/admin/workflows', icon: ClipboardCheck, label: 'Workflows' },
 ];
 
 export default function Navbar({ onMenuClick, showMenuButton }) {
@@ -143,6 +162,8 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
   const [viewAsSearch, setViewAsSearch] = useState('');
   const [viewAsUsers, setViewAsUsers] = useState([]);
   const [viewAsLoading, setViewAsLoading] = useState(false);
+  const [recentLeads, setRecentLeads] = useState([]);
+  const [recentJobs, setRecentJobs] = useState([]);
   const [showNotifications, setShowNotifications] = useState(false);
   const [hoveredSubmenu, setHoveredSubmenu] = useState(null);
   const [showSupportMenu, setShowSupportMenu] = useState(false);
@@ -198,6 +219,18 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
       queryClient.invalidateQueries(['notifications', user?.id]);
     },
   });
+
+  useEffect(() => {
+    if (showLeadsMenu) {
+      setRecentLeads(getRecentItems('leads', user?.id));
+    }
+  }, [showLeadsMenu, user?.id]);
+
+  useEffect(() => {
+    if (showOpportunitiesMenu) {
+      setRecentJobs(getRecentItems('jobs', user?.id));
+    }
+  }, [showOpportunitiesMenu, user?.id]);
 
   // Mutation to mark all notifications as read
   const markAllAsReadMutation = useMutation({
@@ -391,7 +424,7 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
               </button>
 
               {showLeadsMenu && (
-                <div className="absolute top-full left-0 mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50">
+                <div className="absolute top-full left-0 mt-1 w-56 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50">
                   {leadsNavItems.map((item) => {
                     const Icon = item.icon;
                     const active = location.pathname === item.path;
@@ -410,6 +443,26 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
                       </NavLink>
                     );
                   })}
+                  {recentLeads.length > 0 && (
+                    <>
+                      <div className="my-1 border-t border-gray-100"></div>
+                      <div className="px-4 py-1 text-[10px] font-semibold text-gray-400 uppercase tracking-wide">
+                        Recent
+                      </div>
+                      {recentLeads.map((item) => (
+                        <NavLink
+                          key={`recent-lead-${item.id}`}
+                          to={item.path || `/leads/${item.id}`}
+                          className="flex flex-col px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                        >
+                          <span className="truncate">{item.label}</span>
+                          {item.meta ? (
+                            <span className="text-xs text-gray-400 truncate">{item.meta}</span>
+                          ) : null}
+                        </NavLink>
+                      ))}
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -430,7 +483,7 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
               </button>
 
               {showOpportunitiesMenu && (
-                <div className="absolute top-full left-0 mt-1 w-56 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50">
+                <div className="absolute top-full left-0 mt-1 w-64 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50">
                   {opportunitiesNavItems.map((item) => {
                     const Icon = item.icon;
                     const active = location.pathname === item.path;
@@ -449,6 +502,26 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
                       </NavLink>
                     );
                   })}
+                  {recentJobs.length > 0 && (
+                    <>
+                      <div className="my-1 border-t border-gray-100"></div>
+                      <div className="px-4 py-1 text-[10px] font-semibold text-gray-400 uppercase tracking-wide">
+                        Recent
+                      </div>
+                      {recentJobs.map((item) => (
+                        <NavLink
+                          key={`recent-job-${item.id}`}
+                          to={item.path || `/jobs/${item.id}`}
+                          className="flex flex-col px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                        >
+                          <span className="truncate">{item.label}</span>
+                          {item.meta ? (
+                            <span className="text-xs text-gray-400 truncate">{item.meta}</span>
+                          ) : null}
+                        </NavLink>
+                      ))}
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -648,7 +721,7 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
                 </button>
 
                 {showAdminMenu && (
-                  <div className="absolute top-full left-0 mt-1 w-64 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50">
+                  <div className="absolute top-full left-0 mt-1 w-64 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50 max-h-[70vh] overflow-y-auto">
                     {adminNavItems.map((item) => {
                       const Icon = item.icon;
                       const active = isActive(item.path);

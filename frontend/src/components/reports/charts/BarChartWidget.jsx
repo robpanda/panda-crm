@@ -11,6 +11,7 @@ import {
 } from 'recharts';
 import { ExternalLink } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import EmptyStateDiagnosticsLink from '../../analytics/EmptyStateDiagnosticsLink';
 
 const COLORS = [
   '#667eea', '#764ba2', '#4ade80', '#f59e0b', '#ef4444',
@@ -35,6 +36,7 @@ export default function BarChartWidget({
   reportId,  // Optional report ID for "View Report" link
   reportFilter, // Optional filter to apply when navigating
   onBarClick, // Optional click handler for individual bars
+  emptyStateContext,
 }) {
   const navigate = useNavigate();
 
@@ -47,7 +49,7 @@ export default function BarChartWidget({
       });
     }
     const queryString = params.toString();
-    navigate(`/reports/${reportId}${queryString ? `?${queryString}` : ''}`);
+    navigate(`/analytics/reports/${reportId}${queryString ? `?${queryString}` : ''}`);
   };
   const CustomTooltip = ({ active, payload, label }) => {
     if (!active || !payload?.length) return null;
@@ -89,8 +91,11 @@ export default function BarChartWidget({
             {subtitle && <p className="text-sm text-gray-500 mt-1">{subtitle}</p>}
           </div>
         )}
-        <div className="p-5 flex items-center justify-center h-64">
+        <div className="p-5 flex flex-col items-center justify-center h-64 gap-2">
           <p className="text-gray-400">No data available</p>
+          {emptyStateContext && (
+            <EmptyStateDiagnosticsLink context={emptyStateContext} />
+          )}
         </div>
       </div>
     );

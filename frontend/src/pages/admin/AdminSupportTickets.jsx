@@ -47,7 +47,7 @@ export default function AdminSupportTickets() {
   const loadAllTickets = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/support/admin/tickets');
+      const response = await api.get('/api/support/admin/tickets');
       setTickets(response.data.tickets || []);
     } catch (error) {
       console.error('Failed to load tickets:', error);
@@ -58,7 +58,7 @@ export default function AdminSupportTickets() {
 
   const loadStats = async () => {
     try {
-      const response = await api.get('/support/admin/stats');
+      const response = await api.get('/api/support/admin/stats');
       setStats(response.data);
     } catch (error) {
       console.error('Failed to load stats:', error);
@@ -67,7 +67,7 @@ export default function AdminSupportTickets() {
 
   const exportTickets = async () => {
     try {
-      const response = await api.get('/support/admin/export', { responseType: 'blob' });
+      const response = await api.get('/api/support/admin/export', { responseType: 'blob' });
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
       link.href = url;

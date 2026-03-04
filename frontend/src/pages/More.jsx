@@ -27,6 +27,10 @@ import {
   CalendarDays,
   Receipt,
   ClipboardCheck,
+  Gift,
+  Trash2,
+  LifeBuoy,
+  BarChart3,
 } from 'lucide-react';
 
 export default function More() {
@@ -42,7 +46,7 @@ export default function More() {
     {
       title: 'Quick Access',
       items: [
-        { path: '/reports', icon: FileText, label: 'Reports & Analytics' },
+        { path: '/analytics/reports', icon: BarChart3, label: 'Analytics Hub' },
         { path: '/calendar', icon: Calendar, label: 'Calendar' },
         { path: '/messages', icon: MessageSquare, label: 'Messages' },
       ],
@@ -68,6 +72,9 @@ export default function More() {
         { path: '/admin/audit', icon: ClipboardList, label: 'Audit Logs' },
         { path: '/admin/bamboogli', icon: MessageSquare, label: 'Bamboogli' },
         { path: '/admin/commissions', icon: DollarSign, label: 'Commissions' },
+        { path: '/admin/commission-engine', icon: DollarSign, label: 'Commission Engine' },
+        { path: '/admin/payment-engine', icon: Receipt, label: 'Payment Center' },
+        { path: '/admin/google-calendar', icon: CalendarDays, label: 'Google Calendar' },
         { path: '/admin/service-admin', icon: Wrench, label: 'Service Admin' },
         { path: '/admin/integrations', icon: Camera, label: 'Integrations' },
         { path: '/admin/pandasign', icon: PenTool, label: 'PandaSign' },
@@ -78,6 +85,11 @@ export default function More() {
         { path: '/admin/users', icon: Users, label: 'User Management' },
         { path: '/admin/workflows', icon: Workflow, label: 'Workflows' },
         { path: '/admin/help', icon: HelpCircle, label: 'Help Center Admin' },
+        { path: '/admin/call-center', icon: PhoneCall, label: 'Call Center' },
+        { path: '/admin/support', icon: LifeBuoy, label: 'Support Admin' },
+        { path: '/admin/support/tickets', icon: LifeBuoy, label: 'Support Tickets' },
+        { path: '/admin/deleted-records', icon: Trash2, label: 'Deleted Records' },
+        { path: '/admin/referral', icon: Gift, label: 'Referral Program' },
       ],
     },
     {

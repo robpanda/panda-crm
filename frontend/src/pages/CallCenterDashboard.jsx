@@ -2214,6 +2214,12 @@ export default function CallCenterDashboard() {
   // Mutation: Convert lead and book appointment
   const convertLeadMutation = useMutation({
     mutationFn: async ({ leadId, data }) => {
+      // Sales Path Gating: validate before conversion
+      const gatingResult = await leadsApi.validatePreConversion(leadId);
+      if (!gatingResult?.success || gatingResult?.data?.blocked) {
+        const messages = gatingResult?.data?.messages || ['Lead cannot be converted. Please check all gating requirements.'];
+        throw new Error(messages.join('\n'));
+      }
       return leadsApi.convertLead(leadId, {
         ...data,
         createOpportunity: true,
@@ -2226,6 +2232,9 @@ export default function CallCenterDashboard() {
       queryClient.invalidateQueries(['callCenterLeaderboard']);
       setConfirmLeadModal({ open: false, lead: null });
       setConfirmFormData({ appointmentDate: '', appointmentTime: '', notes: '', workType: 'Inspection' });
+    },
+    onError: (error) => {
+      alert(error.message);
     },
   });
 
@@ -2278,12 +2287,12 @@ export default function CallCenterDashboard() {
     e.preventDefault();
     if (!confirmLeadModal.lead) return;
 
-    const appointmentDateTime = new Date(`${confirmFormData.appointmentDate}T${confirmFormData.appointmentTime}`);
+    const appointmentDateTime = `${confirmFormData.appointmentDate}T${confirmFormData.appointmentTime}:00`;
 
     convertLeadMutation.mutate({
       leadId: confirmLeadModal.lead.id,
       data: {
-        tentativeAppointmentDate: appointmentDateTime.toISOString(),
+        tentativeAppointmentDate: appointmentDateTime,
         workType: confirmFormData.workType,
         notes: confirmFormData.notes,
       },
@@ -2333,7 +2342,7 @@ export default function CallCenterDashboard() {
   // Open confirm modal with lead data
   const openConfirmModal = (lead) => {
     setConfirmFormData({
-      appointmentDate: lead.tentativeAppointmentDate ? format(parseISO(lead.tentativeAppointmentDate), 'yyyy-MM-dd') : '',
+      appointmentDate: lead.tentativeAppointmentDate ? lead.tentativeAppointmentDate.split('T')[0] : '',
       appointmentTime: lead.tentativeAppointmentTime || '09:00',
       notes: '',
       workType: lead.workType || 'Inspection',
@@ -2440,7 +2449,7 @@ export default function CallCenterDashboard() {
   // Format appointment date/time nicely
   const formatApptDateTime = (dateStr, timeStr) => {
     if (!dateStr) return '-';
-    const date = parseISO(dateStr);
+    const date = parseISO(dateStr.split('T')[0]);
     const dateLabel = isToday(date) ? 'Today' : isTomorrow(date) ? 'Tomorrow' : format(date, 'EEE, MMM d');
     return timeStr ? `${dateLabel} at ${timeStr}` : dateLabel;
   };

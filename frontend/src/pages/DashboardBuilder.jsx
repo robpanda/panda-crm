@@ -76,9 +76,10 @@ export default function DashboardBuilder() {
 
   const loadSavedReports = async () => {
     try {
-      const response = await reportsApi.getReports();
-      if (response.success) {
-        setSavedReports(response.data);
+      const response = await reportsApi.getSavedReports();
+      if (response?.success || response?.data) {
+        const reports = response?.data?.reports || response?.data || response?.reports || [];
+        setSavedReports(Array.isArray(reports) ? reports : []);
       }
     } catch (error) {
       console.error('Failed to load saved reports:', error);
@@ -96,7 +97,7 @@ export default function DashboardBuilder() {
       }
 
       if (response.success) {
-        navigate('/reports');
+        navigate('/analytics/dashboards');
       }
     } catch (error) {
       console.error('Failed to save dashboard:', error);
@@ -203,7 +204,7 @@ export default function DashboardBuilder() {
         </div>
         <div className="flex items-center gap-3">
           <button
-            onClick={() => navigate('/reports')}
+            onClick={() => navigate('/analytics/dashboards')}
             className="px-4 py-2 text-gray-600 hover:text-gray-800"
           >
             Cancel

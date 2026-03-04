@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { opportunitiesApi, companyCamApi, scheduleApi, casesApi, emailsApi, notificationsApi, bamboogliApi, approvalsApi, measurementsApi, contactsApi, ringCentralApi, usersApi, quotesApi, invoicesApi, tasksApi, documentsApi } from '../services/api';
 import { useRingCentral } from '../context/RingCentralContext';
 import { useAuth } from '../context/AuthContext';
+import { addRecentItem } from '../utils/recentItems';
 import PhotoGallery from '../components/PhotoGallery';
 import CrewAccessManager from '../components/CrewAccessManager';
 import InspectionChecklist from '../components/InspectionChecklist';
@@ -1738,6 +1739,30 @@ export default function OpportunityDetail() {
     queryFn: () => opportunitiesApi.getOpportunity(id),
     enabled: !!id,
   });
+
+  useEffect(() => {
+    if (!opportunity?.id) return;
+    const label = opportunity.account?.name || opportunity.name || 'Job';
+    const metaParts = [];
+    if (opportunity.jobId) metaParts.push(`#${opportunity.jobId}`);
+    if (opportunity.city || opportunity.state) {
+      metaParts.push([opportunity.city, opportunity.state].filter(Boolean).join(', '));
+    }
+    addRecentItem('jobs', currentUser?.id, {
+      id: opportunity.id,
+      label,
+      meta: metaParts.join(' • '),
+      path: `/jobs/${opportunity.id}`,
+    });
+  }, [
+    opportunity?.id,
+    opportunity?.jobId,
+    opportunity?.name,
+    opportunity?.account?.name,
+    opportunity?.city,
+    opportunity?.state,
+    currentUser?.id,
+  ]);
 
   const { data: workOrders } = useQuery({
     queryKey: ['opportunityWorkOrders', id],

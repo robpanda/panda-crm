@@ -25,7 +25,7 @@ function getRoleType(roleInput) {
   // Handle case where role is an object with a name property
   const roleName = typeof roleInput === 'object' ? roleInput?.name : roleInput;
   if (!roleName) return ROLE_TYPES.SALES_REP;
-  const role = roleName.toLowerCase();
+  const role = String(roleName).toLowerCase();
   if (role.includes('super_admin') || role.includes('admin')) return ROLE_TYPES.ADMIN;
   if (role.includes('executive') || role.includes('exec')) return ROLE_TYPES.EXECUTIVE;
   if (role.includes('office_manager') || role.includes('office manager')) return ROLE_TYPES.OFFICE_MANAGER;

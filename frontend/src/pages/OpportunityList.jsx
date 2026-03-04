@@ -12,6 +12,7 @@ import {
   ChevronUp,
   ChevronDown,
   Calendar,
+  Filter,
   X,
   Plus,
   DollarSign,
@@ -89,6 +90,36 @@ const typeOptions = [
   { value: 'COMMERCIAL', label: 'Commercial' },
 ];
 
+const leadSourceOptions = [
+  { value: '', label: 'All Sources' },
+  { value: 'Customer Referral', label: 'Customer Referral' },
+  { value: 'Digital Marketing', label: 'Digital Marketing' },
+  { value: 'Employee Referral', label: 'Employee Referral' },
+  { value: 'Insurance Marketing', label: 'Insurance Marketing' },
+  { value: 'Internet Lead', label: 'Internet Lead' },
+  { value: 'Lead Aggregator', label: 'Lead Aggregator' },
+  { value: 'Other', label: 'Other' },
+  { value: 'Riley AI SMS', label: 'Riley AI SMS' },
+  { value: 'Riley Widget', label: 'Riley Widget' },
+  { value: 'Self-Gen', label: 'Self-Gen' },
+  { value: 'Solar Marketing', label: 'Solar Marketing' },
+  { value: 'Trade Show', label: 'Trade Show' },
+  { value: 'Website', label: 'Website' },
+  { value: 'Yard Sign', label: 'Yard Sign' },
+];
+
+const workTypeOptions = [
+  { value: '', label: 'All Work Types' },
+  { value: 'Commercial', label: 'Commercial' },
+  { value: 'Inspection', label: 'Inspection' },
+  { value: 'Insurance', label: 'Insurance' },
+  { value: 'Insurance Program', label: 'Insurance Program' },
+  { value: 'Interior', label: 'Interior' },
+  { value: 'Retail', label: 'Retail' },
+  { value: 'Service/Repair', label: 'Service/Repair' },
+  { value: 'Subcontractor', label: 'Subcontractor' },
+];
+
 // Default visible columns
 const DEFAULT_COLUMNS = ['jobId', 'priority', 'name', 'account', 'amount', 'stage', 'type', 'closeDate', 'owner'];
 
@@ -99,11 +130,18 @@ export default function OpportunityList() {
 
   const [search, setSearch] = useState('');
   const [ownerFilter, setOwnerFilter] = useState('all');
+  const [ownerId, setOwnerId] = useState('');
+  const [ownerSearch, setOwnerSearch] = useState('');
   const [stage, setStage] = useState(initialStage === 'all' ? '' : initialStage);
   const [type, setType] = useState('');
+  const [leadSource, setLeadSource] = useState('');
+  const [workType, setWorkType] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [sortBy, setSortBy] = useState('createdAt');
   const [sortOrder, setSortOrder] = useState('desc');
   const [page, setPage] = useState(1);
+  const [showFilters, setShowFilters] = useState(false);
 
   // Bulk selection state
   const [selectionMode, setSelectionMode] = useState(false);
@@ -126,10 +164,15 @@ export default function OpportunityList() {
     const params = { page, limit: 25, sortBy, sortOrder };
     if (search) params.search = search;
     if (ownerFilter === 'mine') params.ownerFilter = 'mine';
+    if (ownerId) params.ownerId = ownerId;
     if (stage) params.stage = stage;
     if (type) params.type = type;
+    if (leadSource) params.leadSource = leadSource;
+    if (workType) params.workType = workType;
+    if (startDate) params.createdFrom = startDate;
+    if (endDate) params.createdTo = endDate;
     return params;
-  }, [search, ownerFilter, stage, type, sortBy, sortOrder, page]);
+  }, [search, ownerFilter, ownerId, stage, type, leadSource, workType, startDate, endDate, sortBy, sortOrder, page]);
 
   const { data, isLoading } = useQuery({
     queryKey: ['opportunities', queryParams],
@@ -139,6 +182,19 @@ export default function OpportunityList() {
   const { data: stageCounts } = useQuery({
     queryKey: ['opportunityStageCounts'],
     queryFn: () => opportunitiesApi.getStageCounts(),
+  });
+
+  const { data: ownerOptions } = useQuery({
+    queryKey: ['users-dropdown'],
+    queryFn: () => usersApi.getUsersForDropdown(),
+  });
+
+  const filteredOwners = (ownerOptions || []).filter((u) => {
+    const name = `${u.firstName || ''} ${u.lastName || ''}`.trim().toLowerCase();
+    const email = (u.email || '').toLowerCase();
+    const searchValue = ownerSearch.trim().toLowerCase();
+    if (!searchValue) return true;
+    return name.includes(searchValue) || email.includes(searchValue);
   });
 
   const opportunities = data?.data || [];
@@ -229,13 +285,19 @@ export default function OpportunityList() {
       <ChevronDown className="w-4 h-4 inline ml-1" />;
   };
 
-  const hasActiveFilters = search || stage || type || ownerFilter !== 'all';
+  const hasActiveFilters = search || stage || type || ownerFilter !== 'all' || ownerId || leadSource || workType || startDate || endDate;
 
   const clearFilters = () => {
     setSearch('');
     setStage('');
     setType('');
     setOwnerFilter('all');
+    setOwnerId('');
+    setOwnerSearch('');
+    setLeadSource('');
+    setWorkType('');
+    setStartDate('');
+    setEndDate('');
     setPage(1);
   };
 
@@ -270,6 +332,7 @@ export default function OpportunityList() {
               key={tab.id}
               onClick={() => {
                 setOwnerFilter(tab.id === 'mine' ? 'mine' : 'all');
+                setOwnerId('');
                 if (tab.id === 'open') setStage('');
                 if (tab.id === 'won') setStage('CLOSED_WON');
                 if (tab.id === 'all') setStage('');
@@ -326,6 +389,20 @@ export default function OpportunityList() {
                 <option key={opt.value} value={opt.value}>{opt.label}</option>
               ))}
             </select>
+            <button
+              onClick={() => setShowFilters(!showFilters)}
+              className={`inline-flex items-center px-4 py-2 border rounded-lg transition-colors ${
+                showFilters || hasActiveFilters
+                  ? 'border-panda-primary bg-panda-primary/5 text-panda-primary'
+                  : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              <Filter className="w-4 h-4 mr-2" />
+              Filters
+              {hasActiveFilters && (
+                <span className="ml-2 w-2 h-2 bg-panda-primary rounded-full"></span>
+              )}
+            </button>
             {hasActiveFilters && (
               <button
                 onClick={clearFilters}
@@ -344,6 +421,105 @@ export default function OpportunityList() {
             />
           </div>
         </div>
+
+        {showFilters && (
+          <div className="px-4 pb-4 border-b border-gray-100">
+            <div className="bg-gray-50 rounded-lg p-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Lead Source
+                  </label>
+                  <select
+                    value={leadSource}
+                    onChange={(e) => { setLeadSource(e.target.value); setPage(1); }}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent bg-white"
+                  >
+                    {leadSourceOptions.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Work Type
+                  </label>
+                  <select
+                    value={workType}
+                    onChange={(e) => { setWorkType(e.target.value); setPage(1); }}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent bg-white"
+                  >
+                    {workTypeOptions.map((opt) => (
+                      <option key={opt.value} value={opt.value}>{opt.label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Created From
+                  </label>
+                  <div className="relative">
+                    <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                    <input
+                      type="date"
+                      value={startDate}
+                      onChange={(e) => { setStartDate(e.target.value); setPage(1); }}
+                      className="w-full pl-10 pr-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Created To
+                  </label>
+                  <div className="relative">
+                    <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                    <input
+                      type="date"
+                      value={endDate}
+                      onChange={(e) => { setEndDate(e.target.value); setPage(1); }}
+                      className="w-full pl-10 pr-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+                    />
+                  </div>
+                </div>
+
+                <div className="md:col-span-2 lg:col-span-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Owner
+                  </label>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <input
+                      type="text"
+                      value={ownerSearch}
+                      onChange={(e) => setOwnerSearch(e.target.value)}
+                      placeholder="Search owners..."
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent bg-white"
+                    />
+                    <select
+                      value={ownerId}
+                      onChange={(e) => {
+                        setOwnerId(e.target.value);
+                        setOwnerFilter('all');
+                        setPage(1);
+                      }}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent bg-white"
+                    >
+                      <option value="">All Owners</option>
+                      {filteredOwners.map((owner) => (
+                        <option key={owner.id} value={owner.id}>
+                          {owner.firstName} {owner.lastName}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Bulk Actions Toolbar */}
         <div className="flex items-center justify-between px-4 py-2 border-b border-gray-100 bg-gray-50">

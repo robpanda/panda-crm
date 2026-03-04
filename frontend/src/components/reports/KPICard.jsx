@@ -1,5 +1,9 @@
 import { TrendingUp, TrendingDown, Minus, ExternalLink } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import DataSourceBadge from '../analytics/DataSourceBadge';
+import VerifiedBadge from '../analytics/VerifiedBadge';
+import EmptyStateDiagnosticsLink from '../analytics/EmptyStateDiagnosticsLink';
+import { useAnalyticsBadgeContext } from '../analytics/AnalyticsBadgeContext';
 
 export default function KPICard({
   title,
@@ -14,8 +18,14 @@ export default function KPICard({
   reportId,  // Optional report ID to link to
   reportFilter, // Optional filter to apply when navigating to report
   onClick, // Optional custom click handler
+  source,
+  verifiedStatus,
+  verifiedReason,
+  showBadges,
+  emptyStateContext,
 }) {
   const navigate = useNavigate();
+  const analyticsBadges = useAnalyticsBadgeContext();
   const formatValue = (val) => {
     if (val === null || val === undefined) return '-';
 
@@ -40,6 +50,11 @@ export default function KPICard({
   };
 
   const change = getChange();
+  const formattedValue = formatValue(value);
+  const isValueEmpty = value === null || value === undefined || value === 0;
+  const showEmptyDiagnostics = Boolean(emptyStateContext)
+    && !loading
+    && (emptyStateContext?.isEmpty ?? (isValueEmpty || formattedValue === '-'));
 
   const getTrendIcon = () => {
     if (change === null) return null;
@@ -83,7 +98,7 @@ export default function KPICard({
         });
       }
       const queryString = params.toString();
-      navigate(`/reports/${reportId}${queryString ? `?${queryString}` : ''}`);
+      navigate(`/analytics/reports/${reportId}${queryString ? `?${queryString}` : ''}`);
     }
   };
 
@@ -114,6 +129,11 @@ export default function KPICard({
     large: 'w-7 h-7',
   };
 
+  const resolvedShowBadges = showBadges ?? analyticsBadges?.enabled ?? false;
+  const resolvedSource = source || analyticsBadges?.defaultSource || 'unknown';
+  const resolvedStatus = verifiedStatus || analyticsBadges?.verification?.status || 'unknown';
+  const resolvedReason = verifiedReason || analyticsBadges?.verification?.reason || 'Verification unavailable.';
+
   return (
     <div
       className={`bg-white rounded-xl ${sizeClasses[size]} shadow-sm border border-gray-100 hover:shadow-md transition-all ${
@@ -132,7 +152,18 @@ export default function KPICard({
               <ExternalLink className="w-3 h-3 text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity" />
             )}
           </div>
-          <p className={`${valueSizeClasses[size]} font-bold text-gray-900 mt-1`}>{formatValue(value)}</p>
+          {resolvedShowBadges && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              <DataSourceBadge source={resolvedSource} />
+              <VerifiedBadge status={resolvedStatus} reason={resolvedReason} />
+            </div>
+          )}
+          <p className={`${valueSizeClasses[size]} font-bold text-gray-900 mt-1`}>{formattedValue}</p>
+          {showEmptyDiagnostics && (
+            <div className="mt-1">
+              <EmptyStateDiagnosticsLink context={emptyStateContext} />
+            </div>
+          )}
 
           {/* Trend indicator */}
           {change !== null && (

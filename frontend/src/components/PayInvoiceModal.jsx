@@ -147,8 +147,6 @@ export default function PayInvoiceModal({ isOpen, onClose, invoice, opportunity 
   const [error, setError] = useState(null);
 
   const balanceDue = parseFloat(invoice?.balanceDue || invoice?.totalAmount || 0);
-  const downPaymentPercent = opportunity?.downPaymentPercent || 10;
-  const downPaymentAmount = Math.round(balanceDue * (downPaymentPercent / 100) * 100) / 100;
 
   // Fetch Stripe config
   const { data: stripeConfig } = useQuery({
@@ -177,16 +175,10 @@ export default function PayInvoiceModal({ isOpen, onClose, invoice, opportunity 
     },
   });
 
-  // Update payment amount when type changes
+  // Payment amount is always the full balance due
   useEffect(() => {
-    if (amountType === 'full') {
-      setPaymentAmount(balanceDue);
-    } else if (amountType === 'downpayment') {
-      setPaymentAmount(downPaymentAmount);
-    } else if (amountType === 'partial') {
-      setPaymentAmount(parseFloat(customAmount) || 0);
-    }
-  }, [amountType, balanceDue, downPaymentAmount, customAmount]);
+    setPaymentAmount(balanceDue);
+  }, [balanceDue]);
 
   // Reset state when modal opens
   useEffect(() => {
@@ -286,78 +278,19 @@ export default function PayInvoiceModal({ isOpen, onClose, invoice, opportunity 
 
                 {/* Amount Type Selection */}
                 <div className="space-y-3">
-                  <label className="text-sm font-medium text-gray-700">Select Payment Amount</label>
+                  <label className="text-sm font-medium text-gray-700">Payment Amount</label>
 
-                  {/* Full Amount */}
-                  <label className={`flex items-center justify-between p-4 border-2 rounded-lg cursor-pointer transition-colors ${amountType === 'full' ? 'border-green-500 bg-green-50' : 'border-gray-200 hover:border-gray-300'}`}>
+                  {/* Full Amount Only */}
+                  <div className="flex items-center justify-between p-4 border-2 rounded-lg border-green-500 bg-green-50">
                     <div className="flex items-center gap-3">
-                      <input
-                        type="radio"
-                        name="amountType"
-                        value="full"
-                        checked={amountType === 'full'}
-                        onChange={(e) => setAmountType(e.target.value)}
-                        className="w-4 h-4 text-green-600"
-                      />
+                      <div className="w-4 h-4 rounded-full border-2 border-green-600 bg-green-600" />
                       <div>
                         <span className="font-medium text-gray-900">Full Amount</span>
                         <p className="text-sm text-gray-500">Pay entire balance</p>
                       </div>
                     </div>
                     <span className="text-lg font-bold text-gray-900">${balanceDue.toLocaleString()}</span>
-                  </label>
-
-                  {/* Down Payment */}
-                  <label className={`flex items-center justify-between p-4 border-2 rounded-lg cursor-pointer transition-colors ${amountType === 'downpayment' ? 'border-green-500 bg-green-50' : 'border-gray-200 hover:border-gray-300'}`}>
-                    <div className="flex items-center gap-3">
-                      <input
-                        type="radio"
-                        name="amountType"
-                        value="downpayment"
-                        checked={amountType === 'downpayment'}
-                        onChange={(e) => setAmountType(e.target.value)}
-                        className="w-4 h-4 text-green-600"
-                      />
-                      <div>
-                        <span className="font-medium text-gray-900">Down Payment ({downPaymentPercent}%)</span>
-                        <p className="text-sm text-gray-500">Initial deposit to start work</p>
-                      </div>
-                    </div>
-                    <span className="text-lg font-bold text-gray-900">${downPaymentAmount.toLocaleString()}</span>
-                  </label>
-
-                  {/* Partial/Custom Amount */}
-                  <label className={`flex items-center justify-between p-4 border-2 rounded-lg cursor-pointer transition-colors ${amountType === 'partial' ? 'border-green-500 bg-green-50' : 'border-gray-200 hover:border-gray-300'}`}>
-                    <div className="flex items-center gap-3">
-                      <input
-                        type="radio"
-                        name="amountType"
-                        value="partial"
-                        checked={amountType === 'partial'}
-                        onChange={(e) => setAmountType(e.target.value)}
-                        className="w-4 h-4 text-green-600"
-                      />
-                      <div>
-                        <span className="font-medium text-gray-900">Partial Amount</span>
-                        <p className="text-sm text-gray-500">Enter custom amount</p>
-                      </div>
-                    </div>
-                    {amountType === 'partial' && (
-                      <div className="relative">
-                        <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                        <input
-                          type="number"
-                          value={customAmount}
-                          onChange={(e) => setCustomAmount(e.target.value)}
-                          placeholder="0.00"
-                          className="w-32 pl-8 pr-3 py-2 border border-gray-300 rounded-lg text-right font-medium"
-                          min="0"
-                          max={balanceDue}
-                          step="0.01"
-                        />
-                      </div>
-                    )}
-                  </label>
+                  </div>
                 </div>
 
                 {error && (
