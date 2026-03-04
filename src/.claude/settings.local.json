@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run compile:*)",
+      "Bash(aws ecs describe-task-definition:*)"
+    ]
+  }
+}
