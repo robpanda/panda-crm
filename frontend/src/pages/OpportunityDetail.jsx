@@ -2398,6 +2398,37 @@ export default function OpportunityDetail() {
     },
   });
 
+  const generatePortalLinkMutation = useMutation({
+    mutationFn: () => opportunitiesApi.generatePortalLink(id, { expiresInDays: 30 }),
+    onSuccess: async (result) => {
+      const portalUrl = result?.data?.url || result?.url;
+      if (!portalUrl) {
+        setActionError('Portal link generated but URL was missing');
+        return;
+      }
+
+      let copied = false;
+      try {
+        if (navigator?.clipboard?.writeText) {
+          await navigator.clipboard.writeText(portalUrl);
+          copied = true;
+        }
+      } catch (error) {
+        console.warn('Clipboard copy failed for portal URL', error);
+      }
+
+      if (!copied) {
+        window.prompt('Copy customer portal link', portalUrl);
+      }
+
+      setActionSuccess(copied ? 'Customer portal link copied to clipboard' : 'Customer portal link generated');
+      setTimeout(() => setActionSuccess(null), 5000);
+    },
+    onError: (error) => {
+      setActionError(error.message || 'Failed to generate customer portal link');
+    },
+  });
+
   // GAF Quick Measure form state
   const [gafMeasureForm, setGafMeasureForm] = useState({
     measurementType: 'QuickMeasureResidentialSingleFamily',
@@ -3359,17 +3390,6 @@ export default function OpportunityDetail() {
                       </button>
                       <button
                         onClick={() => {
-                          setActiveQuickAction('eagleviewMeasure');
-                          setShowQuickActionModal(true);
-                          setShowActionsMenu(false);
-                        }}
-                        className="w-full flex items-center space-x-3 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
-                      >
-                        <Eye className="w-4 h-4 text-orange-600" />
-                        <span>EagleView Measurements</span>
-                      </button>
-                      <button
-                        onClick={() => {
                           setActiveQuickAction('hoverCapture');
                           setShowQuickActionModal(true);
                           setShowActionsMenu(false);
@@ -3395,6 +3415,21 @@ export default function OpportunityDetail() {
                       {/* Sales Actions Section */}
                       <div className="border-t border-gray-100 my-1" />
                       <div className="px-4 py-1.5 text-xs font-medium text-gray-400 uppercase">Sales Actions</div>
+                      <button
+                        onClick={() => {
+                          generatePortalLinkMutation.mutate();
+                          setShowActionsMenu(false);
+                        }}
+                        disabled={generatePortalLinkMutation.isPending}
+                        className="w-full flex items-center space-x-3 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+                      >
+                        {generatePortalLinkMutation.isPending ? (
+                          <Loader2 className="w-4 h-4 text-blue-600 animate-spin" />
+                        ) : (
+                          <Globe className="w-4 h-4 text-blue-600" />
+                        )}
+                        <span>{generatePortalLinkMutation.isPending ? 'Generating Portal Link...' : 'Copy Customer Portal Link'}</span>
+                      </button>
                       <button
                         onClick={() => {
                           setActiveQuickAction('requestEstimate');
@@ -3950,16 +3985,6 @@ export default function OpportunityDetail() {
                           >
                             <Ruler className="w-4 h-4" />
                             Order GAF QuickMeasure
-                          </button>
-                          <button
-                            onClick={() => {
-                              setActiveQuickAction('eagleviewMeasure');
-                              setShowQuickActionModal(true);
-                            }}
-                            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium transition-colors"
-                          >
-                            <Ruler className="w-4 h-4" />
-                            Order EagleView
                           </button>
                           <button
                             onClick={() => {
