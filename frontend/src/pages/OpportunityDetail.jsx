@@ -2072,6 +2072,79 @@ function ActivityTimelineTab({ activities = [], onActivityClick }) {
   );
 }
 
+function ArchiveTimelineTab({ activities = [], onActivityClick }) {
+  const sortedActivities = [...activities].sort((a, b) => {
+    const dateA = new Date(a.createdAt || a.occurredAt || 0);
+    const dateB = new Date(b.createdAt || b.occurredAt || 0);
+    return dateB - dateA;
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+        <p className="text-sm text-amber-800 font-medium flex items-center">
+          <Archive className="w-4 h-4 mr-2" />
+          {sortedActivities.length} archived communication item{sortedActivities.length === 1 ? '' : 's'}
+        </p>
+        <p className="text-xs text-amber-700 mt-1">
+          Imported historical activity from AccuLynx (read-only).
+        </p>
+      </div>
+
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm">
+        {sortedActivities.length > 0 ? (
+          <div className="divide-y divide-gray-100">
+            {sortedActivities.map((item, index) => {
+              const itemKey = item.id || `archive-${index}`;
+              const displayDate = new Date(item.createdAt || item.occurredAt || 0).toLocaleString();
+              const userName = item.user
+                ? `${item.user.firstName || ''} ${item.user.lastName || ''}`.trim()
+                : item.externalName || item.userName || 'Imported';
+
+              return (
+                <button
+                  key={itemKey}
+                  type="button"
+                  onClick={() => onActivityClick?.(item)}
+                  className="w-full text-left p-4 hover:bg-gray-50 transition-colors"
+                >
+                  <div className="flex items-start space-x-3">
+                    <div className="w-10 h-10 rounded-lg bg-amber-100 flex items-center justify-center flex-shrink-0">
+                      <Archive className="w-5 h-5 text-amber-600" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-gray-900 truncate">
+                            {item.subject || item.title || 'Archived Activity'}
+                          </p>
+                          <p className="text-xs text-gray-500 mt-1">{userName}</p>
+                        </div>
+                        <span className="text-xs text-gray-500 flex-shrink-0">{displayDate}</span>
+                      </div>
+                      {(item.body || item.description || item.content) && (
+                        <p className="text-sm text-gray-600 mt-2 line-clamp-3 whitespace-pre-wrap">
+                          {item.body || item.description || item.content}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="text-center py-12 text-gray-500">
+            <Archive className="w-12 h-12 mx-auto text-gray-300 mb-3" />
+            <p className="font-medium">No archived communications</p>
+            <p className="text-sm mt-1">Imported AccuLynx history will appear here</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function OpportunityDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -2322,6 +2395,15 @@ export default function OpportunityDetail() {
     queryFn: () => opportunitiesApi.getActivity(id),
     enabled: !!id,
   });
+  const allActivities = activityData?.activities || [];
+  const archivedActivities = useMemo(
+    () => allActivities.filter((activity) => activity?.sourceType === 'ACCULYNX_IMPORT'),
+    [allActivities]
+  );
+  const visibleActivities = useMemo(
+    () => allActivities.filter((activity) => activity?.sourceType !== 'ACCULYNX_IMPORT'),
+    [allActivities]
+  );
 
   const { data: documents } = useQuery({
     queryKey: ['opportunityDocuments', id],
@@ -3470,10 +3552,10 @@ export default function OpportunityDetail() {
   const categoryBadgeCounts = useMemo(() => ({
     schedule: (appointments?.length || 0) + (tasks?.filter(t => t.status !== 'COMPLETED')?.length || 0),
     financial: (invoices?.length || 0) + (commissions?.length || 0) + (quotes?.length || 0),
-    documents: (documents?.documents?.length || 0) + (photos?.length || 0) + (activityData?.activities?.filter(a => a.sourceType !== 'ACCULYNX_IMPORT')?.length || 0),
+    documents: (documents?.documents?.length || 0) + (photos?.length || 0) + (visibleActivities.length || 0),
     team: (contacts?.length || 0) + (workOrders?.length || 0) + (cases?.length || 0),
     messages: totalUnread + unreadNotifications,
-  }), [appointments, tasks, invoices, commissions, quotes, documents, photos, activityData, contacts, workOrders, cases, totalUnread, unreadNotifications]);
+  }), [appointments, tasks, invoices, commissions, quotes, documents, photos, visibleActivities, contacts, workOrders, cases, totalUnread, unreadNotifications]);
 
   // Calculate sub-tab counts for the current category (must be before early returns)
   const subTabCounts = useMemo(() => {
@@ -3493,7 +3575,7 @@ export default function OpportunityDetail() {
       case 'documents':
         return {
           documents: (documents?.documents?.length || 0) + (photos?.length || 0),
-          activity: activityData?.activities?.filter(a => a.sourceType !== 'ACCULYNX_IMPORT')?.length || 0,
+          activity: visibleActivities.length || 0,
         };
       case 'team':
         return {
@@ -3508,12 +3590,13 @@ export default function OpportunityDetail() {
           internalNotes: 0,
           conversations: totalUnread,
           notifications: unreadNotifications,
-          activity: activityData?.activities?.length || 0,
+          activity: visibleActivities.length || 0,
+          archive: archivedActivities.length || 0,
         };
       default:
         return {};
     }
-  }, [activeCategory, appointments, tasks, invoices, commissions, quotes, documents, photos, activityData, contacts, workOrders, cases, totalUnread, unreadNotifications]);
+  }, [activeCategory, appointments, tasks, invoices, commissions, quotes, documents, photos, visibleActivities, archivedActivities, contacts, workOrders, cases, totalUnread, unreadNotifications]);
 
   // Early returns (after all hooks)
   if (isLoading) {
@@ -3555,7 +3638,8 @@ export default function OpportunityDetail() {
     { id: 'payments', label: 'Payments', icon: CreditCard, count: payments?.length || 0 },
     { id: 'commissions', label: 'Commissions', icon: Percent, count: summary?.counts?.commissions || commissions?.length || 0 },
     { id: 'documents', label: 'Documents', icon: FileSignature, count: (summary?.counts?.documents || documents?.documents?.length || 0) },
-    { id: 'activity', label: 'Activity', icon: Activity, count: activityData?.activities?.length || 0 },
+    { id: 'activity', label: 'Activity', icon: Activity, count: visibleActivities.length || 0 },
+    { id: 'archive', label: 'Archive', icon: Archive, count: archivedActivities.length || 0 },
     { id: 'tasks', label: 'Tasks', icon: CheckSquare, count: tasks?.filter(t => t.status !== 'COMPLETED')?.length || 0 },
     { id: 'checklist', label: 'Checklist', icon: ClipboardList },
   ];
@@ -7559,7 +7643,17 @@ export default function OpportunityDetail() {
 
                 {activeTab === 'activity' && (
                   <ActivityTimelineTab
-                    activities={activityData?.activities || []}
+                    activities={visibleActivities}
+                    onActivityClick={(item) => {
+                      setSelectedActivity(item);
+                      setShowActivityModal(true);
+                    }}
+                  />
+                )}
+
+                {activeTab === 'archive' && (
+                  <ArchiveTimelineTab
+                    activities={archivedActivities}
                     onActivityClick={(item) => {
                       setSelectedActivity(item);
                       setShowActivityModal(true);

@@ -78,6 +78,7 @@ export const CATEGORIES = {
       { id: 'conversations', label: 'Customer Comms' },
       { id: 'notifications', label: 'Notifications' },
       { id: 'activity', label: 'Activity' },
+      { id: 'archive', label: 'Archive' },
     ],
   },
 };
@@ -104,6 +105,7 @@ export const TAB_TO_CATEGORY = {
   approvals: 'team',
   conversations: 'messages',
   notifications: 'messages',
+  archive: 'messages',
 };
 
 export default function SuperTabNav({

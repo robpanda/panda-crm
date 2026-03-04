@@ -128,6 +128,7 @@ export default function useJobCategories(initialCategory = 'schedule') {
         counts.internalNotes = data.internalNotes?.length || 0;
         counts.notifications = data.notifications?.length || 0;
         counts.activity = data.activities?.length || 0;
+        counts.archive = data.archivedActivities?.length || 0;
         break;
     }
 
