@@ -15,6 +15,10 @@ WORKDIR /app
 # Copy shared modules
 COPY shared/prisma ./shared/prisma
 
+# Production DB is missing the latest disposition columns in shared schema.
+# Strip them for this service build until migrations are applied.
+RUN sed -i '/currentDispositionCategory/d;/currentDispositionReason/d' ./shared/prisma/schema.prisma
+
 # Copy service files
 COPY services/opportunities/package*.json ./
 
