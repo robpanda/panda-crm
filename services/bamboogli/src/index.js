@@ -37,7 +37,7 @@ app.use(express.urlencoded({ extended: true })); // For Twilio webhooks
 
 // Health check
 app.get('/health', (req, res) => {
-  res.json({ status: 'healthy', service: 'bamboogli' });
+  res.json({ status: 'healthy', service: 'bamboogli', buildSha: process.env.BUILD_SHA || process.env.GITHUB_SHA || 'unknown', buildTime: process.env.BUILD_TIME || process.env.GITHUB_RUN_ID || null });
 });
 
 // Routes

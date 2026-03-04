@@ -39,12 +39,10 @@ app.use(express.json());
 
 // Health check
 app.get('/health', (req, res) => {
-  res.json({
-    status: 'healthy',
+  res.json({ status: 'healthy',
     service: 'workflows',
     timestamp: new Date().toISOString(),
-    features: ['workflows', 'commissions', 'templates', 'messaging', 'approvals', 'triggers', 'orphaned-records'],
-  });
+    features: ['workflows', 'commissions', 'templates', 'messaging', 'approvals', 'triggers', 'orphaned-records'], buildSha: process.env.BUILD_SHA || process.env.GITHUB_SHA || 'unknown', buildTime: process.env.BUILD_TIME || process.env.GITHUB_RUN_ID || null });
 });
 
 // Routes - /api/workflows/* to match ALB path-based routing

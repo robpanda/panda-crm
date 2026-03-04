@@ -88,8 +88,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Health check (ALB target group uses /health)
 app.get('/health', (req, res) => {
-  res.json({
-    status: 'healthy',
+  res.json({ status: 'healthy',
     service: 'photocam',
     timestamp: new Date().toISOString(),
     features: [
@@ -103,14 +102,12 @@ app.get('/health', (req, res) => {
       'galleries',
       'ai-analysis',
       'ai-reports',
-    ],
-  });
+    ], buildSha: process.env.BUILD_SHA || process.env.GITHUB_SHA || 'unknown', buildTime: process.env.BUILD_TIME || process.env.GITHUB_RUN_ID || null });
 });
 
 // Health check at /api/photocam/health for external access
 app.get('/api/photocam/health', (req, res) => {
-  res.json({
-    status: 'healthy',
+  res.json({ status: 'healthy',
     service: 'photocam',
     timestamp: new Date().toISOString(),
     features: [
@@ -124,8 +121,7 @@ app.get('/api/photocam/health', (req, res) => {
       'galleries',
       'ai-analysis',
       'ai-reports',
-    ],
-  });
+    ], buildSha: process.env.BUILD_SHA || process.env.GITHUB_SHA || 'unknown', buildTime: process.env.BUILD_TIME || process.env.GITHUB_RUN_ID || null });
 });
 
 // Diagnostic endpoint to check configuration

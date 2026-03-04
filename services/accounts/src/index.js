@@ -37,7 +37,7 @@ app.options('*', cors());
 
 // Health check (no auth required)
 app.get('/health', (req, res) => {
-  res.json({ status: 'healthy', service: 'accounts', timestamp: new Date().toISOString() });
+  res.json({ status: 'healthy', service: 'accounts', timestamp: new Date().toISOString(), buildSha: process.env.BUILD_SHA || process.env.GITHUB_SHA || 'unknown', buildTime: process.env.BUILD_TIME || process.env.GITHUB_RUN_ID || null });
 });
 
 // Apply auth middleware to all routes below

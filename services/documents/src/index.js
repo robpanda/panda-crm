@@ -41,12 +41,10 @@ app.use(express.json({ limit: '50mb' }));
 
 // Health check
 app.get('/health', (req, res) => {
-  res.json({
-    status: 'healthy',
+  res.json({ status: 'healthy',
     service: 'documents',
     timestamp: new Date().toISOString(),
-    features: ['agreements', 'templates', 'signatures', 'file-storage', 'pdf-generation'],
-  });
+    features: ['agreements', 'templates', 'signatures', 'file-storage', 'pdf-generation'], buildSha: process.env.BUILD_SHA || process.env.GITHUB_SHA || 'unknown', buildTime: process.env.BUILD_TIME || process.env.GITHUB_RUN_ID || null });
 });
 
 // Routes - /api/documents/* to match ALB path-based routing
