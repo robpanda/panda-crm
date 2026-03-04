@@ -11,15 +11,17 @@
  * - Account updates are skipped when an account has multiple opportunities.
  *
  * Usage:
- *   node scripts/migration/backfill-converted-job-account-names.js
- *   node scripts/migration/backfill-converted-job-account-names.js --apply
- *   node scripts/migration/backfill-converted-job-account-names.js --apply --limit 500
+ *   node backfill-converted-job-account-names.js
+ *   node backfill-converted-job-account-names.js --apply
+ *   node backfill-converted-job-account-names.js --apply --limit 500
  */
 
 import dotenv from 'dotenv';
-import { prisma, disconnect } from './prisma-client.js';
+import pg from 'pg';
 
 dotenv.config();
+
+const { Client } = pg;
 
 function normalizeText(value) {
   if (value === undefined || value === null) return '';
@@ -51,9 +53,42 @@ function parseArgs() {
   };
 }
 
+function chunk(values, size = 500) {
+  const output = [];
+  for (let i = 0; i < values.length; i += size) {
+    output.push(values.slice(i, i + size));
+  }
+  return output;
+}
+
+async function queryByIds(client, sql, ids) {
+  if (!ids.length) return [];
+  const rows = [];
+  for (const batch of chunk(ids, 500)) {
+    const result = await client.query(sql, [batch]);
+    rows.push(...result.rows);
+  }
+  return rows;
+}
+
 async function main() {
   const { apply, limit } = parseArgs();
   const dryRun = !apply;
+
+  if (!process.env.DATABASE_URL) {
+    throw new Error('DATABASE_URL is required');
+  }
+
+  const connectionString = process.env.DATABASE_URL
+    .replace(/([?&])sslmode=require(&)?/i, (match, prefix, suffix) => (prefix === '?' && !suffix ? '' : prefix))
+    .replace(/[?&]$/g, '');
+
+  const client = new Client({
+    connectionString,
+    ssl: { rejectUnauthorized: false },
+  });
+
+  await client.connect();
 
   console.log('='.repeat(72));
   console.log('Backfill: Converted Lead Job + Account Names');
@@ -62,42 +97,46 @@ async function main() {
   console.log(`Limit: ${limit || 'none'}`);
   console.log('');
 
-  const leadWhere = {
-    isConverted: true,
-    convertedOpportunityId: { not: null },
-  };
+  const leadQuery = `
+    SELECT
+      id,
+      first_name AS "firstName",
+      last_name AS "lastName",
+      company,
+      converted_opportunity_id AS "convertedOpportunityId",
+      converted_account_id AS "convertedAccountId"
+    FROM leads
+    WHERE is_converted = true
+      AND converted_opportunity_id IS NOT NULL
+    ORDER BY converted_date ASC NULLS LAST, created_at ASC
+    ${limit ? `LIMIT ${Number(limit)}` : ''}
+  `;
 
-  const leads = await prisma.lead.findMany({
-    where: leadWhere,
-    orderBy: { convertedDate: 'asc' },
-    ...(limit ? { take: limit } : {}),
-    select: {
-      id: true,
-      firstName: true,
-      lastName: true,
-      company: true,
-      convertedOpportunityId: true,
-      convertedAccountId: true,
-    },
-  });
+  const leadResult = await client.query(leadQuery);
+  const leads = leadResult.rows;
 
   console.log(`Converted leads considered: ${leads.length}`);
   if (leads.length === 0) {
-    await disconnect();
+    await client.end();
     return;
   }
 
   const opportunityIds = [...new Set(leads.map((lead) => lead.convertedOpportunityId).filter(Boolean))];
-  const opportunities = await prisma.opportunity.findMany({
-    where: { id: { in: opportunityIds } },
-    select: {
-      id: true,
-      name: true,
-      jobId: true,
-      accountId: true,
-      deletedAt: true,
-    },
-  });
+
+  const opportunities = await queryByIds(
+    client,
+    `
+      SELECT
+        id,
+        name,
+        job_id AS "jobId",
+        account_id AS "accountId",
+        deleted_at AS "deletedAt"
+      FROM opportunities
+      WHERE id = ANY($1::text[])
+    `,
+    opportunityIds
+  );
 
   const opportunitiesById = new Map(opportunities.map((opp) => [opp.id, opp]));
   const opportunitiesPerAccount = new Map();
@@ -105,22 +144,21 @@ async function main() {
     opportunitiesPerAccount.set(opp.accountId, (opportunitiesPerAccount.get(opp.accountId) || 0) + 1);
   }
 
-  const accountIds = [
-    ...new Set(
-      opportunities
-        .map((opp) => opp.accountId)
-        .filter(Boolean)
-    ),
-  ];
+  const accountIds = [...new Set(opportunities.map((opp) => opp.accountId).filter(Boolean))];
 
-  const accounts = await prisma.account.findMany({
-    where: { id: { in: accountIds } },
-    select: {
-      id: true,
-      name: true,
-      deletedAt: true,
-    },
-  });
+  const accounts = await queryByIds(
+    client,
+    `
+      SELECT
+        id,
+        name,
+        deleted_at AS "deletedAt"
+      FROM accounts
+      WHERE id = ANY($1::text[])
+    `,
+    accountIds
+  );
+
   const accountsById = new Map(accounts.map((account) => [account.id, account]));
 
   const opportunityUpdates = new Map();
@@ -229,40 +267,47 @@ async function main() {
   if (dryRun) {
     console.log('');
     console.log('Dry run complete. Re-run with --apply to write changes.');
-    await disconnect();
+    await client.end();
     return;
   }
 
   console.log('');
   console.log('Applying updates...');
 
-  let opportunityUpdated = 0;
-  for (const update of opportunityUpdates.values()) {
-    await prisma.opportunity.update({
-      where: { id: update.id },
-      data: { name: update.to },
-    });
-    opportunityUpdated += 1;
+  await client.query('BEGIN');
+  try {
+    let opportunityUpdated = 0;
+    for (const update of opportunityUpdates.values()) {
+      await client.query(
+        'UPDATE opportunities SET name = $1, updated_at = NOW() WHERE id = $2',
+        [update.to, update.id]
+      );
+      opportunityUpdated += 1;
+    }
+
+    let accountUpdated = 0;
+    for (const update of accountUpdates.values()) {
+      await client.query(
+        'UPDATE accounts SET name = $1, updated_at = NOW() WHERE id = $2',
+        [update.to, update.id]
+      );
+      accountUpdated += 1;
+    }
+
+    await client.query('COMMIT');
+
+    console.log(`Updated opportunities: ${opportunityUpdated}`);
+    console.log(`Updated accounts: ${accountUpdated}`);
+    console.log('Backfill complete.');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    await client.end();
   }
-
-  let accountUpdated = 0;
-  for (const update of accountUpdates.values()) {
-    await prisma.account.update({
-      where: { id: update.id },
-      data: { name: update.to },
-    });
-    accountUpdated += 1;
-  }
-
-  console.log(`Updated opportunities: ${opportunityUpdated}`);
-  console.log(`Updated accounts: ${accountUpdated}`);
-  console.log('Backfill complete.');
-
-  await disconnect();
 }
 
-main().catch(async (error) => {
+main().catch((error) => {
   console.error('Backfill failed:', error);
-  await disconnect();
   process.exit(1);
 });
