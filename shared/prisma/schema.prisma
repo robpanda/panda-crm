@@ -338,6 +338,8 @@ model Opportunity {
   changeOrderSigned        Boolean                 @default(false) @map("change_order_signed")
   changeOrderSignedDate    DateTime?               @map("change_order_signed_date")
   followUpDate             DateTime?               @map("follow_up_date")
+  currentDispositionCategory String?               @map("current_disposition_category")
+  currentDispositionReason   String?               @map("current_disposition_reason")
   invoiceReadyDate         DateTime?               @map("invoice_ready_date")
   invoiceStatus            InvoiceWorkflowStatus   @default(NOT_READY) @map("invoice_status")
   invoicedDate             DateTime?               @map("invoiced_date")
@@ -433,7 +435,7 @@ model Opportunity {
   workOrders               WorkOrder[]
   documentLinks            DocumentLink[]
   photoProjects            PhotoProject[]          @relation("PhotoProjectOpportunity")
-  laborOrders              LaborOrder[]
+  appointmentResults       AppointmentResult[]     @relation("AppointmentResults")
 
   @@index([accountId])
   @@index([ownerId])
@@ -464,6 +466,30 @@ model OpportunityLineItem {
 
   @@index([opportunityId])
   @@map("opportunity_line_items")
+}
+
+model AppointmentResult {
+  id                  String       @id @default(cuid())
+  opportunityId       String       @map("opportunity_id")
+  appointmentId       String?      @map("appointment_id")
+  payload             Json
+  dispositionCategory String       @map("disposition_category")
+  dispositionReason   String?      @map("disposition_reason")
+  followUpAt          DateTime?    @map("follow_up_at")
+  insuranceCompany    String?      @map("insurance_company")
+  claimNumber         String?      @map("claim_number")
+  claimFiledDate      DateTime?    @map("claim_filed_date")
+  dateOfLoss          DateTime?    @map("date_of_loss")
+  damageLocation      String?      @map("damage_location")
+  createdById         String?      @map("created_by_id")
+  createdAt           DateTime     @default(now()) @map("created_at")
+
+  opportunity         Opportunity  @relation("AppointmentResults", fields: [opportunityId], references: [id])
+  createdBy           User?        @relation("AppointmentResultsCreatedBy", fields: [createdById], references: [id])
+
+  @@index([opportunityId])
+  @@index([createdAt])
+  @@map("appointment_results")
 }
 
 model WorkOrder {
@@ -1511,6 +1537,7 @@ model User {
   call_lists_call_lists_assigned_user_idTousers    call_lists[]            @relation("call_lists_assigned_user_idTousers")
   call_lists_call_lists_created_by_idTousers       call_lists[]            @relation("call_lists_created_by_idTousers")
   callLogs                                         CallLog[]
+  appointmentResultsCreated                        AppointmentResult[]     @relation("AppointmentResultsCreatedBy")
   call_sessions                                    call_sessions[]
   payoutsProcessed                                 ChampionPayout[]        @relation("PayoutProcessedBy")
   championsAssigned                                Champion[]              @relation("ChampionAssignedRep")

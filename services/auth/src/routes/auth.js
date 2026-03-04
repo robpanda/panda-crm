@@ -8,6 +8,71 @@ const prisma = new PrismaClient();
 
 const router = Router();
 
+async function getDatabaseUserProfile(email) {
+  if (!email) {
+    logger.warn('Skipping DB user enrichment: Cognito user has no email attribute');
+    return { dbUser: null, isManager: false };
+  }
+
+  try {
+    const dbUser = await prisma.user.findUnique({
+      where: { email },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        fullName: true,
+        phone: true,
+        mobilePhone: true,
+        department: true,
+        division: true,
+        title: true,
+        officeAssignment: true,
+        managerId: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
+        roleId: true,
+      },
+    });
+
+    let isManager = false;
+    if (dbUser?.id) {
+      const teamCount = await prisma.user.count({
+        where: { managerId: dbUser.id, isActive: true },
+      });
+      isManager = teamCount > 0;
+    }
+
+    return { dbUser, isManager };
+  } catch (error) {
+    logger.warn(`Failed DB user enrichment for ${email}: ${error.message}`);
+    return { dbUser: null, isManager: false };
+  }
+}
+
+function buildUserResponse(cognitoUser, dbUser, isManager) {
+  return {
+    id: dbUser?.id || cognitoUser.username,
+    email: cognitoUser.email || dbUser?.email || null,
+    firstName: dbUser?.firstName || cognitoUser.firstName,
+    lastName: dbUser?.lastName || cognitoUser.lastName,
+    fullName: dbUser?.fullName || cognitoUser.name,
+    phone: dbUser?.phone || dbUser?.mobilePhone,
+    department: dbUser?.department || cognitoUser.department,
+    jobTitle: dbUser?.title,
+    officeName: dbUser?.officeAssignment,
+    division: dbUser?.division,
+    role: cognitoUser.role || 'SALES_REP',
+    managerId: dbUser?.managerId,
+    isManager,
+    isActive: dbUser?.isActive ?? true,
+    createdAt: dbUser?.createdAt,
+    updatedAt: dbUser?.updatedAt,
+  };
+}
+
 // Login
 router.post('/login', async (req, res, next) => {
   try {
@@ -31,59 +96,8 @@ router.post('/login', async (req, res, next) => {
     // Successful login - fetch user info from database and include in response
     // This is needed for mobile apps that expect { user, accessToken, refreshToken }
     const cognitoUser = await authService.getCurrentUser(result.accessToken);
-
-    // Look up full user record from database by email
-    const dbUser = await prisma.user.findUnique({
-      where: { email: cognitoUser.email },
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        fullName: true,
-        phone: true,
-        mobilePhone: true,
-        department: true,
-        division: true,
-        title: true,
-        officeAssignment: true,
-        managerId: true,
-        isActive: true,
-        createdAt: true,
-        updatedAt: true,
-        // Include role info
-        roleId: true,
-      },
-    });
-
-    // Check if user has team members (is a manager)
-    let isManager = false;
-    if (dbUser?.id) {
-      const teamCount = await prisma.user.count({
-        where: { managerId: dbUser.id, isActive: true },
-      });
-      isManager = teamCount > 0;
-    }
-
-    // Merge Cognito attributes with database user
-    const user = {
-      id: dbUser?.id || cognitoUser.username,
-      email: cognitoUser.email,
-      firstName: dbUser?.firstName || cognitoUser.firstName,
-      lastName: dbUser?.lastName || cognitoUser.lastName,
-      fullName: dbUser?.fullName || cognitoUser.name,
-      phone: dbUser?.phone || dbUser?.mobilePhone,
-      department: dbUser?.department || cognitoUser.department,
-      jobTitle: dbUser?.title,
-      officeName: dbUser?.officeAssignment,
-      division: dbUser?.division,
-      role: cognitoUser.role || 'SALES_REP', // Default role
-      managerId: dbUser?.managerId,
-      isManager,
-      isActive: dbUser?.isActive ?? true,
-      createdAt: dbUser?.createdAt,
-      updatedAt: dbUser?.updatedAt,
-    };
+    const { dbUser, isManager } = await getDatabaseUserProfile(cognitoUser.email);
+    const user = buildUserResponse(cognitoUser, dbUser, isManager);
 
     logger.info(`User logged in: ${email}`);
     res.json({
@@ -241,58 +255,8 @@ router.get('/me', async (req, res, next) => {
 
     const accessToken = authHeader.split(' ')[1];
     const cognitoUser = await authService.getCurrentUser(accessToken);
-
-    // Look up full user record from database by email
-    const dbUser = await prisma.user.findUnique({
-      where: { email: cognitoUser.email },
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        fullName: true,
-        phone: true,
-        mobilePhone: true,
-        department: true,
-        division: true,
-        title: true,
-        officeAssignment: true,
-        managerId: true,
-        isActive: true,
-        createdAt: true,
-        updatedAt: true,
-        roleId: true,
-      },
-    });
-
-    // Check if user has team members (is a manager)
-    let isManager = false;
-    if (dbUser?.id) {
-      const teamCount = await prisma.user.count({
-        where: { managerId: dbUser.id, isActive: true },
-      });
-      isManager = teamCount > 0;
-    }
-
-    // Merge Cognito attributes with database user
-    const user = {
-      id: dbUser?.id || cognitoUser.username,
-      email: cognitoUser.email,
-      firstName: dbUser?.firstName || cognitoUser.firstName,
-      lastName: dbUser?.lastName || cognitoUser.lastName,
-      fullName: dbUser?.fullName || cognitoUser.name,
-      phone: dbUser?.phone || dbUser?.mobilePhone,
-      department: dbUser?.department || cognitoUser.department,
-      jobTitle: dbUser?.title,
-      officeName: dbUser?.officeAssignment,
-      division: dbUser?.division,
-      role: cognitoUser.role || 'SALES_REP',
-      managerId: dbUser?.managerId,
-      isManager,
-      isActive: dbUser?.isActive ?? true,
-      createdAt: dbUser?.createdAt,
-      updatedAt: dbUser?.updatedAt,
-    };
+    const { dbUser, isManager } = await getDatabaseUserProfile(cognitoUser.email);
+    const user = buildUserResponse(cognitoUser, dbUser, isManager);
 
     res.json({ success: true, data: user });
   } catch (error) {

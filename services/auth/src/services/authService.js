@@ -54,21 +54,36 @@ function calculateSecretHash(username, clientId, clientSecret) {
     .digest('base64');
 }
 
+function maybeSecretHash(username, creds) {
+  if (!creds?.clientSecret || !creds?.clientId) {
+    return null;
+  }
+  return calculateSecretHash(username, creds.clientId, creds.clientSecret);
+}
+
+function addSecretHash(target, username, creds, fieldName = 'SECRET_HASH') {
+  const secretHash = maybeSecretHash(username, creds);
+  if (secretHash) {
+    target[fieldName] = secretHash;
+  }
+  return target;
+}
+
 export const authService = {
   /**
    * Authenticate user with email and password
    */
   async login(email, password) {
     const creds = await getCognitoCredentials();
+    const authParameters = addSecretHash({
+      USERNAME: email,
+      PASSWORD: password,
+    }, email, creds);
 
     const params = {
       AuthFlow: 'USER_PASSWORD_AUTH',
       ClientId: creds.clientId,
-      AuthParameters: {
-        USERNAME: email,
-        PASSWORD: password,
-        SECRET_HASH: calculateSecretHash(email, creds.clientId, creds.clientSecret),
-      },
+      AuthParameters: authParameters,
     };
 
     try {
@@ -100,15 +115,15 @@ export const authService = {
    */
   async completeNewPasswordChallenge(email, newPassword, session) {
     const creds = await getCognitoCredentials();
+    const challengeResponses = addSecretHash({
+      USERNAME: email,
+      NEW_PASSWORD: newPassword,
+    }, email, creds);
 
     const params = {
       ChallengeName: 'NEW_PASSWORD_REQUIRED',
       ClientId: creds.clientId,
-      ChallengeResponses: {
-        USERNAME: email,
-        NEW_PASSWORD: newPassword,
-        SECRET_HASH: calculateSecretHash(email, creds.clientId, creds.clientSecret),
-      },
+      ChallengeResponses: challengeResponses,
       Session: session,
     };
 
@@ -147,10 +162,9 @@ export const authService = {
     const params = {
       AuthFlow: 'REFRESH_TOKEN_AUTH',
       ClientId: creds.clientId,
-      AuthParameters: {
+      AuthParameters: addSecretHash({
         REFRESH_TOKEN: refreshToken,
-        SECRET_HASH: calculateSecretHash(cognitoUsername, creds.clientId, creds.clientSecret),
-      },
+      }, cognitoUsername, creds),
     };
 
     const response = await cognitoClient.send(new InitiateAuthCommand(params));
@@ -183,13 +197,12 @@ export const authService = {
       userAttributes.push({ Name: 'custom:salesforce_id', Value: attributes.salesforceId });
     }
 
-    const params = {
+    const params = addSecretHash({
       ClientId: creds.clientId,
       Username: email,
       Password: password,
-      SecretHash: calculateSecretHash(email, creds.clientId, creds.clientSecret),
       UserAttributes: userAttributes,
-    };
+    }, email, creds, 'SecretHash');
 
     await cognitoClient.send(new SignUpCommand(params));
 
@@ -202,12 +215,11 @@ export const authService = {
   async confirmSignUp(email, code) {
     const creds = await getCognitoCredentials();
 
-    const params = {
+    const params = addSecretHash({
       ClientId: creds.clientId,
       Username: email,
       ConfirmationCode: code,
-      SecretHash: calculateSecretHash(email, creds.clientId, creds.clientSecret),
-    };
+    }, email, creds, 'SecretHash');
 
     await cognitoClient.send(new ConfirmSignUpCommand(params));
 
@@ -220,11 +232,10 @@ export const authService = {
   async forgotPassword(email) {
     const creds = await getCognitoCredentials();
 
-    const params = {
+    const params = addSecretHash({
       ClientId: creds.clientId,
       Username: email,
-      SecretHash: calculateSecretHash(email, creds.clientId, creds.clientSecret),
-    };
+    }, email, creds, 'SecretHash');
 
     await cognitoClient.send(new ForgotPasswordCommand(params));
 
@@ -237,13 +248,12 @@ export const authService = {
   async confirmForgotPassword(email, code, newPassword) {
     const creds = await getCognitoCredentials();
 
-    const params = {
+    const params = addSecretHash({
       ClientId: creds.clientId,
       Username: email,
       ConfirmationCode: code,
       Password: newPassword,
-      SecretHash: calculateSecretHash(email, creds.clientId, creds.clientSecret),
-    };
+    }, email, creds, 'SecretHash');
 
     await cognitoClient.send(new ConfirmForgotPasswordCommand(params));
 

@@ -11,6 +11,7 @@ import auditRoutes from './routes/audit.js';
 import helpRoutes from './routes/help.js';
 import supportRoutes from './routes/support.js';
 import setupRoutes from './routes/setup.js';
+import featureFlagsRoutes from './routes/featureFlags.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { logger } from './middleware/logger.js';
 import { authMiddleware } from './middleware/auth.js';
@@ -52,6 +53,7 @@ app.use('/api/audit', authMiddleware, auditRoutes);
 app.use('/api/help', helpRoutes); // Help routes have their own auth handling (some public, some protected)
 app.use('/api/support', supportRoutes); // Support ticket routes
 app.use('/api/setup', authMiddleware, setupRoutes); // Setup/Object Manager routes
+app.use('/api/feature-flags', authMiddleware, featureFlagsRoutes); // Frontend feature flag bootstrap
 
 // Error handling
 app.use(errorHandler);
