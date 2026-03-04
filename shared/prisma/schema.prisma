@@ -433,7 +433,6 @@ model Opportunity {
   workOrders               WorkOrder[]
   documentLinks            DocumentLink[]
   photoProjects            PhotoProject[]          @relation("PhotoProjectOpportunity")
-  laborOrders              LaborOrder[]
 
   @@index([accountId])
   @@index([ownerId])
@@ -1593,6 +1592,9 @@ model User {
   @@index([department])
   @@map("users")
   customFields                                     CustomField[]           @relation("CustomFieldCreator")
+  createdContentBlocks                             TemplateContentBlock[]       @relation("TemplateContentBlockCreator")
+  documentTemplatesCreated                         DocumentTemplateV2[]         @relation("DocumentTemplateCreator")
+  documentTemplateVersionsCreated                  DocumentTemplateVersionV2[]  @relation("DocumentTemplateVersionCreator")
 }
 
 model CustomField {
@@ -2020,6 +2022,20 @@ model Agreement {
   void_reason                           String?
   voided_at                             DateTime?
   voided_by_id                          String?
+  // New fields for instant sign and sequential signing
+  instant_sign_mode                     Boolean           @default(false) @map("instant_sign_mode")
+  current_signer_index                  Int               @default(0) @map("current_signer_index")
+  signer_config                         Json?             @map("signer_config")
+  // WYSIWYG/Slate support fields (PandaSign v2)
+  slateContent                          Json?             @map("slate_content")
+  resolvedTokens                        Json?             @map("resolved_tokens")
+  documentHash                          String?           @map("document_hash")
+  signaturePositions                    Json?             @map("signature_positions")
+  slateTemplateId                       String?           @map("slate_template_id")
+  slateTemplateVersion                  Int?              @map("slate_template_version")
+  previewHash                           String?           @map("preview_hash")
+  editableRegionValues                  Json?             @map("editable_region_values")
+  recipientsConfig                      Json?             @map("recipients_config")
   accounts                              Account?           @relation(fields: [accountId], references: [id])
   contacts                              Contact?           @relation(fields: [contactId], references: [id])
   users_agreements_created_by_idTousers User?              @relation("agreements_created_by_idTousers", fields: [created_by_id], references: [id])
@@ -2027,6 +2043,7 @@ model Agreement {
   users_agreements_sent_by_idTousers    User?              @relation("agreements_sent_by_idTousers", fields: [sent_by_id], references: [id])
   template                              AgreementTemplate? @relation(fields: [templateId], references: [id])
   signatures                            Signature[]
+  signatureFields                       SignatureField[] @relation("AgreementSignatureFields")
 
   @@index([status])
   @@index([opportunityId])
@@ -2047,6 +2064,14 @@ model AgreementTemplate {
   isActive        Boolean     @default(true) @map("is_active")
   createdAt       DateTime    @default(now()) @map("created_at")
   updatedAt       DateTime    @updatedAt @map("updated_at")
+  // New fields for DOCX/PDF template support
+  sourceDocumentUrl  String?   @map("source_document_url")
+  sourceDocumentType String?   @map("source_document_type")
+  fieldPlacements    Json?     @map("field_placements")
+  // Structure: [{id, type, page, x, y, width, height, fieldName, signerRole, required}]
+  signingOrder       String    @default("SEQUENTIAL") @map("signing_order")
+  signerRoles        Json?     @map("signer_roles")
+  // Structure: [{role: 'CUSTOMER', order: 1}, {role: 'AGENT', order: 2}]
   agreements      Agreement[]
 
   @@map("agreement_templates")
@@ -5834,4 +5859,250 @@ model ProductCategoryMapping {
   @@unique([productId, categoryId])
   @@index([categoryId])
   @@map("product_category_mappings")
+}
+
+model TemplateContentBlock {
+  id          String   @id @default(cuid())
+  name        String // e.g., "Maryland 3-Day Rescission"
+  contentType String   @map("content_type") // RESCISSION_CLAUSE, CANCELLATION_POLICY, WARRANTY_TERMS, etc.
+  state       String // State code (e.g., "MD", "DE") or "DEFAULT" for fallback
+  content     String   @db.Text // The actual content/clause text (can be HTML)
+  mergeToken  String   @map("merge_token") // e.g., "{{rescission_clause}}"
+  priority    Int      @default(100) // Higher = more specific (state-specific > default)
+  notes       String? // Internal notes about this block
+  isActive    Boolean  @default(true) @map("is_active")
+  workTypes   String[] @default([]) @map("work_types") // Optional work type filter (empty = all)
+  createdById String?  @map("created_by_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  createdBy User? @relation("TemplateContentBlockCreator", fields: [createdById], references: [id])
+
+  @@unique([contentType, state])
+  @@index([mergeToken])
+  @@index([state])
+  @@index([contentType])
+  @@map("template_content_blocks")
+}
+
+
+model SignatureField {
+  id          String    @id @default(cuid())
+  agreementId String    @map("agreement_id")
+  role        String    // CUSTOMER, AGENT, PM, WITNESS, CO_SIGNER
+  page        Int       @default(1)
+  xPct        Float     @map("x_pct")       // 0-1 normalized X position
+  yPct        Float     @map("y_pct")       // 0-1 normalized Y position (TOP-LEFT origin)
+  widthPct    Float     @map("width_pct")   // 0-1 normalized width
+  heightPct   Float     @map("height_pct")  // 0-1 normalized height
+  fieldType   String    @default("signature") @map("field_type") // signature, initials, date, text
+  label       String?   // Display label (e.g., "Customer Signature")
+  required    Boolean   @default(true)
+  signed      Boolean   @default(false)
+  signedAt    DateTime? @map("signed_at")
+  signedBy    String?   @map("signed_by")   // Email or name of signer
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  agreement   Agreement @relation("AgreementSignatureFields", fields: [agreementId], references: [id], onDelete: Cascade)
+
+  @@index([agreementId])
+  @@index([role])
+  @@map("signature_fields")
+}
+
+
+model DocumentTemplateV2 {
+  id          String  @id @default(cuid())
+  name        String
+  description String? @db.Text
+  category    String? // CONTRACT, WORK_ORDER, QUOTE, CHANGE_ORDER, INVOICE
+  territories String[] @default([]) @map("territories") // State restrictions (empty = all)
+
+  // Version control
+  version       Int              @default(1)
+  schemaVersion String           @default("1.0") @map("schema_version")
+  status        TemplateStatusV2 @default(DRAFT)
+
+  // Slate content (source of truth)
+  editorType String @default("slate") @map("editor_type") // slate, legacy_docx, legacy_pdf
+  content    Json? // Slate AST JSON
+
+  // Token schema definition - defines available tokens and their types
+  tokenSchema Json? @map("token_schema")
+  // Structure: { "customer.name": { type: "string", required: true, label: "Customer Name" }, ... }
+
+  // Signature anchors - logical positions for signatures
+  signatureAnchors Json? @map("signature_anchors")
+  // Structure: [{ id: "customer_sig", role: "CUSTOMER", label: "Customer Signature", pageHint: "last", required: true }]
+
+  // Signing configuration
+  signerRoles  Json?          @map("signer_roles")
+  // Structure: [{ id: "CUSTOMER", label: "Customer", order: 1 }, { id: "AGENT", label: "Agent", order: 2 }]
+  signingOrder SigningOrderV2 @default(SEQUENTIAL) @map("signing_order")
+
+  // Editable regions - areas that can be customized at send time
+  editableRegions Json? @map("editable_regions")
+  // Structure: [{ id: "additional_terms", label: "Additional Terms", allowedNodes: ["paragraph"], maxLength: 2000, required: false }]
+
+  // Branding
+  brandingProfileId String? @map("branding_profile_id")
+
+  // Legacy support - link to old AgreementTemplate
+  legacyTemplateId String? @unique @map("legacy_template_id")
+
+  // Audit
+  createdById String?   @map("created_by_id")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+  publishedAt DateTime? @map("published_at")
+
+  // Relations
+  brandingProfile BrandingProfile?            @relation(fields: [brandingProfileId], references: [id])
+  createdBy       User?                       @relation("DocumentTemplateCreator", fields: [createdById], references: [id])
+  versions        DocumentTemplateVersionV2[]
+
+  @@index([category])
+  @@index([status])
+  @@index([brandingProfileId])
+  @@map("document_templates_v2")
+}
+
+
+model DocumentTemplateVersionV2 {
+  id               String   @id @default(cuid())
+  templateId       String   @map("template_id")
+  version          Int
+  content          Json // Snapshot of Slate AST
+  tokenSchema      Json?    @map("token_schema")
+  signatureAnchors Json?    @map("signature_anchors")
+  territories      String[] @default([]) @map("territories")
+  changelog        String?  @db.Text
+  createdById      String?  @map("created_by_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  template  DocumentTemplateV2 @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  createdBy User?              @relation("DocumentTemplateVersionCreator", fields: [createdById], references: [id])
+
+  @@unique([templateId, version])
+  @@index([templateId])
+  @@map("document_template_versions_v2")
+}
+
+
+model BrandingProfile {
+  id        String  @id @default(cuid())
+  name      String
+  isDefault Boolean @default(false) @map("is_default")
+
+  // Logo
+  logoUrl    String? @map("logo_url")
+  logoWidth  Int?    @map("logo_width") // In pixels
+  logoHeight Int?    @map("logo_height") // In pixels
+
+  // Colors (hex format)
+  primaryColor   String @default("#667eea") @map("primary_color")
+  secondaryColor String @default("#764ba2") @map("secondary_color")
+  accentColor    String @default("#4f46e5") @map("accent_color")
+  textColor      String @default("#111111") @map("text_color")
+
+  // Typography
+  headingFont String @default("Helvetica Bold") @map("heading_font")
+  bodyFont    String @default("Helvetica") @map("body_font")
+  fontSize    Int    @default(11) @map("font_size")
+  lineHeight  Float  @default(1.5) @map("line_height")
+
+  // Page layout
+  pageSize     String @default("letter") @map("page_size")
+  marginTop    Int    @default(50) @map("margin_top")
+  marginBottom Int    @default(50) @map("margin_bottom")
+  marginLeft   Int    @default(50) @map("margin_left")
+  marginRight  Int    @default(50) @map("margin_right")
+
+  // Header/footer
+  headerHtml      String?  @map("header_html")
+  footerHtml      String?  @map("footer_html")
+  showPageNumbers Boolean  @default(true) @map("show_page_numbers")
+
+  // Company info
+  companyName    String? @map("company_name")
+  companyAddress String? @map("company_address")
+  companyPhone   String? @map("company_phone")
+  companyEmail   String? @map("company_email")
+  companyWebsite String? @map("company_website")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  templates DocumentTemplateV2[]
+
+  @@map("branding_profiles")
+}
+
+
+model DocumentAuditTrail {
+  id         String @id @default(cuid())
+  documentId String @map("document_id") // Agreement ID
+
+  action DocumentAuditAction
+  // CREATED, TOKEN_RESOLVED, PDF_GENERATED, SENT, REMINDER_SENT, VIEWED, DOWNLOADED,
+  // SIGNATURE_STARTED, SIGNED, COUNTERSIGNED, DECLINED, VOIDED, COMPLETED, HASH_VERIFIED, CERTIFICATE_GENERATED
+
+  actorType  String  @map("actor_type") // SYSTEM, USER, SIGNER
+  actorId    String? @map("actor_id")
+  actorEmail String? @map("actor_email")
+
+  // Context
+  ipAddress   String? @map("ip_address")
+  userAgent   String? @map("user_agent") @db.Text
+  geoLocation Json?   @map("geo_location") // { country, region, city, lat, lng }
+
+  // Details
+  details      Json? // Action-specific details
+  documentHash String? @map("document_hash") // Hash at time of action
+  previousHash String? @map("previous_hash") // Hash before action (for verification)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([documentId])
+  @@index([action])
+  @@index([actorType])
+  @@index([createdAt])
+  @@map("document_audit_trail")
+}
+
+
+enum TemplateStatusV2 {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+
+enum SigningOrderV2 {
+  SEQUENTIAL
+  PARALLEL
+  AGENT_FIRST
+}
+
+
+enum DocumentAuditAction {
+  CREATED
+  TOKEN_RESOLVED
+  PDF_GENERATED
+  PDF_REGENERATED
+  SENT
+  REMINDER_SENT
+  VIEWED
+  DOWNLOADED
+  SIGNATURE_STARTED
+  SIGNED
+  COUNTERSIGNED
+  DECLINED
+  VOIDED
+  COMPLETED
+  HASH_VERIFIED
+  HASH_MISMATCH
+  CERTIFICATE_GENERATED
+  EXPIRED
 }
