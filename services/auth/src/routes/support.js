@@ -53,6 +53,7 @@ const SUPPORT_USER_SELECT = {
       id: true,
       name: true,
       roleType: true,
+      permissionsJson: true,
     },
   },
 };
@@ -66,24 +67,115 @@ function hasAdminIndicator(value) {
   return normalized.includes('admin');
 }
 
+function normalizePermissionsJson(permissionsJson) {
+  if (!permissionsJson) return {};
+  if (typeof permissionsJson === 'object') return permissionsJson;
+  if (typeof permissionsJson === 'string') {
+    try {
+      const parsed = JSON.parse(permissionsJson);
+      return typeof parsed === 'object' && parsed ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+function toActionSet(value) {
+  if (!value) return new Set();
+
+  if (Array.isArray(value)) {
+    return new Set(value.map((item) => normalizeRoleString(item)).filter(Boolean));
+  }
+
+  if (typeof value === 'string') {
+    const normalized = normalizeRoleString(value);
+    return normalized ? new Set([normalized]) : new Set();
+  }
+
+  if (typeof value === 'object') {
+    const enabled = Object.entries(value)
+      .filter(([, allowed]) => allowed === true)
+      .map(([action]) => normalizeRoleString(action))
+      .filter(Boolean);
+    return new Set(enabled);
+  }
+
+  return new Set();
+}
+
+function hasAnyAction(actions, expected) {
+  for (const action of expected) {
+    if (actions.has(action)) return true;
+  }
+  return false;
+}
+
+function hasSupportAdminPermission(permissionsJson) {
+  const permissions = normalizePermissionsJson(permissionsJson);
+  const supportActions = toActionSet(
+    permissions.support ?? permissions.supportTickets ?? permissions.support_tickets
+  );
+
+  if (
+    hasAnyAction(supportActions, [
+      '*',
+      'admin',
+      'manage',
+      'viewall',
+      'view_all',
+      'assign',
+      'edit',
+      'resolve',
+    ])
+  ) {
+    return true;
+  }
+
+  const pages = permissions.pages && typeof permissions.pages === 'object' ? permissions.pages : {};
+  const pageKeys = [
+    'supportAdmin',
+    'support_admin',
+    'supportTickets',
+    'support_tickets',
+    'admin/support',
+    'admin/support/tickets',
+  ];
+
+  for (const key of pageKeys) {
+    if (pages[key] === true) {
+      return true;
+    }
+  }
+
+  const packs = toActionSet(permissions.packs);
+  if (
+    hasAnyAction(packs, [
+      'can_manage_support',
+      'can_manage_support_tickets',
+      'can_view_support_admin',
+    ])
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 function canManageAllSupportTickets(authUser, dbUser) {
   if (authUser?.isSystem) return true;
 
   const dbRoleName = normalizeRoleString(dbUser?.role?.name);
   const dbRoleType = normalizeRoleString(dbUser?.role?.roleType);
-  const tokenRole = normalizeRoleString(
-    typeof authUser?.role === 'string' ? authUser.role : authUser?.role?.name
-  );
-  const groups = Array.isArray(authUser?.groups)
-    ? authUser.groups.map((group) => normalizeRoleString(group))
-    : [];
-
-  if (dbRoleType === 'admin' || dbRoleType === 'support_admin') return true;
-  if (hasAdminIndicator(dbRoleName) || (dbRoleName.includes('support') && dbRoleName.includes('administrator'))) {
+  if (dbRoleType === 'admin' || dbRoleType === 'support_admin' || dbRoleType === 'system') return true;
+  if (
+    dbRoleName === 'support administrator' ||
+    dbRoleName === 'support admin' ||
+    (dbRoleName.includes('support') && hasAdminIndicator(dbRoleName))
+  ) {
     return true;
   }
-  if (hasAdminIndicator(tokenRole)) return true;
-  return groups.some(hasAdminIndicator);
+  return hasSupportAdminPermission(dbUser?.role?.permissionsJson);
 }
 
 async function resolveAuthenticatedUser(authUser) {
@@ -99,13 +191,13 @@ async function resolveAuthenticatedUser(authUser) {
 
   if (identityCandidates.length > 0) {
     const byId = await prisma.user.findFirst({
-      where: { id: { in: identityCandidates } },
+      where: { id: { in: identityCandidates }, isActive: true },
       select: SUPPORT_USER_SELECT,
     });
     if (byId) return byId;
 
     const byCognitoId = await prisma.user.findFirst({
-      where: { cognitoId: { in: identityCandidates } },
+      where: { cognitoId: { in: identityCandidates }, isActive: true },
       select: SUPPORT_USER_SELECT,
     });
     if (byCognitoId) return byCognitoId;
@@ -114,6 +206,7 @@ async function resolveAuthenticatedUser(authUser) {
   if (authUser.email) {
     const byEmail = await prisma.user.findFirst({
       where: {
+        isActive: true,
         email: {
           equals: String(authUser.email).trim(),
           mode: 'insensitive',
@@ -163,7 +256,7 @@ router.get('/tickets', authMiddleware, async (req, res) => {
     if (!context) return;
 
     const tickets = await prisma.support_tickets.findMany({
-      where: context.canManageAll ? {} : { user_id: context.userId },
+      where: { user_id: context.userId },
       include: {
         _count: {
           select: {
@@ -699,7 +792,7 @@ router.get('/tickets/similar', authMiddleware, async (req, res) => {
     // Get recent tickets (last 90 days) that might be similar
     const tickets = await prisma.support_tickets.findMany({
       where: {
-        ...(context.canManageAll ? {} : { user_id: context.userId }),
+        user_id: context.userId,
         created_at: {
           gte: new Date(Date.now() - 90 * 24 * 60 * 60 * 1000),
         },
