@@ -33,36 +33,54 @@ router.post('/login', async (req, res, next) => {
     const cognitoUser = await authService.getCurrentUser(result.accessToken);
 
     // Look up full user record from database by email
-    const dbUser = await prisma.user.findUnique({
-      where: { email: cognitoUser.email },
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        fullName: true,
-        phone: true,
-        mobilePhone: true,
-        department: true,
-        division: true,
-        title: true,
-        officeAssignment: true,
-        managerId: true,
-        isActive: true,
-        createdAt: true,
-        updatedAt: true,
-        // Include role info
-        roleId: true,
-      },
-    });
+    let dbUser = null;
+    try {
+      dbUser = await prisma.user.findUnique({
+        where: { email: cognitoUser.email },
+        select: {
+          id: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+          fullName: true,
+          phone: true,
+          mobilePhone: true,
+          department: true,
+          division: true,
+          title: true,
+          officeAssignment: true,
+          managerId: true,
+          isActive: true,
+          createdAt: true,
+          updatedAt: true,
+          // Include role info
+          roleId: true,
+        },
+      });
+    } catch (dbError) {
+      if (dbError?.code === 'P2021') {
+        logger.warn('User table is missing; falling back to Cognito profile only.');
+        dbUser = null;
+      } else {
+        throw dbError;
+      }
+    }
 
     // Check if user has team members (is a manager)
     let isManager = false;
     if (dbUser?.id) {
-      const teamCount = await prisma.user.count({
-        where: { managerId: dbUser.id, isActive: true },
-      });
-      isManager = teamCount > 0;
+      try {
+        const teamCount = await prisma.user.count({
+          where: { managerId: dbUser.id, isActive: true },
+        });
+        isManager = teamCount > 0;
+      } catch (dbError) {
+        if (dbError?.code === 'P2021') {
+          logger.warn('User table is missing; skipping manager lookup.');
+        } else {
+          throw dbError;
+        }
+      }
     }
 
     // Merge Cognito attributes with database user
