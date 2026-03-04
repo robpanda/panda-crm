@@ -11,16 +11,14 @@ import { paymentsApi } from '../services/api';
 import {
   X,
   CreditCard,
-  DollarSign,
   CheckCircle,
   AlertCircle,
   Loader2,
-  Receipt,
   Building2,
 } from 'lucide-react';
 
 // Payment Form Component (uses Stripe hooks)
-function PaymentForm({ invoice, paymentAmount, onSuccess, onCancel, clientSecret }) {
+function PaymentForm({ invoice, paymentAmount, onSuccess, onCancel }) {
   const stripe = useStripe();
   const elements = useElements();
   const queryClient = useQueryClient();
@@ -137,9 +135,16 @@ function PaymentForm({ invoice, paymentAmount, onSuccess, onCancel, clientSecret
 }
 
 // Main Modal Component
-export default function PayInvoiceModal({ isOpen, onClose, invoice, opportunity }) {
+export default function PayInvoiceModal({
+  isOpen,
+  onClose,
+  invoice,
+  opportunity,
+  fullAmountOnly = false,
+  onSuccess,
+}) {
   const [step, setStep] = useState(1); // 1: Amount, 2: Payment, 3: Success
-  const [amountType, setAmountType] = useState('full'); // full, downpayment, partial
+  const [amountType, setAmountType] = useState('full');
   const [customAmount, setCustomAmount] = useState('');
   const [paymentAmount, setPaymentAmount] = useState(0);
   const [clientSecret, setClientSecret] = useState(null);
@@ -147,7 +152,7 @@ export default function PayInvoiceModal({ isOpen, onClose, invoice, opportunity 
   const [paymentResult, setPaymentResult] = useState(null);
   const [error, setError] = useState(null);
 
-  const balanceDue = parseFloat(invoice?.balanceDue || invoice?.totalAmount || 0);
+  const balanceDue = Number(invoice?.balanceDue ?? invoice?.totalAmount ?? invoice?.total ?? 0);
 
   // Fetch Stripe config
   const { data: stripeConfig } = useQuery({
@@ -176,10 +181,21 @@ export default function PayInvoiceModal({ isOpen, onClose, invoice, opportunity 
     },
   });
 
-  // Payment amount is always the full balance due
+  // Customer portal is full amount only; job modal allows full or partial.
   useEffect(() => {
+    if (fullAmountOnly) {
+      setPaymentAmount(balanceDue);
+      return;
+    }
+
+    if (amountType === 'partial') {
+      const parsedAmount = Number(customAmount);
+      setPaymentAmount(Number.isFinite(parsedAmount) && parsedAmount > 0 ? parsedAmount : 0);
+      return;
+    }
+
     setPaymentAmount(balanceDue);
-  }, [balanceDue]);
+  }, [amountType, balanceDue, customAmount, fullAmountOnly]);
 
   // Reset state when modal opens
   useEffect(() => {
@@ -196,6 +212,10 @@ export default function PayInvoiceModal({ isOpen, onClose, invoice, opportunity 
   if (!isOpen || !invoice) return null;
 
   const handleContinueToPayment = () => {
+    if (!fullAmountOnly && amountType === 'partial' && !customAmount) {
+      setError('Enter a partial payment amount');
+      return;
+    }
     if (paymentAmount <= 0) {
       setError('Please enter a valid amount');
       return;
@@ -211,6 +231,7 @@ export default function PayInvoiceModal({ isOpen, onClose, invoice, opportunity 
   const handlePaymentSuccess = (paymentIntent) => {
     setPaymentResult(paymentIntent);
     setStep(3);
+    onSuccess?.(paymentIntent);
   };
 
   const appearance = {
@@ -265,11 +286,11 @@ export default function PayInvoiceModal({ isOpen, onClose, invoice, opportunity 
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-gray-500">Invoice Total</span>
-                    <span className="font-medium">${parseFloat(invoice.totalAmount || 0).toLocaleString()}</span>
+                    <span className="font-medium">${Number(invoice.totalAmount ?? invoice.total ?? 0).toLocaleString()}</span>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-gray-500">Amount Paid</span>
-                    <span className="font-medium text-green-600">${parseFloat(invoice.amountPaid || 0).toLocaleString()}</span>
+                    <span className="font-medium text-green-600">${Number(invoice.amountPaid ?? 0).toLocaleString()}</span>
                   </div>
                   <div className="flex justify-between text-sm pt-2 border-t border-gray-200">
                     <span className="text-gray-700 font-medium">Balance Due</span>
@@ -281,17 +302,63 @@ export default function PayInvoiceModal({ isOpen, onClose, invoice, opportunity 
                 <div className="space-y-3">
                   <label className="text-sm font-medium text-gray-700">Payment Amount</label>
 
-                  {/* Full Amount Only */}
-                  <div className="flex items-center justify-between p-4 border-2 rounded-lg border-green-500 bg-green-50">
+                  <button
+                    type="button"
+                    onClick={() => setAmountType('full')}
+                    className={`w-full flex items-center justify-between p-4 border-2 rounded-lg transition-colors ${
+                      amountType === 'full' || fullAmountOnly
+                        ? 'border-green-500 bg-green-50'
+                        : 'border-gray-200 bg-white hover:border-gray-300'
+                    }`}
+                  >
                     <div className="flex items-center gap-3">
-                      <div className="w-4 h-4 rounded-full border-2 border-green-600 bg-green-600" />
-                      <div>
+                      <div className={`w-4 h-4 rounded-full border-2 ${amountType === 'full' || fullAmountOnly ? 'border-green-600 bg-green-600' : 'border-gray-300'}`} />
+                      <div className="text-left">
                         <span className="font-medium text-gray-900">Full Amount</span>
                         <p className="text-sm text-gray-500">Pay entire balance</p>
                       </div>
                     </div>
                     <span className="text-lg font-bold text-gray-900">${balanceDue.toLocaleString()}</span>
-                  </div>
+                  </button>
+
+                  {!fullAmountOnly && (
+                    <div
+                      className={`p-4 border-2 rounded-lg transition-colors ${
+                        amountType === 'partial'
+                          ? 'border-panda-primary bg-panda-primary/5'
+                          : 'border-gray-200 bg-white'
+                      }`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setAmountType('partial')}
+                        className="w-full flex items-center justify-between"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className={`w-4 h-4 rounded-full border-2 ${amountType === 'partial' ? 'border-panda-primary bg-panda-primary' : 'border-gray-300'}`} />
+                          <div className="text-left">
+                            <span className="font-medium text-gray-900">Partial Amount</span>
+                            <p className="text-sm text-gray-500">Collect a custom amount now</p>
+                          </div>
+                        </div>
+                      </button>
+                      {amountType === 'partial' && (
+                        <div className="mt-3">
+                          <input
+                            type="number"
+                            min="0.01"
+                            max={balanceDue}
+                            step="0.01"
+                            value={customAmount}
+                            onChange={(e) => setCustomAmount(e.target.value)}
+                            placeholder="Enter amount"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+                          />
+                          <p className="mt-1 text-xs text-gray-500">Maximum: ${balanceDue.toLocaleString()}</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {error && (
@@ -354,7 +421,6 @@ export default function PayInvoiceModal({ isOpen, onClose, invoice, opportunity 
                     paymentAmount={paymentAmount}
                     onSuccess={handlePaymentSuccess}
                     onCancel={() => setStep(1)}
-                    clientSecret={clientSecret}
                   />
 
                   <p className="text-xs text-gray-500 text-center">
@@ -373,7 +439,7 @@ export default function PayInvoiceModal({ isOpen, onClose, invoice, opportunity 
                 <div>
                   <h3 className="text-xl font-semibold text-gray-900">Payment Successful!</h3>
                   <p className="text-gray-500 mt-1">
-                    ${paymentAmount.toLocaleString()} has been charged to the customer's card.
+                    ${paymentAmount.toLocaleString()} has been collected successfully.
                   </p>
                 </div>
                 <div className="bg-gray-50 rounded-lg p-4 text-sm text-left space-y-2">

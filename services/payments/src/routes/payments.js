@@ -675,7 +675,7 @@ router.post('/invoices/:invoiceId/payment-link', async (req, res, next) => {
 
     // Create Stripe payment link
     const stripeLink = await stripeService.createPaymentLink({
-      amount: Math.round(amount * 100), // Convert to cents
+      amount,
       description: `Invoice ${invoice.invoiceNumber} - ${invoice.account?.name || 'Payment'}`,
       metadata: {
         invoiceId: invoice.id,
@@ -683,6 +683,7 @@ router.post('/invoices/:invoiceId/payment-link', async (req, res, next) => {
         accountId: invoice.accountId || '',
       },
       afterCompletionUrl: `${baseUrl}/success?invoice=${invoice.invoiceNumber}`,
+      paymentMethodTypes: ['card', 'us_bank_account'],
     });
 
     // Calculate expiration

@@ -34,6 +34,14 @@ function getSesClient() {
   return sesClient;
 }
 
+const COMPANY_INFO = {
+  name: 'Panda Exteriors',
+  address: '14409 Greenview Dr Suite 202',
+  cityStateZip: 'Laurel, MD 20708',
+  phone: '(301) 276-4323',
+  email: 'info@pandaexteriors.com',
+};
+
 // Validation schemas
 const lineItemSchema = z.object({
   description: z.string().min(1),
@@ -465,8 +473,8 @@ export async function sendInvoice(req, res, next) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
 
-    if (invoice.status !== 'DRAFT' && invoice.status !== 'PENDING') {
-      return res.status(400).json({ error: 'Invoice already sent or processed' });
+    if (invoice.status === 'VOID') {
+      return res.status(400).json({ error: 'Cannot send a void invoice' });
     }
 
     // Determine recipient email
@@ -503,6 +511,7 @@ export async function sendInvoice(req, res, next) {
 
         const paymentLinkData = await stripe.paymentLinks.create({
           line_items: [{ price: price.id, quantity: 1 }],
+          payment_method_types: ['card', 'us_bank_account'],
           metadata: {
             source: 'panda-crm',
             invoiceId: invoice.id,
@@ -548,9 +557,11 @@ ${paymentLink ? `Pay Online: ${paymentLink}` : ''}
 
 Thank you for your business!
 
-Panda Exteriors
-(240) 801-6665
-info@pandaexteriors.com`;
+${COMPANY_INFO.name}
+${COMPANY_INFO.address}
+${COMPANY_INFO.cityStateZip}
+${COMPANY_INFO.phone}
+${COMPANY_INFO.email}`;
 
     const emailBody = message || defaultMessage;
 
@@ -571,7 +582,7 @@ info@pandaexteriors.com`;
 </head>
 <body>
   <div class="header">
-    <h1 style="margin:0;">Panda Exteriors</h1>
+    <h1 style="margin:0;">${COMPANY_INFO.name}</h1>
     <p style="margin:5px 0 0 0;">Invoice ${invoice.invoiceNumber}</p>
   </div>
   <div class="content">
@@ -590,9 +601,9 @@ info@pandaexteriors.com`;
     ${pdfResult ? `<p><em>Invoice PDF is attached to this email.</em></p>` : ''}
     <p>Thank you for your business!</p>
     <div class="footer">
-      <p><strong>Panda Exteriors</strong><br>
-      8825 Stanford Blvd Suite 201, Columbia, MD 21045<br>
-      (240) 801-6665 | info@pandaexteriors.com</p>
+      <p><strong>${COMPANY_INFO.name}</strong><br>
+      ${COMPANY_INFO.address}, ${COMPANY_INFO.cityStateZip}<br>
+      ${COMPANY_INFO.phone} | ${COMPANY_INFO.email}</p>
     </div>
   </div>
 </body>
@@ -684,10 +695,14 @@ ${Buffer.from(pdfResult.pdfBytes).toString('base64')}`;
     }
 
     // Step 4: Update invoice status
+    const nextStatus = invoice.status === 'DRAFT' || invoice.status === 'PENDING'
+      ? 'SENT'
+      : invoice.status;
+
     const updatedInvoice = await prisma.invoice.update({
       where: { id },
       data: {
-        status: 'SENT',
+        status: nextStatus,
         // Store payment link for reference
         ...(paymentLink && { stripePaymentLinkUrl: paymentLink }),
         ...(pdfResult && {
@@ -766,14 +781,6 @@ async function generateInvoicePdfInternal(invoice) {
   const { PDFDocument, StandardFonts, rgb } = await import('pdf-lib');
   const { v4: uuidv4 } = await import('uuid');
   const { PutObjectCommand } = await import('@aws-sdk/client-s3');
-
-  const COMPANY_INFO = {
-    name: 'Panda Exteriors',
-    address: '8825 Stanford Blvd Suite 201',
-    cityStateZip: 'Columbia, MD 21045',
-    phone: '(240) 801-6665',
-    email: 'info@pandaexteriors.com',
-  };
 
   const COLORS = {
     primary: rgb(0.4, 0.49, 0.92),

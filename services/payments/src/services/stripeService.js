@@ -106,7 +106,14 @@ export const stripeService = {
 
   // ==================== PAYMENT LINKS ====================
 
-  async createPaymentLink({ amount, currency = 'usd', description, metadata = {}, afterCompletionUrl }) {
+  async createPaymentLink({
+    amount,
+    currency = 'usd',
+    description,
+    metadata = {},
+    afterCompletionUrl,
+    paymentMethodTypes,
+  }) {
     logger.info('Creating payment link', { amount, description });
 
     // First create a price for this amount
@@ -125,6 +132,10 @@ export const stripeService = {
         ...metadata,
       },
     };
+
+    if (Array.isArray(paymentMethodTypes) && paymentMethodTypes.length > 0) {
+      paymentLinkOptions.payment_method_types = paymentMethodTypes;
+    }
 
     if (afterCompletionUrl) {
       paymentLinkOptions.after_completion = {

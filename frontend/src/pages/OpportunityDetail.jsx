@@ -668,6 +668,16 @@ function InvoiceDetailModal({
       return;
     }
 
+    if (form.lineItems.some((item) => Number(item.quantity) <= 0)) {
+      setEditError('Line item quantity must be greater than 0.');
+      return;
+    }
+
+    if (form.lineItems.some((item) => Number(item.unitPrice) < 0)) {
+      setEditError('Line item price cannot be negative.');
+      return;
+    }
+
     const payload = {
       invoiceDate: form.invoiceDate ? new Date(`${form.invoiceDate}T00:00:00.000Z`).toISOString() : undefined,
       dueDate: form.dueDate ? new Date(`${form.dueDate}T00:00:00.000Z`).toISOString() : undefined,
@@ -675,7 +685,7 @@ function InvoiceDetailModal({
       notes: form.notes || '',
       lineItems: form.lineItems.map((item) => ({
         description: item.description.trim(),
-        quantity: Number(item.quantity || 0),
+        quantity: Number(item.quantity || 1),
         unitPrice: Number(item.unitPrice || 0),
       })),
       additionalCharges: form.additionalCharges
@@ -899,7 +909,7 @@ function InvoiceDetailModal({
                         <input
                           type="number"
                           step="0.01"
-                          min="0"
+                          min="1"
                           value={item.quantity}
                           onChange={(e) => handleLineItemChange(idx, 'quantity', e.target.value)}
                           className="w-full px-2 py-1 border border-gray-300 rounded text-right"

@@ -18,6 +18,14 @@ import {
   User,
 } from 'lucide-react';
 
+const COMPANY_CONTACT = {
+  name: 'Panda Exteriors',
+  addressLine1: '14409 Greenview Dr Suite 202',
+  cityStateZip: 'Laurel, MD 20708',
+  phone: '(301) 276-4323',
+  billingEmail: 'invoices@pandaexteriors.com',
+};
+
 export default function SendInvoiceModal({ isOpen, onClose, invoice, opportunity, contact }) {
   const queryClient = useQueryClient();
   const [step, setStep] = useState(1); // 1: Compose, 2: Sending, 3: Success
@@ -34,7 +42,7 @@ export default function SendInvoiceModal({ isOpen, onClose, invoice, opportunity
   const [includePaymentLink, setIncludePaymentLink] = useState(true);
 
   // Calculate balance
-  const balanceDue = parseFloat(invoice?.balanceDue || invoice?.totalAmount || 0);
+  const balanceDue = Number(invoice?.balanceDue ?? invoice?.totalAmount ?? invoice?.total ?? 0);
   const invoiceNumber = invoice?.invoiceNumber || `INV-${invoice?.id?.slice(-6)}`;
 
   // Check if this is an insurance job
@@ -56,20 +64,20 @@ export default function SendInvoiceModal({ isOpen, onClose, invoice, opportunity
         `Claim Number: ${claimNumber || 'N/A'}\n\n` +
         `Invoice Amount: $${balanceDue.toLocaleString()}\n\n` +
         `Please remit payment to:\n` +
-        `Panda Exteriors\n` +
-        `8825 Stanford Blvd Suite 201\n` +
-        `Columbia, MD 21045\n\n` +
-        `If you have any questions regarding this invoice, please contact us at (240) 801-6665 or invoices@pandaexteriors.com.\n\n` +
-        `Thank you,\nPanda Exteriors`
+        `${COMPANY_CONTACT.name}\n` +
+        `${COMPANY_CONTACT.addressLine1}\n` +
+        `${COMPANY_CONTACT.cityStateZip}\n\n` +
+        `If you have any questions regarding this invoice, please contact us at ${COMPANY_CONTACT.phone} or ${COMPANY_CONTACT.billingEmail}.\n\n` +
+        `Thank you,\n${COMPANY_CONTACT.name}`
       );
     } else {
       return (
         `Dear ${customerName},\n\n` +
         `Please find attached invoice ${invoiceNumber} for your project with Panda Exteriors.\n\n` +
         `Invoice Amount: $${balanceDue.toLocaleString()}\n\n` +
-        `If you have any questions about this invoice, please don't hesitate to contact us.\n\n` +
+        `If you have any questions about this invoice, please contact us at ${COMPANY_CONTACT.phone}.\n\n` +
         `Thank you for your business!\n\n` +
-        `Best regards,\nPanda Exteriors`
+        `Best regards,\n${COMPANY_CONTACT.name}\n${COMPANY_CONTACT.addressLine1}\n${COMPANY_CONTACT.cityStateZip}`
       );
     }
   };
@@ -220,7 +228,7 @@ export default function SendInvoiceModal({ isOpen, onClose, invoice, opportunity
                   )}
                   <div className="flex justify-between text-sm">
                     <span className="text-gray-500">Invoice Total</span>
-                    <span className="font-medium">${parseFloat(invoice.totalAmount || 0).toLocaleString()}</span>
+                    <span className="font-medium">${Number(invoice.totalAmount ?? invoice.total ?? 0).toLocaleString()}</span>
                   </div>
                   <div className="flex justify-between text-sm pt-2 border-t border-gray-200">
                     <span className="text-gray-700 font-medium">Balance Due</span>
