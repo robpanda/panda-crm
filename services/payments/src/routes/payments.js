@@ -7,6 +7,39 @@ import { logger } from '../middleware/logger.js';
 const router = express.Router();
 const prisma = new PrismaClient();
 
+function parsePaymentSequence(paymentNumber) {
+  if (typeof paymentNumber !== 'string') return null;
+
+  const match = /^PAY-(\d+)$/.exec(paymentNumber);
+  if (!match) return null;
+
+  const parsed = parseInt(match[1], 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+async function getNextPaymentNumber() {
+  const lastPayment = await prisma.payment.findFirst({
+    where: {
+      paymentNumber: {
+        startsWith: 'PAY-',
+      },
+    },
+    orderBy: { paymentNumber: 'desc' },
+    select: { paymentNumber: true },
+  });
+
+  const lastSequence = parsePaymentSequence(lastPayment?.paymentNumber);
+  const nextSequence = (lastSequence || 0) + 1;
+
+  return `PAY-${String(nextSequence).padStart(6, '0')}`;
+}
+
+function isUniqueViolationOnField(error, fieldName) {
+  if (!error || error.code !== 'P2002') return false;
+  const target = Array.isArray(error.meta?.target) ? error.meta.target : [];
+  return target.includes(fieldName);
+}
+
 // Get payments with optional filtering by opportunityId or invoiceId
 router.get('/', async (req, res, next) => {
   try {
@@ -260,31 +293,72 @@ router.post('/', async (req, res, next) => {
       notes,
     } = req.body;
 
-    // Generate payment number
-    const lastPayment = await prisma.payment.findFirst({
-      orderBy: { paymentNumber: 'desc' },
-    });
-    const nextNumber = lastPayment
-      ? parseInt(lastPayment.paymentNumber.replace('PAY-', '')) + 1
-      : 1;
-    const paymentNumber = `PAY-${String(nextNumber).padStart(6, '0')}`;
+    // Idempotency guard: the webhook and modal can race on the same PaymentIntent
+    if (stripePaymentIntentId) {
+      const existingPayment = await prisma.payment.findUnique({
+        where: { stripePaymentIntentId },
+      });
 
-    const payment = await prisma.payment.create({
-      data: {
-        paymentNumber,
-        amount,
-        paymentDate: new Date(),
-        paymentMethod: paymentMethod || 'CREDIT_CARD',
-        status: 'SETTLED',
-        invoiceId,
-        stripePaymentIntentId,
-        stripeChargeId,
-        stripeReceiptUrl,
-        stripePaymentMethodId,
-        referenceNumber,
-        notes,
-      },
-    });
+      if (existingPayment) {
+        return res.json({
+          success: true,
+          data: existingPayment,
+        });
+      }
+    }
+
+    let payment;
+    let lastError = null;
+
+    // Retry number generation if another concurrent request consumed the same number first
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const paymentNumber = await getNextPaymentNumber();
+
+      try {
+        payment = await prisma.payment.create({
+          data: {
+            paymentNumber,
+            amount,
+            paymentDate: new Date(),
+            paymentMethod: paymentMethod || 'CREDIT_CARD',
+            status: 'SETTLED',
+            invoiceId,
+            stripePaymentIntentId,
+            stripeChargeId,
+            stripeReceiptUrl,
+            stripePaymentMethodId,
+            referenceNumber,
+            notes,
+          },
+        });
+        break;
+      } catch (error) {
+        // Treat duplicate PaymentIntent writes as successful retries (idempotent)
+        if (stripePaymentIntentId && isUniqueViolationOnField(error, 'stripe_payment_intent_id')) {
+          const existingPayment = await prisma.payment.findUnique({
+            where: { stripePaymentIntentId },
+          });
+
+          if (existingPayment) {
+            return res.json({
+              success: true,
+              data: existingPayment,
+            });
+          }
+        }
+
+        if (isUniqueViolationOnField(error, 'payment_number')) {
+          lastError = error;
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+    if (!payment) {
+      throw lastError || new Error('Failed to allocate a unique payment number');
+    }
 
     // Update invoice balances
     const invoice = await prisma.invoice.findUnique({
