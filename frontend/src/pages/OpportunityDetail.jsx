@@ -20,6 +20,7 @@ import ContractSigningModal from '../components/ContractSigningModal';
 import ChangeOrderModal from '../components/ChangeOrderModal';
 import PayInvoiceModal from '../components/PayInvoiceModal';
 import SendInvoiceModal from '../components/SendInvoiceModal';
+import ResultAppointmentWizard from '../components/result-appointment-wizard/ResultAppointmentWizard';
 import SuperTabNav, { SubTabNav, CATEGORIES } from '../components/SuperTabNav';
 import PhotoCamTab from '../components/photocam/PhotoCamTab';
 import useJobCategories from '../hooks/useJobCategories';
@@ -1685,6 +1686,9 @@ export default function OpportunityDetail() {
   const [showSendInvoiceModal, setShowSendInvoiceModal] = useState(false);
   const [invoiceToSend, setInvoiceToSend] = useState(null);
 
+  // Result appointment wizard state
+  const [showResultAppointmentWizard, setShowResultAppointmentWizard] = useState(false);
+
   // Create insurance invoice modal state
   const [showCreateInsuranceInvoiceModal, setShowCreateInsuranceInvoiceModal] = useState(false);
 
@@ -3290,13 +3294,22 @@ export default function OpportunityDetail() {
                     </button>
                   </>
                 ) : (
-                  <button
-                    onClick={enterEditMode}
-                    className="flex-1 flex items-center justify-center space-x-2 px-4 py-2.5 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90 transition-colors text-sm font-medium"
-                  >
-                    <Edit className="w-4 h-4" />
-                    <span>Edit Job</span>
-                  </button>
+                  <>
+                    <button
+                      onClick={enterEditMode}
+                      className="flex-1 flex items-center justify-center space-x-2 px-4 py-2.5 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90 transition-colors text-sm font-medium"
+                    >
+                      <Edit className="w-4 h-4" />
+                      <span>Edit Job</span>
+                    </button>
+                    <button
+                      onClick={() => setShowResultAppointmentWizard(true)}
+                      className="flex-1 flex items-center justify-center space-x-2 px-4 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium"
+                    >
+                      <ClipboardCheck className="w-4 h-4" />
+                      <span>Result Appointment</span>
+                    </button>
+                  </>
                 )}
 
                 {/* Actions Dropdown */}
@@ -10424,6 +10437,19 @@ export default function OpportunityDetail() {
         invoice={invoiceToSend}
         opportunity={opportunity}
         contact={opportunity?.contact}
+      />
+
+      {/* Result Appointment Wizard */}
+      <ResultAppointmentWizard
+        isOpen={showResultAppointmentWizard}
+        onClose={() => setShowResultAppointmentWizard(false)}
+        opportunityId={id}
+        appointmentId={appointments?.[0]?.id || null}
+        opportunity={opportunity}
+        onCompleted={() => {
+          setActionSuccess('Appointment result saved');
+          setTimeout(() => setActionSuccess(null), 4000);
+        }}
       />
 
       {/* Create Insurance Invoice Modal */}

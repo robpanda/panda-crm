@@ -635,6 +635,11 @@ export const opportunitiesApi = {
     return response.data.data;
   },
 
+  async submitAppointmentResult(id, payload) {
+    const response = await api.post(`/api/opportunities/${id}/appointment-result`, payload);
+    return response.data.data;
+  },
+
   async updateInvoiceStatus(id, invoiceStatus, followUpDate) {
     const response = await api.put(`/api/opportunities/${id}/invoice-status`, {
       invoiceStatus,

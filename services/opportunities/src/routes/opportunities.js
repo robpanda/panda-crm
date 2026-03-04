@@ -43,6 +43,33 @@ const validatePagination = [
 // STATIC ROUTES - Must come BEFORE /:id routes
 // ============================================================================
 
+// Record appointment result for a job
+router.post('/:id/appointment-result', async (req, res, next) => {
+  try {
+    const result = await opportunityService.createAppointmentResult(req.params.id, req.body, {
+      userId: req.user?.id,
+      userEmail: req.user?.email,
+      ipAddress: req.ip || req.headers['x-forwarded-for']?.split(',')[0],
+      userAgent: req.headers['user-agent'],
+    });
+    res.json({ success: true, data: result });
+  } catch (error) {
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Validation failed', details: error.details || [] },
+      });
+    }
+    if (error.name === 'NotFoundError') {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: error.message },
+      });
+    }
+    next(error);
+  }
+});
+
 // Admin: Get deleted opportunities (for restore page) - must be before /:id
 router.get('/deleted', async (req, res, next) => {
   try {
