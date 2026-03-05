@@ -245,6 +245,57 @@ async function getSupportContext(req, res) {
   };
 }
 
+function buildSupportUserMap(users = []) {
+  return new Map(users.map((user) => [user.id, user]));
+}
+
+function hydrateSupportUser(userMap, userId, options = {}) {
+  const { includeEmail = true, includeRole = false } = options;
+  if (!userId) return null;
+
+  const user = userMap.get(userId);
+  if (!user) {
+    const fallback = {
+      id: userId,
+      firstName: 'Unknown',
+      lastName: 'User',
+    };
+    if (includeEmail) fallback.email = null;
+    if (includeRole) fallback.role = { name: 'Unknown' };
+    return fallback;
+  }
+
+  const hydrated = {
+    id: user.id,
+    firstName: user.firstName,
+    lastName: user.lastName,
+  };
+  if (includeEmail) hydrated.email = user.email || null;
+  if (includeRole) hydrated.role = user.role || { name: 'Unknown' };
+  return hydrated;
+}
+
+function parseMessageAttachments(input) {
+  if (!Array.isArray(input)) return [];
+
+  return input
+    .map((attachment) => {
+      if (!attachment || typeof attachment !== 'object') return null;
+      const fileName = String(attachment.file_name || attachment.fileName || '').trim();
+      const fileUrl = String(attachment.file_url || attachment.fileUrl || '').trim();
+      if (!fileUrl) return null;
+      const parsedFileSize = Number.parseInt(attachment.file_size ?? attachment.fileSize, 10);
+
+      return {
+        file_name: fileName || 'Attachment',
+        file_url: fileUrl,
+        file_size: Number.isFinite(parsedFileSize) ? parsedFileSize : null,
+        file_type: attachment.file_type || attachment.fileType || null,
+      };
+    })
+    .filter(Boolean);
+}
+
 // Upload endpoint for attachments
 router.post('/upload', authMiddleware, upload.single('file'), async (req, res) => {
   try {
@@ -299,21 +350,6 @@ router.get('/tickets/:id', authMiddleware, async (req, res) => {
     const ticket = await prisma.support_tickets.findFirst({
       where,
       include: {
-        user: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            email: true,
-          },
-        },
-        assigned_to: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-          },
-        },
         related_article: {
           select: {
             id: true,
@@ -321,7 +357,6 @@ router.get('/tickets/:id', authMiddleware, async (req, res) => {
             summary: true,
           },
         },
-        attachments: true,
       },
     });
 
@@ -329,27 +364,73 @@ router.get('/tickets/:id', authMiddleware, async (req, res) => {
       return res.status(404).json({ error: 'Ticket not found' });
     }
 
-    // Get messages
-    const messages = await prisma.support_ticket_messages.findMany({
-      where: { ticket_id: req.params.id },
-      include: {
-        user: {
+    const [messagesRaw, allAttachments] = await Promise.all([
+      prisma.support_ticket_messages.findMany({
+        where: { ticket_id: req.params.id },
+        orderBy: { created_at: 'asc' },
+      }),
+      prisma.support_ticket_attachments.findMany({
+        where: { ticket_id: req.params.id },
+        orderBy: { created_at: 'asc' },
+      }),
+    ]);
+
+    const userIds = Array.from(
+      new Set(
+        [
+          ticket.user_id,
+          ticket.assigned_to_id,
+          ...messagesRaw.map((message) => message.user_id),
+          ...allAttachments.map((attachment) => attachment.uploaded_by_id),
+        ].filter(Boolean)
+      )
+    );
+
+    const users = userIds.length > 0
+      ? await prisma.user.findMany({
+          where: { id: { in: userIds } },
           select: {
             id: true,
             firstName: true,
             lastName: true,
+            email: true,
             role: {
               select: {
                 name: true,
               },
             },
           },
-        },
-      },
-      orderBy: { created_at: 'asc' },
-    });
+        })
+      : [];
+    const userMap = buildSupportUserMap(users);
 
-    res.json({ ticket, messages });
+    const messageAttachmentsById = new Map();
+    const ticketAttachments = [];
+    for (const attachment of allAttachments) {
+      if (attachment.message_id) {
+        if (!messageAttachmentsById.has(attachment.message_id)) {
+          messageAttachmentsById.set(attachment.message_id, []);
+        }
+        messageAttachmentsById.get(attachment.message_id).push(attachment);
+      } else {
+        ticketAttachments.push(attachment);
+      }
+    }
+
+    const messages = messagesRaw.map((message) => ({
+      ...message,
+      user: hydrateSupportUser(userMap, message.user_id, { includeRole: true }),
+      attachments: messageAttachmentsById.get(message.id) || [],
+    }));
+
+    const hydratedTicket = {
+      ...ticket,
+      user: hydrateSupportUser(userMap, ticket.user_id, { includeEmail: true }),
+      assigned_to: hydrateSupportUser(userMap, ticket.assigned_to_id, { includeEmail: false }),
+      attachments: ticketAttachments,
+    };
+
+    res.json({ ticket: hydratedTicket, messages });
   } catch (error) {
     console.error('Failed to get ticket:', error);
     res.status(500).json({ error: 'Failed to load ticket' });
@@ -421,6 +502,7 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
     if (!context) return;
 
     const { message, attachments } = req.body;
+    const normalizedAttachments = parseMessageAttachments(attachments);
 
     // Verify ticket belongs to user, is assigned to user, or requester is support admin
     const where = context.canManageAll
@@ -451,6 +533,20 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
       },
     });
 
+    if (normalizedAttachments.length > 0) {
+      await prisma.support_ticket_attachments.createMany({
+        data: normalizedAttachments.map((attachment) => ({
+          ticket_id: req.params.id,
+          message_id: newMessage.id,
+          file_name: attachment.file_name,
+          file_url: attachment.file_url,
+          file_size: attachment.file_size,
+          file_type: attachment.file_type,
+          uploaded_by_id: context.userId,
+        })),
+      });
+    }
+
     // Update ticket timestamps
     const isUserMessage = context.userId === ticket.user_id;
     const updateData = {
@@ -474,7 +570,12 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
       data: updateData,
     });
 
-    res.status(201).json({ message: newMessage });
+    res.status(201).json({
+      message: {
+        ...newMessage,
+        attachments: normalizedAttachments,
+      },
+    });
   } catch (error) {
     console.error('Failed to create message:', error);
     res.status(500).json({ error: 'Failed to send message' });
@@ -490,23 +591,8 @@ router.get('/admin/tickets', authMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
-    const tickets = await prisma.support_tickets.findMany({
+    const ticketsRaw = await prisma.support_tickets.findMany({
       include: {
-        user: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            email: true,
-          },
-        },
-        assigned_to: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-          },
-        },
         _count: {
           select: {
             messages: true,
@@ -520,6 +606,31 @@ router.get('/admin/tickets', authMiddleware, async (req, res) => {
         { created_at: 'desc' },
       ],
     });
+
+    const userIds = Array.from(
+      new Set(
+        ticketsRaw.flatMap((ticket) => [ticket.user_id, ticket.assigned_to_id]).filter(Boolean)
+      )
+    );
+
+    const users = userIds.length > 0
+      ? await prisma.user.findMany({
+          where: { id: { in: userIds } },
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+          },
+        })
+      : [];
+    const userMap = buildSupportUserMap(users);
+
+    const tickets = ticketsRaw.map((ticket) => ({
+      ...ticket,
+      user: hydrateSupportUser(userMap, ticket.user_id, { includeEmail: true }),
+      assigned_to: hydrateSupportUser(userMap, ticket.assigned_to_id, { includeEmail: false }),
+    }));
 
     res.json({ tickets });
   } catch (error) {
@@ -582,13 +693,33 @@ router.get('/admin/export', authMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
-    const tickets = await prisma.support_tickets.findMany({
-      include: {
-        user: true,
-        assigned_to: true,
-      },
+    const ticketsRaw = await prisma.support_tickets.findMany({
       orderBy: { created_at: 'desc' },
     });
+
+    const userIds = Array.from(
+      new Set(
+        ticketsRaw.flatMap((ticket) => [ticket.user_id, ticket.assigned_to_id]).filter(Boolean)
+      )
+    );
+
+    const users = userIds.length > 0
+      ? await prisma.user.findMany({
+          where: { id: { in: userIds } },
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+          },
+        })
+      : [];
+    const userMap = buildSupportUserMap(users);
+
+    const tickets = ticketsRaw.map((ticket) => ({
+      ...ticket,
+      user: hydrateSupportUser(userMap, ticket.user_id, { includeEmail: false }),
+      assigned_to: hydrateSupportUser(userMap, ticket.assigned_to_id, { includeEmail: false }),
+    }));
 
     // Generate CSV
     const csv = [
@@ -598,7 +729,7 @@ router.get('/admin/export', authMiddleware, async (req, res) => {
         `"${t.subject.replace(/"/g, '""')}"`,
         t.status,
         t.priority,
-        `"${t.user.firstName} ${t.user.lastName}"`,
+        `"${t.user?.firstName || 'Unknown'} ${t.user?.lastName || 'User'}"`,
         t.assigned_to ? `"${t.assigned_to.firstName} ${t.assigned_to.lastName}"` : 'Unassigned',
         t.created_at.toISOString(),
         t.resolved_at ? t.resolved_at.toISOString() : '',
