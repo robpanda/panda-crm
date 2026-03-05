@@ -111,6 +111,32 @@ function parseBooleanFlag(value) {
   return value === true || value === 1 || value === '1' || String(value).toLowerCase() === 'true';
 }
 
+function normalizeEntityId(value) {
+  if (value == null) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? String(value) : null;
+  }
+  if (typeof value === 'object') {
+    const nestedCandidates = [
+      value.id,
+      value.userId,
+      value.ownerId,
+      value.newOwnerId,
+      value.value,
+      value.key,
+    ];
+    for (const candidate of nestedCandidates) {
+      const normalized = normalizeEntityId(candidate);
+      if (normalized) return normalized;
+    }
+  }
+  return null;
+}
+
 function formatTransferCounts(counts = {}) {
   const labels = {
     tasks: 'tasks',
@@ -4308,60 +4334,100 @@ Be factual and professional. Highlight anything that needs attention.`;
 
   /**
    * Get users who can be assigned as job owners
-   * Returns sales reps, project managers, and managers who can own jobs
+   * Returns all active users for owner reassignment/search flows.
    */
   async getAssignableUsers() {
-    const assignableRoleValues = ['SALES_REP', 'PROJECT_MANAGER', 'SALES_MANAGER', 'OFFICE_MANAGER', 'ADMIN'];
-    const users = await prisma.user.findMany({
-      where: {
-        isActive: true,
-        role: {
-          is: {
-            isActive: true,
-            OR: [
-              { name: { in: assignableRoleValues } },
-              { roleType: { in: assignableRoleValues } },
-            ],
-          },
-        },
-      },
-      select: {
-        id: true,
-        firstName: true,
-        lastName: true,
-        email: true,
-        role: {
-          select: {
-            name: true,
-            roleType: true,
-          },
-        },
-        officeAssignment: true,
-        _count: {
-          select: {
-            ownedOpportunities: {
-              where: {
-                stage: {
-                  notIn: ['CLOSED_WON', 'CLOSED_LOST'],
-                },
-              },
+    try {
+      const users = await prisma.user.findMany({
+        where: { isActive: true },
+        select: {
+          id: true,
+          fullName: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+          role: {
+            select: {
+              name: true,
+              roleType: true,
             },
           },
+          officeAssignment: true,
         },
-      },
-      orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
-    });
+        orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+      });
 
-    return users.map((user) => ({
-      id: user.id,
-      name: `${user.firstName} ${user.lastName}`,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      email: user.email,
-      role: user.role?.name || user.role?.roleType || null,
-      office: user.officeAssignment,
-      activeJobCount: user._count.ownedOpportunities,
-    }));
+      const ownerIds = users.map((user) => user.id).filter(Boolean);
+      let activeJobsByOwnerId = new Map();
+
+      if (ownerIds.length > 0) {
+        try {
+          const activeOpportunityCounts = await prisma.opportunity.groupBy({
+            by: ['ownerId'],
+            where: {
+              deletedAt: null,
+              ownerId: { in: ownerIds },
+              stage: { notIn: ['CLOSED_WON', 'CLOSED_LOST'] },
+            },
+            _count: { _all: true },
+          });
+          activeJobsByOwnerId = new Map(
+            activeOpportunityCounts.map((row) => [row.ownerId, row._count._all || 0])
+          );
+        } catch (countError) {
+          logger.warn('Failed to load active job counts for assignable users', {
+            error: countError.message,
+          });
+        }
+      }
+
+      return users.map((user) => {
+        const displayName = user.fullName
+          || `${user.firstName || ''} ${user.lastName || ''}`.trim()
+          || user.email
+          || 'Unknown User';
+
+        return {
+          id: user.id,
+          name: displayName,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email,
+          role: user.role?.name || user.role?.roleType || null,
+          office: user.officeAssignment,
+          activeJobCount: activeJobsByOwnerId.get(user.id) || 0,
+        };
+      });
+    } catch (error) {
+      logger.error('Failed to load assignable users', {
+        error: error.message,
+      });
+
+      // Last-resort fallback to avoid hard failures in owner transfer UI.
+      const fallbackUsers = await prisma.user.findMany({
+        where: { isActive: true },
+        select: {
+          id: true,
+          fullName: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+          officeAssignment: true,
+        },
+        orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+      });
+
+      return fallbackUsers.map((user) => ({
+        id: user.id,
+        name: user.fullName || `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email || 'Unknown User',
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        role: null,
+        office: user.officeAssignment,
+        activeJobCount: 0,
+      }));
+    }
   }
 
   /**
@@ -4516,20 +4582,23 @@ Be factual and professional. Highlight anything that needs attention.`;
    * @param {Object} auditContext - Context for audit logging
    */
   async transferOpportunity(opportunityId, newOwnerId, transferOptions = {}, auditContext = {}) {
-    if (!opportunityId) {
+    const normalizedOpportunityId = normalizeEntityId(opportunityId);
+    const normalizedNewOwnerId = normalizeEntityId(newOwnerId);
+
+    if (!normalizedOpportunityId) {
       const error = new Error('Opportunity ID is required');
       error.name = 'ValidationError';
       throw error;
     }
 
-    if (!newOwnerId) {
+    if (!normalizedNewOwnerId) {
       const error = new Error('New owner ID is required');
       error.name = 'ValidationError';
       throw error;
     }
 
-    let normalizedTransferOptions = transferOptions || {};
-    let normalizedAuditContext = auditContext || {};
+    let normalizedTransferOptions = transferOptions && typeof transferOptions === 'object' ? transferOptions : {};
+    let normalizedAuditContext = auditContext && typeof auditContext === 'object' ? auditContext : {};
 
     // Backward compatibility: older callers passed auditContext as 3rd argument.
     if (normalizedTransferOptions && !Object.keys(normalizedAuditContext).length) {
@@ -4553,9 +4622,11 @@ Be factual and professional. Highlight anything that needs attention.`;
       ?? normalizedTransferOptions.transferAssociatedRecords
     );
 
-    const [opportunity, newOwner] = await Promise.all([
+    const auditUserId = normalizeEntityId(normalizedAuditContext.userId);
+
+    const [opportunity, newOwner, auditUser] = await Promise.all([
       prisma.opportunity.findUnique({
-        where: { id: opportunityId },
+        where: { id: normalizedOpportunityId },
         include: {
           owner: {
             select: { id: true, firstName: true, lastName: true, email: true },
@@ -4572,13 +4643,19 @@ Be factual and professional. Highlight anything that needs attention.`;
         },
       }),
       prisma.user.findUnique({
-        where: { id: newOwnerId },
+        where: { id: normalizedNewOwnerId },
         select: { id: true, firstName: true, lastName: true, email: true, isActive: true },
       }),
+      auditUserId
+        ? prisma.user.findUnique({
+            where: { id: auditUserId },
+            select: { id: true },
+          }).catch(() => null)
+        : Promise.resolve(null),
     ]);
 
     if (!opportunity) {
-      const error = new Error(`Opportunity not found: ${opportunityId}`);
+      const error = new Error(`Opportunity not found: ${normalizedOpportunityId}`);
       error.name = 'NotFoundError';
       throw error;
     }
@@ -4616,7 +4693,7 @@ Be factual and professional. Highlight anything that needs attention.`;
       },
     };
 
-    if (opportunity.ownerId === newOwnerId) {
+    if (opportunity.ownerId === normalizedNewOwnerId) {
       return {
         transferred: false,
         reason: 'ALREADY_ASSIGNED',
@@ -4641,46 +4718,55 @@ Be factual and professional. Highlight anything that needs attention.`;
     }
 
     const oldOwnerId = opportunity.ownerId || null;
+    const resolvedAuditUserId = auditUser?.id || null;
 
-    const { updatedOpportunity, relatedTransfer } = await prisma.$transaction(async (tx) => {
-      const updated = await tx.opportunity.update({
-        where: { id: opportunityId },
-        data: {
-          ownerId: newOwnerId,
-          assignedById: normalizedAuditContext.userId || null,
-          assignedAt: new Date(),
+    const updatedOpportunity = await prisma.$transaction(async (tx) => tx.opportunity.update({
+      where: { id: normalizedOpportunityId },
+      data: {
+        ownerId: normalizedNewOwnerId,
+        assignedById: resolvedAuditUserId,
+        assignedAt: new Date(),
+      },
+      include: {
+        account: {
+          select: { id: true, name: true, billingCity: true, billingState: true },
         },
-        include: {
-          account: {
-            select: { id: true, name: true, billingCity: true, billingState: true },
-          },
-          contact: {
-            select: { id: true, firstName: true, lastName: true, phone: true, email: true },
-          },
-          owner: {
-            select: { id: true, firstName: true, lastName: true, email: true },
-          },
-          _count: {
-            select: { quotes: true, workOrders: true },
-          },
+        contact: {
+          select: { id: true, firstName: true, lastName: true, phone: true, email: true },
         },
-      });
+        owner: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+        _count: {
+          select: { quotes: true, workOrders: true },
+        },
+      },
+    }));
 
-      let related = { ...relatedTransferBase };
-      if (transferRelatedItems) {
-        related = await this.transferRelatedOpportunityOwnership(tx, {
-          opportunityId,
+    let relatedTransfer = { ...relatedTransferBase };
+    if (transferRelatedItems) {
+      try {
+        relatedTransfer = await prisma.$transaction(async (tx) => this.transferRelatedOpportunityOwnership(tx, {
+          opportunityId: normalizedOpportunityId,
           accountId: opportunity.accountId || null,
           oldOwnerId,
-          newOwnerId,
+          newOwnerId: normalizedNewOwnerId,
+        }));
+      } catch (error) {
+        logger.error('Related assignment transfer failed after owner transfer', {
+          opportunityId: normalizedOpportunityId,
+          oldOwnerId,
+          newOwnerId: normalizedNewOwnerId,
+          error: error.message,
         });
-      }
 
-      return {
-        updatedOpportunity: updated,
-        relatedTransfer: related,
-      };
-    });
+        relatedTransfer = {
+          ...relatedTransferBase,
+          skippedReason: 'RELATED_TRANSFER_FAILED',
+          error: error.message,
+        };
+      }
+    }
 
     const relatedCountsSummary = formatTransferCounts(relatedTransfer.counts);
     const relatedSummaryText = transferRelatedItems
@@ -4693,15 +4779,15 @@ Be factual and professional. Highlight anything that needs attention.`;
       data: {
         title: 'Job Reassigned',
         body: `Job reassigned from ${previousOwnerName} to ${newOwnerName}.${relatedSummaryText}${normalizedAuditContext.userEmail ? ` Reassigned by: ${normalizedAuditContext.userEmail}` : ''}`,
-        opportunityId,
-        createdById: normalizedAuditContext.userId || null,
+        opportunityId: normalizedOpportunityId,
+        createdById: resolvedAuditUserId || newOwner.id,
       },
     }).catch((error) => {
-      logger.warn(`Failed to create reassignment note for ${opportunityId}: ${error.message}`);
+      logger.warn(`Failed to create reassignment note for ${normalizedOpportunityId}: ${error.message}`);
     });
 
     logger.info(
-      `Job ${opportunityId} transferred from ${previousOwnerName} to ${newOwnerName}` +
+      `Job ${normalizedOpportunityId} transferred from ${previousOwnerName} to ${newOwnerName}` +
       `${transferRelatedItems ? ` (related: ${relatedCountsSummary || 'none moved'})` : ''}`
     );
 

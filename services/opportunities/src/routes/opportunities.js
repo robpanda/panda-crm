@@ -134,6 +134,25 @@ const resolveOpportunityIdFromRequest = (req) => (
   || req.body?.id
 );
 
+const resolveEntityId = (value) => {
+  if (value == null) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? String(value) : null;
+  }
+  if (typeof value === 'object') {
+    const candidates = [value.id, value.userId, value.ownerId, value.newOwnerId, value.value, value.key];
+    for (const candidate of candidates) {
+      const resolved = resolveEntityId(candidate);
+      if (resolved) return resolved;
+    }
+  }
+  return null;
+};
+
 // Backward-compatible aliases for clients that call /internal-comments without /:id
 router.get('/internal-comments', async (req, res, next) => {
   try {
@@ -619,11 +638,13 @@ router.post('/:id/portalLink', handleGeneratePortalLink);
 // Transfer an opportunity/job to another owner
 router.post('/:id/transfer', async (req, res, next) => {
   try {
-    const newOwnerId = req.body?.newOwnerId
-      || req.body?.ownerId
-      || req.body?.toOwnerId
-      || req.body?.assignedToId
-      || req.body?.userId;
+    const newOwnerId = resolveEntityId(
+      req.body?.newOwnerId
+      ?? req.body?.ownerId
+      ?? req.body?.toOwnerId
+      ?? req.body?.assignedToId
+      ?? req.body?.userId
+    );
 
     if (!newOwnerId) {
       return res.status(400).json({
