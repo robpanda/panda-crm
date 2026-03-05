@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth, ROLE_TYPES } from '../context/AuthContext';
 import { useRingCentral } from '../context/RingCentralContext';
-import { leadsApi, opportunitiesApi, usersApi, accountsApi, bamboogliApi, callListsApi, ringCentralApi } from '../services/api';
+import { leadsApi, opportunitiesApi, usersApi, accountsApi, bamboogliApi, callListsApi, ringCentralApi, scheduleApi } from '../services/api';
 import CrewSelector from '../components/CrewSelector';
 import { formatDistanceToNow, format, parseISO, startOfDay, startOfWeek, startOfMonth, endOfDay, endOfWeek, endOfMonth, isToday, isTomorrow, addDays } from 'date-fns';
 import { formatNumber } from '../utils/formatters';
@@ -77,6 +77,7 @@ const DASHBOARD_TABS = [
   { id: 'managerDashboard', label: 'Queue Manager', icon: Users },
   { id: 'callLists', label: 'Call Lists', icon: List },
   { id: 'unconfirmed', label: 'Unconfirmed Leads', icon: AlertCircle },
+  { id: 'confirmations', label: 'Confirmations', icon: CalendarCheck },
   { id: 'unscheduled', label: 'Unscheduled Appts', icon: CalendarX },
   { id: 'serviceRequests', label: 'Service Requests', icon: Wrench },
 ];
@@ -2067,6 +2068,14 @@ export default function CallCenterDashboard() {
   // SMS and Email modals
   const [smsModal, setSmsModal] = useState({ open: false, phone: '', recipientName: '', mergeData: {} });
   const [emailModal, setEmailModal] = useState({ open: false, email: '', recipientName: '', mergeData: {} });
+  const [contactDetailsModal, setContactDetailsModal] = useState({
+    open: false,
+    loading: false,
+    title: '',
+    viewPath: null,
+    error: '',
+    details: null,
+  });
 
   // Form states for modals
   const [confirmFormData, setConfirmFormData] = useState({
@@ -2195,8 +2204,25 @@ export default function CallCenterDashboard() {
     staleTime: 30000, // Consider data fresh for 30 seconds
   });
 
+  // Fetch today's appointments for confirmations view (all work types)
+  const todayKey = format(new Date(), 'yyyy-MM-dd');
+  const { data: confirmationsData, isLoading: confirmationsLoading, refetch: refetchConfirmations } = useQuery({
+    queryKey: ['callCenterConfirmations', todayKey],
+    queryFn: () => scheduleApi.getServiceAppointments({
+      dateFrom: startOfDay(new Date()).toISOString(),
+      dateTo: endOfDay(new Date()).toISOString(),
+      sortBy: 'scheduledStart',
+      sortOrder: 'asc',
+      limit: 200,
+    }),
+    staleTime: 30000,
+  });
+
   const unconfirmedLeads = unconfirmedLeadsData?.data || [];
   const unscheduledAppointments = unscheduledData?.data || unscheduledData?.opportunities || [];
+  const confirmationsAppointments = (confirmationsData?.data || confirmationsData?.appointments || [])
+    .filter((appointment) => appointment?.scheduledStart)
+    .sort((a, b) => new Date(a.scheduledStart) - new Date(b.scheduledStart));
 
   // Fetch service requests (opportunities with serviceRequired=true, serviceComplete=false)
   // Service requests now live on Jobs (Opportunities) per the Opportunity Hub architecture
@@ -2446,12 +2472,126 @@ export default function CallCenterDashboard() {
     },
   ];
 
-  // Format appointment date/time nicely
+  // Format appointment date/time as MM/DD/YYYY with 12-hour time for call center queues
   const formatApptDateTime = (dateStr, timeStr) => {
     if (!dateStr) return '-';
-    const date = parseISO(dateStr.split('T')[0]);
-    const dateLabel = isToday(date) ? 'Today' : isTomorrow(date) ? 'Tomorrow' : format(date, 'EEE, MMM d');
-    return timeStr ? `${dateLabel} at ${timeStr}` : dateLabel;
+    const parsedDate = parseISO(String(dateStr).split('T')[0]);
+    const dateLabel = Number.isNaN(parsedDate.getTime()) ? '-' : format(parsedDate, 'MM/dd/yyyy');
+
+    if (!timeStr) return dateLabel;
+
+    const timeMatch = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(String(timeStr));
+    if (!timeMatch) return `${dateLabel} ${timeStr}`;
+
+    const hour = Number(timeMatch[1]);
+    const minute = timeMatch[2];
+    if (!Number.isFinite(hour) || hour < 0 || hour > 23) return `${dateLabel} ${timeStr}`;
+
+    const meridiem = hour >= 12 ? 'PM' : 'AM';
+    const hour12 = hour % 12 || 12;
+    return `${dateLabel} ${hour12}:${minute} ${meridiem}`;
+  };
+
+  const formatAddress = ({ street, city, state, postalCode }) => {
+    const cityState = [city, state].filter(Boolean).join(', ');
+    return [street, cityState, postalCode].filter(Boolean).join(' ').trim();
+  };
+
+  const formatDateTimeForDisplay = (value) => {
+    if (!value) return '-';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return '-';
+    return format(parsed, 'MM/dd/yyyy h:mm a');
+  };
+
+  const openLeadContactDetails = (lead) => {
+    const fullName = `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || lead.company || 'Unknown';
+    setContactDetailsModal({
+      open: true,
+      loading: false,
+      title: `${fullName} Contact Details`,
+      viewPath: `/leads/${lead.id}`,
+      error: '',
+      details: {
+        name: fullName,
+        company: lead.company || '',
+        phone: lead.phone || '',
+        email: lead.email || '',
+        address: formatAddress({
+          street: lead.street || lead.address,
+          city: lead.city,
+          state: lead.state,
+          postalCode: lead.zipCode || lead.postalCode,
+        }),
+        appointment: formatApptDateTime(lead.tentativeAppointmentDate, lead.tentativeAppointmentTime),
+      },
+    });
+  };
+
+  const openConfirmationContactDetails = async (appointment) => {
+    const fallbackName = appointment?.workOrder?.account?.name
+      || appointment?.workOrder?.opportunity?.name
+      || appointment?.subject
+      || 'Job Contact';
+    const opportunityId = appointment?.workOrder?.opportunity?.id;
+    const accountId = appointment?.workOrder?.account?.id;
+    const viewPath = opportunityId ? `/opportunities/${opportunityId}` : null;
+
+    setContactDetailsModal({
+      open: true,
+      loading: true,
+      title: `${fallbackName} Contact Details`,
+      viewPath,
+      error: '',
+      details: {
+        name: fallbackName,
+        appointment: formatDateTimeForDisplay(appointment?.scheduledStart),
+        workType: appointment?.workOrder?.subject || appointment?.subject || '',
+      },
+    });
+
+    try {
+      const opportunity = opportunityId ? await opportunitiesApi.getOpportunity(opportunityId) : null;
+      const fallbackAccount = !opportunity?.account && accountId
+        ? await accountsApi.getAccount(accountId)
+        : null;
+
+      const account = opportunity?.account || fallbackAccount || appointment?.workOrder?.account || {};
+      const contact = opportunity?.contact || {};
+      const resolvedName = contact.fullName
+        || contact.name
+        || `${contact.firstName || ''} ${contact.lastName || ''}`.trim()
+        || account.name
+        || fallbackName;
+
+      setContactDetailsModal({
+        open: true,
+        loading: false,
+        title: `${resolvedName} Contact Details`,
+        viewPath,
+        error: '',
+        details: {
+          name: resolvedName,
+          company: account.name || '',
+          phone: contact.phone || contact.mobilePhone || account.phone || '',
+          email: contact.email || account.email || '',
+          address: formatAddress({
+            street: account.billingStreet || account.address || appointment?.street,
+            city: account.billingCity || appointment?.city,
+            state: account.billingState || appointment?.state,
+            postalCode: account.billingPostalCode || appointment?.postalCode,
+          }),
+          appointment: formatDateTimeForDisplay(appointment?.scheduledStart),
+          workType: appointment?.workOrder?.subject || appointment?.subject || '',
+        },
+      });
+    } catch (error) {
+      setContactDetailsModal((prev) => ({
+        ...prev,
+        loading: false,
+        error: 'Could not load full contact details.',
+      }));
+    }
   };
 
   // Open SMS modal
@@ -2621,6 +2761,7 @@ export default function CallCenterDashboard() {
           {DASHBOARD_TABS.map((tab) => {
             const Icon = tab.icon;
             const count = tab.id === 'unconfirmed' ? unconfirmedLeads.length :
+                         tab.id === 'confirmations' ? confirmationsAppointments.length :
                          tab.id === 'unscheduled' ? unscheduledAppointments.length :
                          tab.id === 'serviceRequests' ? serviceRequests.length : null;
             return (
@@ -2959,12 +3100,13 @@ export default function CallCenterDashboard() {
                 >
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-3">
-                      <Link
-                        to={`/leads/${lead.id}`}
-                        className="font-medium text-gray-900 hover:text-panda-primary truncate"
+                      <button
+                        type="button"
+                        onClick={() => openLeadContactDetails(lead)}
+                        className="font-medium text-gray-900 hover:text-panda-primary truncate text-left"
                       >
                         {lead.firstName} {lead.lastName}
-                      </Link>
+                      </button>
                       {lead.rating && (
                         <span className={`text-xs px-2 py-0.5 rounded-full ${
                           lead.rating === 'Hot' ? 'bg-red-100 text-red-700' :
@@ -3067,6 +3209,109 @@ export default function CallCenterDashboard() {
               <CheckCircle className="w-12 h-12 text-green-300 mx-auto mb-3" />
               <p className="font-medium text-gray-700">All caught up!</p>
               <p className="text-sm">No unconfirmed leads for {apptDateFilter === 'all' ? 'any date' : apptDateFilter}</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Confirmations Tab Content */}
+      {activeTab === 'confirmations' && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100">
+          <div className="p-5 border-b border-gray-100">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                  <CalendarCheck className="w-5 h-5 text-blue-500" />
+                  Confirmations
+                </h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  Jobs with appointments scheduled for {format(new Date(), 'MM/dd/yyyy')}
+                </p>
+              </div>
+              <button
+                onClick={() => refetchConfirmations()}
+                className="flex items-center gap-2 px-3 py-2 text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Refresh
+              </button>
+            </div>
+          </div>
+
+          {confirmationsLoading ? (
+            <div className="p-8 text-center text-gray-500">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-panda-primary mx-auto mb-3"></div>
+              Loading confirmations...
+            </div>
+          ) : confirmationsAppointments.length > 0 ? (
+            <div className="divide-y divide-gray-100">
+              {confirmationsAppointments.map((appointment) => {
+                const accountName = appointment?.workOrder?.account?.name
+                  || appointment?.workOrder?.opportunity?.name
+                  || appointment?.subject
+                  || 'Unknown Customer';
+                const opportunityId = appointment?.workOrder?.opportunity?.id;
+                return (
+                  <div
+                    key={appointment.id}
+                    className="flex items-center p-4 hover:bg-gray-50 transition-colors"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => openConfirmationContactDetails(appointment)}
+                          className="font-medium text-gray-900 hover:text-panda-primary truncate text-left"
+                        >
+                          {accountName}
+                        </button>
+                        {appointment.status && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">
+                            {appointment.status.replace(/_/g, ' ')}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-4 mt-1 text-sm text-gray-500">
+                        {appointment?.workOrder?.workOrderNumber && (
+                          <span>WO #{appointment.workOrder.workOrderNumber}</span>
+                        )}
+                        {appointment?.workOrder?.opportunity?.name && (
+                          <span>{appointment.workOrder.opportunity.name}</span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-3 ml-4">
+                      <div className="text-right">
+                        <p className="text-sm font-medium text-gray-900">
+                          {formatDateTimeForDisplay(appointment.scheduledStart)}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          {appointment.workOrder?.subject || appointment.subject || 'Appointment'}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {opportunityId && (
+                          <Link
+                            to={`/opportunities/${opportunityId}`}
+                            className="p-2 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition-colors"
+                            title="View Job"
+                          >
+                            <ArrowRight className="w-4 h-4" />
+                          </Link>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="p-8 text-center text-gray-500">
+              <CalendarCheck className="w-12 h-12 text-green-300 mx-auto mb-3" />
+              <p className="font-medium text-gray-700">No appointments scheduled today</p>
+              <p className="text-sm">Today&apos;s confirmations queue is clear</p>
             </div>
           )}
         </div>
@@ -3389,6 +3634,105 @@ export default function CallCenterDashboard() {
       {/* ============================================================================ */}
       {/* MODALS */}
       {/* ============================================================================ */}
+
+      {/* Contact Details Modal */}
+      {contactDetailsModal.open && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full">
+            <div className="p-5 border-b border-gray-100 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-gray-900">{contactDetailsModal.title}</h3>
+              <button
+                onClick={() => setContactDetailsModal({
+                  open: false,
+                  loading: false,
+                  title: '',
+                  viewPath: null,
+                  error: '',
+                  details: null,
+                })}
+                className="p-1 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+            <div className="p-5 space-y-3">
+              {contactDetailsModal.loading ? (
+                <div className="flex items-center justify-center py-6 text-gray-500">
+                  <Loader2 className="w-5 h-5 animate-spin mr-2" />
+                  Loading contact details...
+                </div>
+              ) : (
+                <>
+                  {contactDetailsModal.details?.name && (
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-gray-500">Name</p>
+                      <p className="font-medium text-gray-900">{contactDetailsModal.details.name}</p>
+                    </div>
+                  )}
+                  {contactDetailsModal.details?.company && (
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-gray-500">Company</p>
+                      <p className="text-gray-700">{contactDetailsModal.details.company}</p>
+                    </div>
+                  )}
+                  {contactDetailsModal.details?.phone && (
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-gray-500">Phone</p>
+                      <p className="text-gray-700">{contactDetailsModal.details.phone}</p>
+                    </div>
+                  )}
+                  {contactDetailsModal.details?.email && (
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-gray-500">Email</p>
+                      <p className="text-gray-700">{contactDetailsModal.details.email}</p>
+                    </div>
+                  )}
+                  {contactDetailsModal.details?.address && (
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-gray-500">Address</p>
+                      <p className="text-gray-700">{contactDetailsModal.details.address}</p>
+                    </div>
+                  )}
+                  {contactDetailsModal.details?.appointment && (
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-gray-500">Appointment</p>
+                      <p className="text-gray-700">{contactDetailsModal.details.appointment}</p>
+                    </div>
+                  )}
+                  {contactDetailsModal.details?.workType && (
+                    <div>
+                      <p className="text-xs uppercase tracking-wide text-gray-500">Type</p>
+                      <p className="text-gray-700">{contactDetailsModal.details.workType}</p>
+                    </div>
+                  )}
+                  {contactDetailsModal.error && (
+                    <p className="text-sm text-amber-600">{contactDetailsModal.error}</p>
+                  )}
+                </>
+              )}
+            </div>
+            <div className="p-5 border-t border-gray-100 flex justify-end">
+              {contactDetailsModal.viewPath && (
+                <Link
+                  to={contactDetailsModal.viewPath}
+                  className="inline-flex items-center gap-2 px-3 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-secondary transition-colors text-sm font-medium"
+                  onClick={() => setContactDetailsModal({
+                    open: false,
+                    loading: false,
+                    title: '',
+                    viewPath: null,
+                    error: '',
+                    details: null,
+                  })}
+                >
+                  Open Record
+                  <ArrowRight className="w-4 h-4" />
+                </Link>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Confirm Lead Modal */}
       {confirmLeadModal.open && confirmLeadModal.lead && (
