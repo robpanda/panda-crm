@@ -3624,9 +3624,11 @@ Be factual and professional. Highlight anything that needs attention.`;
         await prisma.opportunity.update({
           where: { id: opp.id },
           data: {
-            ownerId: newOwnerId,
-            assignedById: auditContext.userId,
-            assignedAt: new Date(),
+            // Use relation connect to remain compatible with Prisma clients
+            // where ownerId scalar is not exposed in OpportunityUpdateInput.
+            owner: {
+              connect: { id: newOwnerId },
+            },
           },
         });
 
@@ -3833,9 +3835,10 @@ Be factual and professional. Highlight anything that needs attention.`;
     const updatedOpportunity = await prisma.$transaction(async (tx) => tx.opportunity.update({
       where: { id: normalizedOpportunityId },
       data: {
-        ownerId: normalizedNewOwnerId,
-        assignedById: resolvedAuditUserId,
-        assignedAt: new Date(),
+        // Use relation connect to avoid scalar ownerId update validation failures.
+        owner: {
+          connect: { id: normalizedNewOwnerId },
+        },
       },
       include: {
         account: {
