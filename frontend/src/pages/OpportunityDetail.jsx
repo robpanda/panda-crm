@@ -6644,8 +6644,8 @@ export default function OpportunityDetail() {
                               </div>
                             </div>
                             <div className="flex items-center gap-4">
-                              <div className="text-right">
-                                <p className="font-semibold text-gray-900">${(invoice.totalAmount || 0).toLocaleString()}</p>
+                            <div className="text-right">
+                                <p className="font-semibold text-gray-900">${Number(invoice.total ?? invoice.totalAmount ?? 0).toLocaleString()}</p>
                                 <span className={`px-2 py-0.5 rounded text-xs font-medium ${
                                   invoice.status === 'PAID' ? 'bg-green-100 text-green-800' :
                                   invoice.status === 'OVERDUE' ? 'bg-red-100 text-red-800' :
@@ -6672,7 +6672,10 @@ export default function OpportunityDetail() {
                                   </button>
                                 )}
                                 {/* Pay Invoice Button - only show if not fully paid */}
-                                {invoice.status !== 'PAID' && (parseFloat(invoice.balanceDue) > 0 || parseFloat(invoice.totalAmount) > parseFloat(invoice.amountPaid || 0)) && (
+                                {invoice.status !== 'PAID' && (
+                                  (parseFloat(invoice.balanceDue) > 0) ||
+                                  (parseFloat(invoice.total ?? invoice.totalAmount) > parseFloat(invoice.amountPaid || 0))
+                                ) && (
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();
@@ -6695,7 +6698,7 @@ export default function OpportunityDetail() {
                             <div className="mt-3 pt-3 border-t border-gray-100 flex justify-between text-sm">
                               <span className="text-gray-500">Balance Due:</span>
                               <span className="font-medium text-red-600">
-                                ${parseFloat(invoice.balanceDue || (invoice.totalAmount - (invoice.amountPaid || 0)) || 0).toLocaleString()}
+                                ${parseFloat(invoice.balanceDue || ((invoice.total ?? invoice.totalAmount) - (invoice.amountPaid || 0)) || 0).toLocaleString()}
                               </span>
                             </div>
                           )}
