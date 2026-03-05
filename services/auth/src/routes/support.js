@@ -136,14 +136,21 @@ function hasSupportAdminPermission(permissionsJson) {
   const pageKeys = [
     'supportAdmin',
     'support_admin',
+    'support',
     'supportTickets',
     'support_tickets',
     'admin/support',
     'admin/support/tickets',
+    '/admin/support',
+    '/admin/support/tickets',
   ];
 
   for (const key of pageKeys) {
-    if (pages[key] === true) {
+    const value = pages[key];
+    if (value === true) {
+      return true;
+    }
+    if (value && typeof value === 'object' && value.access === true) {
       return true;
     }
   }
@@ -224,6 +231,10 @@ async function getSupportContext(req, res) {
   const authenticatedUser = await resolveAuthenticatedUser(req.user);
   if (!authenticatedUser) {
     res.status(401).json({ error: 'Unable to resolve authenticated user' });
+    return null;
+  }
+  if (!authenticatedUser.id) {
+    res.status(401).json({ error: 'Authenticated user has no local user id' });
     return null;
   }
 
