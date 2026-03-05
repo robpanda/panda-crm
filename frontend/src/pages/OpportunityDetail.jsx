@@ -3852,7 +3852,10 @@ export default function OpportunityDetail() {
         <div className="flex flex-col lg:flex-row gap-6">
           {/* Left Sidebar - Compact actions and info */}
           <div className="w-full lg:w-80 xl:w-96 flex-shrink-0 order-2 lg:order-1">
-            <div className="lg:sticky lg:top-24 space-y-3 max-h-[calc(100vh-120px)] overflow-y-auto pb-4">
+            <div
+              className="lg:sticky lg:top-24 space-y-3 pb-4 overflow-y-auto max-h-none lg:max-h-[calc(100vh-120px)] [&::-webkit-scrollbar]:hidden"
+              style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+            >
               {/* Primary Actions Row */}
               <div className="flex gap-2">
                 {isEditMode ? (

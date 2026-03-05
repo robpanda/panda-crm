@@ -554,39 +554,72 @@ export const leadsApi = {
 
   // Lead Internal Comments
   async getInternalComments(leadId, params = {}) {
-    const response = await api.get(`/api/leads/${leadId}/internal-comments`, { params });
-    return response.data.data || [];
+    try {
+      const response = await api.get(`/api/leads/${leadId}/internal-comments`, { params });
+      return response.data.data || [];
+    } catch (error) {
+      if (error?.response?.status === 404) {
+        const response = await api.get('/api/leads/internal-comments', {
+          params: { ...params, leadId },
+        });
+        return response.data.data || [];
+      }
+      throw error;
+    }
   },
 
   async getInternalCommentsCount(leadId, params = {}) {
-    const response = await api.get(`/api/leads/${leadId}/internal-comments`, { params });
-    const comments = response.data.data || [];
+    const comments = await this.getInternalComments(leadId, params);
     return { count: comments.length };
   },
 
   async createInternalComment(leadId, data) {
-    const response = await api.post(`/api/leads/${leadId}/internal-comments`, data);
-    return response.data.data;
+    try {
+      const response = await api.post(`/api/leads/${leadId}/internal-comments`, data);
+      return response.data.data;
+    } catch (error) {
+      if (error?.response?.status === 404) {
+        const response = await api.post('/api/leads/internal-comments', { ...data, leadId });
+        return response.data.data;
+      }
+      throw error;
+    }
   },
 
   async updateInternalComment(leadId, commentId, data) {
-    const response = await api.put(`/api/leads/${leadId}/internal-comments/${commentId}`, data);
-    return response.data.data;
+    try {
+      const response = await api.put(`/api/leads/${leadId}/internal-comments/${commentId}`, data);
+      return response.data.data;
+    } catch (error) {
+      if (error?.response?.status === 404) {
+        const response = await api.put(`/api/leads/internal-comments/${commentId}`, { ...data, leadId });
+        return response.data.data;
+      }
+      throw error;
+    }
   },
 
   async deleteInternalComment(leadId, commentId) {
-    const response = await api.delete(`/api/leads/${leadId}/internal-comments/${commentId}`);
-    return response.data;
+    try {
+      const response = await api.delete(`/api/leads/${leadId}/internal-comments/${commentId}`);
+      return response.data;
+    } catch (error) {
+      if (error?.response?.status === 404) {
+        const response = await api.delete(`/api/leads/internal-comments/${commentId}`, {
+          params: { leadId },
+        });
+        return response.data;
+      }
+      throw error;
+    }
   },
 
   async resolveInternalComment(leadId, commentId) {
-    const response = await api.put(`/api/leads/${leadId}/internal-comments/${commentId}`, { isResolved: true });
-    return response.data.data;
+    return this.updateInternalComment(leadId, commentId, { isResolved: true });
   },
 
   async unresolveInternalComment(leadId, commentId) {
-    const response = await api.put(`/api/leads/${leadId}/internal-comments/${commentId}`, { isResolved: false });
-    return response.data.data;
+    return this.updateInternalComment(leadId, commentId, { isResolved: false });
   },
 
   async getCommentDepartments() {
