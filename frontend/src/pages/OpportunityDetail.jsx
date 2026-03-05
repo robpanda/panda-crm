@@ -2215,6 +2215,8 @@ export default function OpportunityDetail() {
   // Document gallery state
   const [showDocumentGallery, setShowDocumentGallery] = useState(false);
   const [selectedDocumentIndex, setSelectedDocumentIndex] = useState(0);
+  const [showRepositoryFileGallery, setShowRepositoryFileGallery] = useState(false);
+  const [selectedRepositoryFileIndex, setSelectedRepositoryFileIndex] = useState(0);
 
   // Contract signing modal state
   const [showContractSigningModal, setShowContractSigningModal] = useState(false);
@@ -2425,6 +2427,90 @@ export default function OpportunityDetail() {
     if (Array.isArray(repositoryFiles?.data?.documents)) return repositoryFiles.data.documents;
     return [];
   }, [repositoryFiles]);
+
+  const selectedRepositoryFile = useMemo(
+    () => repositoryFileList[selectedRepositoryFileIndex] || null,
+    [repositoryFileList, selectedRepositoryFileIndex]
+  );
+
+  const getRepositoryFileUrl = useCallback(
+    (file) => file?.contentUrl || file?.downloadUrl || file?.url || null,
+    []
+  );
+
+  const getRepositoryFileExtension = useCallback((file) => {
+    const normalizedExplicitType = (file?.fileType || file?.fileExtension || '')
+      .toString()
+      .toLowerCase()
+      .replace(/^\./, '');
+    if (normalizedExplicitType) return normalizedExplicitType;
+
+    const fileName = (file?.fileName || file?.title || '').toString().toLowerCase();
+    const extensionIndex = fileName.lastIndexOf('.');
+    return extensionIndex > -1 ? fileName.slice(extensionIndex + 1) : '';
+  }, []);
+
+  const isRepositoryImageFile = useCallback(
+    (file) => ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'svg'].includes(getRepositoryFileExtension(file)),
+    [getRepositoryFileExtension]
+  );
+
+  const isRepositoryPdfFile = useCallback(
+    (file) => getRepositoryFileExtension(file) === 'pdf',
+    [getRepositoryFileExtension]
+  );
+
+  const downloadRemoteFile = useCallback(async (url, preferredFileName) => {
+    if (!url) return;
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Download failed with status ${response.status}`);
+    }
+
+    const blob = await response.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = blobUrl;
+    anchor.download = preferredFileName || 'document';
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(blobUrl);
+  }, []);
+
+  const handleDownloadRepositoryFile = useCallback(async (file) => {
+    const fileUrl = getRepositoryFileUrl(file);
+    if (!fileUrl) {
+      setActionError('No file URL available');
+      return;
+    }
+
+    try {
+      await downloadRemoteFile(fileUrl, file?.fileName || file?.title || 'document');
+      setActionSuccess('Download started');
+      setTimeout(() => setActionSuccess(null), 1500);
+    } catch (error) {
+      setActionError(error.message || 'Failed to download file');
+    }
+  }, [downloadRemoteFile, getRepositoryFileUrl]);
+
+  const handleDownloadCurrentAgreement = useCallback(async () => {
+    const currentDocument = documents?.documents?.[selectedDocumentIndex];
+    const downloadUrl = currentDocument?.downloadUrl || currentDocument?.signedDocumentUrl || currentDocument?.documentUrl;
+    if (!downloadUrl) {
+      setActionError('No document URL available');
+      return;
+    }
+
+    try {
+      await downloadRemoteFile(downloadUrl, currentDocument?.fileName || currentDocument?.name || 'agreement.pdf');
+      setActionSuccess('Download started');
+      setTimeout(() => setActionSuccess(null), 1500);
+    } catch (error) {
+      setActionError(error.message || 'Failed to download document');
+    }
+  }, [documents, selectedDocumentIndex, downloadRemoteFile]);
 
   // Cases (linked via Account) - service not yet deployed, disable retries
   const { data: cases } = useQuery({
@@ -7471,31 +7557,20 @@ export default function OpportunityDetail() {
                               </div>
                               <div className="flex items-center space-x-2">
                                 {/* Download button */}
-                                {documents.documents[selectedDocumentIndex]?.downloadUrl && (
-                                  <a
-                                    href={documents.documents[selectedDocumentIndex].downloadUrl}
-                                    download={documents.documents[selectedDocumentIndex].fileName}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
+                                {(documents.documents[selectedDocumentIndex]?.downloadUrl
+                                  || documents.documents[selectedDocumentIndex]?.signedDocumentUrl
+                                  || documents.documents[selectedDocumentIndex]?.documentUrl) && (
+                                  <button
+                                    type="button"
                                     className="flex items-center space-x-2 px-4 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90"
-                                    onClick={(e) => e.stopPropagation()}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleDownloadCurrentAgreement();
+                                    }}
                                   >
                                     <Download className="w-4 h-4" />
                                     <span>Download</span>
-                                  </a>
-                                )}
-                                {/* Open in new tab */}
-                                {(documents.documents[selectedDocumentIndex]?.signedDocumentUrl || documents.documents[selectedDocumentIndex]?.documentUrl) && (
-                                  <a
-                                    href={documents.documents[selectedDocumentIndex].signedDocumentUrl || documents.documents[selectedDocumentIndex].documentUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="flex items-center space-x-2 px-4 py-2 bg-white/10 text-white rounded-lg hover:bg-white/20"
-                                    onClick={(e) => e.stopPropagation()}
-                                  >
-                                    <ExternalLink className="w-4 h-4" />
-                                    <span>Open</span>
-                                  </a>
+                                  </button>
                                 )}
                               </div>
                             </div>
@@ -7594,22 +7669,24 @@ export default function OpportunityDetail() {
                               {files.map((file) => (
                                 <div key={file.id} className="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
                                   {(() => {
-                                    const fileUrl = file.contentUrl || file.downloadUrl || file.url || null;
-                                    const fileTypeLabel = (file.fileType || file.fileExtension || '').toString().toLowerCase();
-                                    const isImageFile =
-                                      Boolean(fileUrl) &&
-                                      ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'svg'].some((ext) => fileTypeLabel.includes(ext));
+                                    const fileUrl = getRepositoryFileUrl(file);
+                                    const isImageFile = isRepositoryImageFile(file);
 
                                     return (
                                       <>
                                   <div className="flex items-start space-x-3">
                                     <div className="flex-shrink-0">
                                       {isImageFile ? (
-                                        <a
-                                          href={fileUrl}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
+                                        <button
+                                          type="button"
                                           className="block w-10 h-10 rounded-lg overflow-hidden border border-gray-200 bg-gray-50"
+                                          onClick={() => {
+                                            const index = files.findIndex((item) => item.id === file.id);
+                                            if (index >= 0) {
+                                              setSelectedRepositoryFileIndex(index);
+                                              setShowRepositoryFileGallery(true);
+                                            }
+                                          }}
                                         >
                                           <img
                                             src={fileUrl}
@@ -7617,7 +7694,7 @@ export default function OpportunityDetail() {
                                             className="w-full h-full object-cover"
                                             loading="lazy"
                                           />
-                                        </a>
+                                        </button>
                                       ) : (
                                         <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center">
                                           <FileText className="w-5 h-5 text-gray-500" />
@@ -7640,25 +7717,28 @@ export default function OpportunityDetail() {
                                   <div className="mt-3 flex space-x-2">
                                     {fileUrl ? (
                                       <>
-                                        <a
-                                          href={fileUrl}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
+                                        <button
+                                          type="button"
                                           className="flex-1 inline-flex items-center justify-center px-3 py-1.5 bg-panda-primary/10 text-panda-primary text-xs font-medium rounded-md hover:bg-panda-primary/20 transition-colors"
+                                          onClick={() => {
+                                            const index = files.findIndex((item) => item.id === file.id);
+                                            if (index >= 0) {
+                                              setSelectedRepositoryFileIndex(index);
+                                              setShowRepositoryFileGallery(true);
+                                            }
+                                          }}
                                         >
-                                          <ExternalLink className="w-3 h-3 mr-1" />
-                                          Open
-                                        </a>
-                                        <a
-                                          href={fileUrl}
-                                          download={file.fileName || file.title || 'document'}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
+                                          <ZoomIn className="w-3 h-3 mr-1" />
+                                          Preview
+                                        </button>
+                                        <button
+                                          type="button"
                                           className="flex-1 inline-flex items-center justify-center px-3 py-1.5 bg-panda-secondary/10 text-panda-secondary text-xs font-medium rounded-md hover:bg-panda-secondary/20 transition-colors"
+                                          onClick={() => handleDownloadRepositoryFile(file)}
                                         >
                                           <Download className="w-3 h-3 mr-1" />
                                           Download
-                                        </a>
+                                        </button>
                                       </>
                                     ) : (
                                       <span className="flex-1 inline-flex items-center justify-center px-3 py-1.5 bg-gray-100 text-gray-400 text-xs font-medium rounded-md">
@@ -7675,6 +7755,100 @@ export default function OpportunityDetail() {
                             </div>
                           );
                         })()}
+                      </div>
+                    )}
+
+                    {/* Repository File Gallery Modal */}
+                    {showRepositoryFileGallery && selectedRepositoryFile && (
+                      <div className="fixed inset-0 z-50 bg-black/90 flex flex-col">
+                        <div className="flex items-center justify-between p-4 bg-black/50">
+                          <div className="flex items-center space-x-4">
+                            <button
+                              type="button"
+                              onClick={() => setShowRepositoryFileGallery(false)}
+                              className="p-2 text-white hover:bg-white/10 rounded-lg"
+                            >
+                              <X className="w-6 h-6" />
+                            </button>
+                            <div className="text-white">
+                              <h3 className="font-medium">
+                                {selectedRepositoryFile.title || selectedRepositoryFile.fileName || 'Document'}
+                              </h3>
+                              <p className="text-sm text-gray-300">
+                                {selectedRepositoryFileIndex + 1} of {repositoryFileList.length}
+                              </p>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleDownloadRepositoryFile(selectedRepositoryFile)}
+                            className="flex items-center space-x-2 px-4 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90"
+                          >
+                            <Download className="w-4 h-4" />
+                            <span>Download</span>
+                          </button>
+                        </div>
+
+                        <div className="flex-1 flex items-center justify-center p-4 overflow-hidden">
+                          {(() => {
+                            const fileUrl = getRepositoryFileUrl(selectedRepositoryFile);
+                            if (!fileUrl) {
+                              return (
+                                <div className="text-center text-white">
+                                  <FileText className="w-24 h-24 mx-auto mb-4 text-gray-400" />
+                                  <p className="text-xl">No preview available</p>
+                                </div>
+                              );
+                            }
+
+                            if (isRepositoryImageFile(selectedRepositoryFile)) {
+                              return (
+                                <img
+                                  src={fileUrl}
+                                  alt={selectedRepositoryFile.title || selectedRepositoryFile.fileName || 'Document preview'}
+                                  className="max-w-full max-h-full rounded-lg bg-white object-contain"
+                                />
+                              );
+                            }
+
+                            if (isRepositoryPdfFile(selectedRepositoryFile)) {
+                              return (
+                                <iframe
+                                  src={fileUrl}
+                                  title={selectedRepositoryFile.title || selectedRepositoryFile.fileName || 'Document preview'}
+                                  className="w-full max-w-4xl h-full rounded-lg bg-white"
+                                />
+                              );
+                            }
+
+                            return (
+                              <div className="text-center text-white max-w-md">
+                                <FileText className="w-24 h-24 mx-auto mb-4 text-gray-400" />
+                                <p className="text-xl mb-2">Preview not available for this file type</p>
+                                <p className="text-sm text-gray-300">Use Download to open this file locally.</p>
+                              </div>
+                            );
+                          })()}
+                        </div>
+
+                        {repositoryFileList.length > 1 && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedRepositoryFileIndex((prev) => (prev === 0 ? repositoryFileList.length - 1 : prev - 1))}
+                              className="absolute left-4 top-1/2 -translate-y-1/2 p-3 bg-black/50 text-white rounded-full hover:bg-black/70"
+                            >
+                              <ChevronLeft className="w-6 h-6" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedRepositoryFileIndex((prev) => (prev === repositoryFileList.length - 1 ? 0 : prev + 1))}
+                              className="absolute right-4 top-1/2 -translate-y-1/2 p-3 bg-black/50 text-white rounded-full hover:bg-black/70"
+                            >
+                              <ChevronRight className="w-6 h-6" />
+                            </button>
+                          </>
+                        )}
                       </div>
                     )}
 
