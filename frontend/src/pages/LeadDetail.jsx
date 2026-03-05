@@ -496,16 +496,16 @@ const formatAppointmentDateDisplay = (value) => {
   const isoMatch = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw);
   if (isoMatch) {
     const [, year, month, day] = isoMatch;
-    return `${day}/${month}/${year}`;
+    return `${month}/${day}/${year}`;
   }
 
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return '-';
 
-  const day = String(parsed.getDate()).padStart(2, '0');
   const month = String(parsed.getMonth() + 1).padStart(2, '0');
+  const day = String(parsed.getDate()).padStart(2, '0');
   const year = String(parsed.getFullYear());
-  return `${day}/${month}/${year}`;
+  return `${month}/${day}/${year}`;
 };
 
 const formatAppointmentTimeDisplay = (value) => {
