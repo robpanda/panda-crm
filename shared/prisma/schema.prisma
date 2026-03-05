@@ -4693,6 +4693,7 @@ enum MeasurementProvider {
   HOVER
   MANUAL
   INSTANT_MEASURE
+  NEARMAP
 }
 
 enum ReportType {
@@ -4789,6 +4790,7 @@ enum ActivityType {
   CONTRACT_SIGNED
   NOTE_ADDED
   COMMENT_ADDED
+  CHATTER_POST
   SYSTEM_NOTIFICATION
   WORKFLOW_TRIGGERED
 }

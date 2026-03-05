@@ -58,43 +58,6 @@ const PORTAL_STAGE_LABELS = {
   COMPLETED: 'Completed',
 };
 
-const VALID_MEASUREMENT_PROVIDERS = [
-  'EAGLEVIEW',
-  'GAF_QUICKMEASURE',
-  'ROOFSNAP',
-  'HOVER',
-  'MANUAL',
-  'INSTANT_MEASURE',
-];
-
-const VALID_ACTIVITY_TYPES = [
-  'SMS_SENT',
-  'SMS_RECEIVED',
-  'EMAIL_SENT',
-  'EMAIL_RECEIVED',
-  'CALL_OUTBOUND',
-  'CALL_INBOUND',
-  'CALL_MISSED',
-  'VOICEMAIL',
-  'TASK_CREATED',
-  'TASK_COMPLETED',
-  'EVENT_CREATED',
-  'EVENT_COMPLETED',
-  'RECORD_CREATED',
-  'RECORD_UPDATED',
-  'STATUS_CHANGED',
-  'STAGE_CHANGED',
-  'OWNER_CHANGED',
-  'DOCUMENT_UPLOADED',
-  'DOCUMENT_SIGNED',
-  'QUOTE_SENT',
-  'CONTRACT_SIGNED',
-  'NOTE_ADDED',
-  'COMMENT_ADDED',
-  'SYSTEM_NOTIFICATION',
-  'WORKFLOW_TRIGGERED',
-];
-
 function parsePortalTimeWindow(dateValue, timeSlotValue, defaultDurationMinutes = 120) {
   if (!dateValue || !timeSlotValue) return null;
 
@@ -790,9 +753,6 @@ class OpportunityService {
               },
             },
             measurementReports: {
-              where: {
-                provider: { in: VALID_MEASUREMENT_PROVIDERS },
-              },
               orderBy: { createdAt: 'desc' },
               take: 5,
               include: {
@@ -1593,9 +1553,6 @@ class OpportunityService {
         },
         // Get the most recent measurement report for display (prioritize delivered, then by creation date)
         measurementReports: {
-          where: {
-            provider: { in: VALID_MEASUREMENT_PROVIDERS },
-          },
           orderBy: [
             { orderStatus: 'asc' }, // DELIVERED comes before ORDERED/PENDING alphabetically
             { createdAt: 'desc' },
@@ -2108,10 +2065,7 @@ class OpportunityService {
       }),
       // Get activity records (imported from AccuLynx, emails, Chatter, etc.)
       prisma.activity.findMany({
-        where: {
-          opportunityId: id,
-          type: { in: VALID_ACTIVITY_TYPES },
-        },
+        where: { opportunityId: id },
         orderBy: { occurredAt: 'desc' },
         take: limit,
         include: {
@@ -2330,10 +2284,7 @@ Keep it concise and factual. Do not add interpretation beyond what's stated.`;
       // Fetch all activities, notes, and messages for this opportunity
       const [activities, notes] = await Promise.all([
         prisma.activity.findMany({
-          where: {
-            opportunityId,
-            type: { in: VALID_ACTIVITY_TYPES },
-          },
+          where: { opportunityId },
           orderBy: { occurredAt: 'asc' },
           take: 50, // Limit to last 50 to avoid token limits
         }),
@@ -2468,10 +2419,7 @@ Be factual and professional. Highlight anything that needs attention.`;
   async getThreadedConversation(opportunityId) {
     const [activities, notes] = await Promise.all([
       prisma.activity.findMany({
-        where: {
-          opportunityId,
-          type: { in: VALID_ACTIVITY_TYPES },
-        },
+        where: { opportunityId },
         orderBy: { occurredAt: 'desc' },
         include: {
           user: { select: { firstName: true, lastName: true, email: true } },
