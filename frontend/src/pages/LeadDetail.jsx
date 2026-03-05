@@ -18,6 +18,7 @@ import InternalNotesTabs from '../components/InternalNotesTabs';
 import InternalComments from '../components/InternalComments';
 import CommunicationsTab from '../components/CommunicationsTab';
 import UserSearchDropdown from '../components/UserSearchDropdown';
+import { WIZARD_LEAD_SOURCES } from '../constants/leadOptions';
 
 // SMS Modal Component with Canned Responses
 function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {} }) {
@@ -425,6 +426,7 @@ function ActivityTab({ phone, email, leadName }) {
 const LEAD_STATUSES = [
   { value: 'NEW', label: 'New' },
   { value: 'CONTACTED', label: 'Contacted' },
+  { value: 'SCHEDULED', label: 'Confirmed' },
   { value: 'QUALIFIED', label: 'Qualified' },
   { value: 'UNQUALIFIED', label: 'Unqualified' },
   { value: 'CONVERTED', label: 'Converted' },
@@ -441,18 +443,7 @@ const LEAD_DISPOSITIONS = [
   { value: 'DO_NOT_CALL', label: 'Do Not Call' },
 ];
 
-const LEAD_SOURCES = [
-  { value: 'Website', label: 'Website' },
-  { value: 'Referral', label: 'Referral' },
-  { value: 'Door Knock', label: 'Door Knock' },
-  { value: 'Canvassing', label: 'Canvassing' },
-  { value: 'Self-Gen', label: 'Self-Gen' },
-  { value: 'RingCentral', label: 'RingCentral' },
-  { value: 'Marketing', label: 'Marketing' },
-  { value: 'Trade Show', label: 'Trade Show' },
-  { value: 'Partner', label: 'Partner' },
-  { value: 'Other', label: 'Other' },
-];
+const LEAD_SOURCES = WIZARD_LEAD_SOURCES;
 
 const PROPERTY_TYPES = [
   { value: 'Single Family', label: 'Single Family' },
@@ -490,6 +481,52 @@ const US_STATES = [
   { value: 'FL', label: 'Florida' },
 ];
 
+const normalizeLeadStatusForForm = (status) => {
+  if (!status) return 'NEW';
+  const normalized = String(status).trim().toUpperCase().replace(/\s+/g, '_');
+  if (normalized === 'CONFIRMED') return 'SCHEDULED';
+  return normalized;
+};
+
+const formatAppointmentDateDisplay = (value) => {
+  if (!value) return '-';
+  const raw = String(value).trim();
+  const isoMatch = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw);
+  if (isoMatch) {
+    const [, year, month, day] = isoMatch;
+    return `${month}/${day}/${year}`;
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '-';
+
+  const month = String(parsed.getMonth() + 1).padStart(2, '0');
+  const day = String(parsed.getDate()).padStart(2, '0');
+  const year = String(parsed.getFullYear());
+  return `${month}/${day}/${year}`;
+};
+
+const formatAppointmentTimeDisplay = (value) => {
+  if (!value) return '-';
+  const raw = String(value).trim();
+  const timeMatch = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(raw);
+
+  if (timeMatch) {
+    const hour = Number(timeMatch[1]);
+    const minute = timeMatch[2];
+    if (!Number.isFinite(hour) || hour < 0 || hour > 23) return raw;
+    const meridiem = hour >= 12 ? 'PM' : 'AM';
+    const hour12 = hour % 12 || 12;
+    return `${hour12}:${minute} ${meridiem}`;
+  }
+
+  const parsed = new Date(value);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  }
+
+  return raw;
+};
 export default function LeadDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -631,7 +668,7 @@ export default function LeadDetail() {
         city: lead.city || '',
         state: lead.state || '',
         postalCode: lead.postalCode || '',
-        status: lead.status || 'NEW',
+        status: normalizeLeadStatusForForm(lead.status),
         leadSource: lead.source || lead.leadSource || '',
         rating: lead.rating || '',
         description: lead.description || '',
@@ -743,6 +780,12 @@ export default function LeadDetail() {
         cleanedData[key] = null;
       }
     });
+
+    if (Object.prototype.hasOwnProperty.call(cleanedData, 'leadSource')) {
+      cleanedData.source = cleanedData.leadSource;
+      delete cleanedData.leadSource;
+    }
+
     updateMutation.mutate(cleanedData);
   };
 
@@ -758,7 +801,7 @@ export default function LeadDetail() {
       city: lead.city || '',
       state: lead.state || '',
       postalCode: lead.postalCode || '',
-      status: lead.status || 'NEW',
+      status: normalizeLeadStatusForForm(lead.status),
       leadSource: lead.source || lead.leadSource || '',
       rating: lead.rating || '',
       description: lead.description || '',
@@ -790,7 +833,7 @@ export default function LeadDetail() {
       city: lead.city || '',
       state: lead.state || '',
       postalCode: lead.postalCode || '',
-      status: lead.status || 'NEW',
+      status: normalizeLeadStatusForForm(lead.status),
       leadSource: lead.source || lead.leadSource || '',
       rating: lead.rating || '',
       description: lead.description || '',
