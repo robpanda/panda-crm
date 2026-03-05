@@ -6266,6 +6266,10 @@ export const subcontractorPortalApi = {
   },
 };
 
+const shouldFallbackToOpportunityPortal = (error) => (
+  [401, 403, 404].includes(error?.response?.status)
+);
+
 // Customer Portal API (Public - No Auth Required)
 export const customerPortalApi = {
   // Get project info by portal token
@@ -6274,7 +6278,7 @@ export const customerPortalApi = {
       const response = await publicApi.get(`/api/portal/${token}`);
       return response.data;
     } catch (error) {
-      if (error?.response?.status === 404) {
+      if (shouldFallbackToOpportunityPortal(error)) {
         const response = await publicApi.get(`/api/opportunities/portal/${token}`);
         return response.data;
       }
@@ -6284,8 +6288,16 @@ export const customerPortalApi = {
 
   // Get project info by job id (fallback for legacy links)
   async getProjectByJobId(jobId) {
-    const response = await publicApi.get(`/api/portal/job/${jobId}`);
-    return response.data;
+    try {
+      const response = await publicApi.get(`/api/portal/job/${jobId}`);
+      return response.data;
+    } catch (error) {
+      if (shouldFallbackToOpportunityPortal(error)) {
+        const response = await publicApi.get(`/api/opportunities/portal/job/${jobId}`);
+        return response.data;
+      }
+      throw error;
+    }
   },
 
   // Get workflow stages for timeline
@@ -6294,7 +6306,7 @@ export const customerPortalApi = {
       const response = await publicApi.get(`/api/portal/${token}/stages`);
       return response.data;
     } catch (error) {
-      if (error?.response?.status === 404) {
+      if (shouldFallbackToOpportunityPortal(error)) {
         const response = await publicApi.get(`/api/opportunities/portal/${token}/stages`);
         return response.data;
       }
@@ -6308,7 +6320,7 @@ export const customerPortalApi = {
       const response = await publicApi.get(`/api/portal/${token}/galleries`);
       return response.data;
     } catch (error) {
-      if (error?.response?.status === 404) {
+      if (shouldFallbackToOpportunityPortal(error)) {
         const response = await publicApi.get(`/api/opportunities/portal/${token}/galleries`);
         return response.data;
       }
@@ -6326,7 +6338,7 @@ export const customerPortalApi = {
       });
       return response.data;
     } catch (error) {
-      if (error?.response?.status === 404) {
+      if (shouldFallbackToOpportunityPortal(error)) {
         const response = await publicApi.post(`/api/opportunities/portal/${token}/message`, {
           message,
           senderName,
@@ -6344,7 +6356,7 @@ export const customerPortalApi = {
       const response = await publicApi.get(`/api/portal/${token}/appointments`);
       return response.data;
     } catch (error) {
-      if (error?.response?.status === 404) {
+      if (shouldFallbackToOpportunityPortal(error)) {
         const response = await publicApi.get(`/api/opportunities/portal/${token}/appointments`);
         return response.data;
       }
@@ -6361,7 +6373,7 @@ export const customerPortalApi = {
       const response = await publicApi.get(`/api/portal/${token}/available-slots`, { params });
       return response.data;
     } catch (error) {
-      if ([404, 401, 403].includes(error?.response?.status)) {
+      if (shouldFallbackToOpportunityPortal(error)) {
         const response = await publicApi.get(`/api/opportunities/portal/${token}/available-slots`, { params });
         return response.data;
       }
@@ -6375,7 +6387,7 @@ export const customerPortalApi = {
       const response = await publicApi.post(`/api/portal/${token}/book`, bookingData);
       return response.data;
     } catch (error) {
-      if (error?.response?.status === 404) {
+      if (shouldFallbackToOpportunityPortal(error)) {
         const response = await publicApi.post(`/api/opportunities/portal/${token}/book`, bookingData);
         return response.data;
       }
@@ -6392,7 +6404,7 @@ export const customerPortalApi = {
       );
       return response.data;
     } catch (error) {
-      if (error?.response?.status === 404) {
+      if (shouldFallbackToOpportunityPortal(error)) {
         const response = await publicApi.post(
           `/api/opportunities/portal/${token}/appointments/${appointmentId}/reschedule`,
           rescheduleData
@@ -6412,7 +6424,7 @@ export const customerPortalApi = {
       );
       return response.data;
     } catch (error) {
-      if (error?.response?.status === 404) {
+      if (shouldFallbackToOpportunityPortal(error)) {
         const response = await publicApi.post(
           `/api/opportunities/portal/${token}/appointments/${appointmentId}/cancel`,
           { reason }
@@ -6429,7 +6441,7 @@ export const customerPortalApi = {
       const response = await publicApi.get(`/api/portal/${token}/payment-link`);
       return response.data;
     } catch (error) {
-      if (error?.response?.status === 404) {
+      if (shouldFallbackToOpportunityPortal(error)) {
         const response = await publicApi.get(`/api/opportunities/portal/${token}/payment-link`);
         return response.data;
       }
@@ -6443,7 +6455,7 @@ export const customerPortalApi = {
       const response = await publicApi.get(`/api/portal/${token}/payments`);
       return response.data;
     } catch (error) {
-      if (error?.response?.status === 404) {
+      if (shouldFallbackToOpportunityPortal(error)) {
         const response = await publicApi.get(`/api/opportunities/portal/${token}/payments`);
         return response.data;
       }
@@ -6457,7 +6469,7 @@ export const customerPortalApi = {
       const response = await publicApi.get(`/api/portal/${token}/payments`);
       return response.data;
     } catch (error) {
-      if (error?.response?.status === 404) {
+      if (shouldFallbackToOpportunityPortal(error)) {
         const response = await publicApi.get(`/api/opportunities/portal/${token}/payments`);
         return response.data;
       }

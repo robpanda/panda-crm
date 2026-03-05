@@ -36,6 +36,62 @@ const DISPOSITION_STAGE_MAP = {
   RETAIL_NOT_SOLD: 'CLOSED_LOST',
 };
 
+const PORTAL_STAGE_SEQUENCE = [
+  'LEAD_ASSIGNED',
+  'SCHEDULED',
+  'INSPECTED',
+  'CLAIM_FILED',
+  'APPROVED',
+  'CONTRACT_SIGNED',
+  'IN_PRODUCTION',
+  'COMPLETED',
+];
+
+const PORTAL_STAGE_LABELS = {
+  LEAD_ASSIGNED: 'Assigned',
+  SCHEDULED: 'Scheduled',
+  INSPECTED: 'Inspected',
+  CLAIM_FILED: 'Claim Filed',
+  APPROVED: 'Approved',
+  CONTRACT_SIGNED: 'Contract Signed',
+  IN_PRODUCTION: 'In Production',
+  COMPLETED: 'Completed',
+};
+
+function parsePortalTimeWindow(dateValue, timeSlotValue, defaultDurationMinutes = 120) {
+  if (!dateValue || !timeSlotValue) return null;
+
+  const dateStr = String(dateValue).trim();
+  const timeSlot = String(timeSlotValue).trim();
+  if (!dateStr || !timeSlot) return null;
+
+  let startLabel = timeSlot;
+  let endLabel = null;
+
+  if (timeSlot.includes('-')) {
+    const [startRaw, endRaw] = timeSlot.split('-');
+    startLabel = String(startRaw || '').trim();
+    endLabel = String(endRaw || '').trim() || null;
+  }
+
+  const parsePart = (label) => {
+    if (!label) return null;
+    const parsed = new Date(`${dateStr} ${label}`);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed;
+  };
+
+  const start = parsePart(startLabel);
+  if (!start) return null;
+
+  let end = endLabel ? parsePart(endLabel) : null;
+  if (!end || end <= start) {
+    end = new Date(start.getTime() + defaultDurationMinutes * 60 * 1000);
+  }
+
+  return { start, end };
+}
+
 const INTERNAL_COMMENT_TITLE_PREFIX = 'INTERNAL_COMMENT|';
 const INTERNAL_COMMENT_REPLY_TITLE_PREFIX = 'INTERNAL_COMMENT_REPLY|';
 const LEGACY_INTERNAL_COMMENT_JSON_PREFIX = '__internal_comment__:';
@@ -989,6 +1045,471 @@ class OpportunityService {
       expiresAt: gallery.expiresAt,
       galleryId: gallery.id,
     };
+  }
+
+  async resolvePortalContext(token, opportunityInclude = null) {
+    const normalizedToken = String(token || '').trim();
+    if (!normalizedToken) {
+      const error = new Error('Portal token is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const now = new Date();
+    const gallery = await prisma.gallery.findFirst({
+      where: {
+        publicToken: normalizedToken,
+        isPublic: true,
+        OR: [
+          { expiresAt: null },
+          { expiresAt: { gt: now } },
+        ],
+      },
+      select: {
+        id: true,
+        name: true,
+        publicToken: true,
+        expiresAt: true,
+        opportunityId: true,
+        workOrderId: true,
+      },
+    });
+
+    if (!gallery) {
+      const error = new Error('Invalid or expired portal link');
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    let opportunityId = gallery.opportunityId;
+    if (!opportunityId && gallery.workOrderId) {
+      const workOrder = await prisma.workOrder.findUnique({
+        where: { id: gallery.workOrderId },
+        select: { opportunityId: true },
+      });
+      opportunityId = workOrder?.opportunityId || null;
+    }
+
+    if (!opportunityId) {
+      const error = new Error('Portal link is not associated with a job');
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const opportunityQuery = {
+      where: { id: opportunityId },
+    };
+    if (opportunityInclude && Object.keys(opportunityInclude).length > 0) {
+      opportunityQuery.include = opportunityInclude;
+    }
+
+    const opportunity = await prisma.opportunity.findUnique(opportunityQuery);
+
+    if (!opportunity || opportunity.deletedAt) {
+      const error = new Error('Portal job not found');
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    return { gallery, opportunity };
+  }
+
+  buildPortalStageState(currentStage) {
+    const stageIndex = PORTAL_STAGE_SEQUENCE.indexOf(currentStage);
+
+    const stages = PORTAL_STAGE_SEQUENCE.map((stageKey, index) => {
+      let status = 'pending';
+      if (stageIndex >= 0) {
+        if (index < stageIndex) status = 'completed';
+        if (index === stageIndex) status = stageKey === 'COMPLETED' ? 'completed' : 'in_progress';
+      }
+      return {
+        number: index + 1,
+        key: stageKey,
+        name: PORTAL_STAGE_LABELS[stageKey] || this.formatStageName(stageKey),
+        status,
+        is_enabled: true,
+        completedAt: null,
+      };
+    });
+
+    const completedCount = stages.filter((stage) => stage.status === 'completed').length;
+    const progressPercent = stages.length
+      ? Math.round((completedCount / stages.length) * 100)
+      : 0;
+
+    return { stages, progressPercent };
+  }
+
+  async resolvePortalActorId(opportunity) {
+    if (opportunity?.ownerId) {
+      return opportunity.ownerId;
+    }
+
+    const fallbackUser = await prisma.user.findFirst({
+      where: { isActive: true },
+      select: { id: true },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    if (fallbackUser?.id) {
+      return fallbackUser.id;
+    }
+
+    const error = new Error('Unable to resolve actor for portal activity');
+    error.name = 'ValidationError';
+    throw error;
+  }
+
+  async getPortalProject(token) {
+    const { gallery, opportunity } = await this.resolvePortalContext(token, {
+      account: {
+        select: {
+          id: true,
+          name: true,
+          phone: true,
+          email: true,
+          billingStreet: true,
+          billingCity: true,
+          billingState: true,
+          billingPostalCode: true,
+        },
+      },
+      contact: {
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          fullName: true,
+          email: true,
+          phone: true,
+          mobilePhone: true,
+        },
+      },
+      owner: {
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+          phone: true,
+          mobilePhone: true,
+        },
+      },
+    });
+
+    const { stages, progressPercent } = this.buildPortalStageState(opportunity.stage);
+
+    const account = opportunity.account || {};
+    const contact = opportunity.contact || {};
+    const owner = opportunity.owner || {};
+
+    const contactName = contact.fullName
+      || [contact.firstName, contact.lastName].filter(Boolean).join(' ').trim()
+      || account.name
+      || opportunity.name;
+
+    const address = {
+      street: opportunity.street || account.billingStreet || null,
+      city: opportunity.city || account.billingCity || null,
+      state: opportunity.state || account.billingState || null,
+      postalCode: opportunity.postalCode || account.billingPostalCode || null,
+    };
+
+    return {
+      token: gallery.publicToken,
+      project: {
+        id: opportunity.id,
+        jobId: opportunity.jobId,
+        name: opportunity.name || account.name || contactName,
+        stage: opportunity.stage,
+        stageName: this.formatStageName(opportunity.stage),
+        accountName: account.name || contactName,
+        accountPhone: account.phone || contact.phone || contact.mobilePhone || null,
+        accountEmail: account.email || contact.email || null,
+        installDate: opportunity.appointmentDate || null,
+        address,
+        street: address.street,
+        city: address.city,
+        state: address.state,
+        postalCode: address.postalCode,
+      },
+      contact: {
+        id: contact.id || null,
+        name: contactName,
+        phone: contact.phone || contact.mobilePhone || account.phone || null,
+        email: contact.email || account.email || null,
+      },
+      projectManager: {
+        id: owner.id || null,
+        firstName: owner.firstName || null,
+        lastName: owner.lastName || null,
+        name: [owner.firstName, owner.lastName].filter(Boolean).join(' ').trim() || null,
+        email: owner.email || null,
+        phone: owner.mobilePhone || owner.phone || null,
+      },
+      progress: {
+        percent: progressPercent,
+      },
+      stages,
+    };
+  }
+
+  async getPortalProjectByJobId(jobId) {
+    const normalizedJobId = String(jobId || '').trim();
+    if (!normalizedJobId) {
+      const error = new Error('jobId is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const opportunity = await prisma.opportunity.findFirst({
+      where: {
+        jobId: normalizedJobId,
+        deletedAt: null,
+      },
+      select: { id: true, jobId: true },
+    });
+
+    if (!opportunity) {
+      const error = new Error(`Job not found: ${normalizedJobId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const link = await this.generatePortalLink(opportunity.id);
+    const project = await this.getPortalProject(link.token);
+    return {
+      ...project,
+      token: link.token,
+      jobId: opportunity.jobId,
+    };
+  }
+
+  async getPortalStages(token) {
+    const { opportunity } = await this.resolvePortalContext(token, null);
+    const { stages } = this.buildPortalStageState(opportunity.stage);
+    return stages;
+  }
+
+  async getPortalGalleries(token) {
+    const { opportunity } = await this.resolvePortalContext(token, null);
+    const now = new Date();
+    const galleries = await prisma.gallery.findMany({
+      where: {
+        opportunityId: opportunity.id,
+        isPublic: true,
+        OR: [
+          { expiresAt: null },
+          { expiresAt: { gt: now } },
+        ],
+      },
+      orderBy: { updatedAt: 'desc' },
+      include: {
+        _count: {
+          select: { files: true },
+        },
+      },
+    });
+
+    return galleries.map((gallery) => ({
+      id: gallery.id,
+      name: gallery.name || 'Project Gallery',
+      publicToken: gallery.publicToken,
+      photoCount: gallery._count?.files || 0,
+      updatedAt: gallery.updatedAt,
+    }));
+  }
+
+  async getPortalPayments(token) {
+    const { opportunity } = await this.resolvePortalContext(token, null);
+    const invoicePayload = await this.getOpportunityInvoices(opportunity.id);
+    const rawInvoices = Array.isArray(invoicePayload?.invoices) ? invoicePayload.invoices : [];
+
+    const invoices = rawInvoices.map((invoice) => {
+      const lineItems = Array.isArray(invoice.lineItems) ? invoice.lineItems.map((lineItem) => ({
+        ...lineItem,
+        amount: Number(
+          lineItem.amount
+          ?? lineItem.totalPrice
+          ?? (Number(lineItem.unitPrice || 0) * Number(lineItem.quantity || 0))
+        ),
+      })) : [];
+
+      return {
+        ...invoice,
+        issueDate: invoice.invoiceDate || invoice.issueDate || null,
+        description: invoice.description || invoice.notes || 'Project Invoice',
+        lineItems,
+      };
+    });
+
+    const payments = invoices
+      .flatMap((invoice) => (invoice.payments || []).map((payment) => ({
+        id: payment.id,
+        amount: Number(payment.amount || 0),
+        status: payment.status,
+        method: payment.paymentMethod || payment.method || 'Unknown',
+        createdAt: payment.paymentDate || payment.createdAt || null,
+        invoiceId: invoice.id,
+        invoiceNumber: invoice.invoiceNumber,
+      })))
+      .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+
+    return { invoices, payments };
+  }
+
+  async getPortalPaymentLink(token) {
+    const billing = await this.getPortalPayments(token);
+    const targetInvoice = (billing.invoices || []).find(
+      (invoice) => Number(invoice.balanceDue || 0) > 0
+        && (invoice.stripePaymentLinkUrl || invoice.stripeHostedInvoiceUrl)
+    );
+
+    if (!targetInvoice) {
+      return { url: null };
+    }
+
+    return {
+      url: targetInvoice.stripePaymentLinkUrl || targetInvoice.stripeHostedInvoiceUrl,
+      invoiceId: targetInvoice.id,
+      invoiceNumber: targetInvoice.invoiceNumber,
+      amount: Number(targetInvoice.balanceDue || 0),
+    };
+  }
+
+  async getPortalAppointments(token) {
+    const { opportunity } = await this.resolvePortalContext(token, null);
+    const appointmentPayload = await this.getOpportunityAppointments(opportunity.id);
+    return Array.isArray(appointmentPayload?.appointments) ? appointmentPayload.appointments : [];
+  }
+
+  async getPortalAvailableSlots(token, options = {}) {
+    await this.resolvePortalContext(token, null);
+    return {
+      slots: [],
+      reason: 'SELF_SERVICE_SCHEDULING_NOT_ENABLED',
+      ...options,
+    };
+  }
+
+  async addPortalMessage(token, data = {}) {
+    const message = String(data.message || '').trim();
+    if (!message) {
+      const error = new Error('Message is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const { opportunity } = await this.resolvePortalContext(token, null);
+    const createdById = await this.resolvePortalActorId(opportunity);
+
+    const senderName = String(data.senderName || '').trim();
+    const senderPhone = String(data.senderPhone || '').trim();
+    const metadataParts = [];
+    if (senderName) metadataParts.push(`From: ${senderName}`);
+    if (senderPhone) metadataParts.push(`Phone: ${senderPhone}`);
+    const body = [metadataParts.length ? metadataParts.join(' | ') : null, message]
+      .filter(Boolean)
+      .join('\n\n');
+
+    const note = await prisma.note.create({
+      data: {
+        title: 'Customer Portal Message',
+        body,
+        opportunityId: opportunity.id,
+        createdById,
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true },
+        },
+      },
+    });
+
+    return {
+      id: note.id,
+      body: note.body,
+      createdAt: note.createdAt,
+      createdBy: note.createdBy
+        ? {
+          id: note.createdBy.id,
+          name: `${note.createdBy.firstName || ''} ${note.createdBy.lastName || ''}`.trim(),
+        }
+        : null,
+    };
+  }
+
+  async bookPortalAppointment(token, data = {}) {
+    const { opportunity } = await this.resolvePortalContext(token, null);
+    const bookedBy = await this.resolvePortalActorId(opportunity);
+
+    let scheduledStart = data.scheduledStart ? new Date(data.scheduledStart) : null;
+    let scheduledEnd = data.scheduledEnd ? new Date(data.scheduledEnd) : null;
+
+    if (!scheduledStart || Number.isNaN(scheduledStart.getTime()) || !scheduledEnd || Number.isNaN(scheduledEnd.getTime())) {
+      const parsedWindow = parsePortalTimeWindow(data.date, data.timeSlot);
+      scheduledStart = parsedWindow?.start || null;
+      scheduledEnd = parsedWindow?.end || null;
+    }
+
+    if (!scheduledStart || !scheduledEnd) {
+      const error = new Error('Valid appointment date/time is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const result = await this.bookAppointment(opportunity.id, {
+      scheduledStart,
+      scheduledEnd,
+      workTypeId: data.workTypeId || null,
+      notes: data.notes || null,
+      bookedBy,
+    });
+
+    return result.serviceAppointment;
+  }
+
+  async reschedulePortalAppointment(token, appointmentId, data = {}) {
+    const { opportunity } = await this.resolvePortalContext(token, null);
+    const rescheduledBy = await this.resolvePortalActorId(opportunity);
+
+    let scheduledStart = data.scheduledStart ? new Date(data.scheduledStart) : null;
+    let scheduledEnd = data.scheduledEnd ? new Date(data.scheduledEnd) : null;
+
+    if (!scheduledStart || Number.isNaN(scheduledStart.getTime()) || !scheduledEnd || Number.isNaN(scheduledEnd.getTime())) {
+      const parsedWindow = parsePortalTimeWindow(data.newDate || data.date, data.newTimeSlot || data.timeSlot);
+      scheduledStart = parsedWindow?.start || null;
+      scheduledEnd = parsedWindow?.end || null;
+    }
+
+    if (!scheduledStart || !scheduledEnd) {
+      const error = new Error('Valid appointment date/time is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const result = await this.rescheduleAppointment(opportunity.id, appointmentId, {
+      scheduledStart,
+      scheduledEnd,
+      notes: data.reason || data.notes || null,
+      rescheduledBy,
+    });
+
+    return result.appointment;
+  }
+
+  async cancelPortalAppointment(token, appointmentId, data = {}) {
+    const { opportunity } = await this.resolvePortalContext(token, null);
+    const cancelledBy = await this.resolvePortalActorId(opportunity);
+    const reason = String(data.reason || '').trim() || 'Customer requested cancellation';
+
+    const result = await this.cancelAppointment(opportunity.id, appointmentId, {
+      reason,
+      cancelledBy,
+    });
+
+    return result.appointment;
   }
 
   /**

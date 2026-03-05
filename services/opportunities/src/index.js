@@ -8,6 +8,7 @@ import { logger } from './middleware/logger.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { authMiddleware } from './middleware/auth.js';
 import opportunityRoutes from './routes/opportunities.js';
+import portalRoutes from './routes/portal.js';
 
 const app = express();
 const PORT = process.env.PORT || 3004;
@@ -30,6 +31,11 @@ app.use(morgan('combined', { stream: { write: (message) => logger.info(message.t
 app.get('/health', (req, res) => {
   res.json({ status: 'healthy', service: 'opportunities', timestamp: new Date().toISOString(), buildSha: process.env.BUILD_SHA || process.env.GITHUB_SHA || 'unknown', buildTime: process.env.BUILD_TIME || process.env.GITHUB_RUN_ID || null });
 });
+
+// Public customer portal endpoints (no auth)
+app.use('/api/portal', portalRoutes);
+// Compatibility alias for clients already calling through opportunities prefix
+app.use('/api/opportunities/portal', portalRoutes);
 
 // Apply auth middleware to all routes below
 app.use(authMiddleware);
