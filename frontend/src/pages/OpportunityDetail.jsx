@@ -2418,6 +2418,14 @@ export default function OpportunityDetail() {
     enabled: !!id,
   });
 
+  const repositoryFileList = useMemo(() => {
+    if (Array.isArray(repositoryFiles)) return repositoryFiles;
+    if (Array.isArray(repositoryFiles?.data)) return repositoryFiles.data;
+    if (Array.isArray(repositoryFiles?.documents)) return repositoryFiles.documents;
+    if (Array.isArray(repositoryFiles?.data?.documents)) return repositoryFiles.data.documents;
+    return [];
+  }, [repositoryFiles]);
+
   // Cases (linked via Account) - service not yet deployed, disable retries
   const { data: cases } = useQuery({
     queryKey: ['opportunityCases', id],
@@ -7329,9 +7337,9 @@ export default function OpportunityDetail() {
                         >
                           <FileText className="w-4 h-4" />
                           <span>Files</span>
-                          {(repositoryFiles?.data?.length || repositoryFiles?.length || 0) > 0 && (
+                          {repositoryFileList.length > 0 && (
                             <span className="ml-1 px-2 py-0.5 bg-panda-primary/10 text-panda-primary text-xs rounded-full">
-                              {repositoryFiles?.data?.length || repositoryFiles?.length || 0}
+                              {repositoryFileList.length}
                             </span>
                           )}
                         </button>
@@ -7571,7 +7579,7 @@ export default function OpportunityDetail() {
                     {documentsSubTab === 'files' && (
                       <div className="space-y-4">
                         {(() => {
-                          const files = repositoryFiles?.data || repositoryFiles || [];
+                          const files = repositoryFileList;
                           if (files.length === 0) {
                             return (
                               <div className="text-center py-12">
