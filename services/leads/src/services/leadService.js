@@ -259,11 +259,27 @@ class LeadService {
     return trimmed.length > 0 ? trimmed : null;
   }
 
+  /**
+   * Some lead intake paths have historically appended " - M/D/YYYY" to name fields.
+   * Strip that suffix during conversion so job/account naming remains canonical.
+   */
+  sanitizeConvertedNameSegment(value) {
+    const normalized = this.normalizeOptionalText(value);
+    if (!normalized) return null;
+
+    const withoutDateSuffix = normalized
+      .replace(/\s*-\s*\d{1,2}\/\d{1,2}\/\d{2,4}\s*$/g, '')
+      .trim();
+
+    const cleaned = withoutDateSuffix.replace(/\s{2,}/g, ' ').trim();
+    return cleaned || normalized;
+  }
+
   resolveLeadCustomerName(lead = {}) {
-    const firstName = this.normalizeOptionalText(lead.firstName);
-    const lastName = this.normalizeOptionalText(lead.lastName);
+    const firstName = this.sanitizeConvertedNameSegment(lead.firstName);
+    const lastName = this.sanitizeConvertedNameSegment(lead.lastName);
     const fullName = [firstName, lastName].filter(Boolean).join(' ').trim();
-    const companyName = this.normalizeOptionalText(lead.company);
+    const companyName = this.sanitizeConvertedNameSegment(lead.company);
     return fullName || companyName || null;
   }
 
@@ -1176,6 +1192,11 @@ class LeadService {
       || lead.leadSetById
       || null;
 
+    const convertedLeadFirstName = this.sanitizeConvertedNameSegment(lead.firstName) || lead.firstName;
+    const convertedLeadLastName = this.sanitizeConvertedNameSegment(lead.lastName) || lead.lastName;
+    const convertedLeadFullName = [convertedLeadFirstName, convertedLeadLastName].filter(Boolean).join(' ').trim();
+    const convertedLeadCustomerName = this.resolveLeadCustomerName(lead) || 'Customer';
+
     // Use transaction for conversion
     const result = await prisma.$transaction(async (tx) => {
       let jobId = null;
@@ -1211,9 +1232,9 @@ class LeadService {
       // Create Contact
       const contact = await tx.contact.create({
         data: {
-          firstName: lead.firstName,
-          lastName: lead.lastName,
-          fullName: `${lead.firstName} ${lead.lastName}`,
+          firstName: convertedLeadFirstName,
+          lastName: convertedLeadLastName,
+          fullName: convertedLeadFullName || convertedLeadCustomerName,
           email: lead.email,
           phone: lead.phone,
           mobilePhone: lead.mobilePhone,
@@ -1308,7 +1329,7 @@ class LeadService {
         serviceAppointment = await tx.serviceAppointment.create({
           data: {
             appointmentNumber,
-            subject: `${requestedWorkType || 'Inspection'} - ${lead.firstName} ${lead.lastName}`,
+            subject: `${requestedWorkType || 'Inspection'} - ${convertedLeadCustomerName}`,
             workOrderId: workOrder.id,
             scheduledStart: appointmentDate,
             scheduledEnd: endDate,
