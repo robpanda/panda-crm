@@ -42,6 +42,11 @@ const COMPANY_INFO = {
   email: 'info@pandaexteriors.com',
 };
 
+// Invoice deletion guardrails:
+// - Allow delete only when no processed/in-flight payments exist.
+// - Clean up failed/pending payment attempts automatically.
+const NON_DELETABLE_PAYMENT_STATUSES = ['PROCESSING', 'SETTLED', 'REFUNDED', 'PARTIALLY_REFUNDED'];
+
 // Validation schemas
 const lineItemSchema = z.object({
   description: z.string().min(1),
@@ -433,24 +438,62 @@ export async function deleteInvoice(req, res, next) {
   try {
     const { id } = req.params;
 
-    const existing = await prisma.invoice.findUnique({
-      where: { id },
-      include: { payments: true },
+    const result = await prisma.$transaction(async (tx) => {
+      const existing = await tx.invoice.findUnique({
+        where: { id },
+        include: { payments: true },
+      });
+
+      if (!existing) {
+        return { notFound: true };
+      }
+
+      const blockedPayments = existing.payments.filter((payment) =>
+        NON_DELETABLE_PAYMENT_STATUSES.includes(payment.status)
+      );
+
+      if (blockedPayments.length > 0) {
+        return {
+          blocked: true,
+          blockedCount: blockedPayments.length,
+          blockedStatuses: [...new Set(blockedPayments.map((payment) => payment.status))],
+        };
+      }
+
+      const deletedPendingPayments = existing.payments.length > 0
+        ? await tx.payment.deleteMany({
+            where: {
+              invoiceId: id,
+              status: { notIn: NON_DELETABLE_PAYMENT_STATUSES },
+            },
+          })
+        : { count: 0 };
+
+      // Delete line items first (cascade should handle this, but being explicit)
+      await tx.invoiceLineItem.deleteMany({ where: { invoiceId: id } });
+      await tx.invoice.delete({ where: { id } });
+
+      return { deletedPendingPayments: deletedPendingPayments.count || 0 };
     });
 
-    if (!existing) {
+    if (result.notFound) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
 
-    if (existing.payments.length > 0) {
-      return res.status(400).json({ error: 'Cannot delete invoice with payments' });
+    if (result.blocked) {
+      return res.status(400).json({
+        error: 'Cannot delete invoice with processed payments',
+        details: {
+          blockedCount: result.blockedCount,
+          blockedStatuses: result.blockedStatuses,
+        },
+      });
     }
 
-    // Delete line items first (cascade should handle this, but being explicit)
-    await prisma.invoiceLineItem.deleteMany({ where: { invoiceId: id } });
-    await prisma.invoice.delete({ where: { id } });
-
-    res.json({ message: 'Invoice deleted successfully' });
+    res.json({
+      message: 'Invoice deleted successfully',
+      deletedPendingPayments: result.deletedPendingPayments || 0,
+    });
   } catch (error) {
     next(error);
   }
