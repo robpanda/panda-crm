@@ -146,7 +146,7 @@ export default function PayInvoiceModal({ isOpen, onClose, invoice, opportunity 
   const [paymentResult, setPaymentResult] = useState(null);
   const [error, setError] = useState(null);
 
-  const balanceDue = parseFloat(invoice?.balanceDue || invoice?.totalAmount || 0);
+  const balanceDue = Number(invoice?.balanceDue ?? invoice?.total ?? invoice?.totalAmount ?? 0);
 
   // Fetch Stripe config
   const { data: stripeConfig } = useQuery({
@@ -264,7 +264,7 @@ export default function PayInvoiceModal({ isOpen, onClose, invoice, opportunity 
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-gray-500">Invoice Total</span>
-                    <span className="font-medium">${parseFloat(invoice.totalAmount || 0).toLocaleString()}</span>
+                    <span className="font-medium">${Number(invoice.total ?? invoice.totalAmount ?? 0).toLocaleString()}</span>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-gray-500">Amount Paid</span>

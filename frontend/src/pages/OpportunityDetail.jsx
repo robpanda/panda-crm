@@ -106,6 +106,25 @@ import {
   UserCircle,
 } from 'lucide-react';
 
+const getInvoiceTotalValue = (invoice) => Number(invoice?.total ?? invoice?.totalAmount ?? 0);
+
+const normalizeInvoiceTotals = (invoice) => {
+  if (!invoice || typeof invoice !== 'object') return invoice;
+  const total = getInvoiceTotalValue(invoice);
+  const amountPaid = Number(invoice.amountPaid ?? 0);
+  const balanceDue = invoice.balanceDue !== undefined && invoice.balanceDue !== null
+    ? Number(invoice.balanceDue)
+    : Math.max(total - amountPaid, 0);
+
+  return {
+    ...invoice,
+    total,
+    totalAmount: total,
+    amountPaid,
+    balanceDue,
+  };
+};
+
 // SMS Modal Component with Canned Responses (same as LeadDetail)
 function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {} }) {
   const [message, setMessage] = useState('');
@@ -528,7 +547,168 @@ function InvoiceDetailModal({ invoice, onClose }) {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: 'USD',
-    }).format(amount);
+    }).format(Number(amount) || 0);
+    }).format(Number(amount) || 0);
+  };
+
+  const hydrateFormFromInvoice = useCallback((sourceInvoice) => ({
+    invoiceDate: formatDateInput(sourceInvoice?.invoiceDate),
+    dueDate: formatDateInput(sourceInvoice?.dueDate),
+    tax: Number(sourceInvoice?.tax || 0),
+    notes: sourceInvoice?.notes || '',
+    lineItems: (sourceInvoice?.lineItems || []).map((item) => ({
+      id: item.id || null,
+      description: item.description || item.name || '',
+      quantity: Number(item.quantity || 1),
+      unitPrice: Number(item.unitPrice || item.price || 0),
+    })),
+    additionalCharges: (sourceInvoice?.additionalCharges || []).map((charge) => ({
+      id: charge.id || null,
+      name: charge.name || 'Supplement',
+      amount: Number(charge.amount || charge.fixedAmount || 0),
+      notes: charge.notes || '',
+      chargeType: charge.chargeType || 'ADJUSTMENT',
+    })),
+  }), []);
+
+  useEffect(() => {
+    setForm(hydrateFormFromInvoice(invoice));
+    setIsEditing(false);
+    setEditError(null);
+    setEditSuccess(null);
+  }, [invoice, hydrateFormFromInvoice]);
+
+  useEffect(() => {
+    const loadPayments = async () => {
+      setLoading(true);
+      try {
+        const response = await paymentsApi.getPaymentsByInvoice(invoice.id);
+        setPayments(response?.data || []);
+      } catch (err) {
+        console.error('Error loading payments:', err);
+        setPayments([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadPayments();
+  }, [invoice.id]);
+
+  const lineItemsSubtotal = useMemo(
+    () => form.lineItems.reduce((sum, item) => sum + (Number(item.quantity) * Number(item.unitPrice)), 0),
+    [form.lineItems]
+  );
+  const supplementsTotal = useMemo(
+    () => form.additionalCharges.reduce((sum, charge) => sum + Number(charge.amount || 0), 0),
+    [form.additionalCharges]
+  );
+  const computedTotal = lineItemsSubtotal + Number(form.tax || 0) + supplementsTotal;
+  const invoiceAmountPaid = Number(invoice.amountPaid || 0);
+  const computedBalanceDue = Math.max(computedTotal - invoiceAmountPaid, 0);
+
+  const canSendOrResend = (invoice.status || 'DRAFT') !== 'VOID';
+  const sendLabel = ['SENT', 'OVERDUE', 'PARTIAL', 'PAID'].includes(invoice.status) ? 'Resend' : 'Send';
+  const canPay = invoice.status !== 'PAID' && Number(invoice.balanceDue || 0) > 0;
+
+  const updateInvoiceMutation = useMutation({
+    mutationFn: (payload) => invoicesApi.updateInvoice(invoice.id, payload),
+    onSuccess: (updated) => {
+      const updatedInvoice = normalizeInvoiceTotals(updated?.data || updated);
+      onInvoiceUpdated?.(updatedInvoice);
+      setEditSuccess('Invoice updated successfully');
+      setEditError(null);
+      setIsEditing(false);
+    },
+    onError: (error) => {
+      setEditError(error.message || 'Failed to update invoice');
+    },
+  });
+
+  const downloadInvoicePdfMutation = useMutation({
+    mutationFn: async () => {
+      let result = await invoicesApi.getInvoicePdf(invoice.id);
+      let pdfUrl = result?.pdfUrl || result?.data?.pdfUrl;
+      if (!pdfUrl) {
+        await invoicesApi.generateInvoicePdf(invoice.id);
+        result = await invoicesApi.getInvoicePdf(invoice.id);
+        pdfUrl = result?.pdfUrl || result?.data?.pdfUrl;
+      }
+      if (!pdfUrl) {
+        throw new Error('Invoice PDF is unavailable');
+      }
+      return pdfUrl;
+    },
+    onSuccess: (pdfUrl) => {
+      window.open(pdfUrl, '_blank', 'noopener,noreferrer');
+    },
+    onError: (error) => {
+      setEditError(error.message || 'Failed to download invoice PDF');
+    },
+  });
+
+  const handleLineItemChange = (index, key, value) => {
+    setForm((prev) => {
+      const updated = [...prev.lineItems];
+      updated[index] = {
+        ...updated[index],
+        [key]: key === 'quantity' || key === 'unitPrice' ? Number(value) : value,
+      };
+      return { ...prev, lineItems: updated };
+    });
+  };
+
+  const handleAdditionalChargeChange = (index, key, value) => {
+    setForm((prev) => {
+      const updated = [...prev.additionalCharges];
+      updated[index] = {
+        ...updated[index],
+        [key]: key === 'amount' ? Number(value) : value,
+      };
+      return { ...prev, additionalCharges: updated };
+    });
+  };
+
+  const handleSave = () => {
+    if (!form.lineItems.length) {
+      setEditError('At least one line item is required.');
+      return;
+    }
+    if (form.lineItems.some((item) => !item.description?.trim())) {
+      setEditError('All line items must have a description.');
+      return;
+    }
+
+    if (form.lineItems.some((item) => Number(item.quantity) <= 0)) {
+      setEditError('Line item quantity must be greater than 0.');
+      return;
+    }
+
+    if (form.lineItems.some((item) => Number(item.unitPrice) < 0)) {
+      setEditError('Line item price cannot be negative.');
+      return;
+    }
+
+    const payload = {
+      invoiceDate: form.invoiceDate ? new Date(`${form.invoiceDate}T00:00:00.000Z`).toISOString() : undefined,
+      dueDate: form.dueDate ? new Date(`${form.dueDate}T00:00:00.000Z`).toISOString() : undefined,
+      tax: Number(form.tax || 0),
+      notes: form.notes || '',
+      lineItems: form.lineItems.map((item) => ({
+        description: item.description.trim(),
+        quantity: Number(item.quantity || 1),
+        unitPrice: Number(item.unitPrice || 0),
+      })),
+      additionalCharges: form.additionalCharges
+        .filter((charge) => Number(charge.amount || 0) > 0)
+        .map((charge) => ({
+          name: charge.name?.trim() || 'Supplement',
+          amount: Number(charge.amount || 0),
+          notes: charge.notes || '',
+          chargeType: 'ADJUSTMENT',
+        })),
+    };
+
+    updateInvoiceMutation.mutate(payload);
   };
 
   return (
@@ -6436,7 +6616,7 @@ export default function OpportunityDetail() {
                               <div className="flex justify-between">
                                 <span className="text-gray-500">Total Invoiced</span>
                                 <span className="font-medium">
-                                  ${invoices.reduce((sum, inv) => sum + (parseFloat(inv.totalAmount) || 0), 0).toLocaleString()}
+                                  ${invoices.reduce((sum, inv) => sum + (parseFloat(inv.total ?? inv.totalAmount) || 0), 0).toLocaleString()}
                                 </span>
                               </div>
                               <div className="flex justify-between">
@@ -6547,7 +6727,7 @@ export default function OpportunityDetail() {
                             type: 'invoice',
                             date: inv.createdAt,
                             label: `Invoice ${inv.invoiceNumber || `#${inv.id?.slice(-6)}`}`,
-                            amount: inv.totalAmount,
+                            amount: inv.total ?? inv.totalAmount,
                             status: inv.status,
                           })),
                           ...(commissions || []).filter(c => c.status === 'PAID').map(comm => ({
@@ -6630,7 +6810,7 @@ export default function OpportunityDetail() {
                       {invoices && invoices.length > 0 ? invoices.map((invoice) => (
                         <div
                           key={invoice.id}
-                          onClick={() => { setSelectedInvoice(invoice); setShowInvoiceDetailModal(true); }}
+                          onClick={() => { setSelectedInvoice(normalizeInvoiceTotals(invoice)); setShowInvoiceDetailModal(true); }}
                           className="border border-gray-200 rounded-lg p-4 hover:border-panda-primary hover:shadow-md transition-all cursor-pointer"
                         >
                           <div className="flex items-center justify-between">
@@ -6679,7 +6859,7 @@ export default function OpportunityDetail() {
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      setSelectedInvoice(invoice);
+                                      setSelectedInvoice(normalizeInvoiceTotals(invoice));
                                       setShowPayInvoiceModal(true);
                                     }}
                                     className="flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 transition-colors"
@@ -10907,6 +11087,23 @@ export default function OpportunityDetail() {
       {showInvoiceDetailModal && selectedInvoice && (
         <InvoiceDetailModal
           invoice={selectedInvoice}
+          onInvoiceUpdated={(updatedInvoice) => {
+            const normalizedInvoice = normalizeInvoiceTotals(updatedInvoice);
+            queryClient.invalidateQueries({ queryKey: ['opportunityInvoices', id] });
+            setSelectedInvoice((prev) => normalizeInvoiceTotals({
+              ...prev,
+              ...(normalizedInvoice || {}),
+            }));
+          }}
+          onOpenSendInvoice={(invoiceRecord) => {
+            setInvoiceToSend(normalizeInvoiceTotals(invoiceRecord));
+            setShowSendInvoiceModal(true);
+          }}
+          onOpenPayInvoice={(invoiceRecord) => {
+            setSelectedInvoice(normalizeInvoiceTotals(invoiceRecord));
+            setShowInvoiceDetailModal(false);
+            setShowPayInvoiceModal(true);
+          }}
           onClose={() => {
             setShowInvoiceDetailModal(false);
             setSelectedInvoice(null);
