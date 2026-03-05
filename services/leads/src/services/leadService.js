@@ -494,13 +494,16 @@ class LeadService {
     const now = new Date();
     const minLeadTime = new Date(now.getTime() + (30 * 60 * 1000));
     const windowEnd = new Date(now.getTime() + (daysToSearch * 24 * 60 * 60 * 1000));
+    const preferredWindowEnd = new Date(now.getTime() + (365 * 24 * 60 * 60 * 1000));
     const schedulingTimeZone = this.getSchedulingTimeZone();
 
     const preferredDate = options.preferredDateTime
       ? this.parseTentativeAppointmentDate(options.preferredDateTime)
       : null;
 
-    if (preferredDate && preferredDate >= minLeadTime && preferredDate <= windowEnd) {
+    // Explicit customer-requested slots should be accepted if they're a valid future time,
+    // even if they fall outside the auto-suggestion search window.
+    if (preferredDate && preferredDate >= minLeadTime && preferredDate <= preferredWindowEnd) {
       return {
         found: true,
         appointmentDate: this.formatDateForTimeZone(preferredDate, schedulingTimeZone),
