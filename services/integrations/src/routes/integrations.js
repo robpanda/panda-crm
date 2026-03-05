@@ -705,22 +705,23 @@ router.get('/google/users/:userId/status', authMiddleware, async (req, res, next
  */
 router.post('/google/users/:userId/link', authMiddleware, async (req, res, next) => {
   try {
-    const { google_calendar_email, enableSync } = req.body;
+    const { google_calendar_email, googleCalendarEmail, enableSync } = req.body;
+    const calendarEmail = google_calendar_email || googleCalendarEmail;
 
-    if (!google_calendar_email) {
+    if (!calendarEmail) {
       return res.status(400).json({
         success: false,
-        error: { code: 'VALIDATION_ERROR', message: 'google_calendar_email is required' },
+        error: { code: 'VALIDATION_ERROR', message: 'google_calendar_email (or googleCalendarEmail) is required' },
       });
     }
 
     const result = await googleCalendarService.linkUserToGoogleCalendar(
       req.params.userId,
-      google_calendar_email,
+      calendarEmail,
       enableSync !== false // Default to true
     );
 
-    logger.info(`Linked user ${req.params.userId} to Google Calendar ${google_calendar_email}`);
+    logger.info(`Linked user ${req.params.userId} to Google Calendar ${calendarEmail}`);
 
     res.json({ success: true, data: result });
   } catch (error) {
@@ -911,7 +912,7 @@ router.delete('/google/users/:userId', authMiddleware, async (req, res, next) =>
       data: {
         google_calendar_email: null,
         google_calendar_sync_enabled: false,
-        googleCalendarLastSyncAt: null
+        google_calendar_last_sync_at: null
       },
       select: { id: true, firstName: true, lastName: true }
     });

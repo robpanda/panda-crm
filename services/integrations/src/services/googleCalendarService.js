@@ -545,7 +545,7 @@ Notes: ${appointment.notes || 'None'}
           email: true,
           google_calendar_email: true,
           google_calendar_sync_enabled: true,
-          googleCalendarLastSyncAt: true,
+          google_calendar_last_sync_at: true,
         },
       });
 
@@ -575,9 +575,14 @@ Notes: ${appointment.notes || 'None'}
 
       return {
         connected: isLinked,
+        googleCalendarEmail: calendarEmail,
         google_calendar_email: calendarEmail,
+        googleCalendarSyncEnabled: user.google_calendar_sync_enabled || false,
+        google_calendar_sync_enabled: user.google_calendar_sync_enabled || false,
         syncEnabled: user.google_calendar_sync_enabled || false,
-        lastSyncAt: user.googleCalendarLastSyncAt,
+        lastSyncAt: user.google_calendar_last_sync_at,
+        googleCalendarLastSyncAt: user.google_calendar_last_sync_at,
+        google_calendar_last_sync_at: user.google_calendar_last_sync_at,
         isLinked,
         connectionVerified,
         error: connectionError,
@@ -586,9 +591,14 @@ Notes: ${appointment.notes || 'None'}
       logger.error('Error getting calendar connection status:', error);
       return {
         connected: false,
+        googleCalendarEmail: null,
         google_calendar_email: null,
+        googleCalendarSyncEnabled: false,
+        google_calendar_sync_enabled: false,
         syncEnabled: false,
         lastSyncAt: null,
+        googleCalendarLastSyncAt: null,
+        google_calendar_last_sync_at: null,
         isLinked: false,
         connectionVerified: false,
         error: 'Failed to fetch calendar status',
@@ -609,7 +619,7 @@ Notes: ${appointment.notes || 'None'}
         lastName: true,
         google_calendar_email: true,
         google_calendar_sync_enabled: true,
-        googleCalendarLastSyncAt: true,
+        google_calendar_last_sync_at: true,
       },
       orderBy: { lastName: 'asc' },
     });
@@ -621,9 +631,12 @@ Notes: ${appointment.notes || 'None'}
       firstName: user.firstName,
       lastName: user.lastName,
       email: user.email,
+      googleCalendarEmail: user.google_calendar_email,
       google_calendar_email: user.google_calendar_email,
+      googleCalendarSyncEnabled: user.google_calendar_sync_enabled || false,
       google_calendar_sync_enabled: user.google_calendar_sync_enabled || false,
-      googleCalendarLastSyncAt: user.googleCalendarLastSyncAt,
+      googleCalendarLastSyncAt: user.google_calendar_last_sync_at,
+      google_calendar_last_sync_at: user.google_calendar_last_sync_at,
     }));
   },
 };
