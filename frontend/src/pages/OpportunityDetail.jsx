@@ -7592,15 +7592,37 @@ export default function OpportunityDetail() {
                           return (
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                               {files.map((file) => (
-                                <div
-                                  key={file.id}
-                                  className="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow"
-                                >
+                                <div key={file.id} className="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+                                  {(() => {
+                                    const fileUrl = file.contentUrl || file.downloadUrl || file.url || null;
+                                    const fileTypeLabel = (file.fileType || file.fileExtension || '').toString().toLowerCase();
+                                    const isImageFile =
+                                      Boolean(fileUrl) &&
+                                      ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'svg'].some((ext) => fileTypeLabel.includes(ext));
+
+                                    return (
+                                      <>
                                   <div className="flex items-start space-x-3">
                                     <div className="flex-shrink-0">
-                                      <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center">
-                                        <FileText className="w-5 h-5 text-gray-500" />
-                                      </div>
+                                      {isImageFile ? (
+                                        <a
+                                          href={fileUrl}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="block w-10 h-10 rounded-lg overflow-hidden border border-gray-200 bg-gray-50"
+                                        >
+                                          <img
+                                            src={fileUrl}
+                                            alt={file.title || file.fileName || 'File preview'}
+                                            className="w-full h-full object-cover"
+                                            loading="lazy"
+                                          />
+                                        </a>
+                                      ) : (
+                                        <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center">
+                                          <FileText className="w-5 h-5 text-gray-500" />
+                                        </div>
+                                      )}
                                     </div>
                                     <div className="flex-1 min-w-0">
                                       <p className="text-sm font-medium text-gray-900 truncate" title={file.title || file.fileName || 'Untitled'}>
@@ -7616,16 +7638,28 @@ export default function OpportunityDetail() {
                                     </div>
                                   </div>
                                   <div className="mt-3 flex space-x-2">
-                                    {file.contentUrl ? (
-                                      <a
-                                        href={file.contentUrl}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="flex-1 inline-flex items-center justify-center px-3 py-1.5 bg-panda-primary/10 text-panda-primary text-xs font-medium rounded-md hover:bg-panda-primary/20 transition-colors"
-                                      >
-                                        <Download className="w-3 h-3 mr-1" />
-                                        Download
-                                      </a>
+                                    {fileUrl ? (
+                                      <>
+                                        <a
+                                          href={fileUrl}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="flex-1 inline-flex items-center justify-center px-3 py-1.5 bg-panda-primary/10 text-panda-primary text-xs font-medium rounded-md hover:bg-panda-primary/20 transition-colors"
+                                        >
+                                          <ExternalLink className="w-3 h-3 mr-1" />
+                                          Open
+                                        </a>
+                                        <a
+                                          href={fileUrl}
+                                          download={file.fileName || file.title || 'document'}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="flex-1 inline-flex items-center justify-center px-3 py-1.5 bg-panda-secondary/10 text-panda-secondary text-xs font-medium rounded-md hover:bg-panda-secondary/20 transition-colors"
+                                        >
+                                          <Download className="w-3 h-3 mr-1" />
+                                          Download
+                                        </a>
+                                      </>
                                     ) : (
                                       <span className="flex-1 inline-flex items-center justify-center px-3 py-1.5 bg-gray-100 text-gray-400 text-xs font-medium rounded-md">
                                         <FileText className="w-3 h-3 mr-1" />
@@ -7633,6 +7667,9 @@ export default function OpportunityDetail() {
                                       </span>
                                     )}
                                   </div>
+                                      </>
+                                    );
+                                  })()}
                                 </div>
                               ))}
                             </div>
