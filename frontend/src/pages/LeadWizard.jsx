@@ -253,7 +253,9 @@ export default function LeadWizard() {
   const isCallCenter = roleName.includes('call center') ||
                        roleName.includes('call_center') ||
                        roleType.includes('call_center') ||
-                       user?.department?.toLowerCase() === 'call center';
+                       user?.department?.toLowerCase() === 'call center' ||
+                       userTitle.includes('call center') ||
+                       userTitle.includes('call_center');
 
   const disableGuidedFlow = true;
 
@@ -1741,11 +1743,10 @@ export default function LeadWizard() {
           }
         }
 
-        if (isCallCenter) {
-          alert('Call Center Process Complete! The Sales Rep will take the lead from here.');
-          setCurrentStep(3);
-          return;
-        }
+                if (isCallCenter) {
+                  await handleOpenLeadRecord();
+                  return;
+                }
 
         openGuidedFlowModal(leadId);
         return;
@@ -1762,6 +1763,15 @@ export default function LeadWizard() {
     if (currentStep > 1) {
       setCurrentStep(currentStep - 1);
     }
+  };
+
+  const handleOpenLeadRecord = async () => {
+    const targetLeadId = await ensureLeadId();
+    if (!targetLeadId) {
+      alert('Please save the lead before opening the record.');
+      return;
+    }
+    navigate(`/leads/${targetLeadId}`);
   };
 
   // Calculate completion score
@@ -3020,6 +3030,28 @@ export default function LeadWizard() {
                   >
                     Next
                     <ChevronRight className="w-5 h-5 ml-1" />
+                  </button>
+                ) : isCallCenter ? (
+                  <button
+                    onClick={handleOpenLeadRecord}
+                    disabled={isSaving || !formData.leadSource}
+                    className={`inline-flex items-center rounded-lg px-4 py-1.5 text-sm transition-colors ${
+                      isSaving || !formData.leadSource
+                        ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                        : 'bg-panda-primary text-white hover:bg-panda-primary/90'
+                    }`}
+                  >
+                    {isSaving ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Saving...
+                      </>
+                    ) : (
+                      <>
+                        {isNewLead ? 'Create & Open Lead' : 'Open Lead Record'}
+                        <ArrowRight className="ml-1 h-4 w-4" />
+                      </>
+                    )}
                   </button>
                 ) : isNewLead ? (
                   <button
