@@ -118,6 +118,17 @@ function calculateTotals(lineItems, taxAmount = 0) {
   };
 }
 
+async function getFreshInvoicePdfUrl(pdfKey, expiresIn = 3600 * 24 * 7) {
+  if (!pdfKey) return null;
+
+  const S3_BUCKET = process.env.DOCUMENTS_BUCKET || 'panda-crm-documents';
+  return getSignedUrl(
+    s3Client,
+    new GetObjectCommand({ Bucket: S3_BUCKET, Key: pdfKey }),
+    { expiresIn }
+  );
+}
+
 // List invoices
 export async function listInvoices(req, res, next) {
   try {
@@ -767,7 +778,6 @@ ${Buffer.from(pdfResult.pdfBytes).toString('base64')}`;
       include: {
         account: { select: { id: true, name: true, email: true } },
         lineItems: true,
-        opportunity: { select: { id: true, name: true } },
       },
     });
 
@@ -1096,13 +1106,32 @@ export async function getInvoicePdf(req, res, next) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
 
-    // Return existing PDF URL if available and not regenerating
+    // Return a fresh signed URL for existing generated PDF if available.
+    if (invoice.pdf_key && regenerate !== 'true') {
+      const freshPdfUrl = await getFreshInvoicePdfUrl(invoice.pdf_key);
+
+      // Keep stored URL fresh for consumers that still read pdf_url directly.
+      await prisma.invoice.update({
+        where: { id },
+        data: { pdf_url: freshPdfUrl },
+      });
+
+      return res.json({
+        invoiceNumber: invoice.invoiceNumber,
+        pdfUrl: freshPdfUrl,
+        pdfKey: invoice.pdf_key,
+        cached: true,
+      });
+    }
+
+    // Legacy fallback if key is missing but URL exists.
     if (invoice.pdf_url && regenerate !== 'true') {
       return res.json({
         invoiceNumber: invoice.invoiceNumber,
         pdfUrl: invoice.pdf_url,
         pdfKey: invoice.pdf_key,
         cached: true,
+        warning: 'Using legacy PDF URL without key refresh',
       });
     }
 

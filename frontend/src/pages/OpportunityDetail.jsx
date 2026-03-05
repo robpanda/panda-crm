@@ -841,7 +841,7 @@ function InvoiceDetailModal({
             </div>
             <div className="bg-gray-50 rounded-lg p-3">
               <p className="text-xs text-gray-500">Total Amount</p>
-              <p className="text-sm font-medium">{formatCurrency(isEditing ? computedTotal : (invoice.totalAmount ?? invoice.total ?? 0))}</p>
+              <p className="text-sm font-medium">{formatCurrency(isEditing ? computedTotal : (invoice.total ?? invoice.totalAmount ?? 0))}</p>
             </div>
             <div className="bg-gray-50 rounded-lg p-3">
               <p className="text-xs text-gray-500">Balance Due</p>
@@ -7234,7 +7234,7 @@ export default function OpportunityDetail() {
                             </div>
                             <div className="flex items-center gap-4">
                               <div className="text-right">
-                                <p className="font-semibold text-gray-900">${Number(invoice.totalAmount ?? invoice.total ?? 0).toLocaleString()}</p>
+                                <p className="font-semibold text-gray-900">${Number(invoice.total ?? invoice.totalAmount ?? 0).toLocaleString()}</p>
                                 <span className={`px-2 py-0.5 rounded text-xs font-medium ${
                                   invoice.status === 'PAID' ? 'bg-green-100 text-green-800' :
                                   invoice.status === 'OVERDUE' ? 'bg-red-100 text-red-800' :
@@ -7263,7 +7263,7 @@ export default function OpportunityDetail() {
                                 {/* Pay Invoice Button - only show if not fully paid */}
                                 {invoice.status !== 'PAID' && (
                                   (parseFloat(invoice.balanceDue) > 0) ||
-                                  (parseFloat(invoice.totalAmount ?? invoice.total) > parseFloat(invoice.amountPaid || 0))
+                                  (parseFloat(invoice.total ?? invoice.totalAmount) > parseFloat(invoice.amountPaid || 0))
                                 ) && (
                                   <button
                                     onClick={(e) => {
@@ -7287,7 +7287,7 @@ export default function OpportunityDetail() {
                             <div className="mt-3 pt-3 border-t border-gray-100 flex justify-between text-sm">
                               <span className="text-gray-500">Balance Due:</span>
                               <span className="font-medium text-red-600">
-                                ${parseFloat(invoice.balanceDue || ((invoice.totalAmount ?? invoice.total) - (invoice.amountPaid || 0)) || 0).toLocaleString()}
+                                ${parseFloat(invoice.balanceDue || ((invoice.total ?? invoice.totalAmount) - (invoice.amountPaid || 0)) || 0).toLocaleString()}
                               </span>
                             </div>
                           )}
