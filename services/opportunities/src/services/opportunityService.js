@@ -13,7 +13,8 @@ const prisma = new PrismaClient();
 const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-east-2' });
 const S3_BUCKET = process.env.S3_BUCKET || 'pandasign-documents';
 
-const NOTIFICATION_SERVICE_URL = process.env.NOTIFICATION_SERVICE_URL || 'http://localhost:3011';
+const NOTIFICATION_SERVICE_URL = process.env.NOTIFICATION_SERVICE_URL
+  || (process.env.NODE_ENV === 'development' ? 'http://localhost:3011' : 'http://notifications-service:3011');
 const MENTION_DISPATCH_ENDPOINT = `${NOTIFICATION_SERVICE_URL}/api/notifications/mentions/dispatch`;
 
 const DISPOSITION_CATEGORIES = {
@@ -104,6 +105,28 @@ function parseDate(value) {
   if (!value) return null;
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function parseBooleanFlag(value) {
+  return value === true || value === 1 || value === '1' || String(value).toLowerCase() === 'true';
+}
+
+function formatTransferCounts(counts = {}) {
+  const labels = {
+    tasks: 'tasks',
+    events: 'events',
+    commissions: 'commissions',
+    serviceContracts: 'service contracts',
+    photoProjects: 'photo projects',
+    opportunityAttentionItems: 'job attention items',
+    caseAttentionItems: 'case attention items',
+    appointmentAssignments: 'appointment assignments',
+  };
+
+  return Object.entries(labels)
+    .filter(([key]) => Number(counts[key] || 0) > 0)
+    .map(([key, label]) => `${counts[key]} ${label}`)
+    .join(', ');
 }
 
 function normalizeDepartmentTag(value) {
@@ -1159,6 +1182,67 @@ class OpportunityService {
     const error = new Error('Unable to resolve actor for portal activity');
     error.name = 'ValidationError';
     throw error;
+  }
+
+  async resolveUserId(idOrCognitoId) {
+    if (!idOrCognitoId) return null;
+
+    const directUser = await prisma.user.findUnique({
+      where: { id: idOrCognitoId },
+      select: { id: true },
+    });
+    if (directUser?.id) return directUser.id;
+
+    const cognitoUser = await prisma.user.findFirst({
+      where: { cognitoId: idOrCognitoId },
+      select: { id: true },
+    });
+    return cognitoUser?.id || null;
+  }
+
+  async resolveMentionActor(actor = null, fallbackUserId = null) {
+    const candidateIds = [
+      actor?.id,
+      actor?.userId,
+      actor?.cognitoId,
+      actor?.sub,
+      fallbackUserId,
+    ].filter(Boolean);
+
+    let resolvedUserId = null;
+    for (const candidate of candidateIds) {
+      resolvedUserId = await this.resolveUserId(candidate);
+      if (resolvedUserId) break;
+    }
+
+    if (!resolvedUserId && actor?.email) {
+      const emailUser = await prisma.user.findUnique({
+        where: { email: actor.email },
+        select: { id: true },
+      });
+      resolvedUserId = emailUser?.id || null;
+    }
+
+    if (!resolvedUserId) {
+      return {
+        id: null,
+        firstName: actor?.firstName || null,
+        lastName: actor?.lastName || null,
+        email: actor?.email || null,
+      };
+    }
+
+    const dbUser = await prisma.user.findUnique({
+      where: { id: resolvedUserId },
+      select: { id: true, firstName: true, lastName: true, email: true },
+    });
+
+    return dbUser || {
+      id: resolvedUserId,
+      firstName: actor?.firstName || null,
+      lastName: actor?.lastName || null,
+      email: actor?.email || null,
+    };
   }
 
   async getPortalProject(token) {
@@ -2386,13 +2470,15 @@ Be factual and professional. Highlight anything that needs attention.`;
       throw error;
     }
 
+    const mentionActor = await this.resolveMentionActor(user);
+
     // Create the note/reply
     const note = await prisma.note.create({
       data: {
         opportunityId,
         title: `CONVERSATION_REPLY|${channel || 'internal'}`,
         body: noteBody,
-        createdById: user?.id,
+        createdById: mentionActor?.id || null,
       },
     });
 
@@ -2400,7 +2486,7 @@ Be factual and professional. Highlight anything that needs attention.`;
       opportunityId,
       content: normalizedContent || noteBody,
       mentions: mentions || [],
-      actor: user,
+      actor: mentionActor,
       opportunityName: opportunity.name,
       opportunityJobId: opportunity.jobId,
       noteId: note.id,
@@ -2681,6 +2767,10 @@ Be factual and professional. Highlight anything that needs attention.`;
           claimNumber: data.claimNumber,
           claimFiledDate: data.claimFiledDate ? new Date(data.claimFiledDate) : null,
           insuranceCarrier: data.insuranceCarrier,
+          adjusterName: data.adjusterName,
+          adjusterEmail: data.adjusterEmail,
+          adjusterOfficePhone: data.adjusterOfficePhone,
+          fieldAdjusterMobile: data.fieldAdjusterMobile,
           rcvAmount: data.rcvAmount,
           acvAmount: data.acvAmount,
           deductible: data.deductible,
@@ -2741,6 +2831,10 @@ Be factual and professional. Highlight anything that needs attention.`;
         claimNumber: true,
         claimFiledDate: true,
         insuranceCarrier: true,
+        adjusterName: true,
+        adjusterEmail: true,
+        adjusterOfficePhone: true,
+        fieldAdjusterMobile: true,
         isPandaClaims: true,
         type: true,
         rcvAmount: true,
@@ -2774,6 +2868,10 @@ Be factual and professional. Highlight anything that needs attention.`;
       claimNumber: data.claimNumber,
       claimFiledDate: data.claimFiledDate ? new Date(data.claimFiledDate) : undefined,
       insuranceCarrier: data.insuranceCarrier,
+      adjusterName: data.adjusterName,
+      adjusterEmail: data.adjusterEmail,
+      adjusterOfficePhone: data.adjusterOfficePhone,
+      fieldAdjusterMobile: data.fieldAdjusterMobile,
       rcvAmount: data.rcvAmount,
       acvAmount: data.acvAmount,
       deductible: data.deductible,
@@ -2857,6 +2955,18 @@ Be factual and professional. Highlight anything that needs attention.`;
           insuranceCarrier: hasOwnField(data, 'insuranceCarrier')
             ? data.insuranceCarrier
             : previousState.insuranceCarrier,
+          adjusterName: hasOwnField(data, 'adjusterName')
+            ? data.adjusterName
+            : previousState.adjusterName,
+          adjusterEmail: hasOwnField(data, 'adjusterEmail')
+            ? data.adjusterEmail
+            : previousState.adjusterEmail,
+          adjusterOfficePhone: hasOwnField(data, 'adjusterOfficePhone')
+            ? data.adjusterOfficePhone
+            : previousState.adjusterOfficePhone,
+          fieldAdjusterMobile: hasOwnField(data, 'fieldAdjusterMobile')
+            ? data.fieldAdjusterMobile
+            : previousState.fieldAdjusterMobile,
           claimFiledDate: hasOwnField(data, 'claimFiledDate')
             ? data.claimFiledDate
             : previousState.claimFiledDate,
@@ -3109,6 +3219,10 @@ Be factual and professional. Highlight anything that needs attention.`;
       currentDispositionReason: opp.currentDispositionReason,
       damageLocation: opp.damageLocation,
       dateOfLoss: opp.dateOfLoss,
+      adjusterName: opp.adjusterName,
+      adjusterEmail: opp.adjusterEmail,
+      adjusterOfficePhone: opp.adjusterOfficePhone,
+      fieldAdjusterMobile: opp.fieldAdjusterMobile,
       isClosed: ['CLOSED_WON', 'CLOSED_LOST'].includes(opp.stage),
       isWon: opp.stage === 'CLOSED_WON',
       // Account
@@ -4386,9 +4500,10 @@ Be factual and professional. Highlight anything that needs attention.`;
    * Compatibility endpoint for clients posting to /:id/transfer.
    * @param {string} opportunityId - Opportunity ID
    * @param {string} newOwnerId - New owner user ID
+   * @param {Object} transferOptions - Transfer behavior options
    * @param {Object} auditContext - Context for audit logging
    */
-  async transferOpportunity(opportunityId, newOwnerId, auditContext = {}) {
+  async transferOpportunity(opportunityId, newOwnerId, transferOptions = {}, auditContext = {}) {
     if (!opportunityId) {
       const error = new Error('Opportunity ID is required');
       error.name = 'ValidationError';
@@ -4400,6 +4515,31 @@ Be factual and professional. Highlight anything that needs attention.`;
       error.name = 'ValidationError';
       throw error;
     }
+
+    let normalizedTransferOptions = transferOptions || {};
+    let normalizedAuditContext = auditContext || {};
+
+    // Backward compatibility: older callers passed auditContext as 3rd argument.
+    if (normalizedTransferOptions && !Object.keys(normalizedAuditContext).length) {
+      const looksLikeAuditContext = Boolean(
+        hasOwnField(normalizedTransferOptions, 'userId')
+        || hasOwnField(normalizedTransferOptions, 'userEmail')
+        || hasOwnField(normalizedTransferOptions, 'ipAddress')
+        || hasOwnField(normalizedTransferOptions, 'userAgent')
+      );
+
+      if (looksLikeAuditContext) {
+        normalizedAuditContext = normalizedTransferOptions;
+        normalizedTransferOptions = {};
+      }
+    }
+
+    const transferRelatedItems = parseBooleanFlag(
+      normalizedTransferOptions.transferRelatedItems
+      ?? normalizedTransferOptions.transferRelated
+      ?? normalizedTransferOptions.transferAllAssociated
+      ?? normalizedTransferOptions.transferAssociatedRecords
+    );
 
     const [opportunity, newOwner] = await Promise.all([
       prisma.opportunity.findUnique({
@@ -4448,6 +4588,22 @@ Be factual and professional. Highlight anything that needs attention.`;
       : 'Unassigned';
     const newOwnerName = `${newOwner.firstName} ${newOwner.lastName}`;
 
+    const relatedTransferBase = {
+      requested: transferRelatedItems,
+      completed: false,
+      skippedReason: null,
+      counts: {
+        tasks: 0,
+        events: 0,
+        commissions: 0,
+        serviceContracts: 0,
+        photoProjects: 0,
+        opportunityAttentionItems: 0,
+        caseAttentionItems: 0,
+        appointmentAssignments: 0,
+      },
+    };
+
     if (opportunity.ownerId === newOwnerId) {
       return {
         transferred: false,
@@ -4465,44 +4621,77 @@ Be factual and professional. Highlight anything that needs attention.`;
           name: newOwnerName,
           email: newOwner.email,
         },
+        relatedTransfer: {
+          ...relatedTransferBase,
+          skippedReason: transferRelatedItems ? 'ALREADY_ASSIGNED' : null,
+        },
       };
     }
 
-    const updatedOpportunity = await prisma.opportunity.update({
-      where: { id: opportunityId },
-      data: {
-        ownerId: newOwnerId,
-        assignedById: auditContext.userId || null,
-        assignedAt: new Date(),
-      },
-      include: {
-        account: {
-          select: { id: true, name: true, billingCity: true, billingState: true },
+    const oldOwnerId = opportunity.ownerId || null;
+
+    const { updatedOpportunity, relatedTransfer } = await prisma.$transaction(async (tx) => {
+      const updated = await tx.opportunity.update({
+        where: { id: opportunityId },
+        data: {
+          ownerId: newOwnerId,
+          assignedById: normalizedAuditContext.userId || null,
+          assignedAt: new Date(),
         },
-        contact: {
-          select: { id: true, firstName: true, lastName: true, phone: true, email: true },
+        include: {
+          account: {
+            select: { id: true, name: true, billingCity: true, billingState: true },
+          },
+          contact: {
+            select: { id: true, firstName: true, lastName: true, phone: true, email: true },
+          },
+          owner: {
+            select: { id: true, firstName: true, lastName: true, email: true },
+          },
+          _count: {
+            select: { quotes: true, workOrders: true },
+          },
         },
-        owner: {
-          select: { id: true, firstName: true, lastName: true, email: true },
-        },
-        _count: {
-          select: { quotes: true, workOrders: true },
-        },
-      },
+      });
+
+      let related = { ...relatedTransferBase };
+      if (transferRelatedItems) {
+        related = await this.transferRelatedOpportunityOwnership(tx, {
+          opportunityId,
+          accountId: opportunity.accountId || null,
+          oldOwnerId,
+          newOwnerId,
+        });
+      }
+
+      return {
+        updatedOpportunity: updated,
+        relatedTransfer: related,
+      };
     });
+
+    const relatedCountsSummary = formatTransferCounts(relatedTransfer.counts);
+    const relatedSummaryText = transferRelatedItems
+      ? relatedCountsSummary
+        ? ` Related records transferred: ${relatedCountsSummary}.`
+        : ` Related records transfer requested, but no matching assignments were found.`
+      : '';
 
     await prisma.note.create({
       data: {
         title: 'Job Reassigned',
-        body: `Job reassigned from ${previousOwnerName} to ${newOwnerName}.${auditContext.userEmail ? ` Reassigned by: ${auditContext.userEmail}` : ''}`,
+        body: `Job reassigned from ${previousOwnerName} to ${newOwnerName}.${relatedSummaryText}${normalizedAuditContext.userEmail ? ` Reassigned by: ${normalizedAuditContext.userEmail}` : ''}`,
         opportunityId,
-        createdById: auditContext.userId || null,
+        createdById: normalizedAuditContext.userId || null,
       },
     }).catch((error) => {
       logger.warn(`Failed to create reassignment note for ${opportunityId}: ${error.message}`);
     });
 
-    logger.info(`Job ${opportunityId} transferred from ${previousOwnerName} to ${newOwnerName}`);
+    logger.info(
+      `Job ${opportunityId} transferred from ${previousOwnerName} to ${newOwnerName}` +
+      `${transferRelatedItems ? ` (related: ${relatedCountsSummary || 'none moved'})` : ''}`
+    );
 
     return {
       transferred: true,
@@ -4519,7 +4708,166 @@ Be factual and professional. Highlight anything that needs attention.`;
         name: newOwnerName,
         email: newOwner.email,
       },
+      relatedTransfer,
     };
+  }
+
+  async transferRelatedOpportunityOwnership(tx, options = {}) {
+    const {
+      opportunityId,
+      accountId,
+      oldOwnerId,
+      newOwnerId,
+    } = options;
+
+    const result = {
+      requested: true,
+      completed: false,
+      skippedReason: null,
+      counts: {
+        tasks: 0,
+        events: 0,
+        commissions: 0,
+        serviceContracts: 0,
+        photoProjects: 0,
+        opportunityAttentionItems: 0,
+        caseAttentionItems: 0,
+        appointmentAssignments: 0,
+      },
+    };
+
+    if (!oldOwnerId) {
+      result.skippedReason = 'NO_PREVIOUS_OWNER';
+      return result;
+    }
+
+    const [
+      taskUpdate,
+      eventUpdate,
+      commissionUpdate,
+      serviceContractUpdate,
+      photoProjectUpdate,
+      opportunityAttentionUpdate,
+    ] = await Promise.all([
+      tx.task.updateMany({
+        where: { opportunityId, assignedToId: oldOwnerId },
+        data: { assignedToId: newOwnerId },
+      }),
+      tx.event.updateMany({
+        where: { opportunityId, ownerId: oldOwnerId },
+        data: { ownerId: newOwnerId },
+      }),
+      tx.commission.updateMany({
+        where: { opportunityId, ownerId: oldOwnerId },
+        data: { ownerId: newOwnerId },
+      }),
+      tx.serviceContract.updateMany({
+        where: { opportunityId, ownerId: oldOwnerId },
+        data: { ownerId: newOwnerId },
+      }),
+      tx.photoProject.updateMany({
+        where: { opportunityId, ownerId: oldOwnerId },
+        data: { ownerId: newOwnerId },
+      }),
+      tx.attentionItem.updateMany({
+        where: { opportunityId, assignedToId: oldOwnerId },
+        data: { assignedToId: newOwnerId },
+      }),
+    ]);
+
+    result.counts.tasks = taskUpdate.count;
+    result.counts.events = eventUpdate.count;
+    result.counts.commissions = commissionUpdate.count;
+    result.counts.serviceContracts = serviceContractUpdate.count;
+    result.counts.photoProjects = photoProjectUpdate.count;
+    result.counts.opportunityAttentionItems = opportunityAttentionUpdate.count;
+
+    if (accountId) {
+      const accountCaseIds = await tx.case.findMany({
+        where: { accountId },
+        select: { id: true },
+      });
+      const caseIds = accountCaseIds.map((record) => record.id);
+      if (caseIds.length > 0) {
+        const caseAttentionUpdate = await tx.attentionItem.updateMany({
+          where: {
+            caseId: { in: caseIds },
+            assignedToId: oldOwnerId,
+          },
+          data: { assignedToId: newOwnerId },
+        });
+        result.counts.caseAttentionItems = caseAttentionUpdate.count;
+      }
+    }
+
+    const [oldOwnerResource, newOwnerResource] = await Promise.all([
+      tx.serviceResource.findFirst({
+        where: { userId: oldOwnerId, isActive: true },
+        select: { id: true },
+      }),
+      tx.serviceResource.findFirst({
+        where: { userId: newOwnerId, isActive: true },
+        select: { id: true },
+      }),
+    ]);
+
+    if (
+      oldOwnerResource?.id
+      && newOwnerResource?.id
+      && oldOwnerResource.id !== newOwnerResource.id
+    ) {
+      const assignments = await tx.assignedResource.findMany({
+        where: {
+          serviceResourceId: oldOwnerResource.id,
+          serviceAppointment: {
+            workOrder: {
+              opportunityId,
+            },
+          },
+        },
+        select: {
+          id: true,
+          serviceAppointmentId: true,
+          isPrimaryResource: true,
+        },
+      });
+
+      for (const assignment of assignments) {
+        const existingAssignment = await tx.assignedResource.findFirst({
+          where: {
+            serviceAppointmentId: assignment.serviceAppointmentId,
+            serviceResourceId: newOwnerResource.id,
+          },
+          select: {
+            id: true,
+            isPrimaryResource: true,
+          },
+        });
+
+        if (existingAssignment) {
+          if (assignment.isPrimaryResource && !existingAssignment.isPrimaryResource) {
+            await tx.assignedResource.update({
+              where: { id: existingAssignment.id },
+              data: { isPrimaryResource: true },
+            });
+          }
+
+          await tx.assignedResource.delete({
+            where: { id: assignment.id },
+          });
+        } else {
+          await tx.assignedResource.update({
+            where: { id: assignment.id },
+            data: { serviceResourceId: newOwnerResource.id },
+          });
+        }
+
+        result.counts.appointmentAssignments += 1;
+      }
+    }
+
+    result.completed = true;
+    return result;
   }
 
   /**
@@ -4763,13 +5111,17 @@ Be factual and professional. Highlight anything that needs attention.`;
       return 0;
     }
 
-    const actorName = `${actor?.firstName || ''} ${actor?.lastName || ''}`.trim() || actor?.email || 'Someone';
+    const actorProfile = await this.resolveMentionActor(actor);
+    const actorName = `${actorProfile?.firstName || ''} ${actorProfile?.lastName || ''}`.trim()
+      || actorProfile?.email
+      || actor?.email
+      || 'Someone';
     const subjectName = opportunityName || opportunityJobId || 'an opportunity';
     const preview = (content || '').substring(0, 100);
     const resolvedCorrelationId = correlationId || buildCorrelationId('opportunity-mention', opportunityId);
 
     const payload = {
-      actorId: actor?.id || null,
+      actorId: actorProfile?.id || null,
       actorName,
       recipients: mentionUserIds.map((userId) => ({ userId })),
       entityType: 'opportunity',
@@ -4803,7 +5155,11 @@ Be factual and professional. Highlight anything that needs attention.`;
       }
 
       const result = await response.json().catch(() => ({}));
-      return result?.data?.dispatched ?? 0;
+      const dispatched = result?.data?.dispatched ?? 0;
+      logger.info(
+        `[mentions.dispatch] opportunityId=${opportunityId} correlationId=${resolvedCorrelationId} attempted=${mentionUserIds.length} dispatched=${dispatched}`
+      );
+      return dispatched;
     } catch (error) {
       logger.warn(
         `[mentions.dispatch] opportunityId=${opportunityId} correlationId=${resolvedCorrelationId} failed: ${error.message}`
@@ -4999,7 +5355,7 @@ Be factual and professional. Highlight anything that needs attention.`;
       opportunityId,
       content,
       mentions: payload.mentions || [],
-      actor: user,
+      actor: comment.createdBy || (createdById ? { id: createdById } : user),
       opportunityName: opportunity.name,
       opportunityJobId: opportunity.jobId,
       commentId: comment.id,
@@ -5099,7 +5455,7 @@ Be factual and professional. Highlight anything that needs attention.`;
       opportunityId,
       content: nextContent,
       mentions: payload.mentions || [],
-      actor: user,
+      actor: updated.createdBy || user,
       commentId: updated.id,
       correlationId,
     });
@@ -5211,6 +5567,7 @@ Be factual and professional. Highlight anything that needs attention.`;
   async createOpportunityNote(opportunityId, data) {
     logger.info(`Creating note for opportunity: ${opportunityId}`);
     const correlationId = data.correlationId || buildCorrelationId('opportunity-note', opportunityId);
+    const mentionActor = await this.resolveMentionActor({ id: data.createdById });
 
     // If this note is pinned, unpin any existing pinned notes
     if (data.isPinned) {
@@ -5227,7 +5584,7 @@ Be factual and professional. Highlight anything that needs attention.`;
         isPinned: data.isPinned || false,
         pinnedAt: data.isPinned ? new Date() : null,
         opportunityId,
-        createdById: data.createdById,
+        createdById: mentionActor?.id || null,
       },
       include: {
         createdBy: {
@@ -5245,7 +5602,7 @@ Be factual and professional. Highlight anything that needs attention.`;
       opportunityId,
       content: note.body,
       mentions: data.mentions || [],
-      actor: note.createdBy || (data.createdById ? { id: data.createdById } : null),
+      actor: note.createdBy || mentionActor,
       opportunityName: opportunity?.name,
       opportunityJobId: opportunity?.jobId,
       noteId: note.id,

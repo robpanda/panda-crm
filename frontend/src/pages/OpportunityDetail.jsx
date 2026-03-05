@@ -127,7 +127,18 @@ const normalizeInvoiceTotals = (invoice) => {
 };
 
 // SMS Modal Component with Canned Responses (same as LeadDetail)
-function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {} }) {
+function SmsModal({
+  isOpen,
+  onClose,
+  phone,
+  recipientName,
+  onSent,
+  mergeData = {},
+  opportunityId,
+  contactId,
+  accountId,
+  sentById,
+}) {
   const [message, setMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState('');
@@ -193,6 +204,10 @@ function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {
         to: phone,
         body: message.trim(),
         recipientName,
+        opportunityId,
+        contactId,
+        accountId,
+        sentById,
       });
       setMessage('');
       setSelectedTemplate('');
@@ -313,7 +328,18 @@ function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {
 }
 
 // Email Modal Component with Canned Responses (same as LeadDetail)
-function EmailModal({ isOpen, onClose, email, recipientName, onSent, mergeData = {} }) {
+function EmailModal({
+  isOpen,
+  onClose,
+  email,
+  recipientName,
+  onSent,
+  mergeData = {},
+  opportunityId,
+  contactId,
+  accountId,
+  sentById,
+}) {
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
   const [isSending, setIsSending] = useState(false);
@@ -387,6 +413,10 @@ function EmailModal({ isOpen, onClose, email, recipientName, onSent, mergeData =
         subject: subject.trim(),
         body: body.trim(),
         recipientName,
+        opportunityId,
+        contactId,
+        accountId,
+        sentById,
       });
       setSubject('');
       setBody('');
@@ -2265,6 +2295,10 @@ export default function OpportunityDetail() {
 
   // Details sub-tab state (status vs measurements)
   const [detailsSubTab, setDetailsSubTab] = useState('status');
+  const [showTransferOwnerModal, setShowTransferOwnerModal] = useState(false);
+  const [selectedTransferOwnerId, setSelectedTransferOwnerId] = useState('');
+  const [transferRelatedItems, setTransferRelatedItems] = useState(true);
+  const [transferOwnerError, setTransferOwnerError] = useState('');
 
   // Close actions menu when clicking outside
   useEffect(() => {
@@ -2410,6 +2444,12 @@ export default function OpportunityDetail() {
     staleTime: 5 * 60 * 1000, // Cache for 5 minutes
   });
   const users = usersForDropdown || [];
+
+  const { data: assignableOwners = [] } = useQuery({
+    queryKey: ['opportunityAssignableOwners'],
+    queryFn: () => opportunitiesApi.getAssignableUsers(),
+    staleTime: 5 * 60 * 1000,
+  });
 
   const { data: activityData } = useQuery({
     queryKey: ['opportunityActivity', id],
@@ -2596,6 +2636,38 @@ export default function OpportunityDetail() {
     },
     onError: (error) => {
       setActionError(error.message || 'Failed to update job');
+    },
+  });
+
+  const transferOwnerMutation = useMutation({
+    mutationFn: ({ newOwnerId, transferRelated }) =>
+      opportunitiesApi.transferOpportunity(id, newOwnerId, {
+        transferRelatedItems: transferRelated,
+      }),
+    onSuccess: (result) => {
+      const payload = result?.data || {};
+      const relatedCounts = payload.relatedTransfer?.counts || {};
+      const movedCount = Object.values(relatedCounts).reduce((sum, count) => sum + (Number(count) || 0), 0);
+
+      queryClient.invalidateQueries(['opportunity', id]);
+      queryClient.invalidateQueries(['opportunityTasks', id]);
+      queryClient.invalidateQueries(['opportunityAppointments', id]);
+      queryClient.invalidateQueries(['opportunityCases', id]);
+      queryClient.invalidateQueries(['opportunityActivity', id]);
+
+      setShowTransferOwnerModal(false);
+      setSelectedTransferOwnerId('');
+      setTransferRelatedItems(true);
+      setTransferOwnerError('');
+      setActionSuccess(
+        payload.relatedTransfer?.requested
+          ? `Job owner transferred successfully${movedCount > 0 ? ` (${movedCount} related assignment${movedCount === 1 ? '' : 's'} moved)` : ''}.`
+          : 'Job owner transferred successfully.'
+      );
+      setTimeout(() => setActionSuccess(null), 4000);
+    },
+    onError: (error) => {
+      setTransferOwnerError(error.message || 'Failed to transfer job owner');
     },
   });
 
@@ -3682,6 +3754,10 @@ export default function OpportunityDetail() {
     .map((part) => part.charAt(0).toUpperCase())
     .join('');
   const hasOwnerTeamMember = Boolean(ownerDisplayName || ownerDisplayId);
+  const availableTransferOwners = useMemo(
+    () => (assignableOwners || []).filter((teamUser) => teamUser.id !== ownerDisplayId),
+    [assignableOwners, ownerDisplayId]
+  );
 
   // Calculate badge counts for the new category tabs (must be before early returns)
   const categoryBadgeCounts = useMemo(() => ({
@@ -5478,6 +5554,18 @@ export default function OpportunityDetail() {
                     {/* Header */}
                     <div className="flex items-center justify-between">
                       <h3 className="text-sm font-semibold text-gray-900">Job Team</h3>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedTransferOwnerId('');
+                          setTransferRelatedItems(true);
+                          setTransferOwnerError('');
+                          setShowTransferOwnerModal(true);
+                        }}
+                        className="inline-flex items-center px-3 py-1.5 text-sm font-medium text-panda-primary bg-panda-primary/10 rounded-lg hover:bg-panda-primary/20"
+                      >
+                        Transfer Owner
+                      </button>
                     </div>
 
                     {/* Team Members */}
@@ -8381,6 +8469,114 @@ export default function OpportunityDetail() {
           </div>
         </div>
       </div>
+
+      {showTransferOwnerModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg">
+            <div className="flex items-center justify-between p-5 border-b border-gray-100">
+              <h2 className="text-lg font-semibold text-gray-900">Transfer Job Owner</h2>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowTransferOwnerModal(false);
+                  setTransferOwnerError('');
+                }}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="p-3 rounded-lg bg-gray-50 border border-gray-100">
+                <p className="text-xs uppercase tracking-wide text-gray-500 font-medium">Current Owner</p>
+                <p className="mt-1 text-sm font-medium text-gray-900">
+                  {ownerDisplayName || 'Unassigned'}
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">New Owner</label>
+                <select
+                  value={selectedTransferOwnerId}
+                  onChange={(e) => {
+                    setSelectedTransferOwnerId(e.target.value);
+                    setTransferOwnerError('');
+                  }}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                >
+                  <option value="">Select an owner...</option>
+                  {availableTransferOwners.map((teamUser) => (
+                    <option key={teamUser.id} value={teamUser.id}>
+                      {teamUser.name || `${teamUser.firstName || ''} ${teamUser.lastName || ''}`.trim() || teamUser.email}
+                      {teamUser.role ? ` • ${teamUser.role}` : ''}
+                    </option>
+                  ))}
+                </select>
+                {availableTransferOwners.length === 0 && (
+                  <p className="mt-2 text-xs text-gray-500">No alternate owners available.</p>
+                )}
+              </div>
+
+              <label className="flex items-start gap-3 p-3 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50">
+                <input
+                  type="checkbox"
+                  checked={transferRelatedItems}
+                  onChange={(e) => setTransferRelatedItems(e.target.checked)}
+                  className="mt-0.5 rounded border-gray-300 text-panda-primary focus:ring-panda-primary/30"
+                />
+                <div>
+                  <p className="text-sm font-medium text-gray-900">Transfer all related assignments</p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Moves linked tasks, appointments/resources, commissions, service contracts, and related attention items to the new owner when applicable.
+                  </p>
+                </div>
+              </label>
+
+              {transferOwnerError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                  <span>{transferOwnerError}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-3 p-5 border-t border-gray-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowTransferOwnerModal(false);
+                  setTransferOwnerError('');
+                }}
+                className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!selectedTransferOwnerId) {
+                    setTransferOwnerError('Please select a new owner');
+                    return;
+                  }
+
+                  transferOwnerMutation.mutate({
+                    newOwnerId: selectedTransferOwnerId,
+                    transferRelated: transferRelatedItems,
+                  });
+                }}
+                disabled={!selectedTransferOwnerId || transferOwnerMutation.isPending}
+                className="px-4 py-2 text-sm font-medium text-white bg-panda-primary rounded-lg hover:bg-panda-dark disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
+              >
+                {transferOwnerMutation.isPending && (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                )}
+                <span>Transfer Owner</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Quick Action Modal */}
       {showQuickActionModal && (
@@ -11457,6 +11653,10 @@ export default function OpportunityDetail() {
         onClose={() => setShowSmsModal(false)}
         phone={opportunity?.contact?.phone || opportunity?.phone || ''}
         recipientName={opportunity?.contact?.firstName ? `${opportunity.contact.firstName} ${opportunity.contact.lastName || ''}`.trim() : opportunity?.name || 'Customer'}
+        opportunityId={id}
+        contactId={opportunity?.contactId || opportunity?.contact?.id || null}
+        accountId={opportunity?.accountId || opportunity?.account?.id || null}
+        sentById={user?.id || null}
         onSent={() => {
           queryClient.invalidateQueries({ queryKey: ['opportunity', id, 'conversations'] });
           setActionSuccess('SMS sent successfully');
@@ -11479,6 +11679,10 @@ export default function OpportunityDetail() {
         onClose={() => setShowEmailModal(false)}
         email={opportunity?.contact?.email || ''}
         recipientName={opportunity?.contact?.firstName ? `${opportunity.contact.firstName} ${opportunity.contact.lastName || ''}`.trim() : opportunity?.name || 'Customer'}
+        opportunityId={id}
+        contactId={opportunity?.contactId || opportunity?.contact?.id || null}
+        accountId={opportunity?.accountId || opportunity?.account?.id || null}
+        sentById={user?.id || null}
         onSent={() => {
           queryClient.invalidateQueries({ queryKey: ['opportunity', id, 'emails'] });
           setActionSuccess('Email sent successfully');

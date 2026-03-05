@@ -853,8 +853,11 @@ export const opportunitiesApi = {
   },
 
   // Transfer a job/opportunity to a different owner
-  async transferOpportunity(id, newOwnerId) {
-    const response = await api.post(`/api/opportunities/${id}/transfer`, { newOwnerId });
+  async transferOpportunity(id, newOwnerId, options = {}) {
+    const response = await api.post(`/api/opportunities/${id}/transfer`, {
+      newOwnerId,
+      ...options,
+    });
     return response.data;
   },
 
@@ -3705,8 +3708,8 @@ export const bamboogliApi = {
   },
 
   // Get or create conversation by phone/email
-  async getConversationByIdentifier(identifier) {
-    const response = await api.get(`/api/conversations/identifier/${encodeURIComponent(identifier)}`);
+  async getConversationByIdentifier(identifier, params = {}) {
+    const response = await api.get(`/api/conversations/identifier/${encodeURIComponent(identifier)}`, { params });
     return response.data;
   },
 

@@ -29,11 +29,16 @@ const EAGLEVIEW_CLIENT_SECRET = process.env.EAGLEVIEW_CLIENT_SECRET;
 // GAF QuickMeasure API Configuration (OAuth2)
 // ==========================================
 const GAF_TOKEN_URL = process.env.GAF_TOKEN_URL || 'https://ssoext.gaf.com/oauth2/ausclyogeZBNESNcI4x6/v1/token';
-const GAF_API_BASE = process.env.GAF_API_URL || 'https://gafapis.gaf.com/partner/PAN';
+const GAF_API_BASE = (process.env.GAF_API_URL || 'https://gafapis.gaf.com/partner/PAN').replace(/\/+$/, '');
 const GAF_CLIENT_ID = process.env.GAF_CLIENT_ID;
 const GAF_CLIENT_SECRET = process.env.GAF_CLIENT_SECRET;
 const GAF_AUDIENCE = process.env.GAF_AUDIENCE || 'https://quickmeasureapi.gaf.com';
 const GAF_SCOPE = process.env.GAF_SCOPE || 'Subscriber:GetSubscriberDetails Subscriber:SiteStatus Subscriber:AccountCheck Subscriber:CoverageCheck Subscriber:OrderHistory Subscriber:OrderSearch Subscriber:Order Subscriber:Download';
+const GAF_SUBSCRIBER = process.env.GAF_SUBSCRIBER || 'PAN';
+const GAF_WEBHOOK_URL = process.env.GAF_WEBHOOK_URL
+  || (process.env.NODE_ENV === 'production'
+    ? 'https://crm.pandaadmin.com/api/integrations/measurements/gaf/webhook'
+    : 'https://api-staging.pandaadmin.com/api/integrations/measurements/gaf/webhook');
 
 // ==========================================
 // Hover API Configuration (OAuth2 Authorization Code Flow)
@@ -833,43 +838,72 @@ class MeasurementService {
       }
 
       const statusData = await response.json();
+      const normalizedStatus = this.normalizeGAFStatus(
+        statusData.orderStatus || statusData.OrderStatus || statusData.status || statusData.Status,
+        statusData.problemCode || statusData.ProblemCode || null
+      );
+      const hasInlineMeasurements = Boolean(statusData?.RoofMeasurement || statusData?.roofMeasurement || statusData?.roof);
+      const effectiveStatus = normalizedStatus === 'PENDING' && hasInlineMeasurements ? 'COMPLETED' : normalizedStatus;
 
       // Check if report is complete
-      if (statusData.orderStatus === 'Completed' || statusData.orderStatus === 'Complete') {
-        // Fetch the actual measurement data
-        const measurementsUrl = `${GAF_API_BASE}/Download/${gafOrderNumber}`;
+      if (effectiveStatus === 'COMPLETED') {
+        let measurementData = null;
+        if (statusData?.RoofMeasurement || statusData?.roofMeasurement || statusData?.roof) {
+          measurementData = statusData;
+        }
 
-        const measurementsResponse = await fetch(measurementsUrl, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
-          },
-        });
+        if (!measurementData) {
+          const candidateUrls = [
+            `${GAF_API_BASE}/Download/${gafOrderNumber}`,
+            `${GAF_API_BASE}/download/${gafOrderNumber}`,
+          ];
 
-        if (measurementsResponse.ok) {
-          const measurementData = await measurementsResponse.json();
-          const measurements = this.parseGAFMeasurements(measurementData);
+          for (const measurementsUrl of candidateUrls) {
+            const measurementsResponse = await fetch(measurementsUrl, {
+              method: 'GET',
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+              },
+            });
 
+            if (!measurementsResponse.ok) {
+              continue;
+            }
+
+            try {
+              measurementData = await measurementsResponse.json();
+              break;
+            } catch (parseError) {
+              logger.warn(`GAF measurement payload parse failed for ${measurementsUrl}: ${parseError.message}`);
+            }
+          }
+        }
+
+        if (measurementData) {
+          await this.processGAFReport(measurementReportId, {
+            ...(measurementData || {}),
+            orderStatus: statusData.orderStatus || statusData.OrderStatus || 'Completed',
+            GAFOrderNumber: statusData.GAFOrderNumber || statusData.gafOrderNumber || gafOrderNumber,
+            SubscriberOrderNumber: statusData.SubscriberOrderNumber || statusData.subscriberOrderNumber || measurementReportId,
+          });
+        } else {
           await prisma.measurementReport.update({
             where: { id: measurementReportId },
             data: {
               orderStatus: 'DELIVERED',
               deliveredAt: new Date(),
-              reportUrl: statusData.viewUrl || measurementData.viewUrl,
-              reportPdfUrl: statusData.pdfUrl || measurementData.pdfUrl,
-              ...measurements,
-              rawData: { statusData, measurementData },
+              rawData: { statusData },
             },
           });
-
-          logger.info(`GAF report ${gafOrderNumber} retrieved and stored for ${measurementReportId}`);
-          return { success: true, status: 'DELIVERED' };
         }
+
+        logger.info(`GAF report ${gafOrderNumber} retrieved and stored for ${measurementReportId}`);
+        return { success: true, status: 'DELIVERED' };
       }
 
-      logger.info(`GAF report ${gafOrderNumber} still processing: ${statusData.orderStatus}`);
-      return { success: false, status: statusData.orderStatus };
+      logger.info(`GAF report ${gafOrderNumber} still processing: ${statusData.orderStatus || statusData.OrderStatus}`);
+      return { success: false, status: statusData.orderStatus || statusData.OrderStatus || 'PROCESSING' };
     } catch (error) {
       logger.error(`Error polling GAF report ${gafOrderNumber}:`, error);
       return { success: false, error: error.message };
@@ -992,21 +1026,27 @@ class MeasurementService {
         measurementType,
         measurementInstructions,
         comments,
+        subscriberCustomField1: opportunity.jobId || '',
         referenceId: report.id,
       });
 
-      await prisma.measurementReport.update({
+      const updatedReport = await prisma.measurementReport.update({
         where: { id: report.id },
         data: {
-          externalId: gafOrder.orderId,
-          orderNumber: gafOrder.orderNumber,
+          externalId: gafOrder.orderId || null,
+          orderNumber: gafOrder.subscriberOrderNumber || gafOrder.orderNumber || report.id,
           orderStatus: 'ORDERED',
+          rawData: {
+            ...(report.rawData || {}),
+            gafOrderResponse: gafOrder.rawResponse || null,
+            webhookCallbackUrl: GAF_WEBHOOK_URL,
+          },
         },
       });
 
       logger.info(`GAF QuickMeasure order submitted: ${gafOrder.orderId}`);
 
-      return report;
+      return updatedReport;
     } catch (error) {
       logger.error('GAF order error:', error);
       throw error;
@@ -1066,56 +1106,130 @@ class MeasurementService {
   async submitGAFOrder(orderData) {
     const accessToken = await this.getGAFAccessToken();
 
-    // Build order payload matching Salesforce GAF_PlaceOrderMeasurement_API structure
-    const orderPayload = {
-      subscriberName: 'PAN',
-      subscriberOrderNumber: orderData.referenceId || `GP-${Date.now()}`,
-      SubscriberCustomField1: orderData.referenceId || '',
-      emailAddress: orderData.ownerEmail || process.env.GAF_NOTIFICATION_EMAIL || 'jasondaniel@panda-exteriors.com',
-      productCode: this.getGAFProductCode(orderData.measurementType),
+    const subscriberOrderNumber = orderData.referenceId || `GP-${Date.now()}`;
+    const subscriberCustomField1 = orderData.subscriberCustomField1 || '';
+    const emailAddress = orderData.ownerEmail
+      || process.env.GAF_NOTIFICATION_EMAIL
+      || 'operations@pandaexteriors.com';
+    const country = orderData.country || 'USA';
+    const fullAddress = `${orderData.address || ''} ${orderData.city || ''} ${orderData.state || ''} ${orderData.zip || ''} ${country}`.trim();
+    const productCode = this.getGAFProductCode(orderData.measurementType);
+    const instructions = orderData.comments || orderData.measurementInstructions || '';
+    const latitude = orderData.latitude !== null && orderData.latitude !== undefined
+      ? String(orderData.latitude)
+      : '';
+    const longitude = orderData.longitude !== null && orderData.longitude !== undefined
+      ? String(orderData.longitude)
+      : '';
+
+    // Primary payload follows current GAF callback schema naming.
+    const canonicalPayload = {
+      Subscriber: GAF_SUBSCRIBER,
+      SubscriberOrderNumber: subscriberOrderNumber,
+      SubscriberCustomField1: subscriberCustomField1,
+      ProductCode: productCode,
+      EmailAddress: emailAddress,
+      Address1: orderData.address,
+      Address2: '',
+      City: orderData.city,
+      StateOrProvince: this.getStateAbbreviation(orderData.state),
+      PostalCode: orderData.zip,
+      Country: country,
+      Latitude: latitude,
+      Longitude: longitude,
+      FullAddress: fullAddress,
+      RecipientEmailAddresses: orderData.recipientEmails || '',
+      Instructions: instructions,
+      CallbackUrl: GAF_WEBHOOK_URL,
+      WebhookCallbackUrl: GAF_WEBHOOK_URL,
+      IsServiceOpen: false,
+      IgnoreCache: true,
+      CheckForDuplicate: false,
+      SuggestedWaste: '',
+      TrackingId: orderData.referenceId || `PAN-${Date.now()}`,
+    };
+
+    // Backward-compatible payload for legacy field casing accepted by some tenants.
+    const legacyPayload = {
+      subscriberName: GAF_SUBSCRIBER,
+      subscriberOrderNumber,
+      SubscriberCustomField1: subscriberCustomField1,
+      emailAddress,
+      productCode,
       address1: orderData.address,
       address2: '',
       city: orderData.city,
       stateOrProvince: this.getStateAbbreviation(orderData.state),
       postalCode: orderData.zip,
-      fipscode: 'Fips Code',
-      county: 'USA',
-      country: orderData.country || 'USA',
-      latitude: orderData.latitude?.toString() || '',
-      longitude: orderData.longitude?.toString() || '',
-      fullAddress: `${orderData.address} ${orderData.city} ${orderData.zip} ${orderData.country || 'USA'}`,
+      country,
+      latitude,
+      longitude,
+      fullAddress,
       recipientEmailAddresses: orderData.recipientEmails || '',
-      instructions: orderData.comments || '',
+      instructions,
+      callbackUrl: GAF_WEBHOOK_URL,
+      webhookCallbackUrl: GAF_WEBHOOK_URL,
       isServiceOpen: false,
-      susbcriberId: 0,
+      subscriberId: 0,
       ignoreCache: true,
-      trackingId: '10',
+      trackingId: orderData.referenceId || `PAN-${Date.now()}`,
       checkForDuplicate: false,
       SuggestedWaste: '',
     };
 
-    const response = await fetch(`${GAF_API_BASE}/Order`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(orderPayload),
-    });
+    const submitPayload = async (payload, mode) => {
+      const response = await fetch(`${GAF_API_BASE}/Order`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
 
-    if (!response.ok) {
-      const error = await response.text();
-      logger.error('GAF order error:', error);
-      throw new Error(`GAF API error: ${error}`);
+      const rawBody = await response.text();
+      let parsedBody = {};
+      try {
+        parsedBody = rawBody ? JSON.parse(rawBody) : {};
+      } catch {
+        parsedBody = { raw: rawBody };
+      }
+
+      return {
+        ok: response.ok,
+        status: response.status,
+        mode,
+        rawBody,
+        parsedBody,
+      };
+    };
+
+    let submitResult = await submitPayload(canonicalPayload, 'canonical');
+    if (!submitResult.ok) {
+      logger.warn(`GAF order failed using canonical payload (status=${submitResult.status}), retrying legacy payload`);
+      submitResult = await submitPayload(legacyPayload, 'legacy');
     }
 
-    const result = await response.json();
+    if (!submitResult.ok) {
+      logger.error('GAF order error:', {
+        status: submitResult.status,
+        mode: submitResult.mode,
+        body: submitResult.rawBody,
+      });
+      throw new Error(`GAF API error: status ${submitResult.status} (${submitResult.mode}) ${String(submitResult.rawBody || '').slice(0, 1000)}`);
+    }
+
+    const result = submitResult.parsedBody || {};
+    const gafOrderNumber = result.gafOrderNumber || result.GAFOrderNumber || result.orderId || result.OrderId || null;
+    const responseSubscriberOrderNumber = result.subscriberOrderNumber || result.SubscriberOrderNumber || subscriberOrderNumber;
+    const orderDateTime = result.orderDateTime || result.OrderDateTime || null;
 
     return {
-      orderId: result.gafOrderNumber?.toString(),
-      orderNumber: result.gafOrderNumber?.toString(),
-      subscriberOrderNumber: result.subscriberOrderNumber,
-      orderDateTime: result.orderDateTime,
+      orderId: gafOrderNumber ? String(gafOrderNumber) : null,
+      orderNumber: gafOrderNumber ? String(gafOrderNumber) : null,
+      subscriberOrderNumber: responseSubscriberOrderNumber ? String(responseSubscriberOrderNumber) : subscriberOrderNumber,
+      orderDateTime,
+      callbackUrl: GAF_WEBHOOK_URL,
       rawResponse: result,
     };
   }
@@ -1166,41 +1280,151 @@ class MeasurementService {
    * Handle GAF webhook delivery
    */
   async handleGAFWebhook(data) {
-    const { orderId, status, measurements } = data;
+    const gafOrderNumber = data?.GAFOrderNumber || data?.gafOrderNumber || data?.orderId || data?.OrderId || null;
+    const subscriberOrderNumber = data?.SubscriberOrderNumber
+      || data?.subscriberOrderNumber
+      || data?.subscriberOrderId
+      || data?.SubscriberCustomField1
+      || data?.referenceId
+      || null;
+    const statusRaw = data?.OrderStatus || data?.orderStatus || data?.status || data?.Status || null;
+    const problemCode = data?.ProblemCode || data?.problemCode || null;
+    const normalizedStatus = this.normalizeGAFStatus(statusRaw, problemCode);
+    const hasInlineMeasurements = Boolean(data?.RoofMeasurement || data?.roofMeasurement || data?.measurements || data?.roof);
+    const effectiveStatus = normalizedStatus === 'PENDING' && hasInlineMeasurements ? 'COMPLETED' : normalizedStatus;
 
-    logger.info(`GAF webhook: order ${orderId} status ${status}`);
+    logger.info(
+      `GAF webhook: subscriberOrder=${subscriberOrderNumber || 'n/a'} gafOrder=${gafOrderNumber || 'n/a'} status=${effectiveStatus} problemCode=${problemCode || 'n/a'}`
+    );
 
-    const measurementReport = await prisma.measurementReport.findFirst({
-      where: { externalId: orderId },
-    });
+    const orFilters = [];
+    if (subscriberOrderNumber) {
+      orFilters.push({ id: String(subscriberOrderNumber) });
+      orFilters.push({ orderNumber: String(subscriberOrderNumber) });
+    }
+    if (gafOrderNumber) {
+      orFilters.push({ externalId: String(gafOrderNumber) });
+      orFilters.push({ orderNumber: String(gafOrderNumber) });
+    }
 
-    if (!measurementReport) {
-      logger.error(`No measurement report found for GAF order ${orderId}`);
+    if (orFilters.length === 0) {
+      logger.warn('GAF webhook did not include identifiable order references');
       return;
     }
 
-    if (status === 'COMPLETED' && measurements) {
-      await this.processGAFReport(measurementReport.id, measurements);
-    } else if (status === 'FAILED') {
+    const measurementReport = await prisma.measurementReport.findFirst({
+      where: { OR: orFilters },
+    });
+
+    if (!measurementReport) {
+      logger.error(`No measurement report found for GAF webhook subscriberOrder=${subscriberOrderNumber} gafOrder=${gafOrderNumber}`);
+      return;
+    }
+
+    if (effectiveStatus === 'COMPLETED') {
+      await this.processGAFReport(measurementReport.id, {
+        ...data,
+        GAFOrderNumber: gafOrderNumber,
+        SubscriberOrderNumber: subscriberOrderNumber || measurementReport.id,
+      });
+      return;
+    }
+
+    if (effectiveStatus === 'FAILED') {
       await prisma.measurementReport.update({
         where: { id: measurementReport.id },
-        data: { orderStatus: 'FAILED' },
+        data: {
+          orderStatus: 'FAILED',
+          rawData: data,
+        },
       });
+      return;
     }
+
+    await prisma.measurementReport.update({
+      where: { id: measurementReport.id },
+      data: {
+        orderStatus: statusRaw || 'ORDERED',
+        rawData: data,
+      },
+    });
+  }
+
+  normalizeGAFStatus(status, problemCode = null) {
+    if (problemCode) return 'FAILED';
+
+    const normalized = String(status || '').trim().toUpperCase();
+    if (!normalized) return 'PENDING';
+
+    if (['COMPLETED', 'COMPLETE', 'DELIVERED', 'DONE', 'SUCCESS'].includes(normalized)) {
+      return 'COMPLETED';
+    }
+
+    if (['FAILED', 'FAIL', 'ERROR', 'CANCELED', 'CANCELLED'].includes(normalized)) {
+      return 'FAILED';
+    }
+
+    return normalized;
+  }
+
+  buildGAFDownloadUrl(assetValue) {
+    if (!assetValue) return null;
+    const trimmed = String(assetValue).trim();
+    if (!trimmed) return null;
+    if (/^https?:\/\//i.test(trimmed)) return trimmed;
+    return `${GAF_API_BASE}/download/${encodeURIComponent(trimmed)}`;
   }
 
   async processGAFReport(reportId, gafData) {
     const measurements = this.parseGAFMeasurements(gafData);
+    const roofMeasurement = gafData?.RoofMeasurement || gafData?.roofMeasurement || gafData?.roof || {};
+    const assets = roofMeasurement?.Assets || gafData?.Assets || gafData?.assets || {};
+
+    const reportAsset = assets.Report || assets.report || null;
+    const reportPdfUrl = gafData?.pdfUrl
+      || gafData?.PdfUrl
+      || this.buildGAFDownloadUrl(reportAsset);
+    const reportUrl = gafData?.viewUrl
+      || gafData?.ViewUrl
+      || assets.Report3D
+      || assets.report3D
+      || reportPdfUrl;
+    const reportXmlUrl = gafData?.reportXmlUrl
+      || gafData?.ReportXmlUrl
+      || this.buildGAFDownloadUrl(assets.Acculynx || assets.acculynx);
+    const reportJsonUrl = gafData?.reportJsonUrl
+      || gafData?.ReportJsonUrl
+      || this.buildGAFDownloadUrl(assets.Model || assets.model);
+    const latitude = Number(
+      gafData?.location?.latitude
+      || gafData?.Location?.Latitude
+      || gafData?.latitude
+      || gafData?.Latitude
+      || 0
+    ) || null;
+    const longitude = Number(
+      gafData?.location?.longitude
+      || gafData?.Location?.Longitude
+      || gafData?.longitude
+      || gafData?.Longitude
+      || 0
+    ) || null;
+    const externalId = gafData?.GAFOrderNumber || gafData?.gafOrderNumber || null;
+    const subscriberOrderNumber = gafData?.SubscriberOrderNumber || gafData?.subscriberOrderNumber || null;
 
     await prisma.measurementReport.update({
       where: { id: reportId },
       data: {
         orderStatus: 'DELIVERED',
         deliveredAt: new Date(),
-        reportUrl: gafData.viewUrl,
-        reportPdfUrl: gafData.pdfUrl,
-        latitude: gafData.location?.latitude,
-        longitude: gafData.location?.longitude,
+        ...(externalId ? { externalId: String(externalId) } : {}),
+        ...(subscriberOrderNumber ? { orderNumber: String(subscriberOrderNumber) } : {}),
+        reportUrl,
+        reportPdfUrl,
+        reportXmlUrl,
+        reportJsonUrl,
+        latitude,
+        longitude,
         ...measurements,
         rawData: gafData,
       },
@@ -1210,22 +1434,45 @@ class MeasurementService {
   }
 
   parseGAFMeasurements(data) {
-    const roof = data.roof || {};
+    const roof = data?.RoofMeasurement || data?.roofMeasurement || data?.roof || {};
+    const toNumber = (value) => {
+      if (value === null || value === undefined || value === '') return null;
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    };
+
+    const totalRoofArea = toNumber(roof.totalSqFt ?? roof.TotalSqFt ?? roof.Area ?? roof.area);
+    const totalRoofSquares = toNumber(roof.totalSquares ?? roof.TotalSquares)
+      ?? (totalRoofArea ? totalRoofArea / 100 : null);
+    const facets = toNumber(roof.faceCount ?? roof.Facets ?? roof.facets);
+    const ridgeLength = toNumber(roof.ridge ?? roof.Ridges ?? roof.ridges);
+    const hipLength = toNumber(roof.hip ?? roof.Hips ?? roof.hips);
+    const valleyLength = toNumber(roof.valley ?? roof.Valleys ?? roof.valleys);
+    const rakeLength = toNumber(roof.rake ?? roof.Rakes ?? roof.rakes);
+    const eaveLength = toNumber(roof.eave ?? roof.Eaves ?? roof.eaves);
+    const flashingLength = toNumber(roof.flashing ?? roof.flash ?? roof.Flash);
+    const stepFlashingLength = toNumber(roof.stepFlashing ?? roof.step ?? roof.Step);
+    const dripEdgeLength = toNumber(roof.dripEdge ?? roof.DripEdge);
+    const predominantPitch = roof.mainPitch || roof.MainPitch || roof.Pitch || roof.pitch || null;
+    const pitches = roof.allPitches || roof.AllPitches || roof.PitchToArea || roof.pitchToArea || null;
+    const suggestedWasteFactor = toNumber(roof.recommendedWaste ?? roof.RecommendedWaste ?? roof.SuggestedWaste);
 
     return {
-      totalRoofArea: roof.totalSqFt,
-      totalRoofSquares: roof.totalSquares,
-      predominantPitch: roof.mainPitch,
-      pitches: roof.allPitches,
-      facets: roof.faceCount,
-      ridgeLength: roof.ridge,
-      hipLength: roof.hip,
-      valleyLength: roof.valley,
-      rakeLength: roof.rake,
-      eaveLength: roof.eave,
-      dripEdgeLength: roof.dripEdge,
-      roofComplexity: this.calculateComplexity(roof.faceCount),
-      suggestedWasteFactor: roof.recommendedWaste,
+      totalRoofArea,
+      totalRoofSquares,
+      predominantPitch,
+      pitches,
+      facets: facets ? Math.round(facets) : null,
+      ridgeLength,
+      hipLength,
+      valleyLength,
+      rakeLength,
+      eaveLength,
+      flashingLength,
+      stepFlashingLength,
+      dripEdgeLength,
+      roofComplexity: this.calculateComplexity(facets || 0),
+      suggestedWasteFactor,
     };
   }
 

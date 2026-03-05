@@ -635,7 +635,18 @@ router.post('/:id/transfer', async (req, res, next) => {
       });
     }
 
+    const transferRelatedItemsRaw = req.body?.transferRelatedItems
+      ?? req.body?.transferRelated
+      ?? req.body?.transferAllAssociated
+      ?? req.body?.transferAssociatedRecords;
+    const transferRelatedItems = transferRelatedItemsRaw === true
+      || transferRelatedItemsRaw === 'true'
+      || transferRelatedItemsRaw === 1
+      || transferRelatedItemsRaw === '1';
+
     const result = await opportunityService.transferOpportunity(req.params.id, newOwnerId, {
+      transferRelatedItems,
+    }, {
       userId: req.user?.id,
       userEmail: req.user?.email,
       ipAddress: req.ip || req.headers['x-forwarded-for']?.split(',')[0],
