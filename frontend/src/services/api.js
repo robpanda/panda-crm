@@ -4739,6 +4739,18 @@ export const agreementsApi = {
     return response.data;
   },
 
+  // Get PandaSign branding templates
+  async getBrandingTemplates() {
+    const response = await api.get('/api/documents/agreements/branding-templates');
+    return response.data;
+  },
+
+  // Save PandaSign branding templates (admin)
+  async saveBrandingTemplates(templates) {
+    const response = await api.put('/api/documents/agreements/branding-templates', { templates });
+    return response.data;
+  },
+
   // Get agreement statistics
   async getStats(params = {}) {
     const response = await api.get('/api/documents/agreements/stats', { params });

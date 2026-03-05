@@ -7,6 +7,69 @@ import { authMiddleware, requireRole } from '../middleware/auth.js';
 
 const router = Router();
 const prisma = new PrismaClient();
+const BRANDING_SETTINGS_KEY = 'pandasign.branding.templates.v1';
+
+const DEFAULT_BRANDING_TEMPLATES = [
+  {
+    id: 'default-panda',
+    name: 'Panda Primary',
+    companyName: 'Panda Exteriors',
+    logoUrl: 'https://crm.pandaadmin.com/panda-logo.svg',
+    primaryColor: '#f88000',
+    secondaryColor: '#68a000',
+    accentColor: '#1f2937',
+    headerText: 'Professional Exterior Services',
+    footerText: 'Thank you for choosing Panda Exteriors.',
+    isDefault: true,
+  },
+  {
+    id: 'default-clean',
+    name: 'Clean Minimal',
+    companyName: 'Panda Exteriors',
+    logoUrl: '',
+    primaryColor: '#111827',
+    secondaryColor: '#6b7280',
+    accentColor: '#2563eb',
+    headerText: 'Service Agreement',
+    footerText: 'Questions? Contact our office for support.',
+    isDefault: false,
+  },
+];
+
+function normalizeBrandingTemplate(template, index = 0) {
+  const now = new Date().toISOString();
+  return {
+    id: String(template?.id || `branding-${Date.now()}-${index}`),
+    name: String(template?.name || `Branding ${index + 1}`).trim(),
+    companyName: String(template?.companyName || 'Panda Exteriors').trim(),
+    logoUrl: String(template?.logoUrl || '').trim(),
+    primaryColor: String(template?.primaryColor || '#f88000').trim(),
+    secondaryColor: String(template?.secondaryColor || '#68a000').trim(),
+    accentColor: String(template?.accentColor || '#1f2937').trim(),
+    headerText: String(template?.headerText || '').trim(),
+    footerText: String(template?.footerText || '').trim(),
+    isDefault: Boolean(template?.isDefault),
+    createdAt: template?.createdAt || now,
+    updatedAt: now,
+  };
+}
+
+function parseBrandingTemplates(settingValue) {
+  if (!settingValue) return DEFAULT_BRANDING_TEMPLATES.map((item, idx) => normalizeBrandingTemplate(item, idx));
+
+  try {
+    const parsed = JSON.parse(settingValue);
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      return DEFAULT_BRANDING_TEMPLATES.map((item, idx) => normalizeBrandingTemplate(item, idx));
+    }
+    const normalized = parsed.map((item, idx) => normalizeBrandingTemplate(item, idx));
+    if (!normalized.some(item => item.isDefault)) normalized[0].isDefault = true;
+    return normalized;
+  } catch (error) {
+    logger.warn(`Invalid PandaSign branding template JSON. Falling back to defaults: ${error.message}`);
+    return DEFAULT_BRANDING_TEMPLATES.map((item, idx) => normalizeBrandingTemplate(item, idx));
+  }
+}
 
 /**
  * GET /agreements - List agreements (authenticated)
@@ -48,37 +111,6 @@ router.get('/', authMiddleware, async (req, res, next) => {
       data: agreements,
       pagination: { total, limit: parseInt(limit), offset: parseInt(offset) },
     });
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * GET /agreements/:id - Get single agreement (authenticated)
- */
-router.get('/:id', authMiddleware, async (req, res, next) => {
-  try {
-    const agreement = await prisma.agreement.findUnique({
-      where: { id: req.params.id },
-      include: {
-        template: true,
-        opportunity: true,
-        account: true,
-        contact: true,
-        signatures: true,
-        createdBy: { select: { id: true, name: true } },
-        sentBy: { select: { id: true, name: true } },
-      },
-    });
-
-    if (!agreement) {
-      return res.status(404).json({
-        success: false,
-        error: { code: 'NOT_FOUND', message: 'Agreement not found' },
-      });
-    }
-
-    res.json({ success: true, data: agreement });
   } catch (error) {
     next(error);
   }
@@ -537,6 +569,71 @@ router.delete('/templates/:id', authMiddleware, requireRole('admin', 'super_admi
 });
 
 /**
+ * GET /agreements/branding-templates - List PandaSign branding templates
+ */
+router.get('/branding-templates', authMiddleware, async (req, res, next) => {
+  try {
+    const setting = await prisma.systemSetting.findUnique({
+      where: { key: BRANDING_SETTINGS_KEY },
+      select: { value: true },
+    });
+
+    const templates = parseBrandingTemplates(setting?.value);
+    res.json({ success: true, data: templates });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * PUT /agreements/branding-templates - Replace PandaSign branding templates (admin)
+ */
+router.put('/branding-templates', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
+  try {
+    const templatesInput = req.body?.templates;
+
+    if (!Array.isArray(templatesInput) || templatesInput.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'templates array is required' },
+      });
+    }
+
+    const templates = templatesInput.map((template, index) => normalizeBrandingTemplate(template, index));
+    if (!templates.some(item => item.isDefault)) templates[0].isDefault = true;
+
+    const defaultId = templates.find(item => item.isDefault)?.id;
+    const canonicalTemplates = templates.map(template => ({
+      ...template,
+      isDefault: template.id === defaultId,
+    }));
+
+    await prisma.systemSetting.upsert({
+      where: { key: BRANDING_SETTINGS_KEY },
+      create: {
+        key: BRANDING_SETTINGS_KEY,
+        value: JSON.stringify(canonicalTemplates),
+        category: 'pandasign',
+        description: 'PandaSign branding template presets',
+        createdById: req.user?.id || null,
+        updatedById: req.user?.id || null,
+      },
+      update: {
+        value: JSON.stringify(canonicalTemplates),
+        category: 'pandasign',
+        description: 'PandaSign branding template presets',
+        updatedById: req.user?.id || null,
+      },
+    });
+
+    logger.info(`PandaSign branding templates updated by ${req.user?.email || req.user?.id || 'unknown'}`);
+    res.json({ success: true, data: canonicalTemplates });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * GET /agreements/stats - Get agreement statistics (authenticated)
  */
 router.get('/stats', authMiddleware, async (req, res, next) => {
@@ -570,6 +667,38 @@ router.get('/stats', authMiddleware, async (req, res, next) => {
         signedRate: total > 0 ? ((signed / total) * 100).toFixed(1) : 0,
       },
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /agreements/:id - Get single agreement (authenticated)
+ * NOTE: Keep this route below static one-segment routes like /templates, /stats, /branding-templates.
+ */
+router.get('/:id', authMiddleware, async (req, res, next) => {
+  try {
+    const agreement = await prisma.agreement.findUnique({
+      where: { id: req.params.id },
+      include: {
+        template: true,
+        opportunity: true,
+        account: true,
+        contact: true,
+        signatures: true,
+        createdBy: { select: { id: true, name: true } },
+        sentBy: { select: { id: true, name: true } },
+      },
+    });
+
+    if (!agreement) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Agreement not found' },
+      });
+    }
+
+    res.json({ success: true, data: agreement });
   } catch (error) {
     next(error);
   }
