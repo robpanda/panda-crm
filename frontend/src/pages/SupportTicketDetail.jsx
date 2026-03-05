@@ -114,22 +114,42 @@ export default function SupportTicketDetail() {
     setUploading(true);
 
     try {
-      // Upload files
-      const uploadPromises = files.map(async (file) => {
+      const uploadSingleFile = async (file, attempt = 1) => {
         const formData = new FormData();
         formData.append('file', file);
 
-        const response = await api.post('/api/support/upload', formData, {
-          headers: { 'Content-Type': 'multipart/form-data' },
-        });
+        try {
+          const response = await api.post('/api/support/upload', formData, {
+            // Keep this generous because S3 upload can spike during ECS rotation.
+            timeout: 45000,
+          });
 
-        return {
-          name: file.name,
-          size: file.size,
-          type: file.type,
-          url: response.data.url,
-        };
-      });
+          return {
+            name: file.name,
+            size: file.size,
+            type: file.type,
+            url: response.data.url,
+          };
+        } catch (error) {
+          const shouldRetry = (
+            attempt < 3 && (
+              error.code === 'ECONNABORTED' ||
+              error.code === 'ERR_NETWORK' ||
+              !error.response
+            )
+          );
+
+          if (!shouldRetry) {
+            throw error;
+          }
+
+          await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+          return uploadSingleFile(file, attempt + 1);
+        }
+      };
+
+      // Upload files
+      const uploadPromises = files.map((file) => uploadSingleFile(file));
 
       const uploadedFiles = await Promise.all(uploadPromises);
       setAttachments([...attachments, ...uploadedFiles]);

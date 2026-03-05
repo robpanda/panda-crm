@@ -303,10 +303,33 @@ router.post('/upload', authMiddleware, upload.single('file'), async (req, res) =
       return res.status(400).json({ error: 'No file provided' });
     }
 
-    const url = await uploadToS3(req.file, 'attachments');
+    const uploadTimeoutMs = 30000;
+    let timeoutId;
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error('UPLOAD_TIMEOUT')), uploadTimeoutMs);
+    });
+    let url;
+    try {
+      url = await Promise.race([
+        uploadToS3(req.file, 'attachments'),
+        timeoutPromise,
+      ]);
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
+
     res.json({ url });
   } catch (error) {
-    console.error('Failed to upload file:', error);
+    console.error('Failed to upload file:', {
+      message: error?.message,
+      code: error?.code,
+      name: req.file?.originalname,
+      size: req.file?.size,
+      type: req.file?.mimetype,
+    });
+    if (error?.message === 'UPLOAD_TIMEOUT') {
+      return res.status(504).json({ error: 'Upload timed out. Please try again.' });
+    }
     res.status(500).json({ error: 'Failed to upload file' });
   }
 });
