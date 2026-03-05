@@ -43,6 +43,59 @@ function parseDate(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+function hasOwnField(obj, key) {
+  return Object.prototype.hasOwnProperty.call(obj || {}, key);
+}
+
+function parseBooleanFlag(value) {
+  if (value === true || value === false) return value;
+  if (value === 1 || value === '1') return true;
+  if (value === 0 || value === '0') return false;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+  }
+  return false;
+}
+
+function normalizeEntityId(value) {
+  if (value == null) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? String(value) : null;
+  }
+  if (typeof value === 'object') {
+    const candidates = [value.id, value.userId, value.ownerId, value.newOwnerId, value.value, value.key];
+    for (const candidate of candidates) {
+      const normalized = normalizeEntityId(candidate);
+      if (normalized) return normalized;
+    }
+  }
+  return null;
+}
+
+function formatTransferCounts(counts = {}) {
+  const labels = {
+    tasks: 'tasks',
+    events: 'events',
+    commissions: 'commissions',
+    serviceContracts: 'service contracts',
+    photoProjects: 'photo projects',
+    opportunityAttentionItems: 'job attention items',
+    caseAttentionItems: 'case attention items',
+    appointmentAssignments: 'appointment assignments',
+  };
+
+  return Object.entries(labels)
+    .filter(([key]) => Number(counts[key] || 0) > 0)
+    .map(([key, label]) => `${counts[key]} ${label}`)
+    .join(', ');
+}
+
 function validateAppointmentResultPayload(payload = {}) {
   const errors = [];
   const category = payload.dispositionCategory;
@@ -3466,9 +3519,11 @@ Be factual and professional. Highlight anything that needs attention.`;
         await prisma.opportunity.update({
           where: { id: opp.id },
           data: {
-            ownerId: newOwnerId,
-            assignedById: auditContext.userId,
-            assignedAt: new Date(),
+            // Use relation connect to remain compatible with Prisma clients
+            // where ownerId scalar is not exposed in OpportunityUpdateInput.
+            owner: {
+              connect: { id: newOwnerId },
+            },
           },
         });
 
@@ -3523,6 +3578,402 @@ Be factual and professional. Highlight anything that needs attention.`;
     );
 
     return results;
+  }
+
+  /**
+   * Transfer a single opportunity to a different owner.
+   * Compatibility endpoint for clients posting to /:id/transfer.
+   * @param {string} opportunityId - Opportunity ID
+   * @param {string} newOwnerId - New owner user ID
+   * @param {Object} transferOptions - Transfer behavior options
+   * @param {Object} auditContext - Context for audit logging
+   */
+  async transferOpportunity(opportunityId, newOwnerId, transferOptions = {}, auditContext = {}) {
+    const normalizedOpportunityId = normalizeEntityId(opportunityId);
+    const normalizedNewOwnerId = normalizeEntityId(newOwnerId);
+
+    if (!normalizedOpportunityId) {
+      const error = new Error('Opportunity ID is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    if (!normalizedNewOwnerId) {
+      const error = new Error('New owner ID is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    let normalizedTransferOptions = transferOptions && typeof transferOptions === 'object' ? transferOptions : {};
+    let normalizedAuditContext = auditContext && typeof auditContext === 'object' ? auditContext : {};
+
+    // Backward compatibility: older callers passed auditContext as 3rd argument.
+    if (normalizedTransferOptions && !Object.keys(normalizedAuditContext).length) {
+      const looksLikeAuditContext = Boolean(
+        hasOwnField(normalizedTransferOptions, 'userId')
+        || hasOwnField(normalizedTransferOptions, 'userEmail')
+        || hasOwnField(normalizedTransferOptions, 'ipAddress')
+        || hasOwnField(normalizedTransferOptions, 'userAgent')
+      );
+
+      if (looksLikeAuditContext) {
+        normalizedAuditContext = normalizedTransferOptions;
+        normalizedTransferOptions = {};
+      }
+    }
+
+    const transferRelatedItems = parseBooleanFlag(
+      normalizedTransferOptions.transferRelatedItems
+      ?? normalizedTransferOptions.transferRelated
+      ?? normalizedTransferOptions.transferAllAssociated
+      ?? normalizedTransferOptions.transferAssociatedRecords
+    );
+
+    const auditUserId = normalizeEntityId(normalizedAuditContext.userId);
+
+    const [opportunity, newOwner, auditUser] = await Promise.all([
+      prisma.opportunity.findUnique({
+        where: { id: normalizedOpportunityId },
+        include: {
+          owner: {
+            select: { id: true, firstName: true, lastName: true, email: true },
+          },
+          account: {
+            select: { id: true, name: true, billingCity: true, billingState: true },
+          },
+          contact: {
+            select: { id: true, firstName: true, lastName: true, phone: true, email: true },
+          },
+          _count: {
+            select: { quotes: true, workOrders: true },
+          },
+        },
+      }),
+      prisma.user.findUnique({
+        where: { id: normalizedNewOwnerId },
+        select: { id: true, firstName: true, lastName: true, email: true, isActive: true },
+      }),
+      auditUserId
+        ? prisma.user.findUnique({
+            where: { id: auditUserId },
+            select: { id: true },
+          }).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+
+    if (!opportunity) {
+      const error = new Error(`Opportunity not found: ${normalizedOpportunityId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    if (!newOwner) {
+      const error = new Error(`User not found: ${newOwnerId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    if (!newOwner.isActive) {
+      const error = new Error('Cannot transfer to inactive user');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const previousOwnerName = opportunity.owner
+      ? `${opportunity.owner.firstName} ${opportunity.owner.lastName}`
+      : 'Unassigned';
+    const newOwnerName = `${newOwner.firstName} ${newOwner.lastName}`;
+
+    const relatedTransferBase = {
+      requested: transferRelatedItems,
+      completed: false,
+      skippedReason: null,
+      counts: {
+        tasks: 0,
+        events: 0,
+        commissions: 0,
+        serviceContracts: 0,
+        photoProjects: 0,
+        opportunityAttentionItems: 0,
+        caseAttentionItems: 0,
+        appointmentAssignments: 0,
+      },
+    };
+
+    if (opportunity.ownerId === normalizedNewOwnerId) {
+      return {
+        transferred: false,
+        reason: 'ALREADY_ASSIGNED',
+        opportunity: this.createOpportunityWrapper(opportunity),
+        previousOwner: opportunity.owner
+          ? {
+              id: opportunity.owner.id,
+              name: previousOwnerName,
+              email: opportunity.owner.email,
+            }
+          : null,
+        newOwner: {
+          id: newOwner.id,
+          name: newOwnerName,
+          email: newOwner.email,
+        },
+        relatedTransfer: {
+          ...relatedTransferBase,
+          skippedReason: transferRelatedItems ? 'ALREADY_ASSIGNED' : null,
+        },
+      };
+    }
+
+    const oldOwnerId = opportunity.ownerId || null;
+    const resolvedAuditUserId = auditUser?.id || null;
+
+    const updatedOpportunity = await prisma.$transaction(async (tx) => tx.opportunity.update({
+      where: { id: normalizedOpportunityId },
+      data: {
+        // Use relation connect to avoid scalar ownerId update validation failures.
+        owner: {
+          connect: { id: normalizedNewOwnerId },
+        },
+      },
+      include: {
+        account: {
+          select: { id: true, name: true, billingCity: true, billingState: true },
+        },
+        contact: {
+          select: { id: true, firstName: true, lastName: true, phone: true, email: true },
+        },
+        owner: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+        _count: {
+          select: { quotes: true, workOrders: true },
+        },
+      },
+    }));
+
+    let relatedTransfer = { ...relatedTransferBase };
+    if (transferRelatedItems) {
+      try {
+        relatedTransfer = await prisma.$transaction(async (tx) => this.transferRelatedOpportunityOwnership(tx, {
+          opportunityId: normalizedOpportunityId,
+          accountId: opportunity.accountId || null,
+          oldOwnerId,
+          newOwnerId: normalizedNewOwnerId,
+        }));
+      } catch (error) {
+        logger.error('Related assignment transfer failed after owner transfer', {
+          opportunityId: normalizedOpportunityId,
+          oldOwnerId,
+          newOwnerId: normalizedNewOwnerId,
+          error: error.message,
+        });
+
+        relatedTransfer = {
+          ...relatedTransferBase,
+          skippedReason: 'RELATED_TRANSFER_FAILED',
+          error: error.message,
+        };
+      }
+    }
+
+    const relatedCountsSummary = formatTransferCounts(relatedTransfer.counts);
+    const relatedSummaryText = transferRelatedItems
+      ? relatedCountsSummary
+        ? ` Related records transferred: ${relatedCountsSummary}.`
+        : ` Related records transfer requested, but no matching assignments were found.`
+      : '';
+
+    await prisma.note.create({
+      data: {
+        title: 'Job Reassigned',
+        body: `Job reassigned from ${previousOwnerName} to ${newOwnerName}.${relatedSummaryText}${normalizedAuditContext.userEmail ? ` Reassigned by: ${normalizedAuditContext.userEmail}` : ''}`,
+        opportunityId: normalizedOpportunityId,
+        createdById: resolvedAuditUserId || newOwner.id,
+      },
+    }).catch((error) => {
+      logger.warn(`Failed to create reassignment note for ${normalizedOpportunityId}: ${error.message}`);
+    });
+
+    logger.info(
+      `Job ${normalizedOpportunityId} transferred from ${previousOwnerName} to ${newOwnerName}` +
+      `${transferRelatedItems ? ` (related: ${relatedCountsSummary || 'none moved'})` : ''}`
+    );
+
+    return {
+      transferred: true,
+      opportunity: this.createOpportunityWrapper(updatedOpportunity),
+      previousOwner: opportunity.owner
+        ? {
+            id: opportunity.owner.id,
+            name: previousOwnerName,
+            email: opportunity.owner.email,
+          }
+        : null,
+      newOwner: {
+        id: newOwner.id,
+        name: newOwnerName,
+        email: newOwner.email,
+      },
+      relatedTransfer,
+    };
+  }
+
+  async transferRelatedOpportunityOwnership(tx, options = {}) {
+    const {
+      opportunityId,
+      accountId,
+      oldOwnerId,
+      newOwnerId,
+    } = options;
+
+    const result = {
+      requested: true,
+      completed: false,
+      skippedReason: null,
+      counts: {
+        tasks: 0,
+        events: 0,
+        commissions: 0,
+        serviceContracts: 0,
+        photoProjects: 0,
+        opportunityAttentionItems: 0,
+        caseAttentionItems: 0,
+        appointmentAssignments: 0,
+      },
+    };
+
+    if (!oldOwnerId) {
+      result.skippedReason = 'NO_PREVIOUS_OWNER';
+      return result;
+    }
+
+    const [
+      taskUpdate,
+      eventUpdate,
+      commissionUpdate,
+      serviceContractUpdate,
+      photoProjectUpdate,
+      opportunityAttentionUpdate,
+    ] = await Promise.all([
+      tx.task.updateMany({
+        where: { opportunityId, assignedToId: oldOwnerId },
+        data: { assignedToId: newOwnerId },
+      }),
+      tx.event.updateMany({
+        where: { opportunityId, ownerId: oldOwnerId },
+        data: { ownerId: newOwnerId },
+      }),
+      tx.commission.updateMany({
+        where: { opportunityId, ownerId: oldOwnerId },
+        data: { ownerId: newOwnerId },
+      }),
+      tx.serviceContract.updateMany({
+        where: { opportunityId, ownerId: oldOwnerId },
+        data: { ownerId: newOwnerId },
+      }),
+      tx.photoProject.updateMany({
+        where: { opportunityId, ownerId: oldOwnerId },
+        data: { ownerId: newOwnerId },
+      }),
+      tx.attentionItem.updateMany({
+        where: { opportunityId, assignedToId: oldOwnerId },
+        data: { assignedToId: newOwnerId },
+      }),
+    ]);
+
+    result.counts.tasks = taskUpdate.count;
+    result.counts.events = eventUpdate.count;
+    result.counts.commissions = commissionUpdate.count;
+    result.counts.serviceContracts = serviceContractUpdate.count;
+    result.counts.photoProjects = photoProjectUpdate.count;
+    result.counts.opportunityAttentionItems = opportunityAttentionUpdate.count;
+
+    if (accountId) {
+      const accountCaseIds = await tx.case.findMany({
+        where: { accountId },
+        select: { id: true },
+      });
+      const caseIds = accountCaseIds.map((record) => record.id);
+      if (caseIds.length > 0) {
+        const caseAttentionUpdate = await tx.attentionItem.updateMany({
+          where: {
+            caseId: { in: caseIds },
+            assignedToId: oldOwnerId,
+          },
+          data: { assignedToId: newOwnerId },
+        });
+        result.counts.caseAttentionItems = caseAttentionUpdate.count;
+      }
+    }
+
+    const [oldOwnerResource, newOwnerResource] = await Promise.all([
+      tx.serviceResource.findFirst({
+        where: { userId: oldOwnerId, isActive: true },
+        select: { id: true },
+      }),
+      tx.serviceResource.findFirst({
+        where: { userId: newOwnerId, isActive: true },
+        select: { id: true },
+      }),
+    ]);
+
+    if (
+      oldOwnerResource?.id
+      && newOwnerResource?.id
+      && oldOwnerResource.id !== newOwnerResource.id
+    ) {
+      const assignments = await tx.assignedResource.findMany({
+        where: {
+          serviceResourceId: oldOwnerResource.id,
+          serviceAppointment: {
+            workOrder: {
+              opportunityId,
+            },
+          },
+        },
+        select: {
+          id: true,
+          serviceAppointmentId: true,
+          isPrimaryResource: true,
+        },
+      });
+
+      for (const assignment of assignments) {
+        const existingAssignment = await tx.assignedResource.findFirst({
+          where: {
+            serviceAppointmentId: assignment.serviceAppointmentId,
+            serviceResourceId: newOwnerResource.id,
+          },
+          select: {
+            id: true,
+            isPrimaryResource: true,
+          },
+        });
+
+        if (existingAssignment) {
+          if (assignment.isPrimaryResource && !existingAssignment.isPrimaryResource) {
+            await tx.assignedResource.update({
+              where: { id: existingAssignment.id },
+              data: { isPrimaryResource: true },
+            });
+          }
+
+          await tx.assignedResource.delete({
+            where: { id: assignment.id },
+          });
+        } else {
+          await tx.assignedResource.update({
+            where: { id: assignment.id },
+            data: { serviceResourceId: newOwnerResource.id },
+          });
+        }
+
+        result.counts.appointmentAssignments += 1;
+      }
+    }
+
+    result.completed = true;
+    return result;
   }
 
   /**
