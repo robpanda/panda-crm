@@ -90,6 +90,304 @@ class LeadService {
   }
 
   /**
+   * Normalize optional text field to trimmed string or null
+   */
+  normalizeOptionalText(value) {
+    if (value === undefined || value === null) return null;
+    const trimmed = String(value).trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  /**
+   * Some lead intake paths have historically appended " - M/D/YYYY" to name fields.
+   * Strip that suffix during conversion so job/account naming remains canonical.
+   */
+  sanitizeConvertedNameSegment(value) {
+    const normalized = this.normalizeOptionalText(value);
+    if (!normalized) return null;
+
+    const withoutDateSuffix = normalized
+      .replace(/\s*-\s*\d{1,2}\/\d{1,2}\/\d{2,4}\s*$/g, '')
+      .trim();
+
+    const cleaned = withoutDateSuffix.replace(/\s{2,}/g, ' ').trim();
+    return cleaned || normalized;
+  }
+
+  resolveLeadCustomerName(lead = {}) {
+    const firstName = this.sanitizeConvertedNameSegment(lead.firstName);
+    const lastName = this.sanitizeConvertedNameSegment(lead.lastName);
+    const fullName = [firstName, lastName].filter(Boolean).join(' ').trim();
+    const companyName = this.sanitizeConvertedNameSegment(lead.company);
+    return fullName || companyName || null;
+  }
+
+  buildConvertedOpportunityName(lead = {}) {
+    return this.resolveLeadCustomerName(lead) || 'Customer';
+  }
+
+  buildConvertedAccountName(lead = {}, jobId = null) {
+    const customerName = this.resolveLeadCustomerName(lead) || 'Customer';
+    return jobId ? `${jobId} ${customerName}` : customerName;
+  }
+
+  /**
+   * Scheduling timezone used when date/time payloads arrive without an explicit timezone offset.
+   */
+  getSchedulingTimeZone() {
+    return process.env.APPOINTMENT_TIMEZONE || process.env.BUSINESS_TIMEZONE || 'America/New_York';
+  }
+
+  /**
+   * Build a UTC Date that represents a wall-clock time in a target IANA timezone.
+   */
+  buildZonedDate({ year, month, day, hour = 0, minute = 0, second = 0, timeZone = this.getSchedulingTimeZone() }) {
+    const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hour12: false,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    const parts = formatter.formatToParts(utcGuess).reduce((acc, part) => {
+      if (part.type !== 'literal') acc[part.type] = part.value;
+      return acc;
+    }, {});
+
+    const asUtc = Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      Number(parts.hour),
+      Number(parts.minute),
+      Number(parts.second)
+    );
+    const offsetMs = asUtc - utcGuess.getTime();
+
+    return new Date(Date.UTC(year, month - 1, day, hour, minute, second) - offsetMs);
+  }
+
+  formatDateForTimeZone(date, timeZone = this.getSchedulingTimeZone()) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(date).reduce((acc, part) => {
+      if (part.type !== 'literal') acc[part.type] = part.value;
+      return acc;
+    }, {});
+    return `${parts.year}-${parts.month}-${parts.day}`;
+  }
+
+  formatTimeForTimeZone(date, timeZone = this.getSchedulingTimeZone()) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+    }).formatToParts(date).reduce((acc, part) => {
+      if (part.type !== 'literal') acc[part.type] = part.value;
+      return acc;
+    }, {});
+    return `${parts.hour}:${parts.minute}`;
+  }
+
+  async generateWorkOrderNumber(tx = prisma) {
+    const lastWorkOrder = await tx.workOrder.findFirst({
+      orderBy: { createdAt: 'desc' },
+      select: { workOrderNumber: true },
+    });
+
+    const lastNumber = lastWorkOrder?.workOrderNumber
+      ? Number((String(lastWorkOrder.workOrderNumber).match(/WO-(\d+)/i) || [])[1] || 0)
+      : 0;
+
+    const nextNumber = Number.isFinite(lastNumber) ? lastNumber + 1 : 1;
+    return `WO-${String(nextNumber).padStart(6, '0')}`;
+  }
+
+  async generateAppointmentNumber(tx = prisma) {
+    const lastAppointment = await tx.serviceAppointment.findFirst({
+      orderBy: { createdAt: 'desc' },
+      select: { appointmentNumber: true },
+    });
+
+    const lastNumber = lastAppointment?.appointmentNumber
+      ? Number((String(lastAppointment.appointmentNumber).match(/SA-(\d+)/i) || [])[1] || 0)
+      : 0;
+
+    const nextNumber = Number.isFinite(lastNumber) ? lastNumber + 1 : 1;
+    return `SA-${String(nextNumber).padStart(6, '0')}`;
+  }
+
+  async generateJobId(tx = prisma) {
+    const currentYear = new Date().getFullYear();
+
+    const sequences = await tx.$queryRaw`
+      SELECT id, year, last_number
+      FROM job_id_sequences
+      WHERE year = ${currentYear}
+      FOR UPDATE
+    `;
+
+    let nextNumber;
+    if (!sequences || sequences.length === 0) {
+      const newSequenceId = `job-seq-${currentYear}`;
+      await tx.$executeRaw`
+        INSERT INTO job_id_sequences (id, year, last_number, created_at, updated_at)
+        VALUES (${newSequenceId}, ${currentYear}, ${JOB_ID_STARTING_NUMBER + 1}, NOW(), NOW())
+      `;
+      nextNumber = JOB_ID_STARTING_NUMBER + 1;
+    } else {
+      nextNumber = Number(sequences[0].last_number) + 1;
+      await tx.$executeRaw`
+        UPDATE job_id_sequences
+        SET last_number = ${nextNumber}, updated_at = NOW()
+        WHERE year = ${currentYear}
+      `;
+    }
+
+    return `${currentYear}-${nextNumber}`;
+  }
+
+  /**
+   * Parse tentative appointment date/time into a stable Date.
+   * Accepts full ISO strings (preferred) and date-only + time fallback.
+   */
+  parseTentativeAppointmentDate(dateValue, timeValue = null) {
+    if (!dateValue) return null;
+
+    if (dateValue instanceof Date) {
+      if (Number.isNaN(dateValue.getTime())) return null;
+      return new Date(dateValue.getTime());
+    }
+
+    let raw = String(dateValue).trim();
+    if (!raw) return null;
+
+    const hasTimezone = /(?:Z|[+-]\d{2}:\d{2})$/i.test(raw);
+    if (hasTimezone) {
+      const parsedWithTimezone = new Date(raw);
+      return Number.isNaN(parsedWithTimezone.getTime()) ? null : parsedWithTimezone;
+    }
+
+    const [datePart, rawTimePart] = raw.split('T');
+    const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(datePart);
+    if (!dateMatch) return null;
+
+    let timePart = rawTimePart || '';
+    if (!timePart && typeof timeValue === 'string' && /^\d{2}:\d{2}$/.test(timeValue.trim())) {
+      timePart = `${timeValue.trim()}:00`;
+    }
+
+    const timeMatch = /^(\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d{1,3})?$/.exec(timePart || '00:00:00');
+    if (!timeMatch) return null;
+
+    const [, y, m, d] = dateMatch;
+    const [, hh, mm, ss = '00'] = timeMatch;
+
+    const zonedDate = this.buildZonedDate({
+      year: Number(y),
+      month: Number(m),
+      day: Number(d),
+      hour: Number(hh),
+      minute: Number(mm),
+      second: Number(ss),
+    });
+
+    return Number.isNaN(zonedDate.getTime()) ? null : zonedDate;
+  }
+
+  async suggestInspectionAppointment(id, options = {}) {
+    const lead = await prisma.lead.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        ownerId: true,
+        leadSetById: true,
+        owner: { select: { id: true, firstName: true, lastName: true } },
+        leadSetBy: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+
+    if (!lead) {
+      const error = new Error(`Lead not found: ${id}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const daysToSearchInput = Number.parseInt(options.daysToSearch, 10);
+    const daysToSearch = Number.isFinite(daysToSearchInput)
+      ? Math.min(Math.max(daysToSearchInput, 1), 30)
+      : 14;
+    const allowFallback = options.allowFallback !== false;
+    const slotTimes = Array.isArray(options.slotTimes) && options.slotTimes.length > 0
+      ? options.slotTimes.filter(slot => /^\d{2}:\d{2}$/.test(String(slot)))
+      : ['09:00', '11:00', '13:00', '15:00'];
+
+    const now = new Date();
+    const minLeadTime = new Date(now.getTime() + (30 * 60 * 1000));
+    const windowEnd = new Date(now.getTime() + (daysToSearch * 24 * 60 * 60 * 1000));
+    const preferredWindowEnd = new Date(now.getTime() + (365 * 24 * 60 * 60 * 1000));
+    const schedulingTimeZone = this.getSchedulingTimeZone();
+
+    const preferredDate = options.preferredDateTime
+      ? this.parseTentativeAppointmentDate(options.preferredDateTime)
+      : null;
+
+    // Explicit customer-requested slots should be accepted if they're a valid future time,
+    // even if they fall outside the auto-suggestion search window.
+    if (preferredDate && preferredDate >= minLeadTime && preferredDate <= preferredWindowEnd) {
+      return {
+        found: true,
+        appointmentDate: this.formatDateForTimeZone(preferredDate, schedulingTimeZone),
+        appointmentTime: this.formatTimeForTimeZone(preferredDate, schedulingTimeZone),
+        ownerId: lead.owner?.id || lead.ownerId || lead.leadSetBy?.id || lead.leadSetById || null,
+        ownerName: lead.owner
+          ? `${lead.owner.firstName || ''} ${lead.owner.lastName || ''}`.trim()
+          : (lead.leadSetBy ? `${lead.leadSetBy.firstName || ''} ${lead.leadSetBy.lastName || ''}`.trim() : ''),
+      };
+    }
+
+    if (preferredDate && !allowFallback) {
+      return {
+        found: false,
+        reason: 'PREFERRED_SLOT_UNAVAILABLE',
+      };
+    }
+
+    for (let dayOffset = 0; dayOffset < daysToSearch; dayOffset += 1) {
+      const day = new Date(now.getTime() + (dayOffset * 24 * 60 * 60 * 1000));
+      const dateString = this.formatDateForTimeZone(day, schedulingTimeZone);
+
+      for (const slot of slotTimes) {
+        const candidate = this.parseTentativeAppointmentDate(dateString, slot);
+        if (!candidate || candidate < minLeadTime || candidate > windowEnd) continue;
+
+        return {
+          found: true,
+          appointmentDate: dateString,
+          appointmentTime: slot,
+          ownerId: lead.owner?.id || lead.ownerId || lead.leadSetBy?.id || lead.leadSetById || null,
+          ownerName: lead.owner
+            ? `${lead.owner.firstName || ''} ${lead.owner.lastName || ''}`.trim()
+            : (lead.leadSetBy ? `${lead.leadSetBy.firstName || ''} ${lead.leadSetBy.lastName || ''}`.trim() : ''),
+        };
+      }
+    }
+
+    return {
+      found: false,
+      reason: preferredDate ? 'PREFERRED_SLOT_UNAVAILABLE' : 'NO_AVAILABLE_SLOTS_IN_2_WEEKS',
+    };
+  }
+
+  /**
    * Get leads with filtering and pagination
    * Replicates: getLeads()
    */
