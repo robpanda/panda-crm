@@ -134,6 +134,25 @@ const resolveOpportunityIdFromRequest = (req) => (
   || req.body?.id
 );
 
+const resolveEntityId = (value) => {
+  if (value == null) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? String(value) : null;
+  }
+  if (typeof value === 'object') {
+    const candidates = [value.id, value.userId, value.ownerId, value.newOwnerId, value.value, value.key];
+    for (const candidate of candidates) {
+      const resolved = resolveEntityId(candidate);
+      if (resolved) return resolved;
+    }
+  }
+  return null;
+};
+
 // Backward-compatible aliases for clients that call /internal-comments without /:id
 router.get('/internal-comments', async (req, res, next) => {
   try {
@@ -593,6 +612,69 @@ router.get('/:id/contacts', async (req, res, next) => {
   try {
     const contacts = await opportunityService.getOpportunityContacts(req.params.id);
     res.json({ success: true, data: contacts });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Generate customer portal link
+const handleGeneratePortalLink = async (req, res, next) => {
+  try {
+    const result = await opportunityService.generatePortalLink(req.params.id, {
+      expiresInDays: req.body?.expiresInDays,
+    });
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Primary endpoint
+router.post('/:id/portal-link', handleGeneratePortalLink);
+// Compatibility aliases for environments/clients using alternate path shapes
+router.post('/:id/portal', handleGeneratePortalLink);
+router.post('/:id/portalLink', handleGeneratePortalLink);
+
+// Transfer an opportunity/job to another owner
+router.post('/:id/transfer', async (req, res, next) => {
+  try {
+    const newOwnerId = resolveEntityId(
+      req.body?.newOwnerId
+      ?? req.body?.ownerId
+      ?? req.body?.toOwnerId
+      ?? req.body?.assignedToId
+      ?? req.body?.userId
+    );
+
+    if (!newOwnerId) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'newOwnerId is required',
+        },
+      });
+    }
+
+    const transferRelatedItemsRaw = req.body?.transferRelatedItems
+      ?? req.body?.transferRelated
+      ?? req.body?.transferAllAssociated
+      ?? req.body?.transferAssociatedRecords;
+    const transferRelatedItems = transferRelatedItemsRaw === true
+      || transferRelatedItemsRaw === 'true'
+      || transferRelatedItemsRaw === 1
+      || transferRelatedItemsRaw === '1';
+
+    const result = await opportunityService.transferOpportunity(req.params.id, newOwnerId, {
+      transferRelatedItems,
+    }, {
+      userId: req.user?.id,
+      userEmail: req.user?.email,
+      ipAddress: req.ip || req.headers['x-forwarded-for']?.split(',')[0],
+      userAgent: req.headers['user-agent'],
+    });
+
+    res.json({ success: true, data: result });
   } catch (error) {
     next(error);
   }

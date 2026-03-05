@@ -48,6 +48,54 @@ async function generateWorkOrderNumber() {
   return `WO-${String(next).padStart(6, '0')}`;
 }
 
+function parseBooleanFlag(value) {
+  return value === true || value === 1 || value === '1' || String(value).toLowerCase() === 'true';
+}
+
+function normalizeEntityId(value) {
+  if (value == null) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? String(value) : null;
+  }
+  if (typeof value === 'object') {
+    const nestedCandidates = [
+      value.id,
+      value.userId,
+      value.ownerId,
+      value.newOwnerId,
+      value.value,
+      value.key,
+    ];
+    for (const candidate of nestedCandidates) {
+      const normalized = normalizeEntityId(candidate);
+      if (normalized) return normalized;
+    }
+  }
+  return null;
+}
+
+function formatTransferCounts(counts = {}) {
+  const labels = {
+    tasks: 'tasks',
+    events: 'events',
+    commissions: 'commissions',
+    serviceContracts: 'service contracts',
+    photoProjects: 'photo projects',
+    opportunityAttentionItems: 'job attention items',
+    caseAttentionItems: 'case attention items',
+    appointmentAssignments: 'appointment assignments',
+  };
+
+  return Object.entries(labels)
+    .filter(([key]) => Number(counts[key] || 0) > 0)
+    .map(([key, label]) => `${counts[key]} ${label}`)
+    .join(', ');
+}
+
 function normalizeDepartmentTag(value) {
   const normalized = String(value || 'general')
     .trim()
@@ -3396,60 +3444,100 @@ Be factual and professional. Highlight anything that needs attention.`;
 
   /**
    * Get users who can be assigned as job owners
-   * Returns sales reps, project managers, and managers who can own jobs
+   * Returns all active users for owner reassignment/search flows.
    */
   async getAssignableUsers() {
-    const assignableRoleValues = ['SALES_REP', 'PROJECT_MANAGER', 'SALES_MANAGER', 'OFFICE_MANAGER', 'ADMIN'];
-    const users = await prisma.user.findMany({
-      where: {
-        isActive: true,
-        role: {
-          is: {
-            isActive: true,
-            OR: [
-              { name: { in: assignableRoleValues } },
-              { roleType: { in: assignableRoleValues } },
-            ],
-          },
-        },
-      },
-      select: {
-        id: true,
-        firstName: true,
-        lastName: true,
-        email: true,
-        role: {
-          select: {
-            name: true,
-            roleType: true,
-          },
-        },
-        officeAssignment: true,
-        _count: {
-          select: {
-            ownedOpportunities: {
-              where: {
-                stage: {
-                  notIn: ['CLOSED_WON', 'CLOSED_LOST'],
-                },
-              },
+    try {
+      const users = await prisma.user.findMany({
+        where: { isActive: true },
+        select: {
+          id: true,
+          fullName: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+          role: {
+            select: {
+              name: true,
+              roleType: true,
             },
           },
+          officeAssignment: true,
         },
-      },
-      orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
-    });
+        orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+      });
 
-    return users.map((user) => ({
-      id: user.id,
-      name: `${user.firstName} ${user.lastName}`,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      email: user.email,
-      role: user.role?.name || user.role?.roleType || null,
-      office: user.officeAssignment,
-      activeJobCount: user._count.ownedOpportunities,
-    }));
+      const ownerIds = users.map((user) => user.id).filter(Boolean);
+      let activeJobsByOwnerId = new Map();
+
+      if (ownerIds.length > 0) {
+        try {
+          const activeOpportunityCounts = await prisma.opportunity.groupBy({
+            by: ['ownerId'],
+            where: {
+              deletedAt: null,
+              ownerId: { in: ownerIds },
+              stage: { notIn: ['CLOSED_WON', 'CLOSED_LOST'] },
+            },
+            _count: { _all: true },
+          });
+          activeJobsByOwnerId = new Map(
+            activeOpportunityCounts.map((row) => [row.ownerId, row._count._all || 0])
+          );
+        } catch (countError) {
+          logger.warn('Failed to load active job counts for assignable users', {
+            error: countError.message,
+          });
+        }
+      }
+
+      return users.map((user) => {
+        const displayName = user.fullName
+          || `${user.firstName || ''} ${user.lastName || ''}`.trim()
+          || user.email
+          || 'Unknown User';
+
+        return {
+          id: user.id,
+          name: displayName,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email,
+          role: user.role?.name || user.role?.roleType || null,
+          office: user.officeAssignment,
+          activeJobCount: activeJobsByOwnerId.get(user.id) || 0,
+        };
+      });
+    } catch (error) {
+      logger.error('Failed to load assignable users', {
+        error: error.message,
+      });
+
+      // Last-resort fallback to avoid hard failures in owner transfer UI.
+      const fallbackUsers = await prisma.user.findMany({
+        where: { isActive: true },
+        select: {
+          id: true,
+          fullName: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+          officeAssignment: true,
+        },
+        orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+      });
+
+      return fallbackUsers.map((user) => ({
+        id: user.id,
+        name: user.fullName || `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email || 'Unknown User',
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        role: null,
+        office: user.officeAssignment,
+        activeJobCount: 0,
+      }));
+    }
   }
 
   /**
@@ -3593,6 +3681,401 @@ Be factual and professional. Highlight anything that needs attention.`;
     );
 
     return results;
+  }
+
+  /**
+   * Transfer a single opportunity to a different owner.
+   * Compatibility endpoint for clients posting to /:id/transfer.
+   * @param {string} opportunityId - Opportunity ID
+   * @param {string} newOwnerId - New owner user ID
+   * @param {Object} transferOptions - Transfer behavior options
+   * @param {Object} auditContext - Context for audit logging
+   */
+  async transferOpportunity(opportunityId, newOwnerId, transferOptions = {}, auditContext = {}) {
+    const normalizedOpportunityId = normalizeEntityId(opportunityId);
+    const normalizedNewOwnerId = normalizeEntityId(newOwnerId);
+
+    if (!normalizedOpportunityId) {
+      const error = new Error('Opportunity ID is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    if (!normalizedNewOwnerId) {
+      const error = new Error('New owner ID is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    let normalizedTransferOptions = transferOptions && typeof transferOptions === 'object' ? transferOptions : {};
+    let normalizedAuditContext = auditContext && typeof auditContext === 'object' ? auditContext : {};
+
+    // Backward compatibility: older callers passed auditContext as 3rd argument.
+    if (normalizedTransferOptions && !Object.keys(normalizedAuditContext).length) {
+      const looksLikeAuditContext = Boolean(
+        hasOwnField(normalizedTransferOptions, 'userId')
+        || hasOwnField(normalizedTransferOptions, 'userEmail')
+        || hasOwnField(normalizedTransferOptions, 'ipAddress')
+        || hasOwnField(normalizedTransferOptions, 'userAgent')
+      );
+
+      if (looksLikeAuditContext) {
+        normalizedAuditContext = normalizedTransferOptions;
+        normalizedTransferOptions = {};
+      }
+    }
+
+    const transferRelatedItems = parseBooleanFlag(
+      normalizedTransferOptions.transferRelatedItems
+      ?? normalizedTransferOptions.transferRelated
+      ?? normalizedTransferOptions.transferAllAssociated
+      ?? normalizedTransferOptions.transferAssociatedRecords
+    );
+
+    const auditUserId = normalizeEntityId(normalizedAuditContext.userId);
+
+    const [opportunity, newOwner, auditUser] = await Promise.all([
+      prisma.opportunity.findUnique({
+        where: { id: normalizedOpportunityId },
+        include: {
+          owner: {
+            select: { id: true, firstName: true, lastName: true, email: true },
+          },
+          account: {
+            select: { id: true, name: true, billingCity: true, billingState: true },
+          },
+          contact: {
+            select: { id: true, firstName: true, lastName: true, phone: true, email: true },
+          },
+          _count: {
+            select: { quotes: true, workOrders: true },
+          },
+        },
+      }),
+      prisma.user.findUnique({
+        where: { id: normalizedNewOwnerId },
+        select: { id: true, firstName: true, lastName: true, email: true, isActive: true },
+      }),
+      auditUserId
+        ? prisma.user.findUnique({
+            where: { id: auditUserId },
+            select: { id: true },
+          }).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+
+    if (!opportunity) {
+      const error = new Error(`Opportunity not found: ${normalizedOpportunityId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    if (!newOwner) {
+      const error = new Error(`User not found: ${newOwnerId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    if (!newOwner.isActive) {
+      const error = new Error('Cannot transfer to inactive user');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const previousOwnerName = opportunity.owner
+      ? `${opportunity.owner.firstName} ${opportunity.owner.lastName}`
+      : 'Unassigned';
+    const newOwnerName = `${newOwner.firstName} ${newOwner.lastName}`;
+
+    const relatedTransferBase = {
+      requested: transferRelatedItems,
+      completed: false,
+      skippedReason: null,
+      counts: {
+        tasks: 0,
+        events: 0,
+        commissions: 0,
+        serviceContracts: 0,
+        photoProjects: 0,
+        opportunityAttentionItems: 0,
+        caseAttentionItems: 0,
+        appointmentAssignments: 0,
+      },
+    };
+
+    if (opportunity.ownerId === normalizedNewOwnerId) {
+      return {
+        transferred: false,
+        reason: 'ALREADY_ASSIGNED',
+        opportunity: this.createOpportunityWrapper(opportunity),
+        previousOwner: opportunity.owner
+          ? {
+              id: opportunity.owner.id,
+              name: previousOwnerName,
+              email: opportunity.owner.email,
+            }
+          : null,
+        newOwner: {
+          id: newOwner.id,
+          name: newOwnerName,
+          email: newOwner.email,
+        },
+        relatedTransfer: {
+          ...relatedTransferBase,
+          skippedReason: transferRelatedItems ? 'ALREADY_ASSIGNED' : null,
+        },
+      };
+    }
+
+    const oldOwnerId = opportunity.ownerId || null;
+    const resolvedAuditUserId = auditUser?.id || null;
+
+    const updatedOpportunity = await prisma.$transaction(async (tx) => tx.opportunity.update({
+      where: { id: normalizedOpportunityId },
+      data: {
+        ownerId: normalizedNewOwnerId,
+        assignedById: resolvedAuditUserId,
+        assignedAt: new Date(),
+      },
+      include: {
+        account: {
+          select: { id: true, name: true, billingCity: true, billingState: true },
+        },
+        contact: {
+          select: { id: true, firstName: true, lastName: true, phone: true, email: true },
+        },
+        owner: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+        _count: {
+          select: { quotes: true, workOrders: true },
+        },
+      },
+    }));
+
+    let relatedTransfer = { ...relatedTransferBase };
+    if (transferRelatedItems) {
+      try {
+        relatedTransfer = await prisma.$transaction(async (tx) => this.transferRelatedOpportunityOwnership(tx, {
+          opportunityId: normalizedOpportunityId,
+          accountId: opportunity.accountId || null,
+          oldOwnerId,
+          newOwnerId: normalizedNewOwnerId,
+        }));
+      } catch (error) {
+        logger.error('Related assignment transfer failed after owner transfer', {
+          opportunityId: normalizedOpportunityId,
+          oldOwnerId,
+          newOwnerId: normalizedNewOwnerId,
+          error: error.message,
+        });
+
+        relatedTransfer = {
+          ...relatedTransferBase,
+          skippedReason: 'RELATED_TRANSFER_FAILED',
+          error: error.message,
+        };
+      }
+    }
+
+    const relatedCountsSummary = formatTransferCounts(relatedTransfer.counts);
+    const relatedSummaryText = transferRelatedItems
+      ? relatedCountsSummary
+        ? ` Related records transferred: ${relatedCountsSummary}.`
+        : ` Related records transfer requested, but no matching assignments were found.`
+      : '';
+
+    await prisma.note.create({
+      data: {
+        title: 'Job Reassigned',
+        body: `Job reassigned from ${previousOwnerName} to ${newOwnerName}.${relatedSummaryText}${normalizedAuditContext.userEmail ? ` Reassigned by: ${normalizedAuditContext.userEmail}` : ''}`,
+        opportunityId: normalizedOpportunityId,
+        createdById: resolvedAuditUserId || newOwner.id,
+      },
+    }).catch((error) => {
+      logger.warn(`Failed to create reassignment note for ${normalizedOpportunityId}: ${error.message}`);
+    });
+
+    logger.info(
+      `Job ${normalizedOpportunityId} transferred from ${previousOwnerName} to ${newOwnerName}` +
+      `${transferRelatedItems ? ` (related: ${relatedCountsSummary || 'none moved'})` : ''}`
+    );
+
+    return {
+      transferred: true,
+      opportunity: this.createOpportunityWrapper(updatedOpportunity),
+      previousOwner: opportunity.owner
+        ? {
+            id: opportunity.owner.id,
+            name: previousOwnerName,
+            email: opportunity.owner.email,
+          }
+        : null,
+      newOwner: {
+        id: newOwner.id,
+        name: newOwnerName,
+        email: newOwner.email,
+      },
+      relatedTransfer,
+    };
+  }
+
+  async transferRelatedOpportunityOwnership(tx, options = {}) {
+    const {
+      opportunityId,
+      accountId,
+      oldOwnerId,
+      newOwnerId,
+    } = options;
+
+    const result = {
+      requested: true,
+      completed: false,
+      skippedReason: null,
+      counts: {
+        tasks: 0,
+        events: 0,
+        commissions: 0,
+        serviceContracts: 0,
+        photoProjects: 0,
+        opportunityAttentionItems: 0,
+        caseAttentionItems: 0,
+        appointmentAssignments: 0,
+      },
+    };
+
+    if (!oldOwnerId) {
+      result.skippedReason = 'NO_PREVIOUS_OWNER';
+      return result;
+    }
+
+    const [
+      taskUpdate,
+      eventUpdate,
+      commissionUpdate,
+      serviceContractUpdate,
+      photoProjectUpdate,
+      opportunityAttentionUpdate,
+    ] = await Promise.all([
+      tx.task.updateMany({
+        where: { opportunityId, assignedToId: oldOwnerId },
+        data: { assignedToId: newOwnerId },
+      }),
+      tx.event.updateMany({
+        where: { opportunityId, ownerId: oldOwnerId },
+        data: { ownerId: newOwnerId },
+      }),
+      tx.commission.updateMany({
+        where: { opportunityId, ownerId: oldOwnerId },
+        data: { ownerId: newOwnerId },
+      }),
+      tx.serviceContract.updateMany({
+        where: { opportunityId, ownerId: oldOwnerId },
+        data: { ownerId: newOwnerId },
+      }),
+      tx.photoProject.updateMany({
+        where: { opportunityId, ownerId: oldOwnerId },
+        data: { ownerId: newOwnerId },
+      }),
+      tx.attentionItem.updateMany({
+        where: { opportunityId, assignedToId: oldOwnerId },
+        data: { assignedToId: newOwnerId },
+      }),
+    ]);
+
+    result.counts.tasks = taskUpdate.count;
+    result.counts.events = eventUpdate.count;
+    result.counts.commissions = commissionUpdate.count;
+    result.counts.serviceContracts = serviceContractUpdate.count;
+    result.counts.photoProjects = photoProjectUpdate.count;
+    result.counts.opportunityAttentionItems = opportunityAttentionUpdate.count;
+
+    if (accountId) {
+      const accountCaseIds = await tx.case.findMany({
+        where: { accountId },
+        select: { id: true },
+      });
+      const caseIds = accountCaseIds.map((record) => record.id);
+      if (caseIds.length > 0) {
+        const caseAttentionUpdate = await tx.attentionItem.updateMany({
+          where: {
+            caseId: { in: caseIds },
+            assignedToId: oldOwnerId,
+          },
+          data: { assignedToId: newOwnerId },
+        });
+        result.counts.caseAttentionItems = caseAttentionUpdate.count;
+      }
+    }
+
+    const [oldOwnerResource, newOwnerResource] = await Promise.all([
+      tx.serviceResource.findFirst({
+        where: { userId: oldOwnerId, isActive: true },
+        select: { id: true },
+      }),
+      tx.serviceResource.findFirst({
+        where: { userId: newOwnerId, isActive: true },
+        select: { id: true },
+      }),
+    ]);
+
+    if (
+      oldOwnerResource?.id
+      && newOwnerResource?.id
+      && oldOwnerResource.id !== newOwnerResource.id
+    ) {
+      const assignments = await tx.assignedResource.findMany({
+        where: {
+          serviceResourceId: oldOwnerResource.id,
+          serviceAppointment: {
+            workOrder: {
+              opportunityId,
+            },
+          },
+        },
+        select: {
+          id: true,
+          serviceAppointmentId: true,
+          isPrimaryResource: true,
+        },
+      });
+
+      for (const assignment of assignments) {
+        const existingAssignment = await tx.assignedResource.findFirst({
+          where: {
+            serviceAppointmentId: assignment.serviceAppointmentId,
+            serviceResourceId: newOwnerResource.id,
+          },
+          select: {
+            id: true,
+            isPrimaryResource: true,
+          },
+        });
+
+        if (existingAssignment) {
+          if (assignment.isPrimaryResource && !existingAssignment.isPrimaryResource) {
+            await tx.assignedResource.update({
+              where: { id: existingAssignment.id },
+              data: { isPrimaryResource: true },
+            });
+          }
+
+          await tx.assignedResource.delete({
+            where: { id: assignment.id },
+          });
+        } else {
+          await tx.assignedResource.update({
+            where: { id: assignment.id },
+            data: { serviceResourceId: newOwnerResource.id },
+          });
+        }
+
+        result.counts.appointmentAssignments += 1;
+      }
+    }
+
+    result.completed = true;
+    return result;
   }
 
   /**
