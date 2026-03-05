@@ -116,7 +116,25 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
     },
   });
 
-  const photos = photosData?.data || photosData || [];
+  const photos = Array.isArray(photosData?.data)
+    ? photosData.data
+    : Array.isArray(photosData?.photos)
+      ? photosData.photos
+      : Array.isArray(photosData)
+        ? photosData
+        : [];
+
+  const checklistItems = Array.isArray(checklists?.data)
+    ? checklists.data
+    : Array.isArray(checklists)
+      ? checklists
+      : [];
+
+  const comparisonItems = Array.isArray(comparisons?.data)
+    ? comparisons.data
+    : Array.isArray(comparisons)
+      ? comparisons
+      : [];
 
   // Filter photos by search term
   const filteredPhotos = photos.filter(photo => {
@@ -468,7 +486,7 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
             </div>
           )}
 
-          {!checklistsLoading && (!checklists || checklists.length === 0) && (
+          {!checklistsLoading && checklistItems.length === 0 && (
             <div className="text-center py-12 border-2 border-dashed border-gray-200 rounded-xl">
               <ClipboardList className="w-12 h-12 mx-auto text-gray-300 mb-4" />
               <h3 className="text-lg font-medium text-gray-900 mb-2">No checklists yet</h3>
@@ -482,9 +500,9 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
             </div>
           )}
 
-          {!checklistsLoading && checklists && checklists.length > 0 && (
+          {!checklistsLoading && checklistItems.length > 0 && (
             <div className="space-y-3">
-              {checklists.map(checklist => (
+              {checklistItems.map(checklist => (
                 <div key={checklist.id} className="p-4 bg-white border border-gray-200 rounded-lg hover:shadow-md transition-shadow">
                   <div className="flex items-center justify-between">
                     <div>
@@ -535,7 +553,7 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
             </div>
           )}
 
-          {!comparisonsLoading && (!comparisons || comparisons.length === 0) && (
+          {!comparisonsLoading && comparisonItems.length === 0 && (
             <div className="text-center py-12 border-2 border-dashed border-gray-200 rounded-xl">
               <Layers className="w-12 h-12 mx-auto text-gray-300 mb-4" />
               <h3 className="text-lg font-medium text-gray-900 mb-2">No comparisons yet</h3>
@@ -549,9 +567,9 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
             </div>
           )}
 
-          {!comparisonsLoading && comparisons && comparisons.length > 0 && (
+          {!comparisonsLoading && comparisonItems.length > 0 && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {comparisons.map(comparison => (
+              {comparisonItems.map(comparison => (
                 <div key={comparison.id} className="p-4 bg-white border border-gray-200 rounded-lg hover:shadow-md transition-shadow cursor-pointer">
                   <div className="flex gap-2 mb-3">
                     <div className="flex-1 aspect-video bg-gray-100 rounded overflow-hidden">
