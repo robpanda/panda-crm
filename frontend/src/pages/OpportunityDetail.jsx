@@ -3642,6 +3642,28 @@ export default function OpportunityDetail() {
   const totalConversationsCount = (conversations?.length || 0) + (emails?.length || 0);
   const totalUnread = unreadConversations + (emails?.filter(e => e.status === 'UNREAD')?.length || 0);
 
+  // Job Team fallback: opportunity payloads may include ownerId/ownerName without nested owner object.
+  const ownerDisplayName = useMemo(() => {
+    if (opportunity?.owner?.firstName || opportunity?.owner?.lastName) {
+      return `${opportunity.owner.firstName || ''} ${opportunity.owner.lastName || ''}`.trim();
+    }
+    if (opportunity?.ownerName && opportunity.ownerName !== 'Unassigned') {
+      return opportunity.ownerName;
+    }
+    return '';
+  }, [opportunity?.owner?.firstName, opportunity?.owner?.lastName, opportunity?.ownerName]);
+
+  const ownerDisplayId = opportunity?.owner?.id || opportunity?.ownerId || null;
+  const ownerDisplayEmail = opportunity?.owner?.email || null;
+  const ownerDisplayPhone = opportunity?.owner?.phone || null;
+  const ownerInitials = ownerDisplayName
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part.charAt(0).toUpperCase())
+    .join('');
+  const hasOwnerTeamMember = Boolean(ownerDisplayName || ownerDisplayId);
+
   // Calculate badge counts for the new category tabs (must be before early returns)
   const categoryBadgeCounts = useMemo(() => ({
     schedule: (appointments?.length || 0) + (tasks?.filter(t => t.status !== 'COMPLETED')?.length || 0),
@@ -5442,37 +5464,41 @@ export default function OpportunityDetail() {
                     {/* Team Members */}
                     <div className="space-y-3">
                       {/* Sales Rep / Owner */}
-                      {opportunity?.owner && (
+                      {hasOwnerTeamMember && (
                         <div className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-panda-primary transition-colors">
                           <div className="flex items-center space-x-3">
                             <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-500 to-emerald-500 flex items-center justify-center">
                               <span className="text-white text-sm font-medium">
-                                {opportunity.owner.firstName?.charAt(0)}{opportunity.owner.lastName?.charAt(0)}
+                                {ownerInitials || 'U'}
                               </span>
                             </div>
                             <div>
-                              <Link
-                                to={`/users/${opportunity.owner.id}`}
-                                className="font-medium text-gray-900 hover:text-panda-primary"
-                              >
-                                {opportunity.owner.firstName} {opportunity.owner.lastName}
-                              </Link>
+                              {ownerDisplayId ? (
+                                <Link
+                                  to={`/users/${ownerDisplayId}`}
+                                  className="font-medium text-gray-900 hover:text-panda-primary"
+                                >
+                                  {ownerDisplayName || 'Unassigned'}
+                                </Link>
+                              ) : (
+                                <p className="font-medium text-gray-900">{ownerDisplayName || 'Unassigned'}</p>
+                              )}
                               <p className="text-sm text-gray-500">Sales Rep</p>
                             </div>
                           </div>
                           <div className="flex items-center space-x-2">
-                            {opportunity.owner.phone && (
+                            {ownerDisplayPhone && (
                               <a
-                                href={`tel:${opportunity.owner.phone}`}
+                                href={`tel:${ownerDisplayPhone}`}
                                 className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
                                 title="Call"
                               >
                                 <Phone className="w-4 h-4" />
                               </a>
                             )}
-                            {opportunity.owner.email && (
+                            {ownerDisplayEmail && (
                               <a
-                                href={`mailto:${opportunity.owner.email}`}
+                                href={`mailto:${ownerDisplayEmail}`}
                                 className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                                 title="Email"
                               >
@@ -5610,7 +5636,7 @@ export default function OpportunityDetail() {
                       )}
 
                       {/* Empty State */}
-                      {!opportunity?.owner && !opportunity?.projectManager && !opportunity?.onboardedBy && !opportunity?.approvedBy && (
+                      {!hasOwnerTeamMember && !opportunity?.projectManager && !opportunity?.onboardedBy && !opportunity?.approvedBy && (
                         <div className="text-center py-8 text-gray-500">
                           <UserCircle className="w-12 h-12 mx-auto text-gray-300 mb-2" />
                           <p>No team members assigned</p>
