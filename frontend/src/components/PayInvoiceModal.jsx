@@ -152,7 +152,7 @@ export default function PayInvoiceModal({
   const [paymentResult, setPaymentResult] = useState(null);
   const [error, setError] = useState(null);
 
-  const balanceDue = Number(invoice?.balanceDue ?? invoice?.totalAmount ?? invoice?.total ?? 0);
+  const balanceDue = Number(invoice?.balanceDue ?? invoice?.total ?? invoice?.totalAmount ?? 0);
 
   // Fetch Stripe config
   const { data: stripeConfig } = useQuery({
@@ -286,7 +286,7 @@ export default function PayInvoiceModal({
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-gray-500">Invoice Total</span>
-                    <span className="font-medium">${Number(invoice.totalAmount ?? invoice.total ?? 0).toLocaleString()}</span>
+                    <span className="font-medium">${Number(invoice.total ?? invoice.totalAmount ?? 0).toLocaleString()}</span>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-gray-500">Amount Paid</span>

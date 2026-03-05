@@ -42,7 +42,7 @@ export default function SendInvoiceModal({ isOpen, onClose, invoice, opportunity
   const [includePaymentLink, setIncludePaymentLink] = useState(true);
 
   // Calculate balance
-  const balanceDue = Number(invoice?.balanceDue ?? invoice?.totalAmount ?? invoice?.total ?? 0);
+  const balanceDue = Number(invoice?.balanceDue ?? invoice?.total ?? invoice?.totalAmount ?? 0);
   const invoiceNumber = invoice?.invoiceNumber || `INV-${invoice?.id?.slice(-6)}`;
 
   // Check if this is an insurance job
@@ -228,7 +228,7 @@ export default function SendInvoiceModal({ isOpen, onClose, invoice, opportunity
                   )}
                   <div className="flex justify-between text-sm">
                     <span className="text-gray-500">Invoice Total</span>
-                    <span className="font-medium">${Number(invoice.totalAmount ?? invoice.total ?? 0).toLocaleString()}</span>
+                    <span className="font-medium">${Number(invoice.total ?? invoice.totalAmount ?? 0).toLocaleString()}</span>
                   </div>
                   <div className="flex justify-between text-sm pt-2 border-t border-gray-200">
                     <span className="text-gray-700 font-medium">Balance Due</span>

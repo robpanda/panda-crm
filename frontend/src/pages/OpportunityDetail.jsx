@@ -107,6 +107,25 @@ import {
   UserCircle,
 } from 'lucide-react';
 
+const getInvoiceTotalValue = (invoice) => Number(invoice?.total ?? invoice?.totalAmount ?? 0);
+
+const normalizeInvoiceTotals = (invoice) => {
+  if (!invoice || typeof invoice !== 'object') return invoice;
+  const total = getInvoiceTotalValue(invoice);
+  const amountPaid = Number(invoice.amountPaid ?? 0);
+  const balanceDue = invoice.balanceDue !== undefined && invoice.balanceDue !== null
+    ? Number(invoice.balanceDue)
+    : Math.max(total - amountPaid, 0);
+
+  return {
+    ...invoice,
+    total,
+    totalAmount: total,
+    amountPaid,
+    balanceDue,
+  };
+};
+
 // SMS Modal Component with Canned Responses (same as LeadDetail)
 function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {} }) {
   const [message, setMessage] = useState('');
@@ -603,7 +622,7 @@ function InvoiceDetailModal({
   const updateInvoiceMutation = useMutation({
     mutationFn: (payload) => invoicesApi.updateInvoice(invoice.id, payload),
     onSuccess: (updated) => {
-      const updatedInvoice = updated?.data || updated;
+      const updatedInvoice = normalizeInvoiceTotals(updated?.data || updated);
       onInvoiceUpdated?.(updatedInvoice);
       setEditSuccess('Invoice updated successfully');
       setEditError(null);
@@ -7025,7 +7044,7 @@ export default function OpportunityDetail() {
                               <div className="flex justify-between">
                                 <span className="text-gray-500">Total Invoiced</span>
                                 <span className="font-medium">
-                                  ${invoices.reduce((sum, inv) => sum + (parseFloat(inv.totalAmount ?? inv.total) || 0), 0).toLocaleString()}
+                                  ${invoices.reduce((sum, inv) => sum + (parseFloat(inv.total ?? inv.totalAmount) || 0), 0).toLocaleString()}
                                 </span>
                               </div>
                               <div className="flex justify-between">
@@ -7136,7 +7155,7 @@ export default function OpportunityDetail() {
                             type: 'invoice',
                             date: inv.createdAt,
                             label: `Invoice ${inv.invoiceNumber || `#${inv.id?.slice(-6)}`}`,
-                            amount: inv.totalAmount ?? inv.total,
+                            amount: inv.total ?? inv.totalAmount,
                             status: inv.status,
                           })),
                           ...(commissions || []).filter(c => c.status === 'PAID').map(comm => ({
@@ -7219,7 +7238,7 @@ export default function OpportunityDetail() {
                       {invoices && invoices.length > 0 ? invoices.map((invoice) => (
                         <div
                           key={invoice.id}
-                          onClick={() => { setSelectedInvoice(invoice); setShowInvoiceDetailModal(true); }}
+                          onClick={() => { setSelectedInvoice(normalizeInvoiceTotals(invoice)); setShowInvoiceDetailModal(true); }}
                           className="border border-gray-200 rounded-lg p-4 hover:border-panda-primary hover:shadow-md transition-all cursor-pointer"
                         >
                           <div className="flex items-center justify-between">
@@ -7268,7 +7287,7 @@ export default function OpportunityDetail() {
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      setSelectedInvoice(invoice);
+                                      setSelectedInvoice(normalizeInvoiceTotals(invoice));
                                       setShowPayInvoiceModal(true);
                                     }}
                                     className="flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 transition-colors"
@@ -11245,18 +11264,19 @@ export default function OpportunityDetail() {
         <InvoiceDetailModal
           invoice={selectedInvoice}
           onInvoiceUpdated={(updatedInvoice) => {
+            const normalizedInvoice = normalizeInvoiceTotals(updatedInvoice);
             queryClient.invalidateQueries({ queryKey: ['opportunityInvoices', id] });
-            setSelectedInvoice((prev) => ({
+            setSelectedInvoice((prev) => normalizeInvoiceTotals({
               ...prev,
-              ...(updatedInvoice || {}),
+              ...(normalizedInvoice || {}),
             }));
           }}
           onOpenSendInvoice={(invoiceRecord) => {
-            setInvoiceToSend(invoiceRecord);
+            setInvoiceToSend(normalizeInvoiceTotals(invoiceRecord));
             setShowSendInvoiceModal(true);
           }}
           onOpenPayInvoice={(invoiceRecord) => {
-            setSelectedInvoice(invoiceRecord);
+            setSelectedInvoice(normalizeInvoiceTotals(invoiceRecord));
             setShowInvoiceDetailModal(false);
             setShowPayInvoiceModal(true);
           }}
