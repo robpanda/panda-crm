@@ -120,6 +120,7 @@ export async function listInvoices(req, res, next) {
       accountId,
       status,
       isOverdue,
+      search,
       dateFrom,
       dateTo,
       page = 1,
@@ -132,6 +133,16 @@ export async function listInvoices(req, res, next) {
 
     if (accountId) where.accountId = accountId;
     if (status) where.status = status;
+
+    if (search && search.trim()) {
+      const term = search.trim();
+      where.OR = [
+        { invoiceNumber: { contains: term, mode: 'insensitive' } },
+        { notes: { contains: term, mode: 'insensitive' } },
+        { account: { name: { contains: term, mode: 'insensitive' } } },
+        { lineItems: { some: { description: { contains: term, mode: 'insensitive' } } } },
+      ];
+    }
 
     if (isOverdue === 'true') {
       where.status = { in: ['PENDING', 'SENT', 'PARTIAL'] };

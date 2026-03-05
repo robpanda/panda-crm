@@ -35,10 +35,11 @@ import {
   Zap,
   X,
   User,
+  Trash2,
 } from 'lucide-react';
 import { loadStripe } from '@stripe/stripe-js';
 import { Elements, CardElement, useStripe, useElements } from '@stripe/react-stripe-js';
-import { paymentsApi, accountsApi, contactsApi } from '../../services/api';
+import { paymentsApi, accountsApi, contactsApi, invoicesApi, opportunitiesApi } from '../../services/api';
 import AdminLayout from '../../components/AdminLayout';
 
 // Status configurations
@@ -113,6 +114,45 @@ function formatDateTime(date) {
     hour: 'numeric',
     minute: '2-digit',
   });
+}
+
+function parseNumericValue(value) {
+  if (value === null || value === undefined || value === '') return 0;
+  const parsed = Number.parseFloat(String(value).replace(/,/g, ''));
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function parseQuickBooksCustomerBalanceRows(report) {
+  const rows = report?.Rows?.Row;
+  if (!Array.isArray(rows)) return [];
+
+  return rows
+    .map((row) => {
+      const customerName = row?.ColData?.[0]?.value || 'Unknown';
+      const balance = parseNumericValue(row?.ColData?.[1]?.value);
+      return { customerName, balance };
+    })
+    .filter((row) => row.customerName)
+    .sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance));
+}
+
+function parseQuickBooksProfitLoss(report) {
+  const rows = report?.Rows?.Row;
+  if (!Array.isArray(rows)) {
+    return { totalIncome: 0, totalExpenses: 0, netIncome: 0 };
+  }
+
+  const byGroup = rows.reduce((acc, row) => {
+    if (!row?.group) return acc;
+    acc[row.group] = parseNumericValue(row?.Summary?.ColData?.[1]?.value);
+    return acc;
+  }, {});
+
+  return {
+    totalIncome: byGroup.Income || 0,
+    totalExpenses: byGroup.Expenses || 0,
+    netIncome: byGroup.NetIncome || byGroup.NetOperatingIncome || 0,
+  };
 }
 
 // Stat Card Component
@@ -756,7 +796,7 @@ function InvoicesTab() {
                 </div>
                 <div>
                   <h4 className="text-sm font-medium text-gray-500">Terms</h4>
-                  <p className="text-gray-900">{selectedInvoice.terms ? `Net ${selectedInvoice.terms}` : 'N/A'}</p>
+                  <p className="text-gray-900">{selectedInvoice.terms || 'N/A'}</p>
                 </div>
                 <div>
                   <h4 className="text-sm font-medium text-gray-500">Created</h4>
@@ -1024,7 +1064,7 @@ function PaymentsTab() {
   // Fetch invoices for selected account
   const { data: invoicesData } = useQuery({
     queryKey: ['account-invoices', recordPaymentForm.accountId],
-    queryFn: () => invoicesApi.getInvoices({ accountId: recordPaymentForm.accountId, status: 'UNPAID' }),
+    queryFn: () => invoicesApi.getInvoices({ accountId: recordPaymentForm.accountId, limit: 200 }),
     enabled: showRecordPaymentModal && !!recordPaymentForm.accountId,
   });
 
@@ -1032,6 +1072,10 @@ function PaymentsTab() {
   const pagination = paymentsData?.pagination || {};
   const accounts = accountsData?.data || [];
   const invoices = invoicesData?.data || [];
+  const accountInvoices = useMemo(
+    () => invoices.filter((invoice) => !['PAID', 'VOID'].includes(invoice.status) && parseNumericValue(invoice.balanceDue) > 0),
+    [invoices]
+  );
 
   // Record payment mutation
   const recordPaymentMutation = useMutation({
@@ -1102,7 +1146,8 @@ function PaymentsTab() {
   };
 
   // Handle form submission
-  const handleRecordPayment = () => {
+  const handleRecordPayment = (event) => {
+    event.preventDefault();
     if (!recordPaymentForm.amount || parseFloat(recordPaymentForm.amount) <= 0) return;
 
     recordPaymentMutation.mutate({
@@ -1380,7 +1425,7 @@ function PaymentsTab() {
                   required
                 >
                   <option value="">Select an account...</option>
-                  {accountsDropdown?.map(account => (
+                  {accounts.map(account => (
                     <option key={account.id} value={account.id}>
                       {account.name}
                     </option>
@@ -1407,9 +1452,9 @@ function PaymentsTab() {
                   disabled={!recordPaymentForm.accountId}
                 >
                   <option value="">No invoice (general payment)</option>
-                  {accountInvoices?.map(invoice => (
+                  {accountInvoices.map(invoice => (
                     <option key={invoice.id} value={invoice.id}>
-                      {invoice.invoiceNumber} - ${invoice.balanceDue?.toFixed(2)} due
+                      {invoice.invoiceNumber} - ${parseNumericValue(invoice.balanceDue).toFixed(2)} due
                     </option>
                   ))}
                 </select>
@@ -1549,7 +1594,7 @@ function QuickBooksTab({ onConnectQuickBooks, isConnecting }) {
   const [showItemsModal, setShowItemsModal] = useState(false);
   const [showSyncModal, setShowSyncModal] = useState(false);
   const [syncType, setSyncType] = useState(null); // 'customers', 'invoices', 'payments'
-  const [syncProgress, setSyncProgress] = useState({ current: 0, total: 0, status: '' });
+  const [syncProgress, setSyncProgress] = useState({ status: 'idle', total: 0, completed: 0, errors: [] });
 
   // P&L date range state
   const [plDateRange, setPlDateRange] = useState({
@@ -1557,29 +1602,32 @@ function QuickBooksTab({ onConnectQuickBooks, isConnecting }) {
     endDate: new Date().toISOString().split('T')[0], // Today
   });
 
-  const { data: qbStatus, isLoading: statusLoading } = useQuery({
+  const { data: qbStatus } = useQuery({
     queryKey: ['quickbooks-status'],
     queryFn: paymentsApi.getQuickBooksStatus,
   });
 
-  const { data: customerBalance } = useQuery({
+  const { data: customerBalanceRows = [] } = useQuery({
     queryKey: ['qb-customer-balance'],
     queryFn: paymentsApi.getQBCustomerBalance,
     enabled: qbStatus?.connected,
+    select: parseQuickBooksCustomerBalanceRows,
   });
 
   // Fetch P&L report
-  const { data: profitLossData, isLoading: plLoading, refetch: refetchPL } = useQuery({
+  const { data: plData, isLoading: plLoading, error: plError } = useQuery({
     queryKey: ['qb-profit-loss', plDateRange.startDate, plDateRange.endDate],
     queryFn: () => paymentsApi.getQBProfitLoss(plDateRange.startDate, plDateRange.endDate),
     enabled: showProfitLossModal && qbStatus?.connected,
+    select: parseQuickBooksProfitLoss,
   });
 
   // Fetch QB Items
-  const { data: qbItems, isLoading: itemsLoading } = useQuery({
+  const { data: qbItemsData = [], isLoading: qbItemsLoading, error: qbItemsError } = useQuery({
     queryKey: ['qb-items'],
     queryFn: paymentsApi.getQBItems,
     enabled: showItemsModal && qbStatus?.connected,
+    select: (items) => (Array.isArray(items) ? items : []),
   });
 
   // Fetch accounts for sync
@@ -1620,14 +1668,14 @@ function QuickBooksTab({ onConnectQuickBooks, isConnecting }) {
     }
 
     if (items.length === 0) {
-      setSyncProgress({ current: 0, total: 0, status: 'No items to sync' });
+      setSyncProgress({ status: 'complete', total: 0, completed: 0, errors: [] });
       return;
     }
 
-    setSyncProgress({ current: 0, total: items.length, status: 'Syncing...' });
+    setSyncProgress({ status: 'syncing', total: items.length, completed: 0, errors: [] });
 
     let successCount = 0;
-    let errorCount = 0;
+    const syncErrors = [];
 
     for (let i = 0; i < items.length; i++) {
       try {
@@ -1635,30 +1683,31 @@ function QuickBooksTab({ onConnectQuickBooks, isConnecting }) {
         successCount++;
       } catch (error) {
         console.error(`Failed to sync item ${items[i].id}:`, error);
-        errorCount++;
+        syncErrors.push(`Item ${items[i].id}: ${error?.response?.data?.error?.message || error.message}`);
       }
-      setSyncProgress({
-        current: i + 1,
-        total: items.length,
-        status: `Synced ${successCount} of ${i + 1}${errorCount > 0 ? ` (${errorCount} errors)` : ''}`
-      });
+      setSyncProgress((prev) => ({
+        ...prev,
+        completed: i + 1,
+        errors: [...syncErrors],
+      }));
     }
 
     setSyncProgress({
-      current: items.length,
+      status: 'complete',
       total: items.length,
-      status: `Complete! ${successCount} synced${errorCount > 0 ? `, ${errorCount} failed` : ''}`
+      completed: successCount,
+      errors: syncErrors,
     });
 
     // Invalidate queries to refresh data
-    queryClient.invalidateQueries(['quickbooks-status']);
-    queryClient.invalidateQueries(['qb-customer-balance']);
+    queryClient.invalidateQueries({ queryKey: ['quickbooks-status'] });
+    queryClient.invalidateQueries({ queryKey: ['qb-customer-balance'] });
   };
 
   // Open sync modal
   const openSyncModal = (type) => {
     setSyncType(type);
-    setSyncProgress({ current: 0, total: 0, status: '' });
+    setSyncProgress({ status: 'idle', total: 0, completed: 0, errors: [] });
     setShowSyncModal(true);
   };
 
@@ -1780,12 +1829,12 @@ function QuickBooksTab({ onConnectQuickBooks, isConnecting }) {
                 <div>
                   <h4 className="text-sm font-medium text-gray-700 mb-4">Customer Balances (Top 10)</h4>
                   <div className="space-y-3">
-                    {customerBalance?.rows?.slice(0, 10).map((row, idx) => (
-                      <div key={idx} className="flex items-center justify-between py-2 border-b border-gray-100 last:border-0">
+                    {customerBalanceRows.length > 0 ? customerBalanceRows.slice(0, 10).map((row, idx) => (
+                      <div key={`${row.customerName}-${idx}`} className="flex items-center justify-between py-2 border-b border-gray-100 last:border-0">
                         <span className="text-gray-700">{row.customerName}</span>
                         <span className="font-medium text-gray-900">{formatCurrency(row.balance)}</span>
                       </div>
-                    )) || (
+                    )) : (
                       <p className="text-gray-500 text-sm">No data available</p>
                     )}
                   </div>
@@ -1878,7 +1927,7 @@ function QuickBooksTab({ onConnectQuickBooks, isConnecting }) {
                   <div className="w-full bg-gray-200 rounded-full h-2.5">
                     <div
                       className="bg-panda-primary h-2.5 rounded-full transition-all duration-300"
-                      style={{ width: `${(syncProgress.completed / syncProgress.total) * 100}%` }}
+                      style={{ width: `${syncProgress.total ? (syncProgress.completed / syncProgress.total) * 100 : 0}%` }}
                     />
                   </div>
                   {syncProgress.errors.length > 0 && (
@@ -1895,7 +1944,7 @@ function QuickBooksTab({ onConnectQuickBooks, isConnecting }) {
                   </div>
                   <p className="text-gray-900 font-medium mb-2">Sync Complete!</p>
                   <p className="text-sm text-gray-600 mb-4">
-                    Successfully synced {syncProgress.completed} {syncType}.
+                    Successfully synced {syncProgress.completed} of {syncProgress.total} {syncType}.
                     {syncProgress.errors.length > 0 && ` ${syncProgress.errors.length} failed.`}
                   </p>
                   {syncProgress.errors.length > 0 && (
@@ -1964,24 +2013,24 @@ function QuickBooksTab({ onConnectQuickBooks, isConnecting }) {
                 <div className="text-center py-12">
                   <p className="text-red-600">Failed to load report</p>
                 </div>
-              ) : plData?.data ? (
+              ) : plData ? (
                 <div className="space-y-4">
                   <div className="bg-gray-50 rounded-lg p-4">
                     <p className="text-sm text-gray-500 mb-1">Total Income</p>
                     <p className="text-2xl font-bold text-green-600">
-                      ${(plData.data.totalIncome || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                      ${(plData.totalIncome || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                     </p>
                   </div>
                   <div className="bg-gray-50 rounded-lg p-4">
                     <p className="text-sm text-gray-500 mb-1">Total Expenses</p>
                     <p className="text-2xl font-bold text-red-600">
-                      ${(plData.data.totalExpenses || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                      ${(plData.totalExpenses || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                     </p>
                   </div>
                   <div className="bg-panda-primary/5 rounded-lg p-4 border border-panda-primary/20">
                     <p className="text-sm text-gray-500 mb-1">Net Income</p>
                     <p className="text-2xl font-bold text-panda-primary">
-                      ${(plData.data.netIncome || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                      ${(plData.netIncome || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                     </p>
                   </div>
                 </div>
@@ -2026,9 +2075,9 @@ function QuickBooksTab({ onConnectQuickBooks, isConnecting }) {
                 <div className="text-center py-12">
                   <p className="text-red-600">Failed to load items</p>
                 </div>
-              ) : qbItemsData?.data?.length > 0 ? (
+              ) : qbItemsData.length > 0 ? (
                 <div className="space-y-2">
-                  {qbItemsData.data.map((item) => (
+                  {qbItemsData.map((item) => (
                     <div
                       key={item.id}
                       className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
@@ -2192,9 +2241,14 @@ function TakePaymentForm({ onClose, onSuccess }) {
     setPaymentError(null);
 
     try {
+      const linkedAccountId = selectedCustomer
+        ? (selectedCustomer.type === 'account' ? selectedCustomer.id : selectedCustomer.accountId)
+        : undefined;
+
       // Create payment intent on backend
       const intentResponse = await paymentsApi.createPaymentIntent({
         amount: amountInCents,
+        accountId: linkedAccountId,
         description: description || 'Virtual Terminal Payment',
         metadata: {
           customerEmail,

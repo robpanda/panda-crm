@@ -43,7 +43,15 @@ function isUniqueViolationOnField(error, fieldName) {
 // Get payments with optional filtering by opportunityId or invoiceId
 router.get('/', async (req, res, next) => {
   try {
-    const { opportunityId, invoiceId, status, limit = 50, page = 1 } = req.query;
+    const {
+      opportunityId,
+      invoiceId,
+      status,
+      paymentMethod,
+      search,
+      limit = 50,
+      page = 1,
+    } = req.query;
     const where = {};
 
     // Filter by invoiceId directly
@@ -60,6 +68,23 @@ router.get('/', async (req, res, next) => {
       where.status = status;
     }
 
+    // Filter by payment method if provided
+    if (paymentMethod) {
+      where.paymentMethod = paymentMethod;
+    }
+
+    // Search by payment number, reference, notes, invoice number, or account name
+    if (typeof search === 'string' && search.trim()) {
+      const term = search.trim();
+      where.OR = [
+        { paymentNumber: { contains: term, mode: 'insensitive' } },
+        { referenceNumber: { contains: term, mode: 'insensitive' } },
+        { notes: { contains: term, mode: 'insensitive' } },
+        { invoice: { invoiceNumber: { contains: term, mode: 'insensitive' } } },
+        { invoice: { account: { name: { contains: term, mode: 'insensitive' } } } },
+      ];
+    }
+
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     const [payments, total] = await Promise.all([
@@ -73,6 +98,12 @@ router.get('/', async (req, res, next) => {
               total: true,
               balanceDue: true,
               status: true,
+              account: {
+                select: {
+                  id: true,
+                  name: true,
+                },
+              },
             },
           },
         },
@@ -183,48 +214,54 @@ router.get('/stats', async (req, res, next) => {
 // Create payment intent for an invoice
 router.post('/intent', async (req, res, next) => {
   try {
-    const { invoiceId, amount, accountId, description } = req.body;
+    const { invoiceId, amount, accountId, description, metadata = {} } = req.body;
 
-    // Get account to find or create Stripe customer
-    const account = await prisma.account.findUnique({
-      where: { id: accountId },
-      include: { contacts: { take: 1 } },
-    });
+    let account = null;
+    let stripeCustomerId = null;
 
-    if (!account) {
-      return res.status(404).json({
-        success: false,
-        error: { code: 'NOT_FOUND', message: 'Account not found' },
-      });
-    }
-
-    // Create Stripe customer if doesn't exist
-    let stripeCustomerId = account.stripeCustomerId;
-    if (!stripeCustomerId) {
-      const primaryContact = account.contacts[0];
-      const customer = await stripeService.createCustomer({
-        email: primaryContact?.email || `${account.id}@panda-crm.local`,
-        name: account.name,
-        phone: primaryContact?.phone,
-        metadata: { accountId: account.id },
-      });
-
-      stripeCustomerId = customer.id;
-
-      await prisma.account.update({
+    // Account is optional for ad-hoc virtual terminal payments.
+    if (accountId) {
+      account = await prisma.account.findUnique({
         where: { id: accountId },
-        data: { stripeCustomerId },
+        include: { contacts: { take: 1 } },
       });
+
+      if (!account) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Account not found' },
+        });
+      }
+
+      // Create Stripe customer if doesn't exist
+      stripeCustomerId = account.stripeCustomerId;
+      if (!stripeCustomerId) {
+        const primaryContact = account.contacts[0];
+        const customer = await stripeService.createCustomer({
+          email: primaryContact?.email || `${account.id}@panda-crm.local`,
+          name: account.name,
+          phone: primaryContact?.phone,
+          metadata: { accountId: account.id },
+        });
+
+        stripeCustomerId = customer.id;
+
+        await prisma.account.update({
+          where: { id: accountId },
+          data: { stripeCustomerId },
+        });
+      }
     }
 
     // Create payment intent
     const paymentIntent = await stripeService.createPaymentIntent({
       amount,
-      customerId: stripeCustomerId,
-      description: description || `Payment for ${account.name}`,
+      customerId: stripeCustomerId || undefined,
+      description: description || (account ? `Payment for ${account.name}` : 'Virtual terminal payment'),
       metadata: {
-        accountId,
+        accountId: accountId || '',
         invoiceId: invoiceId || '',
+        ...metadata,
       },
     });
 
@@ -291,6 +328,7 @@ router.post('/', async (req, res, next) => {
       stripePaymentMethodId,
       referenceNumber,
       notes,
+      paymentDate,
     } = req.body;
 
     // Idempotency guard: the webhook and modal can race on the same PaymentIntent
@@ -319,7 +357,7 @@ router.post('/', async (req, res, next) => {
           data: {
             paymentNumber,
             amount,
-            paymentDate: new Date(),
+            paymentDate: paymentDate ? new Date(paymentDate) : new Date(),
             paymentMethod: paymentMethod || 'CREDIT_CARD',
             status: 'SETTLED',
             invoiceId,
