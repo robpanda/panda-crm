@@ -234,6 +234,14 @@ class LeadService {
       'UNQUALIFIED': 'UNQUALIFIED',
       'NURTURING': 'NURTURING',
       'CONVERTED': 'CONVERTED',
+      'SCHEDULED': 'SCHEDULED',
+      'CONFIRMED': 'SCHEDULED',
+      'LEAD_CREATED': 'LEAD_CREATED',
+      'INSPECTION_ISSUED': 'INSPECTION_ISSUED',
+      'INSPECTED': 'INSPECTED',
+      'NO_INSPECTION': 'NO_INSPECTION',
+      'RESCHEDULE_SCHEDULED': 'RESCHEDULE_SCHEDULED',
+      'RESCHEDULE_UNSCHEDULED': 'RESCHEDULE_UNSCHEDULED',
       'LEAD_NOT_SET': 'NEW',     // Map "Lead Not Set" to NEW
       'LEAD_SET': 'CONTACTED',    // Map "Lead Set" to CONTACTED
     };
@@ -751,6 +759,7 @@ class LeadService {
     return [
       { value: 'NEW', label: 'New' },
       { value: 'CONTACTED', label: 'Contacted' },
+      { value: 'SCHEDULED', label: 'Confirmed' },
       { value: 'QUALIFIED', label: 'Qualified' },
       { value: 'UNQUALIFIED', label: 'Unqualified' },
       { value: 'NURTURING', label: 'Nurturing' },

@@ -38,6 +38,7 @@ import AddressAutocomplete from '../components/AddressAutocomplete';
 import MentionTextarea from '../components/MentionTextarea';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { isValidPhoneFormat, isValidEmailFormat } from '../utils/formatters';
+import { WIZARD_LEAD_SOURCES } from '../constants/leadOptions';
 
 const US_STATES = [
   { value: 'AL', label: 'Alabama' }, { value: 'AK', label: 'Alaska' },
@@ -186,26 +187,7 @@ const RETAIL_DISPOSITIONS_BY_STATUS = {
   ],
 };
 
-const LEAD_SOURCES = [
-  { value: 'Bath Lead', label: 'Bath Lead' },
-  { value: 'Company Vehicle', label: 'Company Vehicle' },
-  { value: 'Customer Referral', label: 'Customer Referral' },
-  { value: 'Digital Marketing', label: 'Digital Marketing' },
-  { value: 'Employee Referral', label: 'Employee Referral' },
-  { value: 'Flyer', label: 'Flyer' },
-  { value: 'Insurance Marketing', label: 'Insurance Marketing' },
-  { value: 'Insurance Program', label: 'Insurance Program' },
-  { value: 'Lead Aggregator', label: 'Lead Aggregator' },
-  { value: 'Radio', label: 'Radio' },
-  { value: 'Retail Marketing', label: 'Retail Marketing' },
-  { value: 'Roof DRP', label: 'Roof DRP' },
-  { value: 'Self-Gen', label: 'Self-Gen' },
-  { value: 'Solar Marketing', label: 'Solar Marketing' },
-  { value: 'Telemarketing', label: 'Telemarketing' },
-  { value: 'Trade Show', label: 'Trade Show' },
-  { value: 'Vendor Referral', label: 'Vendor Referral' },
-  { value: 'Yard Sign', label: 'Yard Sign' },
-];
+const LEAD_SOURCES = WIZARD_LEAD_SOURCES;
 
 const PROPERTY_TYPES = [
   { value: 'Commercial', label: 'Commercial' },
@@ -248,6 +230,8 @@ export default function LeadWizard() {
 
   const roleName = (user?.role?.name || user?.role || '').toString().toLowerCase();
   const roleType = (user?.roleType || '').toString().toLowerCase();
+  const userTitle = (user?.title || user?.jobTitle || '').toString().toLowerCase();
+  const hasSalesInRoleOrTitle = [roleName, roleType, userTitle].some((value) => value.includes('sales'));
 
   // Determine if user is call center based on role or department
   const isCallCenter = roleName.includes('call center') ||
@@ -1757,6 +1741,11 @@ export default function LeadWizard() {
         const leadId = await handleSave();
         if (!leadId) return;
 
+        if (isNewLead && !hasSalesInRoleOrTitle && formData.leadSource) {
+          navigate(`/leads/${leadId}`);
+          return;
+        }
+
         if (!hasCallCenterAppointment) {
           setShowAppointmentPrompt(true);
           return;
@@ -1879,7 +1868,7 @@ export default function LeadWizard() {
   }
 
   return (
-    <div className="space-y-6 pb-28 sm:pb-32">
+    <div className="space-y-6 pb-32 sm:pb-36">
       {/* Header */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
         <div className="flex items-center justify-between">
@@ -3029,19 +3018,19 @@ export default function LeadWizard() {
 
       {/* Navigation Buttons */}
       {!conversionResult && (
-        <div className="fixed inset-x-0 bottom-0 z-50 px-3 pb-3 sm:px-6 sm:pb-4">
+        <div className="fixed inset-x-0 bottom-0 z-50 px-2 pb-2 sm:px-4 sm:pb-3">
           <div className="mx-auto max-w-screen-2xl">
-            <div className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white/95 p-3 shadow-lg backdrop-blur sm:p-4">
+            <div className="flex items-center justify-between gap-2 rounded-lg border border-gray-200 bg-white/95 p-2 shadow-lg backdrop-blur sm:gap-3 sm:p-2.5">
               <button
                 onClick={handlePrevious}
                 disabled={currentStep === 1}
-                className={`inline-flex items-center px-4 py-2 rounded-lg transition-colors ${
+                className={`inline-flex items-center rounded-lg px-3 py-1.5 text-sm transition-colors ${
                   currentStep === 1
                     ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
                     : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                 }`}
               >
-                <ChevronLeft className="w-5 h-5 mr-1" />
+                <ChevronLeft className="mr-1 h-4 w-4" />
                 Previous
               </button>
 
@@ -3060,7 +3049,7 @@ export default function LeadWizard() {
                     }
                   }}
                   disabled={!formData.phone && !formData.mobilePhone}
-                  className={`inline-flex items-center space-x-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                  className={`inline-flex items-center space-x-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-all sm:text-sm ${
                     (formData.phone || formData.mobilePhone)
                       ? currentCall
                         ? 'bg-red-500 text-white hover:bg-red-600'
@@ -3080,7 +3069,7 @@ export default function LeadWizard() {
                     setShowSmsPanel(true);
                   }}
                   disabled={!formData.phone && !formData.mobilePhone}
-                  className={`inline-flex items-center space-x-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                  className={`inline-flex items-center space-x-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-all sm:text-sm ${
                     formData.phone || formData.mobilePhone
                       ? 'bg-blue-500 text-white hover:bg-blue-600'
                       : 'bg-gray-200 text-gray-400 cursor-not-allowed'
@@ -3095,7 +3084,7 @@ export default function LeadWizard() {
                   type="button"
                   onClick={() => setShowEmailPanel(true)}
                   disabled={!formData.email}
-                  className={`inline-flex items-center space-x-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                  className={`inline-flex items-center space-x-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-all sm:text-sm ${
                     formData.email
                       ? 'bg-indigo-500 text-white hover:bg-indigo-600'
                       : 'bg-gray-200 text-gray-400 cursor-not-allowed'
@@ -3109,23 +3098,23 @@ export default function LeadWizard() {
               <div className="flex items-center space-x-2 sm:space-x-3">
                 <button
                   onClick={() => navigate(-1)}
-                  className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
+                  className="px-3 py-1.5 text-sm text-gray-600 transition-colors hover:text-gray-800"
                 >
                   Cancel
                 </button>
                 {currentStep < totalSteps ? (
                   <button
                     onClick={handleNext}
-                    className="inline-flex items-center px-6 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90 transition-colors"
+                    className="inline-flex items-center rounded-lg bg-panda-primary px-4 py-1.5 text-sm text-white transition-colors hover:bg-panda-primary/90"
                   >
                     Next
-                    <ChevronRight className="w-5 h-5 ml-1" />
+                    <ChevronRight className="ml-1 h-4 w-4" />
                   </button>
                 ) : isNewLead ? (
                   <button
                     onClick={handleSave}
                     disabled={isSaving || !hasRequiredFields}
-                    className={`inline-flex items-center px-6 py-2 rounded-lg transition-colors ${
+                    className={`inline-flex items-center rounded-lg px-4 py-1.5 text-sm transition-colors ${
                       isSaving || !hasRequiredFields
                         ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                         : 'bg-green-500 text-white hover:bg-green-600'
@@ -3133,12 +3122,12 @@ export default function LeadWizard() {
                   >
                     {isSaving ? (
                       <>
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                         Creating...
                       </>
                     ) : (
                       <>
-                        <CheckCircle className="w-5 h-5 mr-2" />
+                        <CheckCircle className="mr-2 h-4 w-4" />
                         Create Lead
                       </>
                     )}
@@ -3741,7 +3730,7 @@ export default function LeadWizard() {
       )}
 
       {/* Add padding at bottom to account for fixed Quick Actions bar */}
-      <div className="h-20" />
+      <div className="h-16" />
     </div>
   );
 }

@@ -18,6 +18,7 @@ import InternalNotesTabs from '../components/InternalNotesTabs';
 import InternalComments from '../components/InternalComments';
 import CommunicationsTab from '../components/CommunicationsTab';
 import UserSearchDropdown from '../components/UserSearchDropdown';
+import { WIZARD_LEAD_SOURCES } from '../constants/leadOptions';
 
 // SMS Modal Component with Canned Responses
 function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {} }) {
@@ -425,6 +426,7 @@ function ActivityTab({ phone, email, leadName }) {
 const LEAD_STATUSES = [
   { value: 'NEW', label: 'New' },
   { value: 'CONTACTED', label: 'Contacted' },
+  { value: 'SCHEDULED', label: 'Confirmed' },
   { value: 'QUALIFIED', label: 'Qualified' },
   { value: 'UNQUALIFIED', label: 'Unqualified' },
   { value: 'CONVERTED', label: 'Converted' },
@@ -441,18 +443,7 @@ const LEAD_DISPOSITIONS = [
   { value: 'DO_NOT_CALL', label: 'Do Not Call' },
 ];
 
-const LEAD_SOURCES = [
-  { value: 'Website', label: 'Website' },
-  { value: 'Referral', label: 'Referral' },
-  { value: 'Door Knock', label: 'Door Knock' },
-  { value: 'Canvassing', label: 'Canvassing' },
-  { value: 'Self-Gen', label: 'Self-Gen' },
-  { value: 'RingCentral', label: 'RingCentral' },
-  { value: 'Marketing', label: 'Marketing' },
-  { value: 'Trade Show', label: 'Trade Show' },
-  { value: 'Partner', label: 'Partner' },
-  { value: 'Other', label: 'Other' },
-];
+const LEAD_SOURCES = WIZARD_LEAD_SOURCES;
 
 const PROPERTY_TYPES = [
   { value: 'Single Family', label: 'Single Family' },
@@ -489,6 +480,13 @@ const US_STATES = [
   { value: 'NC', label: 'North Carolina' },
   { value: 'FL', label: 'Florida' },
 ];
+
+const normalizeLeadStatusForForm = (status) => {
+  if (!status) return 'NEW';
+  const normalized = String(status).trim().toUpperCase().replace(/\s+/g, '_');
+  if (normalized === 'CONFIRMED') return 'SCHEDULED';
+  return normalized;
+};
 
 const formatAppointmentDateDisplay = (value) => {
   if (!value) return '-';
@@ -686,7 +684,7 @@ export default function LeadDetail() {
         city: lead.city || '',
         state: lead.state || '',
         postalCode: lead.postalCode || '',
-        status: lead.status || 'NEW',
+        status: normalizeLeadStatusForForm(lead.status),
         leadSource: lead.source || lead.leadSource || '',
         rating: lead.rating || '',
         description: lead.description || '',
@@ -798,6 +796,12 @@ export default function LeadDetail() {
         cleanedData[key] = null;
       }
     });
+
+    if (Object.prototype.hasOwnProperty.call(cleanedData, 'leadSource')) {
+      cleanedData.source = cleanedData.leadSource;
+      delete cleanedData.leadSource;
+    }
+
     updateMutation.mutate(cleanedData);
   };
 
@@ -813,7 +817,7 @@ export default function LeadDetail() {
       city: lead.city || '',
       state: lead.state || '',
       postalCode: lead.postalCode || '',
-      status: lead.status || 'NEW',
+      status: normalizeLeadStatusForForm(lead.status),
       leadSource: lead.source || lead.leadSource || '',
       rating: lead.rating || '',
       description: lead.description || '',
@@ -845,7 +849,7 @@ export default function LeadDetail() {
       city: lead.city || '',
       state: lead.state || '',
       postalCode: lead.postalCode || '',
-      status: lead.status || 'NEW',
+      status: normalizeLeadStatusForForm(lead.status),
       leadSource: lead.source || lead.leadSource || '',
       rating: lead.rating || '',
       description: lead.description || '',
