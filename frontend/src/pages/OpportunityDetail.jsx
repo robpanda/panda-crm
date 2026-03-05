@@ -1725,6 +1725,10 @@ export default function OpportunityDetail() {
     dateOfLoss: '',
     claimFiledDate: '',
     damageLocation: '',
+    adjusterName: '',
+    adjusterEmail: '',
+    adjusterOfficePhone: '',
+    fieldAdjusterMobile: '',
   });
 
   // Inline edit mode for job details
@@ -1948,6 +1952,10 @@ export default function OpportunityDetail() {
         dateOfLoss: opportunity.dateOfLoss ? new Date(opportunity.dateOfLoss).toISOString().split('T')[0] : '',
         claimFiledDate: opportunity.claimFiledDate ? new Date(opportunity.claimFiledDate).toISOString().split('T')[0] : '',
         damageLocation: opportunity.damageLocation || '',
+        adjusterName: opportunity.adjusterName || '',
+        adjusterEmail: opportunity.adjusterEmail || '',
+        adjusterOfficePhone: opportunity.adjusterOfficePhone || '',
+        fieldAdjusterMobile: opportunity.fieldAdjusterMobile || '',
       });
     }
   }, [opportunity]);
@@ -2024,6 +2032,10 @@ export default function OpportunityDetail() {
       dateOfLoss: claimForm.dateOfLoss ? new Date(claimForm.dateOfLoss).toISOString() : null,
       claimFiledDate: claimForm.claimFiledDate ? new Date(claimForm.claimFiledDate).toISOString() : null,
       damageLocation: claimForm.damageLocation || null,
+      adjusterName: claimForm.adjusterName || null,
+      adjusterEmail: claimForm.adjusterEmail || null,
+      adjusterOfficePhone: claimForm.adjusterOfficePhone || null,
+      fieldAdjusterMobile: claimForm.fieldAdjusterMobile || null,
     };
     updateMutation.mutate(updateData);
     setIsEditingClaim(false);
@@ -2364,6 +2376,55 @@ export default function OpportunityDetail() {
     mobilePhone: '',
     isPrimary: false,
   });
+  const [showEditContactModal, setShowEditContactModal] = useState(false);
+  const [editingContactId, setEditingContactId] = useState(null);
+  const [editContactForm, setEditContactForm] = useState({
+    firstName: '',
+    lastName: '',
+    email: '',
+    phone: '',
+    mobilePhone: '',
+    title: '',
+    department: '',
+    mailingStreet: '',
+    mailingCity: '',
+    mailingState: '',
+    mailingPostalCode: '',
+    isPrimary: false,
+    smsOptOut: false,
+    emailOptOut: false,
+    doNotCall: false,
+  });
+
+  const openEditContactModal = useCallback((contact = null) => {
+    if (!contact?.id) return;
+
+    setEditingContactId(contact.id);
+    setEditContactForm({
+      firstName: contact.firstName || '',
+      lastName: contact.lastName || '',
+      email: contact.email || '',
+      phone: contact.phone || '',
+      mobilePhone: contact.mobilePhone || '',
+      title: contact.title || '',
+      department: contact.department || '',
+      mailingStreet: contact.mailingStreet || contact.street || '',
+      mailingCity: contact.mailingCity || contact.city || '',
+      mailingState: contact.mailingState || contact.state || '',
+      mailingPostalCode: contact.mailingPostalCode || contact.postalCode || '',
+      isPrimary: Boolean(contact.isPrimary || contact.isPrimaryContact),
+      smsOptOut: Boolean(contact.smsOptOut),
+      emailOptOut: Boolean(contact.emailOptOut),
+      doNotCall: Boolean(contact.doNotCall),
+    });
+    setShowEditContactModal(true);
+    setActionError(null);
+  }, []);
+
+  const closeEditContactModal = useCallback(() => {
+    setShowEditContactModal(false);
+    setEditingContactId(null);
+  }, []);
 
   // Contact mutation - add contact to account
   const addContactMutation = useMutation({
@@ -2381,6 +2442,19 @@ export default function OpportunityDetail() {
     },
     onError: (error) => {
       setActionError(error.message || 'Failed to add contact');
+    },
+  });
+
+  const updateContactMutation = useMutation({
+    mutationFn: ({ contactId, data }) => contactsApi.updateContact(contactId, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['opportunityContacts', id]);
+      setActionSuccess('Contact updated successfully');
+      closeEditContactModal();
+      setTimeout(() => setActionSuccess(null), 3000);
+    },
+    onError: (error) => {
+      setActionError(error.message || 'Failed to update contact');
     },
   });
 
@@ -4709,9 +4783,13 @@ export default function OpportunityDetail() {
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center space-x-2">
-                                <Link to={`/contacts/${contact.id}`} className="font-medium text-gray-900 hover:text-panda-primary">
+                                <button
+                                  type="button"
+                                  onClick={() => openEditContactModal(contact)}
+                                  className="font-medium text-gray-900 hover:text-panda-primary"
+                                >
                                   {contact.firstName} {contact.lastName}
-                                </Link>
+                                </button>
                                 {isPrimary && (
                                   <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-medium rounded-full">Primary</span>
                                 )}
@@ -4748,13 +4826,14 @@ export default function OpportunityDetail() {
                               )}
                             </div>
                             {/* Edit button */}
-                            <Link
-                              to={`/contacts/${contact.id}`}
+                            <button
+                              type="button"
+                              onClick={() => openEditContactModal(contact)}
                               className="p-2 text-gray-400 hover:text-panda-primary hover:bg-gray-100 rounded-lg transition-colors flex-shrink-0"
                               title="Edit Contact"
                             >
                               <Edit className="w-4 h-4" />
-                            </Link>
+                            </button>
                           </div>
                         </div>
                       );
@@ -5152,9 +5231,8 @@ export default function OpportunityDetail() {
                     </div>
 
                     {contacts && contacts.length > 0 ? contacts.map((contact) => (
-                      <Link
+                      <div
                         key={contact.id}
-                        to={`/contacts/${contact.id}`}
                         className="block border border-gray-200 rounded-lg p-4 hover:border-panda-primary transition-colors"
                       >
                         <div className="flex items-center space-x-3">
@@ -5163,14 +5241,20 @@ export default function OpportunityDetail() {
                               {contact.firstName?.charAt(0)}{contact.lastName?.charAt(0)}
                             </span>
                           </div>
-                          <div className="flex-1">
+                          <div className="flex-1 min-w-0">
                             <div className="flex items-center space-x-2">
-                              <h4 className="font-medium text-gray-900">{contact.firstName} {contact.lastName}</h4>
+                              <button
+                                type="button"
+                                onClick={() => openEditContactModal(contact)}
+                                className="font-medium text-gray-900 hover:text-panda-primary"
+                              >
+                                {contact.firstName} {contact.lastName}
+                              </button>
                               {contact.isPrimary && (
                                 <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-medium rounded-full">Primary</span>
                               )}
                             </div>
-                            <div className="flex items-center space-x-4 text-sm text-gray-500">
+                            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-500">
                               {contact.email && (
                                 <span className="flex items-center">
                                   <Mail className="w-3 h-3 mr-1" />
@@ -5185,8 +5269,16 @@ export default function OpportunityDetail() {
                               )}
                             </div>
                           </div>
+                          <button
+                            type="button"
+                            onClick={() => openEditContactModal(contact)}
+                            className="p-2 text-gray-400 hover:text-panda-primary hover:bg-gray-100 rounded-lg transition-colors flex-shrink-0"
+                            title="Edit Contact"
+                          >
+                            <Edit className="w-4 h-4" />
+                          </button>
                         </div>
-                      </Link>
+                      </div>
                     )) : (
                       <div className="text-center py-8 text-gray-500">
                         <Users className="w-12 h-12 mx-auto text-gray-300 mb-2" />
@@ -7392,7 +7484,7 @@ export default function OpportunityDetail() {
                 <div className="p-5">
                   {isEditingClaim ? (
                     <form onSubmit={handleClaimSave} className="space-y-4">
-                      <div className="grid grid-cols-2 gap-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
                           <label className="block text-sm text-gray-500 mb-1">Insurance Company</label>
                           <input
@@ -7431,7 +7523,47 @@ export default function OpportunityDetail() {
                             className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
                           />
                         </div>
-                        <div className="col-span-2">
+                        <div>
+                          <label className="block text-sm text-gray-500 mb-1">Adjuster Name</label>
+                          <input
+                            type="text"
+                            value={claimForm.adjusterName}
+                            onChange={(e) => setClaimForm({ ...claimForm, adjusterName: e.target.value })}
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                            placeholder="Enter adjuster name"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm text-gray-500 mb-1">Adjuster Email</label>
+                          <input
+                            type="email"
+                            value={claimForm.adjusterEmail}
+                            onChange={(e) => setClaimForm({ ...claimForm, adjusterEmail: e.target.value })}
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                            placeholder="adjuster@insurance.com"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm text-gray-500 mb-1">Adjuster Office Phone (with extension)</label>
+                          <input
+                            type="text"
+                            value={claimForm.adjusterOfficePhone}
+                            onChange={(e) => setClaimForm({ ...claimForm, adjusterOfficePhone: e.target.value })}
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                            placeholder="(555) 123-4567 ext 204"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm text-gray-500 mb-1">Field Adjuster Mobile</label>
+                          <input
+                            type="tel"
+                            value={claimForm.fieldAdjusterMobile}
+                            onChange={(e) => setClaimForm({ ...claimForm, fieldAdjusterMobile: e.target.value })}
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                            placeholder="(555) 987-6543"
+                          />
+                        </div>
+                        <div className="md:col-span-2">
                           <label className="block text-sm text-gray-500 mb-1">Damage Location</label>
                           <input
                             type="text"
@@ -7459,7 +7591,7 @@ export default function OpportunityDetail() {
                       </div>
                     </form>
                   ) : (
-                    <div className="grid grid-cols-2 gap-x-8 gap-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
                       <div>
                         <label className="text-sm text-gray-500">Insurance Company</label>
                         <p className={`font-medium ${opportunity.insuranceCarrier ? 'text-gray-900' : 'text-gray-500 italic'}`}>
@@ -7488,7 +7620,31 @@ export default function OpportunityDetail() {
                             : 'Not set'}
                         </p>
                       </div>
-                      <div className="col-span-2">
+                      <div>
+                        <label className="text-sm text-gray-500">Adjuster Name</label>
+                        <p className={`font-medium ${opportunity.adjusterName ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                          {opportunity.adjusterName || 'Not set'}
+                        </p>
+                      </div>
+                      <div>
+                        <label className="text-sm text-gray-500">Adjuster Email</label>
+                        <p className={`font-medium ${opportunity.adjusterEmail ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                          {opportunity.adjusterEmail || 'Not set'}
+                        </p>
+                      </div>
+                      <div>
+                        <label className="text-sm text-gray-500">Adjuster Office Phone</label>
+                        <p className={`font-medium ${opportunity.adjusterOfficePhone ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                          {opportunity.adjusterOfficePhone || 'Not set'}
+                        </p>
+                      </div>
+                      <div>
+                        <label className="text-sm text-gray-500">Field Adjuster Mobile</label>
+                        <p className={`font-medium ${opportunity.fieldAdjusterMobile ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                          {opportunity.fieldAdjusterMobile || 'Not set'}
+                        </p>
+                      </div>
+                      <div className="md:col-span-2">
                         <label className="text-sm text-gray-500">Damage Location</label>
                         <p className={`font-medium ${opportunity.damageLocation ? 'text-gray-900' : 'text-gray-500 italic'}`}>
                           {opportunity.damageLocation || 'Not set'}
@@ -7555,6 +7711,317 @@ export default function OpportunityDetail() {
           </div>
         </div>
       </div>
+
+      {showEditContactModal && editingContactId && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between p-5 border-b border-gray-100">
+              <h2 className="text-lg font-semibold text-gray-900">Edit Contact</h2>
+              <button
+                type="button"
+                onClick={closeEditContactModal}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form
+              className="flex-1 overflow-y-auto p-5 space-y-4"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!editContactForm.firstName.trim() || !editContactForm.lastName.trim()) {
+                  setActionError('First and last name are required');
+                  return;
+                }
+
+                updateContactMutation.mutate({
+                  contactId: editingContactId,
+                  data: {
+                    ...editContactForm,
+                    accountId: opportunity?.accountId || null,
+                  },
+                });
+              }}
+            >
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">First Name *</label>
+                  <input
+                    type="text"
+                    value={editContactForm.firstName}
+                    onChange={(e) => setEditContactForm((prev) => ({ ...prev, firstName: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Last Name *</label>
+                  <input
+                    type="text"
+                    value={editContactForm.lastName}
+                    onChange={(e) => setEditContactForm((prev) => ({ ...prev, lastName: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                  <input
+                    type="email"
+                    value={editContactForm.email}
+                    onChange={(e) => setEditContactForm((prev) => ({ ...prev, email: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
+                  <input
+                    type="tel"
+                    value={editContactForm.phone}
+                    onChange={(e) => setEditContactForm((prev) => ({ ...prev, phone: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Mobile Phone</label>
+                  <input
+                    type="tel"
+                    value={editContactForm.mobilePhone}
+                    onChange={(e) => setEditContactForm((prev) => ({ ...prev, mobilePhone: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Title</label>
+                  <input
+                    type="text"
+                    value={editContactForm.title}
+                    onChange={(e) => setEditContactForm((prev) => ({ ...prev, title: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Department</label>
+                  <input
+                    type="text"
+                    value={editContactForm.department}
+                    onChange={(e) => setEditContactForm((prev) => ({ ...prev, department: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="border-t border-gray-100 pt-4">
+                <h3 className="text-sm font-semibold text-gray-900 mb-3">Mailing Address</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Street</label>
+                    <input
+                      type="text"
+                      value={editContactForm.mailingStreet}
+                      onChange={(e) => setEditContactForm((prev) => ({ ...prev, mailingStreet: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">City</label>
+                    <input
+                      type="text"
+                      value={editContactForm.mailingCity}
+                      onChange={(e) => setEditContactForm((prev) => ({ ...prev, mailingCity: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">State</label>
+                    <input
+                      type="text"
+                      value={editContactForm.mailingState}
+                      onChange={(e) => setEditContactForm((prev) => ({ ...prev, mailingState: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Postal Code</label>
+                    <input
+                      type="text"
+                      value={editContactForm.mailingPostalCode}
+                      onChange={(e) => setEditContactForm((prev) => ({ ...prev, mailingPostalCode: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="border-t border-gray-100 pt-4 space-y-2">
+                <label className="flex items-center space-x-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={editContactForm.isPrimary}
+                    onChange={(e) => setEditContactForm((prev) => ({ ...prev, isPrimary: e.target.checked }))}
+                    className="w-4 h-4 text-panda-primary border-gray-300 rounded focus:ring-panda-primary/30"
+                  />
+                  <span>Primary Contact</span>
+                </label>
+                <label className="flex items-center space-x-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={editContactForm.smsOptOut}
+                    onChange={(e) => setEditContactForm((prev) => ({ ...prev, smsOptOut: e.target.checked }))}
+                    className="w-4 h-4 text-panda-primary border-gray-300 rounded focus:ring-panda-primary/30"
+                  />
+                  <span>SMS Opt-Out</span>
+                </label>
+                <label className="flex items-center space-x-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={editContactForm.emailOptOut}
+                    onChange={(e) => setEditContactForm((prev) => ({ ...prev, emailOptOut: e.target.checked }))}
+                    className="w-4 h-4 text-panda-primary border-gray-300 rounded focus:ring-panda-primary/30"
+                  />
+                  <span>Email Opt-Out</span>
+                </label>
+                <label className="flex items-center space-x-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={editContactForm.doNotCall}
+                    onChange={(e) => setEditContactForm((prev) => ({ ...prev, doNotCall: e.target.checked }))}
+                    className="w-4 h-4 text-panda-primary border-gray-300 rounded focus:ring-panda-primary/30"
+                  />
+                  <span>Do Not Call</span>
+                </label>
+              </div>
+
+              <div className="flex items-center justify-end space-x-3 pt-4 border-t border-gray-100">
+                <button
+                  type="button"
+                  onClick={closeEditContactModal}
+                  className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={updateContactMutation.isPending}
+                  className="px-4 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-dark disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
+                >
+                  {updateContactMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+                  <span>Save Contact</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showTransferOwnerModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg">
+            <div className="flex items-center justify-between p-5 border-b border-gray-100">
+              <h2 className="text-lg font-semibold text-gray-900">Transfer Job Owner</h2>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowTransferOwnerModal(false);
+                  setTransferOwnerError('');
+                }}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="p-3 rounded-lg bg-gray-50 border border-gray-100">
+                <p className="text-xs uppercase tracking-wide text-gray-500 font-medium">Current Owner</p>
+                <p className="mt-1 text-sm font-medium text-gray-900">
+                  {ownerDisplayName || 'Unassigned'}
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">New Owner</label>
+                <select
+                  value={selectedTransferOwnerId}
+                  onChange={(e) => {
+                    setSelectedTransferOwnerId(e.target.value);
+                    setTransferOwnerError('');
+                  }}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                >
+                  <option value="">Select an owner...</option>
+                  {availableTransferOwners.map((teamUser) => (
+                    <option key={teamUser.id} value={teamUser.id}>
+                      {teamUser.name || `${teamUser.firstName || ''} ${teamUser.lastName || ''}`.trim() || teamUser.email}
+                      {teamUser.role ? ` • ${teamUser.role}` : ''}
+                    </option>
+                  ))}
+                </select>
+                {availableTransferOwners.length === 0 && (
+                  <p className="mt-2 text-xs text-gray-500">No alternate owners available.</p>
+                )}
+              </div>
+
+              <label className="flex items-start gap-3 p-3 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50">
+                <input
+                  type="checkbox"
+                  checked={transferRelatedItems}
+                  onChange={(e) => setTransferRelatedItems(e.target.checked)}
+                  className="mt-0.5 rounded border-gray-300 text-panda-primary focus:ring-panda-primary/30"
+                />
+                <div>
+                  <p className="text-sm font-medium text-gray-900">Transfer all related assignments</p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Moves linked tasks, appointments/resources, commissions, service contracts, and related attention items to the new owner when applicable.
+                  </p>
+                </div>
+              </label>
+
+              {transferOwnerError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                  <span>{transferOwnerError}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-3 p-5 border-t border-gray-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowTransferOwnerModal(false);
+                  setTransferOwnerError('');
+                }}
+                className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!selectedTransferOwnerId) {
+                    setTransferOwnerError('Please select a new owner');
+                    return;
+                  }
+
+                  transferOwnerMutation.mutate({
+                    newOwnerId: selectedTransferOwnerId,
+                    transferRelated: transferRelatedItems,
+                  });
+                }}
+                disabled={!selectedTransferOwnerId || transferOwnerMutation.isPending}
+                className="px-4 py-2 text-sm font-medium text-white bg-panda-primary rounded-lg hover:bg-panda-dark disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
+              >
+                {transferOwnerMutation.isPending && (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                )}
+                <span>Transfer Owner</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Quick Action Modal */}
       {showQuickActionModal && (

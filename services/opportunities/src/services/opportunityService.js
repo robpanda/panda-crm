@@ -3399,11 +3399,18 @@ Be factual and professional. Highlight anything that needs attention.`;
    * Returns sales reps, project managers, and managers who can own jobs
    */
   async getAssignableUsers() {
+    const assignableRoleValues = ['SALES_REP', 'PROJECT_MANAGER', 'SALES_MANAGER', 'OFFICE_MANAGER', 'ADMIN'];
     const users = await prisma.user.findMany({
       where: {
         isActive: true,
         role: {
-          in: ['SALES_REP', 'PROJECT_MANAGER', 'SALES_MANAGER', 'OFFICE_MANAGER', 'ADMIN'],
+          is: {
+            isActive: true,
+            OR: [
+              { name: { in: assignableRoleValues } },
+              { roleType: { in: assignableRoleValues } },
+            ],
+          },
         },
       },
       select: {
@@ -3411,7 +3418,12 @@ Be factual and professional. Highlight anything that needs attention.`;
         firstName: true,
         lastName: true,
         email: true,
-        role: true,
+        role: {
+          select: {
+            name: true,
+            roleType: true,
+          },
+        },
         officeAssignment: true,
         _count: {
           select: {
@@ -3434,7 +3446,7 @@ Be factual and professional. Highlight anything that needs attention.`;
       firstName: user.firstName,
       lastName: user.lastName,
       email: user.email,
-      role: user.role,
+      role: user.role?.name || user.role?.roleType || null,
       office: user.officeAssignment,
       activeJobCount: user._count.ownedOpportunities,
     }));
@@ -4521,7 +4533,18 @@ Be factual and professional. Highlight anything that needs attention.`;
     if (!approverId) {
       // Find an admin user as fallback
       const admin = await prisma.user.findFirst({
-        where: { role: 'ADMIN', isActive: true },
+        where: {
+          isActive: true,
+          role: {
+            is: {
+              isActive: true,
+              OR: [
+                { name: { equals: 'ADMIN', mode: 'insensitive' } },
+                { roleType: { equals: 'ADMIN', mode: 'insensitive' } },
+              ],
+            },
+          },
+        },
         select: { id: true },
       });
       approverId = admin?.id;
