@@ -12015,7 +12015,7 @@ export default function OpportunityDetail() {
         opportunityId={id}
         contactId={opportunity?.contactId || opportunity?.contact?.id || null}
         accountId={opportunity?.accountId || opportunity?.account?.id || null}
-        sentById={user?.id || null}
+        sentById={currentUser?.id || null}
         onSent={() => {
           queryClient.invalidateQueries({ queryKey: ['opportunity', id, 'conversations'] });
           setActionSuccess('SMS sent successfully');
@@ -12041,7 +12041,7 @@ export default function OpportunityDetail() {
         opportunityId={id}
         contactId={opportunity?.contactId || opportunity?.contact?.id || null}
         accountId={opportunity?.accountId || opportunity?.account?.id || null}
-        sentById={user?.id || null}
+        sentById={currentUser?.id || null}
         onSent={() => {
           queryClient.invalidateQueries({ queryKey: ['opportunity', id, 'emails'] });
           setActionSuccess('Email sent successfully');
