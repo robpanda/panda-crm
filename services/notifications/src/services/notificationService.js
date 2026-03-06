@@ -4,6 +4,7 @@ const prisma = new PrismaClient();
 
 // Bamboogli messaging service URL
 const BAMBOOGLI_SERVICE_URL = process.env.BAMBOOGLI_SERVICE_URL || 'http://localhost:3012';
+const CRM_BASE_URL = (process.env.CRM_BASE_URL || process.env.APP_URL || 'https://crm.pandaadmin.com').replace(/\/+$/, '');
 
 /**
  * NotificationService - Central service for creating and managing notifications
@@ -214,7 +215,11 @@ class NotificationService {
       return false;
     }
 
-    const message = this.interpolate(template.smsTemplate, data);
+    let message = this.interpolate(template.smsTemplate, data);
+    const actionUrl = this.resolveActionUrl(data.actionUrl || notification.actionUrl);
+    if (notification.type === 'MENTION' && actionUrl && !message.includes(actionUrl)) {
+      message = `${message}${message.endsWith(' ') ? '' : ' '}View: ${actionUrl}`;
+    }
 
     try {
       const response = await fetch(`${BAMBOOGLI_SERVICE_URL}/api/messages/send/sms`, {
@@ -389,6 +394,14 @@ class NotificationService {
     return template.replace(/\{\{(\w+)\}\}/g, (match, key) => {
       return data[key] !== undefined ? data[key] : match;
     });
+  }
+
+  resolveActionUrl(actionUrl) {
+    const value = String(actionUrl || '').trim();
+    if (!value) return '';
+    if (/^https?:\/\//i.test(value)) return value;
+    if (value.startsWith('/')) return `${CRM_BASE_URL}${value}`;
+    return `${CRM_BASE_URL}/${value}`;
   }
 
   /**
