@@ -35,6 +35,12 @@ const GAF_CLIENT_SECRET = process.env.GAF_CLIENT_SECRET;
 const GAF_AUDIENCE = process.env.GAF_AUDIENCE || 'https://quickmeasureapi.gaf.com';
 const GAF_SCOPE = process.env.GAF_SCOPE || 'Subscriber:GetSubscriberDetails Subscriber:SiteStatus Subscriber:AccountCheck Subscriber:CoverageCheck Subscriber:OrderHistory Subscriber:OrderSearch Subscriber:Order Subscriber:Download';
 const GAF_SUBSCRIBER = process.env.GAF_SUBSCRIBER || 'PAN';
+const GAF_ACCOUNT_EMAIL = (
+  process.env.GAF_ACCOUNT_EMAIL
+  || process.env.GAF_MAIN_ACCOUNT_EMAIL
+  || process.env.GAF_NOTIFICATION_EMAIL
+  || 'christiancurry@panda-exteriors.com'
+).trim();
 const GAF_WEBHOOK_URL = process.env.GAF_WEBHOOK_URL
   || (process.env.NODE_ENV === 'production'
     ? 'https://crm.pandaadmin.com/api/integrations/measurements/gaf/webhook'
@@ -171,7 +177,14 @@ class MeasurementService {
     // Validate opportunity exists
     const opportunity = await prisma.opportunity.findUnique({
       where: { id: opportunityId },
-      include: { account: true },
+      include: {
+        account: true,
+        owner: {
+          select: {
+            email: true,
+          },
+        },
+      },
     });
 
     if (!opportunity) {
@@ -1028,6 +1041,7 @@ class MeasurementService {
         comments,
         subscriberCustomField1: opportunity.jobId || '',
         referenceId: report.id,
+        ownerEmail: opportunity.owner?.email || null,
       });
 
       const updatedReport = await prisma.measurementReport.update({
@@ -1108,9 +1122,10 @@ class MeasurementService {
 
     const subscriberOrderNumber = orderData.referenceId || `GP-${Date.now()}`;
     const subscriberCustomField1 = orderData.subscriberCustomField1 || '';
-    const emailAddress = orderData.ownerEmail
-      || process.env.GAF_NOTIFICATION_EMAIL
-      || 'operations@pandaexteriors.com';
+    const emailAddress = GAF_ACCOUNT_EMAIL;
+    const recipientEmailAddresses = orderData.recipientEmails
+      || orderData.ownerEmail
+      || GAF_ACCOUNT_EMAIL;
     const country = orderData.country || 'USA';
     const fullAddress = `${orderData.address || ''} ${orderData.city || ''} ${orderData.state || ''} ${orderData.zip || ''} ${country}`.trim();
     const productCode = this.getGAFProductCode(orderData.measurementType);
@@ -1138,7 +1153,7 @@ class MeasurementService {
       Latitude: latitude,
       Longitude: longitude,
       FullAddress: fullAddress,
-      RecipientEmailAddresses: orderData.recipientEmails || '',
+      RecipientEmailAddresses: recipientEmailAddresses,
       Instructions: instructions,
       CallbackUrl: GAF_WEBHOOK_URL,
       WebhookCallbackUrl: GAF_WEBHOOK_URL,
@@ -1165,7 +1180,9 @@ class MeasurementService {
       latitude,
       longitude,
       fullAddress,
-      recipientEmailAddresses: orderData.recipientEmails || '',
+      recipientEmailAddresses: recipientEmailAddresses,
+      recipientemailaddress: recipientEmailAddresses,
+      emailaddress: emailAddress,
       instructions,
       callbackUrl: GAF_WEBHOOK_URL,
       webhookCallbackUrl: GAF_WEBHOOK_URL,
