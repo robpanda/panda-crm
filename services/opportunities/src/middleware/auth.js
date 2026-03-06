@@ -67,17 +67,28 @@ async function verifyToken(token) {
     // Development bypass - decode JWT without verification
     try {
       const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
-      const cognitoId = payload.sub;
+      const cognitoCandidates = [...new Set([
+        payload.sub,
+        payload.username,
+        payload['cognito:username'],
+      ]
+        .map((value) => String(value || '').trim())
+        .filter(Boolean))];
+      const cognitoId = cognitoCandidates[0] || null;
       const emailCandidate = payload.email || payload.username || payload['cognito:username'] || null;
 
       // Look up the user in the database to get the actual database ID
       const { PrismaClient } = await import('@prisma/client');
       const prisma = new PrismaClient();
       try {
-        const dbUser = await prisma.user.findFirst({
-          where: { cognitoId },
-          select: { id: true, email: true, roleId: true, role: { select: { name: true, roleType: true } } },
-        });
+        let dbUser = null;
+        for (const cognitoCandidate of cognitoCandidates) {
+          dbUser = await prisma.user.findFirst({
+            where: { cognitoId: cognitoCandidate },
+            select: { id: true, email: true, roleId: true, role: { select: { name: true, roleType: true } } },
+          });
+          if (dbUser) break;
+        }
 
         if (dbUser) {
           return {
@@ -94,10 +105,10 @@ async function verifyToken(token) {
 
       // Fallback to payload values
       return {
-        id: payload.userId || payload.sub,
+        id: payload.userId || payload['custom:userId'] || cognitoId,
         email: emailCandidate,
         role: payload.role || 'user',
-        cognitoId: payload.sub,
+        cognitoId,
       };
     } catch {
       throw new Error('Invalid token format');
@@ -116,7 +127,14 @@ async function verifyToken(token) {
 
   logger.info('Verifying token...');
   const payload = await verifier.verify(token);
-  const cognitoId = payload.sub;
+  const cognitoCandidates = [...new Set([
+    payload.sub,
+    payload.username,
+    payload['cognito:username'],
+  ]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean))];
+  const cognitoId = cognitoCandidates[0] || null;
   const emailCandidates = [...new Set([
     payload.email,
     payload.username,
@@ -145,11 +163,14 @@ async function verifyToken(token) {
       if (user) break;
     }
 
-    if (!user && cognitoId) {
-      user = await prisma.user.findFirst({
-        where: { cognitoId },
-        include: { role: true },
-      });
+    if (!user) {
+      for (const cognitoCandidate of cognitoCandidates) {
+        user = await prisma.user.findFirst({
+          where: { cognitoId: cognitoCandidate },
+          include: { role: true },
+        });
+        if (user) break;
+      }
     }
 
     if (user) {
@@ -166,10 +187,10 @@ async function verifyToken(token) {
     // User not in database - return basic info
     logger.warn('User not found in database for cognitoId:', cognitoId);
     return {
-      id: cognitoId,
+      id: payload.userId || payload['custom:userId'] || cognitoId,
       email: emailCandidates[0] || null,
       role: payload['custom:role'] || 'user',
-      cognitoId: cognitoId,
+      cognitoId,
       groups: payload['cognito:groups'] || [],
     };
   } finally {

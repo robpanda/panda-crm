@@ -5,7 +5,27 @@ const prisma = new PrismaClient();
 // Bamboogli messaging service URL
 const BAMBOOGLI_SERVICE_URL = process.env.BAMBOOGLI_SERVICE_URL
   || (process.env.NODE_ENV === 'development' ? 'http://localhost:3012' : 'http://bamboogli-service:3012');
-const CRM_APP_URL = (process.env.CRM_APP_URL || process.env.APP_URL || 'https://crm.pandaadmin.com').replace(/\/+$/, '');
+const DEFAULT_CRM_APP_URL = 'https://crm.pandaadmin.com';
+
+function resolveCrmAppUrl() {
+  const configured = String(process.env.CRM_APP_URL || process.env.APP_URL || DEFAULT_CRM_APP_URL).trim();
+  if (!configured) return DEFAULT_CRM_APP_URL;
+
+  let normalized = configured;
+  if (normalized.startsWith('//')) {
+    normalized = `https:${normalized}`;
+  } else if (!/^https?:\/\//i.test(normalized)) {
+    normalized = `https://${normalized.replace(/^\/+/, '')}`;
+  }
+
+  try {
+    const parsed = new URL(normalized);
+    if (!parsed.hostname) return DEFAULT_CRM_APP_URL;
+    return parsed.origin.replace(/\/+$/, '');
+  } catch (_error) {
+    return DEFAULT_CRM_APP_URL;
+  }
+}
 
 /**
  * NotificationService - Central service for creating and managing notifications
@@ -427,7 +447,7 @@ class NotificationService {
     if (/^https?:\/\//i.test(raw)) return raw;
     if (raw.startsWith('//')) return `https:${raw}`;
     const normalizedPath = raw.startsWith('/') ? raw : `/${raw}`;
-    return `${CRM_APP_URL}${normalizedPath}`;
+    return `${resolveCrmAppUrl()}${normalizedPath}`;
   }
 
   getDeliveryTemplateData(data = {}) {
