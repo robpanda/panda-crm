@@ -135,6 +135,20 @@ const NAIP_CONFIDENCE_THRESHOLD = parseFloat(process.env.NAIP_CONFIDENCE_THRESHO
 let eagleViewTokenCache = { token: null, expiresAt: 0 };
 let gafTokenCache = { token: null, expiresAt: 0 };
 let hoverTokenCache = { accessToken: null, refreshToken: null, expiresAt: 0 };
+const OPPORTUNITY_MEASUREMENT_SELECT = {
+  id: true,
+  street: true,
+  city: true,
+  state: true,
+  postalCode: true,
+  accountId: true,
+  jobId: true,
+  owner: {
+    select: {
+      email: true,
+    },
+  },
+};
 
 class MeasurementService {
   /**
@@ -177,14 +191,7 @@ class MeasurementService {
     // Validate opportunity exists
     const opportunity = await prisma.opportunity.findUnique({
       where: { id: opportunityId },
-      include: {
-        account: true,
-        owner: {
-          select: {
-            email: true,
-          },
-        },
-      },
+      select: OPPORTUNITY_MEASUREMENT_SELECT,
     });
 
     if (!opportunity) {
@@ -990,7 +997,7 @@ class MeasurementService {
 
     const opportunity = await prisma.opportunity.findUnique({
       where: { id: opportunityId },
-      include: { account: true },
+      select: OPPORTUNITY_MEASUREMENT_SELECT,
     });
 
     if (!opportunity) {
@@ -1509,6 +1516,7 @@ class MeasurementService {
 
     const opportunity = await prisma.opportunity.findUnique({
       where: { id: opportunityId },
+      select: OPPORTUNITY_MEASUREMENT_SELECT,
     });
 
     if (!opportunity) {
@@ -1870,7 +1878,7 @@ class MeasurementService {
 
     const opportunity = await prisma.opportunity.findUnique({
       where: { id: opportunityId },
-      include: { account: true },
+      select: OPPORTUNITY_MEASUREMENT_SELECT,
     });
 
     if (!opportunity) {
