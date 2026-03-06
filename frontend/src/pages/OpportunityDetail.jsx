@@ -184,6 +184,28 @@ function getDocumentCategoryBadgeClass(value) {
   }
 }
 
+function parseAdjusterOfficePhone(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return { phone: '', extension: '' };
+
+  const extMatch = raw.match(/^(.*?)(?:\s*(?:ext\.?|x|extension)\s*[:#-]?\s*([a-z0-9-]+))$/i);
+  if (!extMatch) return { phone: raw, extension: '' };
+
+  return {
+    phone: extMatch[1]?.trim() || '',
+    extension: extMatch[2]?.trim() || '',
+  };
+}
+
+function formatAdjusterOfficePhone(phone, extension) {
+  const normalizedPhone = String(phone || '').trim();
+  const normalizedExtension = String(extension || '').trim();
+
+  if (!normalizedPhone && !normalizedExtension) return null;
+  if (!normalizedExtension) return normalizedPhone || null;
+  return `${normalizedPhone} ext ${normalizedExtension}`.trim();
+}
+
 // SMS Modal Component with Canned Responses (same as LeadDetail)
 function SmsModal({
   isOpen,
@@ -2358,6 +2380,7 @@ export default function OpportunityDetail() {
   const [detailsSubTab, setDetailsSubTab] = useState('status');
   const [showTransferOwnerModal, setShowTransferOwnerModal] = useState(false);
   const [selectedTransferOwnerId, setSelectedTransferOwnerId] = useState('');
+  const [transferOwnerSearchTerm, setTransferOwnerSearchTerm] = useState('');
   const [transferRelatedItems, setTransferRelatedItems] = useState(true);
   const [transferOwnerError, setTransferOwnerError] = useState('');
 
@@ -2383,6 +2406,7 @@ export default function OpportunityDetail() {
     adjusterName: '',
     adjusterEmail: '',
     adjusterOfficePhone: '',
+    adjusterOfficeExtension: '',
     fieldAdjusterMobile: '',
   });
 
@@ -2558,7 +2582,7 @@ export default function OpportunityDetail() {
   );
 
   const getRepositoryFileUrl = useCallback(
-    (file) => file?.contentUrl || file?.downloadUrl || file?.url || null,
+    (file) => file?.downloadUrl || file?.signedContentUrl || file?.contentUrl || file?.url || null,
     []
   );
 
@@ -2764,6 +2788,7 @@ export default function OpportunityDetail() {
 
       setShowTransferOwnerModal(false);
       setSelectedTransferOwnerId('');
+      setTransferOwnerSearchTerm('');
       setTransferRelatedItems(true);
       setTransferOwnerError('');
       setActionSuccess(
@@ -2781,6 +2806,7 @@ export default function OpportunityDetail() {
   // Initialize claim form when opportunity data loads
   useEffect(() => {
     if (opportunity) {
+      const officePhoneParts = parseAdjusterOfficePhone(opportunity.adjusterOfficePhone || '');
       setClaimForm({
         insuranceCarrier: opportunity.insuranceCarrier || '',
         claimNumber: opportunity.claimNumber || '',
@@ -2789,7 +2815,8 @@ export default function OpportunityDetail() {
         damageLocation: opportunity.damageLocation || '',
         adjusterName: opportunity.adjusterName || '',
         adjusterEmail: opportunity.adjusterEmail || '',
-        adjusterOfficePhone: opportunity.adjusterOfficePhone || '',
+        adjusterOfficePhone: officePhoneParts.phone,
+        adjusterOfficeExtension: officePhoneParts.extension,
         fieldAdjusterMobile: opportunity.fieldAdjusterMobile || '',
       });
     }
@@ -2866,7 +2893,10 @@ export default function OpportunityDetail() {
       damageLocation: claimForm.damageLocation || null,
       adjusterName: claimForm.adjusterName || null,
       adjusterEmail: claimForm.adjusterEmail || null,
-      adjusterOfficePhone: claimForm.adjusterOfficePhone || null,
+      adjusterOfficePhone: formatAdjusterOfficePhone(
+        claimForm.adjusterOfficePhone,
+        claimForm.adjusterOfficeExtension
+      ),
       fieldAdjusterMobile: claimForm.fieldAdjusterMobile || null,
     };
     updateMutation.mutate(updateData);
@@ -3924,6 +3954,10 @@ export default function OpportunityDetail() {
   const ownerDisplayId = opportunity?.owner?.id || opportunity?.ownerId || null;
   const ownerDisplayEmail = opportunity?.owner?.email || null;
   const ownerDisplayPhone = opportunity?.owner?.phone || null;
+  const parsedAdjusterOfficePhone = useMemo(
+    () => parseAdjusterOfficePhone(opportunity?.adjusterOfficePhone || ''),
+    [opportunity?.adjusterOfficePhone]
+  );
   const ownerInitials = ownerDisplayName
     .split(' ')
     .filter(Boolean)
@@ -3935,6 +3969,23 @@ export default function OpportunityDetail() {
     () => (assignableOwners || []).filter((teamUser) => teamUser.id !== ownerDisplayId),
     [assignableOwners, ownerDisplayId]
   );
+  const filteredTransferOwners = useMemo(() => {
+    const query = transferOwnerSearchTerm.trim().toLowerCase();
+    if (!query) return availableTransferOwners;
+    return availableTransferOwners.filter((teamUser) => {
+      const haystack = [
+        teamUser.name,
+        teamUser.email,
+        teamUser.role,
+        teamUser.firstName,
+        teamUser.lastName,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [availableTransferOwners, transferOwnerSearchTerm]);
 
   // Calculate badge counts for the new category tabs (must be before early returns)
   const categoryBadgeCounts = useMemo(() => ({
@@ -5740,6 +5791,7 @@ export default function OpportunityDetail() {
                         type="button"
                         onClick={() => {
                           setSelectedTransferOwnerId('');
+                          setTransferOwnerSearchTerm('');
                           setTransferRelatedItems(true);
                           setTransferOwnerError('');
                           setShowTransferOwnerModal(true);
@@ -5772,7 +5824,7 @@ export default function OpportunityDetail() {
                               ) : (
                                 <p className="font-medium text-gray-900">{ownerDisplayName || 'Unassigned'}</p>
                               )}
-                              <p className="text-sm text-gray-500">Sales Rep</p>
+                              <p className="text-sm text-gray-500">Owner</p>
                             </div>
                           </div>
                           <div className="flex items-center space-x-2">
@@ -8603,13 +8655,23 @@ export default function OpportunityDetail() {
                           />
                         </div>
                         <div>
-                          <label className="block text-sm text-gray-500 mb-1">Adjuster Office Phone (with extension)</label>
+                          <label className="block text-sm text-gray-500 mb-1">Adjuster Office Phone</label>
                           <input
-                            type="text"
+                            type="tel"
                             value={claimForm.adjusterOfficePhone}
                             onChange={(e) => setClaimForm({ ...claimForm, adjusterOfficePhone: e.target.value })}
                             className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
-                            placeholder="(555) 123-4567 ext 204"
+                            placeholder="(555) 123-4567"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm text-gray-500 mb-1">Extension</label>
+                          <input
+                            type="text"
+                            value={claimForm.adjusterOfficeExtension}
+                            onChange={(e) => setClaimForm({ ...claimForm, adjusterOfficeExtension: e.target.value })}
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                            placeholder="Ext"
                           />
                         </div>
                         <div>
@@ -8693,8 +8755,14 @@ export default function OpportunityDetail() {
                       </div>
                       <div>
                         <label className="text-sm text-gray-500">Adjuster Office Phone</label>
-                        <p className={`font-medium ${opportunity.adjusterOfficePhone ? 'text-gray-900' : 'text-gray-500 italic'}`}>
-                          {opportunity.adjusterOfficePhone || 'Not set'}
+                        <p className={`font-medium ${parsedAdjusterOfficePhone.phone ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                          {parsedAdjusterOfficePhone.phone || 'Not set'}
+                        </p>
+                      </div>
+                      <div>
+                        <label className="text-sm text-gray-500">Extension</label>
+                        <p className={`font-medium ${parsedAdjusterOfficePhone.extension ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                          {parsedAdjusterOfficePhone.extension || 'Not set'}
                         </p>
                       </div>
                       <div>
@@ -8860,15 +8928,6 @@ export default function OpportunityDetail() {
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
                   />
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Department</label>
-                  <input
-                    type="text"
-                    value={editContactForm.department}
-                    onChange={(e) => setEditContactForm((prev) => ({ ...prev, department: e.target.value }))}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
-                  />
-                </div>
               </div>
 
               <div className="border-t border-gray-100 pt-4">
@@ -8876,11 +8935,19 @@ export default function OpportunityDetail() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="md:col-span-2">
                     <label className="block text-sm font-medium text-gray-700 mb-1">Street</label>
-                    <input
-                      type="text"
+                    <AddressAutocomplete
                       value={editContactForm.mailingStreet}
-                      onChange={(e) => setEditContactForm((prev) => ({ ...prev, mailingStreet: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                      onChange={(mailingStreet) => setEditContactForm((prev) => ({ ...prev, mailingStreet }))}
+                      onAddressSelect={(address) => {
+                        setEditContactForm((prev) => ({
+                          ...prev,
+                          mailingStreet: address.street || prev.mailingStreet,
+                          mailingCity: address.city || prev.mailingCity,
+                          mailingState: address.state || prev.mailingState,
+                          mailingPostalCode: address.postalCode || prev.mailingPostalCode,
+                        }));
+                      }}
+                      placeholder="Start typing an address..."
                     />
                   </div>
                   <div>
@@ -8983,6 +9050,7 @@ export default function OpportunityDetail() {
                 type="button"
                 onClick={() => {
                   setShowTransferOwnerModal(false);
+                  setTransferOwnerSearchTerm('');
                   setTransferOwnerError('');
                 }}
                 className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"
@@ -9000,6 +9068,15 @@ export default function OpportunityDetail() {
               </div>
 
               <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Search Owner</label>
+                <input
+                  type="text"
+                  value={transferOwnerSearchTerm}
+                  onChange={(event) => setTransferOwnerSearchTerm(event.target.value)}
+                  placeholder="Search by name, email, or role"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none mb-3"
+                />
+
                 <label className="block text-sm font-medium text-gray-700 mb-1">New Owner</label>
                 <select
                   value={selectedTransferOwnerId}
@@ -9010,7 +9087,7 @@ export default function OpportunityDetail() {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
                 >
                   <option value="">Select an owner...</option>
-                  {availableTransferOwners.map((teamUser) => (
+                  {filteredTransferOwners.map((teamUser) => (
                     <option key={teamUser.id} value={teamUser.id}>
                       {teamUser.name || `${teamUser.firstName || ''} ${teamUser.lastName || ''}`.trim() || teamUser.email}
                       {teamUser.role ? ` • ${teamUser.role}` : ''}
@@ -9019,6 +9096,9 @@ export default function OpportunityDetail() {
                 </select>
                 {availableTransferOwners.length === 0 && (
                   <p className="mt-2 text-xs text-gray-500">No alternate owners available.</p>
+                )}
+                {availableTransferOwners.length > 0 && filteredTransferOwners.length === 0 && (
+                  <p className="mt-2 text-xs text-gray-500">No owners match your search.</p>
                 )}
               </div>
 
@@ -9050,6 +9130,7 @@ export default function OpportunityDetail() {
                 type="button"
                 onClick={() => {
                   setShowTransferOwnerModal(false);
+                  setTransferOwnerSearchTerm('');
                   setTransferOwnerError('');
                 }}
                 className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-lg"

@@ -771,7 +771,10 @@ export const opportunitiesApi = {
   // Get service appointments (via WorkOrders)
   async getAppointments(id) {
     const response = await api.get(`/api/opportunities/${id}/appointments`);
-    return response.data.data;
+    const payload = response.data.data;
+    if (Array.isArray(payload)) return payload;
+    if (Array.isArray(payload?.appointments)) return payload.appointments;
+    return [];
   },
 
   // Get service contract
