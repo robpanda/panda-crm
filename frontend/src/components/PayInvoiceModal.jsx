@@ -40,15 +40,12 @@ function PaymentForm({
   const queryClient = useQueryClient();
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentError, setPaymentError] = useState(null);
+  const [isElementReady, setIsElementReady] = useState(false);
   const isMountedRef = useRef(true);
 
   useEffect(() => () => {
     isMountedRef.current = false;
   }, []);
-
-  useEffect(() => {
-    onProcessingChange?.(isProcessing);
-  }, [isProcessing, onProcessingChange]);
 
   const recordPaymentMutation = useMutation({
     mutationFn: (data) => paymentsApi.createPayment(data),
@@ -63,25 +60,31 @@ function PaymentForm({
   const handleSubmit = async (e) => {
     e.preventDefault();
 
+    if (isProcessing) {
+      return;
+    }
+
     if (!stripe || !elements) {
       return;
     }
 
     if (!isMountedRef.current) return;
     setIsProcessing(true);
+    onProcessingChange?.(true);
     setPaymentError(null);
 
     try {
-      // Confirm the payment with Stripe
-      const { error: submitError } = await elements.submit();
-      if (submitError) {
+      const paymentElement = elements.getElement(PaymentElement);
+      if (!paymentElement) {
         if (isMountedRef.current) {
-          setPaymentError(submitError.message);
+          setPaymentError('Payment form is still loading. Please wait a moment and try again.');
           setIsProcessing(false);
+          onProcessingChange?.(false);
         }
         return;
       }
 
+      // Confirm the payment with Stripe
       const { error, paymentIntent } = await stripe.confirmPayment({
         elements,
         confirmParams: {
@@ -94,6 +97,7 @@ function PaymentForm({
         if (isMountedRef.current) {
           setPaymentError(error.message);
           setIsProcessing(false);
+          onProcessingChange?.(false);
         }
         return;
       }
@@ -118,6 +122,7 @@ function PaymentForm({
       if (isMountedRef.current) {
         setIsProcessing(false);
       }
+      onProcessingChange?.(false);
     }
   };
 
@@ -138,6 +143,12 @@ function PaymentForm({
     <form onSubmit={handleSubmit} className="space-y-4">
       <PaymentElement
         options={paymentElementOptions}
+        onReady={() => setIsElementReady(true)}
+        onLoaderStart={() => setIsElementReady(false)}
+        onLoaderror={(event) => {
+          setPaymentError(event?.error?.message || 'Unable to load payment form.');
+          setIsElementReady(false);
+        }}
       />
 
       {paymentError && (
@@ -158,7 +169,7 @@ function PaymentForm({
         </button>
         <button
           type="submit"
-          disabled={isProcessing || !stripe || !elements}
+          disabled={isProcessing || !stripe || !elements || !isElementReady}
           className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center justify-center gap-2"
         >
           {isProcessing ? (
