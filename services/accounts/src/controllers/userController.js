@@ -2,6 +2,45 @@
 import { userService } from '../services/userService.js';
 import { logger } from '../middleware/logger.js';
 
+const extractIdArray = (value) => {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => {
+      if (!entry) return null;
+      if (typeof entry === 'string') return entry;
+      if (typeof entry === 'object') return entry.id || entry.userId || entry.value || null;
+      return String(entry);
+    })
+    .map((id) => String(id || '').trim())
+    .filter(Boolean);
+};
+
+const normalizeMergePayload = (body = {}) => {
+  const masterUserId = String(
+    body.masterUserId ||
+      body.masterId ||
+      body.primaryUserId ||
+      body.keepUserId ||
+      ''
+  ).trim();
+
+  const duplicateCandidates = extractIdArray(
+    body.duplicateUserIds ||
+      body.duplicateIds ||
+      body.sourceUserIds ||
+      body.mergedUserIds ||
+      body.userIds
+  );
+
+  const duplicateUserIds = duplicateCandidates.filter((id) => id !== masterUserId);
+
+  return {
+    masterUserId,
+    duplicateUserIds,
+    reason: body.reason || body.mergeReason || body.note || undefined,
+  };
+};
+
 export const userController = {
   // GET /users
   async list(req, res, next) {
@@ -166,11 +205,15 @@ export const userController = {
   // POST /users/merge
   async merge(req, res, next) {
     try {
-      const result = await userService.mergeUsers({
-        masterUserId: req.body.masterUserId,
-        duplicateUserIds: req.body.duplicateUserIds,
-        reason: req.body.reason,
+      const normalizedPayload = normalizeMergePayload(req.body);
+
+      logger.info('Received user merge request', {
+        actorId: req.user?.id || null,
+        masterUserId: normalizedPayload.masterUserId,
+        duplicateCount: normalizedPayload.duplicateUserIds.length,
       });
+
+      const result = await userService.mergeUsers(normalizedPayload);
 
       res.json({
         success: true,

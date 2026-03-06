@@ -86,6 +86,7 @@ export default function Users() {
   const [selectedMergeUserIds, setSelectedMergeUserIds] = useState([]);
   const [actionError, setActionError] = useState('');
   const [mergeError, setMergeError] = useState('');
+  const [mergeSuccess, setMergeSuccess] = useState('');
 
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -190,16 +191,30 @@ export default function Users() {
 
   const mergeUsersMutation = useMutation({
     mutationFn: (payload) => usersApi.mergeUsers(payload),
-    onSuccess: () => {
-      queryClient.invalidateQueries(['users']);
-      queryClient.invalidateQueries(['userStats']);
+    onSuccess: async (result) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['users'] }),
+        queryClient.invalidateQueries({ queryKey: ['userStats'] }),
+        queryClient.refetchQueries({ queryKey: ['users'], type: 'active' }),
+        queryClient.refetchQueries({ queryKey: ['userStats'], type: 'active' }),
+      ]);
+
+      const mergedCount = result?.mergedUsers?.length || 0;
+      const transferredCount = result?.reassignmentSummary?.total || 0;
+      const masterName = result?.masterUser?.name || 'master user';
+
       setShowMergeModal(false);
       setSelectedMergeUserIds([]);
       setMergeForm({ masterUserId: '', reason: '', search: '' });
       setMergeError('');
+      setMergeSuccess(
+        `Merged ${mergedCount} user${mergedCount === 1 ? '' : 's'} into ${masterName}. ` +
+        `Reassigned ${transferredCount} linked record${transferredCount === 1 ? '' : 's'}.`
+      );
       setActionError('');
     },
     onError: (error) => {
+      setMergeSuccess('');
       setMergeError(error.response?.data?.error?.message || error.message || 'Failed to merge users');
     },
   });
@@ -839,6 +854,7 @@ export default function Users() {
                 reason: '',
                 search: '',
               }));
+              setMergeSuccess('');
               setMergeError('');
               setActionError('');
             }}
@@ -965,26 +981,30 @@ export default function Users() {
 
       {/* User Table */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-        {(selectedMergeUserIds.length > 0 || mergeError) && (
+        {(selectedMergeUserIds.length > 0 || mergeError || mergeSuccess) && (
           <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
             <div className="text-sm text-gray-700">
               {selectedMergeUserIds.length > 0
                 ? `${selectedMergeUserIds.length} user${selectedMergeUserIds.length === 1 ? '' : 's'} selected for merge.`
                 : 'No users selected.'}
             </div>
-            {selectedMergeUserIds.length > 0 && (
+            {(selectedMergeUserIds.length > 0 || mergeSuccess) && (
               <button
                 onClick={() => {
                   setSelectedMergeUserIds([]);
                   setMergeError('');
+                  setMergeSuccess('');
                 }}
                 className="text-sm text-gray-600 hover:text-gray-900"
               >
-                Clear selection
+                Clear
               </button>
             )}
             {mergeError && !showMergeModal && (
               <div className="text-sm text-red-600">{mergeError}</div>
+            )}
+            {mergeSuccess && (
+              <div className="text-sm text-green-700">{mergeSuccess}</div>
             )}
           </div>
         )}

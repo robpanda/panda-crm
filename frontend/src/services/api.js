@@ -1698,6 +1698,11 @@ export const usersApi = {
 
   async mergeUsers(data) {
     const response = await api.post('/api/users/merge', data);
+    if (response.data?.success === false) {
+      const error = new Error(response.data?.error?.message || 'Failed to merge users');
+      error.response = { data: response.data };
+      throw error;
+    }
     return response.data.data;
   },
 

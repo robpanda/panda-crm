@@ -6,6 +6,38 @@ import { requireRole } from '../middleware/auth.js';
 
 const router = Router();
 
+const normalizeMergeIds = (body = {}) => {
+  const masterUserId = String(
+    body.masterUserId ||
+      body.masterId ||
+      body.primaryUserId ||
+      body.keepUserId ||
+      ''
+  ).trim();
+
+  const candidateList =
+    body.duplicateUserIds ||
+    body.duplicateIds ||
+    body.sourceUserIds ||
+    body.mergedUserIds ||
+    body.userIds;
+
+  const duplicateUserIds = Array.isArray(candidateList)
+    ? candidateList
+        .map((entry) => {
+          if (!entry) return null;
+          if (typeof entry === 'string') return entry;
+          if (typeof entry === 'object') return entry.id || entry.userId || entry.value || null;
+          return String(entry);
+        })
+        .map((id) => String(id || '').trim())
+        .filter(Boolean)
+        .filter((id) => id !== masterUserId)
+    : [];
+
+  return { masterUserId, duplicateUserIds };
+};
+
 // Validation middleware
 const validatePagination = [
   query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
@@ -55,10 +87,19 @@ router.post(
   '/merge',
   requireRole('admin', 'super_admin', 'system'),
   [
-    body('masterUserId').isString().notEmpty().withMessage('masterUserId is required'),
-    body('duplicateUserIds').isArray({ min: 1 }).withMessage('duplicateUserIds must contain at least one id'),
-    body('duplicateUserIds.*').isString().notEmpty().withMessage('Each duplicate user id must be a non-empty string'),
-    body('reason').optional().isString(),
+    body().custom((payload) => {
+      const { masterUserId, duplicateUserIds } = normalizeMergeIds(payload);
+      if (!masterUserId) {
+        throw new Error('masterUserId is required');
+      }
+      if (!duplicateUserIds.length) {
+        throw new Error('duplicateUserIds must contain at least one id');
+      }
+      return true;
+    }),
+    body('reason').optional().isString().withMessage('reason must be a string'),
+    body('mergeReason').optional().isString().withMessage('mergeReason must be a string'),
+    body('note').optional().isString().withMessage('note must be a string'),
   ],
   handleValidation,
   userController.merge
