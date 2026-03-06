@@ -3,6 +3,8 @@
  * Use these throughout the app for consistent number display
  */
 
+const PANDA_EMPLOYEE_EMAIL_DOMAINS = new Set(['pandaexteriors.com', 'panda-exteriors.com']);
+
 /**
  * Format a number with commas (e.g., 1234 -> "1,234")
  * @param {number|string} value - The number to format
@@ -116,6 +118,35 @@ export function isValidEmailFormat(email) {
 }
 
 /**
+ * Normalize Panda employee emails by removing dots from the local part.
+ * Examples:
+ * - first.last@pandaexteriors.com -> firstlast@pandaexteriors.com
+ * - first.last@panda-exteriors.com -> firstlast@panda-exteriors.com
+ * Other domains are returned unchanged.
+ * @param {string} email
+ * @returns {string}
+ */
+export function normalizePandaEmployeeEmail(email) {
+  if (typeof email !== 'string') return email || '';
+  const trimmed = email.trim();
+  if (!trimmed) return '';
+
+  const atIndex = trimmed.lastIndexOf('@');
+  if (atIndex <= 0 || atIndex === trimmed.length - 1) {
+    return trimmed;
+  }
+
+  const localPart = trimmed.slice(0, atIndex);
+  const domainPart = trimmed.slice(atIndex + 1).toLowerCase();
+
+  if (!PANDA_EMPLOYEE_EMAIL_DOMAINS.has(domainPart)) {
+    return trimmed;
+  }
+
+  return `${localPart.replace(/\./g, '').toLowerCase()}@${domainPart}`;
+}
+
+/**
  * Format phone number to standard (XXX) XXX-XXXX format
  * @param {string} phone - The phone number to format
  * @returns {string} Formatted phone number or original if can't format
@@ -156,6 +187,7 @@ export default {
   formatValue,
   isValidPhoneFormat,
   isValidEmailFormat,
+  normalizePandaEmployeeEmail,
   formatPhoneNumber,
   formatDateMDY,
 };

@@ -27,6 +27,7 @@ import {
   GitMerge,
 } from 'lucide-react';
 import AdminLayout from '../../components/AdminLayout';
+import { normalizePandaEmployeeEmail } from '../../utils/formatters';
 
 const statusColors = {
   ACTIVE: 'bg-green-100 text-green-700',
@@ -59,6 +60,7 @@ const roleTypeLabels = {
 };
 
 const uniqueArray = (values = []) => [...new Set(values.filter(Boolean))];
+const formatAdminUserEmail = (email) => normalizePandaEmployeeEmail(email);
 
 export default function Users() {
   const [search, setSearch] = useState('');
@@ -415,7 +417,7 @@ export default function Users() {
                   <label className="block text-sm text-gray-500 mb-1">Email</label>
                   <div className="flex items-center">
                     <Mail className="w-4 h-4 text-gray-400 mr-2" />
-                    <span className="text-gray-900">{user.email}</span>
+                    <span className="text-gray-900">{formatAdminUserEmail(user.email)}</span>
                   </div>
                 </div>
                 <div>
@@ -1066,7 +1068,7 @@ export default function Users() {
                         </div>
                         <div className="ml-3">
                           <p className="font-medium text-gray-900">{user.fullName || `${user.firstName} ${user.lastName}`}</p>
-                          <p className="text-sm text-gray-500">{user.email}</p>
+                          <p className="text-sm text-gray-500">{formatAdminUserEmail(user.email)}</p>
                         </div>
                       </div>
                     </td>
@@ -1213,6 +1215,10 @@ export default function Users() {
                   type="email"
                   value={newUserForm.email}
                   onChange={(e) => setNewUserForm({ ...newUserForm, email: e.target.value })}
+                  onBlur={(e) => setNewUserForm((prev) => ({
+                    ...prev,
+                    email: normalizePandaEmployeeEmail(e.target.value),
+                  }))}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
                   placeholder="user@pandaexteriors.com"
                 />
@@ -1282,7 +1288,10 @@ export default function Users() {
                     setActionError('Password must be at least 8 characters');
                     return;
                   }
-                  createUserMutation.mutate(newUserForm);
+                  createUserMutation.mutate({
+                    ...newUserForm,
+                    email: normalizePandaEmployeeEmail(newUserForm.email),
+                  });
                 }}
                 disabled={createUserMutation.isPending}
                 className="px-4 py-2 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg font-medium hover:opacity-90 disabled:opacity-50"
@@ -1315,7 +1324,7 @@ export default function Users() {
                 </div>
               )}
               <p className="text-gray-600 mb-6">
-                Are you sure you want to delete <span className="font-semibold">{selectedUser.firstName} {selectedUser.lastName}</span> ({selectedUser.email})?
+                Are you sure you want to delete <span className="font-semibold">{selectedUser.firstName} {selectedUser.lastName}</span> ({formatAdminUserEmail(selectedUser.email)})?
               </p>
               <div className="flex justify-end gap-3">
                 <button
@@ -1436,7 +1445,7 @@ export default function Users() {
                 <div>
                   <h2 className="text-xl font-bold text-gray-900">Terminate Employee</h2>
                   <p className="text-sm text-gray-500 mt-1">
-                    {selectedUser.firstName} {selectedUser.lastName} ({selectedUser.email})
+                    {selectedUser.firstName} {selectedUser.lastName} ({formatAdminUserEmail(selectedUser.email)})
                   </p>
                 </div>
                 <button
@@ -1599,14 +1608,14 @@ export default function Users() {
                           />
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
-                              <span className="text-sm font-medium text-gray-900">{userName || user.email}</span>
+                              <span className="text-sm font-medium text-gray-900">{userName || formatAdminUserEmail(user.email)}</span>
                               <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
                                 user.isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'
                               }`}>
                                 {user.isActive ? 'Active' : 'Inactive'}
                               </span>
                             </div>
-                            <div className="text-xs text-gray-500">{user.email}</div>
+                            <div className="text-xs text-gray-500">{formatAdminUserEmail(user.email)}</div>
                           </div>
                         </label>
                       );

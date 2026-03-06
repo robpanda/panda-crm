@@ -8,6 +8,28 @@ const prisma = new PrismaClient();
 
 const router = Router();
 
+const PANDA_EMPLOYEE_EMAIL_DOMAINS = new Set(['pandaexteriors.com', 'panda-exteriors.com']);
+
+function normalizePandaEmployeeEmail(email) {
+  if (typeof email !== 'string') return email;
+  const trimmed = email.trim();
+  if (!trimmed) return trimmed;
+
+  const atIndex = trimmed.lastIndexOf('@');
+  if (atIndex <= 0 || atIndex === trimmed.length - 1) {
+    return trimmed;
+  }
+
+  const localPart = trimmed.slice(0, atIndex);
+  const domainPart = trimmed.slice(atIndex + 1).toLowerCase();
+
+  if (!PANDA_EMPLOYEE_EMAIL_DOMAINS.has(domainPart)) {
+    return trimmed;
+  }
+
+  return `${localPart.replace(/\./g, '').toLowerCase()}@${domainPart}`;
+}
+
 async function getDatabaseUserProfile(email) {
   if (!email) {
     logger.warn('Skipping DB user enrichment: Cognito user has no email attribute');
@@ -300,20 +322,21 @@ const requireApiKey = (req, res, next) => {
 router.post('/admin/users', requireApiKey, async (req, res, next) => {
   try {
     const { email, name, temporaryPassword, role, department, salesforceId } = req.body;
+    const normalizedEmail = normalizePandaEmployeeEmail(email);
 
-    if (!email || !name || !temporaryPassword) {
+    if (!normalizedEmail || !name || !temporaryPassword) {
       return res.status(400).json({
         success: false,
         error: { code: 'VALIDATION_ERROR', message: 'Email, name, and temporaryPassword are required' },
       });
     }
 
-    const result = await authService.adminCreateUser(email, name, temporaryPassword, {
+    const result = await authService.adminCreateUser(normalizedEmail, name, temporaryPassword, {
       role,
       department,
       salesforceId,
     });
-    logger.info(`Admin created user: ${email}`);
+    logger.info(`Admin created user: ${normalizedEmail}`);
     res.json({ success: true, data: result });
   } catch (error) {
     next(error);
