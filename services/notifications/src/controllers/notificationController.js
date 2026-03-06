@@ -1,8 +1,55 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 import { notificationService } from '../services/notificationService.js';
 import { dispatchMentions } from '../services/mentionDispatcher.js';
 
 const prisma = new PrismaClient();
+const notificationModel = Prisma?.dmmf?.datamodel?.models?.find((model) => model.name === 'Notification');
+const runtimeNotificationModel = prisma?._runtimeDataModel?.models?.Notification;
+const runtimeFields = Array.isArray(runtimeNotificationModel?.fields)
+  ? runtimeNotificationModel.fields.map((field) => field.name)
+  : Object.keys(runtimeNotificationModel?.fields || {});
+const notificationFields = new Set([
+  ...(notificationModel?.fields || []).map((field) => field.name),
+  ...runtimeFields,
+]);
+const supportsNotificationActorId = notificationFields.has('actorId');
+const supportsNotificationActorRelation = notificationFields.has('actor');
+
+const ACTOR_SELECT = { id: true, fullName: true, firstName: true, lastName: true, email: true };
+
+function withActorInclude(include = {}) {
+  if (!supportsNotificationActorRelation) {
+    return include;
+  }
+  return {
+    ...include,
+    actor: {
+      select: ACTOR_SELECT,
+    },
+  };
+}
+
+async function hydrateActors(notifications = []) {
+  if (!supportsNotificationActorId || supportsNotificationActorRelation || notifications.length === 0) {
+    return notifications;
+  }
+
+  const actorIds = [...new Set(notifications.map((notification) => notification.actorId).filter(Boolean))];
+  if (!actorIds.length) {
+    return notifications;
+  }
+
+  const actors = await prisma.user.findMany({
+    where: { id: { in: actorIds } },
+    select: ACTOR_SELECT,
+  });
+
+  const actorById = new Map(actors.map((actor) => [actor.id, actor]));
+  return notifications.map((notification) => ({
+    ...notification,
+    actor: notification.actorId ? actorById.get(notification.actorId) || null : null,
+  }));
+}
 
 // List notifications for a user with filtering
 export async function listNotifications(req, res, next) {
@@ -32,35 +79,35 @@ export async function listNotifications(req, res, next) {
       status: status || { not: 'DELETED' }, // Exclude deleted by default
     };
 
-    const [notifications, total] = await Promise.all([
+    const include = withActorInclude({
+      opportunity: {
+        select: { id: true, name: true, stage: true },
+      },
+      account: {
+        select: { id: true, name: true },
+      },
+      contact: {
+        select: { id: true, fullName: true },
+      },
+      workOrder: {
+        select: { id: true, workOrderNumber: true, status: true },
+      },
+      case: {
+        select: { id: true, caseNumber: true, subject: true },
+      },
+    });
+
+    const [rawNotifications, total] = await Promise.all([
       prisma.notification.findMany({
         where,
-        include: {
-          actor: {
-            select: { id: true, fullName: true, firstName: true, lastName: true, email: true },
-          },
-          opportunity: {
-            select: { id: true, name: true, stage: true },
-          },
-          account: {
-            select: { id: true, name: true },
-          },
-          contact: {
-            select: { id: true, fullName: true },
-          },
-          workOrder: {
-            select: { id: true, workOrderNumber: true, status: true },
-          },
-          case: {
-            select: { id: true, caseNumber: true, subject: true },
-          },
-        },
+        include,
         orderBy: { createdAt: 'desc' },
         skip: (parseInt(page) - 1) * parseInt(limit),
         take: parseInt(limit),
       }),
       prisma.notification.count({ where }),
     ]);
+    const notifications = await hydrateActors(rawNotifications);
 
     res.json({
       data: notifications,
@@ -93,6 +140,17 @@ export async function listOutboxNotifications(req, res, next) {
     if (!actorId) {
       return res.status(400).json({ error: 'actorId is required' });
     }
+    if (!supportsNotificationActorId) {
+      return res.json({
+        data: [],
+        pagination: {
+          page: parseInt(page, 10),
+          limit: parseInt(limit, 10),
+          total: 0,
+          totalPages: 0,
+        },
+      });
+    }
 
     const where = {
       actorId,
@@ -104,23 +162,23 @@ export async function listOutboxNotifications(req, res, next) {
       status: status || { not: 'DELETED' },
     };
 
-    const [notifications, total] = await Promise.all([
+    const include = withActorInclude({
+      user: {
+        select: { id: true, fullName: true, firstName: true, lastName: true, email: true },
+      },
+    });
+
+    const [rawNotifications, total] = await Promise.all([
       prisma.notification.findMany({
         where,
-        include: {
-          user: {
-            select: { id: true, fullName: true, firstName: true, lastName: true, email: true },
-          },
-          actor: {
-            select: { id: true, fullName: true, firstName: true, lastName: true, email: true },
-          },
-        },
+        include,
         orderBy: { createdAt: 'desc' },
         skip: (parseInt(page, 10) - 1) * parseInt(limit, 10),
         take: parseInt(limit, 10),
       }),
       prisma.notification.count({ where }),
     ]);
+    const notifications = await hydrateActors(rawNotifications);
 
     res.json({
       data: notifications,
@@ -141,25 +199,32 @@ export async function getNotification(req, res, next) {
   try {
     const { id } = req.params;
 
-    const notification = await prisma.notification.findUnique({
-      where: { id },
-      include: {
-        user: {
-          select: { id: true, fullName: true, email: true },
-        },
-        actor: {
-          select: { id: true, fullName: true, email: true },
-        },
-        opportunity: true,
-        account: true,
-        contact: true,
-        workOrder: true,
-        case: true,
+    const include = withActorInclude({
+      user: {
+        select: { id: true, fullName: true, email: true },
       },
+      opportunity: true,
+      account: true,
+      contact: true,
+      workOrder: true,
+      case: true,
+    });
+
+    let notification = await prisma.notification.findUnique({
+      where: { id },
+      include,
     });
 
     if (!notification) {
       return res.status(404).json({ error: 'Notification not found' });
+    }
+
+    if (supportsNotificationActorId && !supportsNotificationActorRelation && notification.actorId) {
+      const actor = await prisma.user.findUnique({
+        where: { id: notification.actorId },
+        select: ACTOR_SELECT,
+      });
+      notification = { ...notification, actor: actor || null };
     }
 
     res.json(notification);
@@ -213,38 +278,49 @@ export async function createNotification(req, res, next) {
       }
     }
 
-    const notification = await prisma.notification.create({
-      data: {
-        userId,
-        type,
-        title,
-        message,
-        priority,
-        actionUrl,
-        actionLabel,
-        opportunityId,
-        accountId,
-        contactId,
-        leadId,
-        workOrderId,
-        caseId,
-        actorId: actorId || null,
-        sourceType,
-        sourceId,
-        expiresAt: expiresAt ? new Date(expiresAt) : null,
+    const notificationData = {
+      userId,
+      type,
+      title,
+      message,
+      priority,
+      actionUrl,
+      actionLabel,
+      opportunityId,
+      accountId,
+      contactId,
+      leadId,
+      workOrderId,
+      caseId,
+      sourceType,
+      sourceId,
+      expiresAt: expiresAt ? new Date(expiresAt) : null,
+    };
+    if (supportsNotificationActorId) {
+      notificationData.actorId = actorId || null;
+    }
+
+    const include = withActorInclude({
+      opportunity: {
+        select: { id: true, name: true },
       },
-      include: {
-        actor: {
-          select: { id: true, fullName: true, email: true },
-        },
-        opportunity: {
-          select: { id: true, name: true },
-        },
-        account: {
-          select: { id: true, name: true },
-        },
+      account: {
+        select: { id: true, name: true },
       },
     });
+
+    let notification = await prisma.notification.create({
+      data: notificationData,
+      include,
+    });
+
+    if (supportsNotificationActorId && !supportsNotificationActorRelation && notification.actorId) {
+      const actor = await prisma.user.findUnique({
+        where: { id: notification.actorId },
+        select: ACTOR_SELECT,
+      });
+      notification = { ...notification, actor: actor || null };
+    }
 
     // Queue email/SMS delivery if enabled in preferences
     // This would be handled by a separate delivery service
@@ -396,19 +472,19 @@ export async function getNotificationsByOpportunity(req, res, next) {
       ...(status ? { status } : { status: { not: 'DELETED' } }),
     };
 
-    const notifications = await prisma.notification.findMany({
-      where,
-      include: {
-        user: {
-          select: { id: true, fullName: true },
-        },
-        actor: {
-          select: { id: true, fullName: true },
-        },
+    const include = withActorInclude({
+      user: {
+        select: { id: true, fullName: true },
       },
+    });
+
+    const rawNotifications = await prisma.notification.findMany({
+      where,
+      include,
       orderBy: { createdAt: 'desc' },
       take: parseInt(limit),
     });
+    const notifications = await hydrateActors(rawNotifications);
 
     res.json(notifications);
   } catch (error) {

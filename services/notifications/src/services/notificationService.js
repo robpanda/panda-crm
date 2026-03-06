@@ -1,6 +1,16 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, Prisma } from '@prisma/client';
 
 const prisma = new PrismaClient();
+const notificationModel = Prisma?.dmmf?.datamodel?.models?.find((model) => model.name === 'Notification');
+const runtimeNotificationModel = prisma?._runtimeDataModel?.models?.Notification;
+const runtimeFields = Array.isArray(runtimeNotificationModel?.fields)
+  ? runtimeNotificationModel.fields.map((field) => field.name)
+  : Object.keys(runtimeNotificationModel?.fields || {});
+const notificationFields = new Set([
+  ...(notificationModel?.fields || []).map((field) => field.name),
+  ...runtimeFields,
+]);
+const supportsNotificationActorId = notificationFields.has('actorId');
 
 // Bamboogli messaging service URL
 const BAMBOOGLI_SERVICE_URL = process.env.BAMBOOGLI_SERVICE_URL || 'http://localhost:3012';
@@ -66,25 +76,29 @@ class NotificationService {
     }
 
     // Create notification
+    const notificationData = {
+      userId,
+      type,
+      title,
+      message,
+      priority: template.defaultPriority || 'NORMAL',
+      actionUrl: data.actionUrl,
+      actionLabel: data.actionLabel,
+      opportunityId: relations.opportunityId,
+      accountId: relations.accountId,
+      contactId: relations.contactId,
+      leadId: relations.leadId,
+      workOrderId: relations.workOrderId,
+      caseId: relations.caseId,
+      sourceType: data.sourceType,
+      sourceId: data.sourceId,
+    };
+    if (supportsNotificationActorId) {
+      notificationData.actorId = relations.actorId || data.actorId || null;
+    }
+
     const notification = await prisma.notification.create({
-      data: {
-        userId,
-        type,
-        title,
-        message,
-        priority: template.defaultPriority || 'NORMAL',
-        actionUrl: data.actionUrl,
-        actionLabel: data.actionLabel,
-        opportunityId: relations.opportunityId,
-        accountId: relations.accountId,
-        contactId: relations.contactId,
-        leadId: relations.leadId,
-        workOrderId: relations.workOrderId,
-        caseId: relations.caseId,
-        actorId: relations.actorId || data.actorId || null,
-        sourceType: data.sourceType,
-        sourceId: data.sourceId,
-      },
+      data: notificationData,
     });
 
     // Handle delivery channels
