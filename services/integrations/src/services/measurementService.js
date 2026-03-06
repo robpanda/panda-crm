@@ -6,6 +6,7 @@ import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { createHash } from 'crypto';
 import { logger } from '../middleware/logger.js';
 
 const prisma = new PrismaClient();
@@ -14,6 +15,7 @@ const secretsClient = new SecretsManagerClient({ region: process.env.AWS_REGION 
 // S3 configuration for document storage
 const S3_BUCKET = process.env.MEASUREMENT_DOCS_BUCKET || 'panda-crm-measurement-docs';
 const S3_REGION = process.env.AWS_REGION || 'us-east-2';
+const DOCUMENTS_BUCKET = process.env.DOCUMENTS_BUCKET || 'panda-crm-documents';
 const s3Client = new S3Client({ region: S3_REGION });
 const lambdaClient = new LambdaClient({ region: S3_REGION });
 
@@ -1377,14 +1379,334 @@ class MeasurementService {
     return `${GAF_API_BASE}/download/${encodeURIComponent(trimmed)}`;
   }
 
+  getGAFAssetFileName(assetKey, assetValue, contentDisposition = null, contentType = null) {
+    // Prefer filename from content-disposition if available.
+    const dispositionMatch = contentDisposition
+      ? /filename\*?=(?:UTF-8''|")?([^\";]+)/i.exec(contentDisposition)
+      : null;
+    if (dispositionMatch?.[1]) {
+      const decoded = decodeURIComponent(dispositionMatch[1].replace(/"/g, '').trim());
+      if (decoded) return decoded;
+    }
+
+    const rawValue = String(assetValue || '').trim();
+    if (rawValue) {
+      // URL or identifier already containing extension.
+      const withoutQuery = rawValue.split('?')[0];
+      const lastSegment = withoutQuery.split('/').pop();
+      if (lastSegment && /\.[A-Za-z0-9]+$/.test(lastSegment)) {
+        return lastSegment;
+      }
+    }
+
+    const extensionByContentType = {
+      'application/pdf': 'pdf',
+      'application/xml': 'xml',
+      'text/xml': 'xml',
+      'application/json': 'json',
+      'application/dxf': 'dxf',
+      'image/jpeg': 'jpg',
+      'image/png': 'png',
+      'image/webp': 'webp',
+      'image/gif': 'gif',
+      'image/svg+xml': 'svg',
+    };
+    const inferredExt = extensionByContentType[String(contentType || '').toLowerCase()] || 'bin';
+    return `${assetKey}.${inferredExt}`;
+  }
+
+  sanitizeFileName(fileName) {
+    return String(fileName || 'file')
+      .replace(/[^A-Za-z0-9._-]/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 180) || 'file';
+  }
+
+  mapGAFAssetDisplayName(assetKey) {
+    const map = {
+      report: 'Report',
+      cover: 'Cover',
+      diagram: 'Diagram',
+      acculynx: 'AccuLynx XML',
+      homeownerreport: 'Homeowner Report',
+      report3d: '3D Report',
+      dxfurl: 'DXF',
+      verticalimage: 'Vertical Image',
+      northimage: 'North Image',
+      eastimage: 'East Image',
+      southimage: 'South Image',
+      westimage: 'West Image',
+    };
+    const normalized = String(assetKey || '').toLowerCase();
+    return map[normalized] || assetKey;
+  }
+
+  async upsertMeasurementRepositoryDocument({
+    measurementReport,
+    assetKey,
+    assetIdentifier,
+    fileName,
+    contentType,
+    contentSize,
+    s3Key,
+    s3Bucket,
+    provider = 'GAF_QUICKMEASURE',
+    orderNumber,
+    gafOrderNumber,
+    sourceUrl,
+  }) {
+    const assetSignature = createHash('sha1')
+      .update(`${measurementReport.id}|${String(assetKey)}|${String(assetIdentifier || sourceUrl || fileName)}`)
+      .digest('hex');
+    const sourceDocumentId = `GAF_${assetSignature}`;
+    const ext = (fileName.split('.').pop() || '').toUpperCase();
+    const lowerExt = (fileName.split('.').pop() || '').toLowerCase();
+    const assetLabel = this.mapGAFAssetDisplayName(assetKey);
+    const title = assetKey?.toLowerCase?.() === 'report'
+      ? `GAF Measurement Report ${orderNumber ? `#${orderNumber}` : ''}`.trim()
+      : `GAF ${assetLabel} ${orderNumber ? `#${orderNumber}` : ''}`.trim();
+    const metadata = JSON.stringify({
+      provider,
+      measurementReportId: measurementReport.id,
+      opportunityId: measurementReport.opportunityId,
+      accountId: measurementReport.accountId,
+      orderNumber: orderNumber || null,
+      gafOrderNumber: gafOrderNumber || null,
+      assetKey,
+      assetIdentifier: assetIdentifier || null,
+      sourceUrl: sourceUrl || null,
+      s3Key,
+      s3Bucket,
+    });
+
+    const document = await prisma.document.upsert({
+      where: { salesforceId: sourceDocumentId },
+      update: {
+        title,
+        fileName,
+        fileType: ext || null,
+        fileExtension: lowerExt || null,
+        contentSize: Number.isFinite(contentSize) ? contentSize : null,
+        contentUrl: `s3://${s3Bucket}/${s3Key}`,
+        sourceType: provider,
+        metadata,
+        latestVersionSalesforceId: sourceDocumentId,
+        contentModifiedDate: new Date(),
+        isArchived: false,
+      },
+      create: {
+        salesforceId: sourceDocumentId,
+        title,
+        fileName,
+        fileType: ext || null,
+        fileExtension: lowerExt || null,
+        contentSize: Number.isFinite(contentSize) ? contentSize : null,
+        contentUrl: `s3://${s3Bucket}/${s3Key}`,
+        sourceType: provider,
+        metadata,
+        latestVersionSalesforceId: sourceDocumentId,
+        contentModifiedDate: new Date(),
+        ownerId: measurementReport.orderedById || null,
+      },
+    });
+
+    const existingLink = await prisma.documentLink.findFirst({
+      where: {
+        documentId: document.id,
+        opportunityId: measurementReport.opportunityId,
+      },
+      select: { id: true },
+    });
+
+    if (!existingLink) {
+      await prisma.documentLink.create({
+        data: {
+          documentId: document.id,
+          linkedRecordType: 'OPPORTUNITY',
+          opportunityId: measurementReport.opportunityId,
+          accountId: measurementReport.accountId || null,
+          shareType: 'V',
+          visibility: 'AllUsers',
+        },
+      });
+    }
+
+    return document;
+  }
+
+  async downloadAndStoreGAFAsset({
+    measurementReport,
+    accessToken,
+    assetKey,
+    assetValue,
+    orderNumber,
+    gafOrderNumber,
+  }) {
+    const sourceUrl = this.buildGAFDownloadUrl(assetValue);
+    if (!sourceUrl) return null;
+
+    const headers = {};
+    if (accessToken) {
+      headers.Authorization = `Bearer ${accessToken}`;
+    }
+
+    const response = await fetch(sourceUrl, { method: 'GET', headers });
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      throw new Error(`GAF download failed (${response.status}) for ${assetKey}: ${String(body).slice(0, 300)}`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    if (!buffer.length) {
+      throw new Error(`GAF download returned empty payload for ${assetKey}`);
+    }
+
+    const contentType = response.headers.get('content-type') || 'application/octet-stream';
+    const fileName = this.sanitizeFileName(
+      this.getGAFAssetFileName(
+        assetKey,
+        assetValue,
+        response.headers.get('content-disposition'),
+        contentType
+      )
+    );
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const safeAssetKey = this.sanitizeFileName(String(assetKey || 'asset').toLowerCase());
+    const s3Key = `measurements/gaf/${measurementReport.id}/${timestamp}-${safeAssetKey}-${fileName}`;
+
+    await s3Client.send(new PutObjectCommand({
+      Bucket: DOCUMENTS_BUCKET,
+      Key: s3Key,
+      Body: buffer,
+      ContentType: contentType,
+      Metadata: {
+        provider: 'gaf_quickmeasure',
+        measurement_report_id: measurementReport.id,
+        opportunity_id: measurementReport.opportunityId,
+        gaf_order_number: String(gafOrderNumber || ''),
+      },
+    }));
+
+    const presignedUrl = await getSignedUrl(
+      s3Client,
+      new GetObjectCommand({ Bucket: DOCUMENTS_BUCKET, Key: s3Key }),
+      { expiresIn: 7 * 24 * 60 * 60 }
+    );
+
+    await this.upsertMeasurementRepositoryDocument({
+      measurementReport,
+      assetKey,
+      assetIdentifier: assetValue,
+      fileName,
+      contentType,
+      contentSize: buffer.length,
+      s3Key,
+      s3Bucket: DOCUMENTS_BUCKET,
+      orderNumber,
+      gafOrderNumber,
+      sourceUrl,
+    });
+
+    return {
+      assetKey,
+      assetLabel: this.mapGAFAssetDisplayName(assetKey),
+      assetIdentifier: assetValue,
+      sourceUrl,
+      fileName,
+      contentType,
+      contentSize: buffer.length,
+      s3Bucket: DOCUMENTS_BUCKET,
+      s3Key,
+      s3Url: `s3://${DOCUMENTS_BUCKET}/${s3Key}`,
+      presignedUrl,
+    };
+  }
+
+  async downloadAndStoreGAFAssets({
+    measurementReport,
+    assets,
+    subscriberOrderNumber,
+    gafOrderNumber,
+  }) {
+    if (!assets || typeof assets !== 'object') return [];
+
+    const accessToken = await this.getGAFAccessToken();
+    const storedAssets = [];
+
+    for (const [assetKey, assetValue] of Object.entries(assets)) {
+      if (!assetValue) continue;
+      const normalizedValue = String(assetValue).trim();
+      if (!normalizedValue) continue;
+      const normalizedKey = String(assetKey || '').toLowerCase();
+
+      // 3D viewer URL is not a downloadable binary asset; keep as link only.
+      if (normalizedKey === 'report3d' && /^https?:\/\//i.test(normalizedValue)) {
+        continue;
+      }
+
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const stored = await this.downloadAndStoreGAFAsset({
+          measurementReport,
+          accessToken,
+          assetKey,
+          assetValue: normalizedValue,
+          orderNumber: subscriberOrderNumber,
+          gafOrderNumber,
+        });
+        if (stored) storedAssets.push(stored);
+      } catch (error) {
+        logger.warn(
+          `Failed to download/store GAF asset ${assetKey} for report ${measurementReport.id}: ${error.message}`
+        );
+      }
+    }
+
+    return storedAssets;
+  }
+
   async processGAFReport(reportId, gafData) {
+    const existingReport = await prisma.measurementReport.findUnique({
+      where: { id: reportId },
+      select: {
+        id: true,
+        opportunityId: true,
+        accountId: true,
+        orderedById: true,
+        rawData: true,
+      },
+    });
+    if (!existingReport) {
+      throw new Error(`Measurement report ${reportId} not found`);
+    }
+
     const measurements = this.parseGAFMeasurements(gafData);
     const roofMeasurement = gafData?.RoofMeasurement || gafData?.roofMeasurement || gafData?.roof || {};
     const assets = roofMeasurement?.Assets || gafData?.Assets || gafData?.assets || {};
+    const externalId = gafData?.GAFOrderNumber || gafData?.gafOrderNumber || null;
+    const subscriberOrderNumber = gafData?.SubscriberOrderNumber || gafData?.subscriberOrderNumber || null;
+
+    let storedAssets = [];
+    try {
+      storedAssets = await this.downloadAndStoreGAFAssets({
+        measurementReport: existingReport,
+        assets,
+        subscriberOrderNumber,
+        gafOrderNumber: externalId,
+      });
+    } catch (error) {
+      logger.warn(`Failed bulk GAF asset storage for report ${reportId}: ${error.message}`);
+      storedAssets = [];
+    }
+    const storedReportPdf = storedAssets.find((asset) => String(asset.assetKey).toLowerCase() === 'report');
 
     const reportAsset = assets.Report || assets.report || null;
     const reportPdfUrl = gafData?.pdfUrl
       || gafData?.PdfUrl
+      || storedReportPdf?.presignedUrl
       || this.buildGAFDownloadUrl(reportAsset);
     const reportUrl = gafData?.viewUrl
       || gafData?.ViewUrl
@@ -1411,8 +1733,6 @@ class MeasurementService {
       || gafData?.Longitude
       || 0
     ) || null;
-    const externalId = gafData?.GAFOrderNumber || gafData?.gafOrderNumber || null;
-    const subscriberOrderNumber = gafData?.SubscriberOrderNumber || gafData?.subscriberOrderNumber || null;
 
     await prisma.measurementReport.update({
       where: { id: reportId },
@@ -1428,7 +1748,28 @@ class MeasurementService {
         latitude,
         longitude,
         ...measurements,
-        rawData: gafData,
+        rawData: {
+          ...(existingReport.rawData || {}),
+          ...gafData,
+          gafAssetsStored: storedAssets.map((asset) => ({
+            assetKey: asset.assetKey,
+            assetLabel: asset.assetLabel,
+            fileName: asset.fileName,
+            contentType: asset.contentType,
+            contentSize: asset.contentSize,
+            s3Bucket: asset.s3Bucket,
+            s3Key: asset.s3Key,
+            s3Url: asset.s3Url,
+            sourceUrl: asset.sourceUrl,
+          })),
+          ...(storedReportPdf
+            ? {
+                pdfS3Key: storedReportPdf.s3Key,
+                pdfS3Bucket: storedReportPdf.s3Bucket,
+                pdfS3Url: storedReportPdf.s3Url,
+              }
+            : {}),
+        },
       },
     });
 
