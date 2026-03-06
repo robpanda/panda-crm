@@ -546,13 +546,8 @@ router.post('/invoices/:invoiceId/create-intent', async (req, res, next) => {
             automaticPaymentMethods: { enabled: true },
           }
         : {
-            paymentMethodTypes: ['card', 'us_bank_account'],
-            paymentMethodOptions: {
-              // Keep internal ACH entry manual and avoid Financial Connections flow.
-              us_bank_account: {
-                verification_method: 'microdeposits',
-              },
-            },
+            // Internal CRM collection is card-only to keep checkout deterministic.
+            paymentMethodTypes: ['card'],
           }),
       metadata: {
         invoiceId: invoice.id,

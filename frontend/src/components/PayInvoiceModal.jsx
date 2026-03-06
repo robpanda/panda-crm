@@ -4,6 +4,7 @@ import { loadStripe } from '@stripe/stripe-js';
 import {
   Elements,
   PaymentElement,
+  CardElement,
   useStripe,
   useElements,
 } from '@stripe/react-stripe-js';
@@ -21,7 +22,12 @@ const stripePromiseCache = new Map();
 const getStripePromise = (publishableKey) => {
   if (!publishableKey) return null;
   if (!stripePromiseCache.has(publishableKey)) {
-    stripePromiseCache.set(publishableKey, loadStripe(publishableKey));
+    const promise = loadStripe(publishableKey).catch((error) => {
+      // Allow retry on a transient Stripe.js load failure.
+      stripePromiseCache.delete(publishableKey);
+      throw error;
+    });
+    stripePromiseCache.set(publishableKey, promise);
   }
   return stripePromiseCache.get(publishableKey);
 };
@@ -32,6 +38,7 @@ function PaymentForm({
   paymentAmount,
   onSuccess,
   onCancel,
+  clientSecret,
   paymentContext = 'internal',
   onProcessingChange,
 }) {
@@ -74,24 +81,44 @@ function PaymentForm({
     setPaymentError(null);
 
     try {
-      const paymentElement = elements.getElement(PaymentElement);
-      if (!paymentElement) {
-        if (isMountedRef.current) {
-          setPaymentError('Payment form is still loading. Please wait a moment and try again.');
-          setIsProcessing(false);
-          onProcessingChange?.(false);
-        }
-        return;
-      }
+      let error = null;
+      let paymentIntent = null;
 
-      // Confirm the payment with Stripe
-      const { error, paymentIntent } = await stripe.confirmPayment({
-        elements,
-        confirmParams: {
-          return_url: window.location.href,
-        },
-        redirect: 'if_required',
-      });
+      if (paymentContext === 'portal') {
+        const paymentElement = elements.getElement(PaymentElement);
+        if (!paymentElement) {
+          if (isMountedRef.current) {
+            setPaymentError('Payment form is still loading. Please wait a moment and try again.');
+            setIsProcessing(false);
+            onProcessingChange?.(false);
+          }
+          return;
+        }
+
+        ({ error, paymentIntent } = await stripe.confirmPayment({
+          elements,
+          confirmParams: {
+            return_url: window.location.href,
+          },
+          redirect: 'if_required',
+        }));
+      } else {
+        const cardElement = elements.getElement(CardElement);
+        if (!cardElement) {
+          if (isMountedRef.current) {
+            setPaymentError('Card form is still loading. Please wait a moment and try again.');
+            setIsProcessing(false);
+            onProcessingChange?.(false);
+          }
+          return;
+        }
+
+        ({ error, paymentIntent } = await stripe.confirmCardPayment(clientSecret, {
+          payment_method: {
+            card: cardElement,
+          },
+        }));
+      }
 
       if (error) {
         if (isMountedRef.current) {
@@ -126,30 +153,55 @@ function PaymentForm({
     }
   };
 
-  const paymentElementOptions = paymentContext === 'portal'
-    ? {
-        layout: 'tabs',
-      }
-    : {
-        layout: 'tabs',
-        paymentMethodOrder: ['card'],
-        wallets: {
-          applePay: 'never',
-          googlePay: 'never',
-        },
-      };
-
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
-      <PaymentElement
-        options={paymentElementOptions}
-        onReady={() => setIsElementReady(true)}
-        onLoaderStart={() => setIsElementReady(false)}
-        onLoaderror={(event) => {
-          setPaymentError(event?.error?.message || 'Unable to load payment form.');
-          setIsElementReady(false);
-        }}
-      />
+      {paymentContext === 'portal' && (
+        <PaymentElement
+          options={{ layout: 'tabs' }}
+          onReady={() => setIsElementReady(true)}
+          onLoaderStart={() => setIsElementReady(false)}
+          onLoadError={(event) => {
+            setPaymentError(event?.error?.message || 'Unable to load payment form.');
+            setIsElementReady(false);
+          }}
+        />
+      )}
+
+      {paymentContext !== 'portal' && (
+        <CardElement
+          options={{
+            hidePostalCode: false,
+            style: {
+              base: {
+                fontSize: '16px',
+                color: '#1f2937',
+                '::placeholder': {
+                  color: '#9ca3af',
+                },
+              },
+              invalid: {
+                color: '#dc2626',
+              },
+            },
+          }}
+          onReady={() => setIsElementReady(true)}
+          onChange={(event) => {
+            if (event?.error?.message) {
+              setPaymentError(event.error.message);
+            } else {
+              setPaymentError(null);
+            }
+          }}
+          onLoadError={(event) => {
+            setPaymentError(event?.error?.message || 'Unable to load card form.');
+            setIsElementReady(false);
+          }}
+        />
+      )}
+
+      {!isElementReady && (
+        <div className="text-xs text-gray-500">Loading secure payment form...</div>
+      )}
 
       {paymentError && (
         <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
@@ -169,7 +221,7 @@ function PaymentForm({
         </button>
         <button
           type="submit"
-          disabled={isProcessing || !stripe || !elements}
+          disabled={isProcessing || !stripe || !elements || !isElementReady}
           className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center justify-center gap-2"
         >
           {isProcessing ? (
@@ -490,6 +542,7 @@ export default function PayInvoiceModal({
                   <PaymentForm
                     invoice={invoice}
                     paymentAmount={paymentAmount}
+                    clientSecret={clientSecret}
                     paymentContext={paymentContext}
                     onSuccess={handlePaymentSuccess}
                     onCancel={() => setStep(1)}
