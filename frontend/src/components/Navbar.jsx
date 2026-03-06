@@ -240,13 +240,34 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
     },
   });
 
+  const navigateNotificationTarget = (actionUrl) => {
+    const rawUrl = String(actionUrl || '').trim();
+    if (!rawUrl) return;
+
+    if (/^https?:\/\//i.test(rawUrl)) {
+      try {
+        const parsed = new URL(rawUrl);
+        if (parsed.origin === window.location.origin) {
+          navigate(`${parsed.pathname}${parsed.search}${parsed.hash}`);
+        } else {
+          window.open(parsed.toString(), '_blank', 'noopener,noreferrer');
+        }
+        return;
+      } catch (error) {
+        console.warn('Invalid notification action URL:', rawUrl, error);
+      }
+    }
+
+    navigate(rawUrl.startsWith('/') ? rawUrl : `/${rawUrl}`);
+  };
+
   // Handle notification click
   const handleNotificationClick = (notification) => {
     if (notification.status === 'UNREAD') {
       markAsReadMutation.mutate(notification.id);
     }
     if (notification.actionUrl) {
-      navigate(notification.actionUrl);
+      navigateNotificationTarget(notification.actionUrl);
     }
     setShowNotifications(false);
   };

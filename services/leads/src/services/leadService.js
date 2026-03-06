@@ -12,7 +12,8 @@ const JOB_ID_STARTING_NUMBER = 999;
 const INTERNAL_COMMENT_TITLE_PREFIX = 'INTERNAL_COMMENT|';
 const INTERNAL_COMMENT_REPLY_TITLE_PREFIX = 'INTERNAL_COMMENT_REPLY|';
 const LEGACY_INTERNAL_COMMENT_JSON_PREFIX = '__internal_comment__:';
-const NOTIFICATION_SERVICE_URL = process.env.NOTIFICATION_SERVICE_URL || 'http://localhost:3011';
+const NOTIFICATION_SERVICE_URL = process.env.NOTIFICATION_SERVICE_URL
+  || (process.env.NODE_ENV === 'development' ? 'http://localhost:3011' : 'http://notifications-service:3011');
 const MENTION_DISPATCH_ENDPOINT = `${NOTIFICATION_SERVICE_URL}/api/notifications/mentions/dispatch`;
 
 function normalizeDepartmentTag(value) {
@@ -177,6 +178,20 @@ function extractMentionUserId(mention) {
 
 function buildCorrelationId(prefix, entityId) {
   return `${prefix}-${entityId}-${Date.now()}`;
+}
+
+function buildLeadMentionActionPath(leadId, noteId = null, commentId = null) {
+  const params = new URLSearchParams();
+  if (commentId) {
+    params.set('tab', 'internalComments');
+    params.set('commentId', String(commentId));
+  } else if (noteId) {
+    params.set('tab', 'internal');
+    params.set('noteId', String(noteId));
+  } else {
+    params.set('tab', 'internalComments');
+  }
+  return `/leads/${leadId}?${params.toString()}`;
 }
 
 // Audit logging helper
@@ -840,28 +855,71 @@ class LeadService {
   async resolveUserId(idOrCognitoId) {
     if (!idOrCognitoId) return null;
 
-    // If it's already a valid user ID format (user_XXX), return as-is
-    if (idOrCognitoId.startsWith('user_')) {
-      return idOrCognitoId;
+    const directUser = await prisma.user.findUnique({
+      where: { id: idOrCognitoId },
+      select: { id: true }
+    });
+    if (directUser?.id) {
+      return directUser.id;
     }
 
-    // Look up by cognitoId (UUID format from Cognito)
+    // Fallback: look up by cognitoId (UUID format from Cognito)
     const user = await prisma.user.findFirst({
       where: { cognitoId: idOrCognitoId },
       select: { id: true }
     });
 
-    if (user) {
-      return user.id;
+    return user?.id || null;
+  }
+
+  async resolveMentionActor(actor = null, fallbackUserId = null) {
+    const candidateIds = [
+      actor?.id,
+      actor?.userId,
+      actor?.cognitoId,
+      actor?.sub,
+      fallbackUserId,
+    ].filter(Boolean);
+
+    let resolvedUserId = null;
+    for (const candidate of candidateIds) {
+      resolvedUserId = await this.resolveUserId(candidate);
+      if (resolvedUserId) break;
     }
 
-    // Fallback: try direct lookup by id
-    const directUser = await prisma.user.findUnique({
-      where: { id: idOrCognitoId },
-      select: { id: true }
+    if (!resolvedUserId && actor?.email) {
+      const emailUser = await prisma.user.findFirst({
+        where: {
+          email: {
+            equals: String(actor.email || '').trim(),
+            mode: 'insensitive',
+          },
+        },
+        select: { id: true },
+      });
+      resolvedUserId = emailUser?.id || null;
+    }
+
+    if (!resolvedUserId) {
+      return {
+        id: null,
+        firstName: actor?.firstName || null,
+        lastName: actor?.lastName || null,
+        email: actor?.email || null,
+      };
+    }
+
+    const dbUser = await prisma.user.findUnique({
+      where: { id: resolvedUserId },
+      select: { id: true, firstName: true, lastName: true, email: true },
     });
 
-    return directUser?.id || null;
+    return dbUser || {
+      id: resolvedUserId,
+      firstName: actor?.firstName || null,
+      lastName: actor?.lastName || null,
+      email: actor?.email || null,
+    };
   }
 
   /**
@@ -2336,13 +2394,15 @@ class LeadService {
       throw error;
     }
 
+    const resolvedCreatedById = await this.resolveUserId(createdBy);
+
     // Create the note
     const newNote = await prisma.note.create({
       data: {
         title: title || null,
         body: note,
         leadId: leadId,
-        createdById: createdBy,
+        createdById: resolvedCreatedById,
       },
       include: {
         createdBy: {
@@ -2359,7 +2419,7 @@ class LeadService {
         leadId,
         content: note,
         mentions,
-        actor: newNote.createdBy || (createdBy ? { id: createdBy } : null),
+        actor: newNote.createdBy || (resolvedCreatedById ? { id: resolvedCreatedById } : null),
         leadName,
         noteId: newNote.id,
         correlationId: resolvedCorrelationId,
@@ -2391,13 +2451,17 @@ class LeadService {
       return 0;
     }
 
-    const actorName = `${actor?.firstName || ''} ${actor?.lastName || ''}`.trim() || actor?.email || 'Someone';
+    const actorProfile = await this.resolveMentionActor(actor);
+    const actorName = `${actorProfile?.firstName || ''} ${actorProfile?.lastName || ''}`.trim()
+      || actorProfile?.email
+      || actor?.email
+      || 'Someone';
     const preview = (content || '').substring(0, 100);
     const targetName = leadName || 'a lead';
 
     const resolvedCorrelationId = correlationId || buildCorrelationId('lead-mention', leadId);
     const payload = {
-      actorId: actor?.id || null,
+      actorId: actorProfile?.id || null,
       actorName,
       recipients: mentionUserIds.map((userId) => ({ userId })),
       entityType: 'lead',
@@ -2406,7 +2470,7 @@ class LeadService {
       commentId,
       bodyPreview: content || '',
       snippet: preview,
-      actionPath: `/leads/${leadId}`,
+      actionPath: buildLeadMentionActionPath(leadId, noteId, commentId),
       actionLabel: 'View Lead',
       context: targetName,
       sourceType: 'LEAD',
@@ -2431,7 +2495,11 @@ class LeadService {
       }
 
       const result = await response.json().catch(() => ({}));
-      return result?.data?.dispatched ?? 0;
+      const dispatched = result?.data?.dispatched ?? 0;
+      logger.info(
+        `[mentions.dispatch] leadId=${leadId} correlationId=${resolvedCorrelationId} attempted=${mentionUserIds.length} dispatched=${dispatched}`
+      );
+      return dispatched;
     } catch (error) {
       logger.warn(
         `[mentions.dispatch] leadId=${leadId} correlationId=${resolvedCorrelationId} failed: ${error.message}`
@@ -2471,12 +2539,14 @@ class LeadService {
       throw error;
     }
 
+    const mentionActor = await this.resolveMentionActor(actor);
+
     const reply = await prisma.note.create({
       data: {
         leadId,
         title: `REPLY|${noteId}`,
         body: content,
-        createdById: actor?.id,
+        createdById: mentionActor?.id || null,
       },
       include: {
         createdBy: {
@@ -2490,7 +2560,7 @@ class LeadService {
       leadId,
       content,
       mentions: payload.mentions || [],
-      actor,
+      actor: reply.createdBy || mentionActor,
       leadName: `${lead.firstName || ''} ${lead.lastName || ''}`.trim(),
       noteId: reply.id,
       correlationId,
@@ -2639,8 +2709,13 @@ class LeadService {
       : (parentMeta?.isResolved || false);
     let createdById = await this.resolveUserId(actor?.id || actor?.userId || actor?.cognitoId || actor?.sub || null);
     if (!createdById && actor?.email) {
-      const actorUser = await prisma.user.findUnique({
-        where: { email: actor.email },
+      const actorUser = await prisma.user.findFirst({
+        where: {
+          email: {
+            equals: String(actor.email || '').trim(),
+            mode: 'insensitive',
+          },
+        },
         select: { id: true },
       });
       createdById = actorUser?.id || null;
@@ -2686,7 +2761,7 @@ class LeadService {
       leadId,
       content,
       mentions: payload.mentions || [],
-      actor,
+      actor: comment.createdBy || (createdById ? { id: createdById } : null),
       leadName: `${lead.firstName || ''} ${lead.lastName || ''}`.trim(),
       commentId: comment.id,
       correlationId,
@@ -2787,7 +2862,7 @@ class LeadService {
       leadId,
       content: nextContent,
       mentions: payload.mentions || [],
-      actor,
+      actor: updated.createdBy || actor,
       commentId: updated.id,
       correlationId,
     });

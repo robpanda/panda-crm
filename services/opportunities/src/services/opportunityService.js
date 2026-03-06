@@ -319,6 +319,20 @@ function buildCorrelationId(prefix, entityId) {
   return `${prefix}-${entityId}-${Date.now()}`;
 }
 
+function buildOpportunityMentionActionPath(opportunityId, noteId = null, commentId = null) {
+  const params = new URLSearchParams();
+  if (commentId) {
+    params.set('tab', 'internalComments');
+    params.set('commentId', String(commentId));
+  } else if (noteId) {
+    params.set('tab', 'internalNotes');
+    params.set('noteId', String(noteId));
+  } else {
+    params.set('tab', 'internalComments');
+  }
+  return `/jobs/${opportunityId}?${params.toString()}`;
+}
+
 function validateAppointmentResultPayload(payload = {}) {
   const errors = [];
   const category = payload.dispositionCategory;
@@ -1242,8 +1256,13 @@ class OpportunityService {
     }
 
     if (!resolvedUserId && actor?.email) {
-      const emailUser = await prisma.user.findUnique({
-        where: { email: actor.email },
+      const emailUser = await prisma.user.findFirst({
+        where: {
+          email: {
+            equals: String(actor.email || '').trim(),
+            mode: 'insensitive',
+          },
+        },
         select: { id: true },
       });
       resolvedUserId = emailUser?.id || null;
@@ -5231,7 +5250,7 @@ Be factual and professional. Highlight anything that needs attention.`;
       commentId,
       bodyPreview: content || '',
       snippet: preview,
-      actionPath: `/jobs/${opportunityId}`,
+      actionPath: buildOpportunityMentionActionPath(opportunityId, noteId, commentId),
       actionLabel: 'View Job',
       context: subjectName,
       sourceType: 'OPPORTUNITY',
@@ -5409,8 +5428,13 @@ Be factual and professional. Highlight anything that needs attention.`;
       }
     }
     if (!createdById && user?.email) {
-      const emailUser = await prisma.user.findUnique({
-        where: { email: user.email },
+      const emailUser = await prisma.user.findFirst({
+        where: {
+          email: {
+            equals: String(user.email || '').trim(),
+            mode: 'insensitive',
+          },
+        },
         select: { id: true },
       });
       createdById = emailUser?.id || null;

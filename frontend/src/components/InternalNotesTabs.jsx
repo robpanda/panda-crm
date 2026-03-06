@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   StickyNote,
@@ -23,8 +24,9 @@ const apiByEntity = {
   opportunity: opportunitiesApi,
 };
 
-export default function InternalNotesTabs({ entityType = 'lead', entityId }) {
+export default function InternalNotesTabs({ entityType = 'lead', entityId, highlightNoteId = null }) {
   const api = apiByEntity[entityType];
+  const location = useLocation();
   const queryClient = useQueryClient();
   const [isAddingNote, setIsAddingNote] = useState(false);
   const [editingNoteId, setEditingNoteId] = useState(null);
@@ -36,12 +38,21 @@ export default function InternalNotesTabs({ entityType = 'lead', entityId }) {
   const [editMentions, setEditMentions] = useState([]);
   const [expandedNotes, setExpandedNotes] = useState(new Set());
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [highlightedNoteId, setHighlightedNoteId] = useState(null);
 
   const { data: notes = [], isLoading, error } = useQuery({
     queryKey: ['internalNotes', entityType, entityId],
     queryFn: () => api?.getNotes?.(entityId),
     enabled: !!entityId && !!api?.getNotes,
   });
+
+  const deepLinkNoteId = useMemo(() => {
+    const fromProp = String(highlightNoteId || '').trim();
+    if (fromProp) return fromProp;
+    const params = new URLSearchParams(location.search || '');
+    const fromUrl = String(params.get('noteId') || '').trim();
+    return fromUrl || null;
+  }, [highlightNoteId, location.search]);
 
   const createNoteMutation = useMutation({
     mutationFn: (data) => api?.createNote?.(entityId, data),
@@ -79,6 +90,32 @@ export default function InternalNotesTabs({ entityType = 'lead', entityId }) {
       queryClient.invalidateQueries(['internalNotes', entityType, entityId]);
     },
   });
+
+  useEffect(() => {
+    if (!deepLinkNoteId || !Array.isArray(notes) || notes.length === 0) return;
+
+    const elementId = `internal-note-${deepLinkNoteId}`;
+    let attempts = 0;
+
+    const scrollToNote = () => {
+      const el = document.getElementById(elementId);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        setHighlightedNoteId(String(deepLinkNoteId));
+        window.setTimeout(() => {
+          setHighlightedNoteId((current) => (current === String(deepLinkNoteId) ? null : current));
+        }, 2600);
+        return;
+      }
+
+      if (attempts < 10) {
+        attempts += 1;
+        window.setTimeout(scrollToNote, 120);
+      }
+    };
+
+    scrollToNote();
+  }, [deepLinkNoteId, notes]);
 
   const handleCreateNote = () => {
     if (!newNoteBody.trim()) return;
@@ -272,7 +309,13 @@ export default function InternalNotesTabs({ entityType = 'lead', entityId }) {
           const authorName = `${author.firstName || ''} ${author.lastName || ''}`.trim();
 
           return (
-            <div key={note.id} className="border border-gray-200 rounded-lg p-3">
+            <div
+              key={note.id}
+              id={`internal-note-${note.id}`}
+              className={`border border-gray-200 rounded-lg p-3 transition-colors ${
+                highlightedNoteId === String(note.id) ? 'bg-yellow-50 ring-1 ring-yellow-300' : ''
+              }`}
+            >
               {isEditing ? (
                 <div>
                   <input

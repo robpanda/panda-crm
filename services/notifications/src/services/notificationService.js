@@ -3,7 +3,9 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
 // Bamboogli messaging service URL
-const BAMBOOGLI_SERVICE_URL = process.env.BAMBOOGLI_SERVICE_URL || 'http://localhost:3012';
+const BAMBOOGLI_SERVICE_URL = process.env.BAMBOOGLI_SERVICE_URL
+  || (process.env.NODE_ENV === 'development' ? 'http://localhost:3012' : 'http://bamboogli-service:3012');
+const CRM_APP_URL = (process.env.CRM_APP_URL || process.env.APP_URL || 'https://crm.pandaadmin.com').replace(/\/+$/, '');
 
 /**
  * NotificationService - Central service for creating and managing notifications
@@ -64,6 +66,14 @@ class NotificationService {
       // In production, this would queue to a job system
     }
 
+    const requestedActorId = relations.actorId || data.actorId || null;
+    const actorId = await this.resolveActorId(requestedActorId);
+    if (requestedActorId && !actorId) {
+      console.warn(
+        `[notifications] Ignoring invalid actorId=${requestedActorId} for type=${type} userId=${userId} correlationId=${options.correlationId || data.correlationId || 'n/a'}`
+      );
+    }
+
     // Create notification
     const notification = await prisma.notification.create({
       data: {
@@ -80,7 +90,7 @@ class NotificationService {
         leadId: relations.leadId,
         workOrderId: relations.workOrderId,
         caseId: relations.caseId,
-        actorId: relations.actorId || data.actorId || null,
+        actorId,
         sourceType: data.sourceType,
         sourceId: data.sourceId,
       },
@@ -145,8 +155,9 @@ class NotificationService {
       return false;
     }
 
-    const subject = this.interpolate(template.emailSubjectTemplate, data);
-    const bodyHtml = this.interpolate(template.emailBodyTemplate, data);
+    const deliveryData = this.getDeliveryTemplateData(data);
+    const subject = this.interpolate(template.emailSubjectTemplate, deliveryData);
+    const bodyHtml = this.interpolate(template.emailBodyTemplate, deliveryData);
     // Create plain text version by stripping HTML
     const bodyText = bodyHtml.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
 
@@ -161,15 +172,15 @@ class NotificationService {
           subject,
           body: bodyText,
           bodyHtml,
-          contactId: data.contactId,
-          opportunityId: data.opportunityId || notification.opportunityId,
-          accountId: data.accountId || notification.accountId,
+          contactId: deliveryData.contactId,
+          opportunityId: deliveryData.opportunityId || notification.opportunityId,
+          accountId: deliveryData.accountId || notification.accountId,
           sentById: 'system', // System notification
           internalNotification: true,
           metadata: {
             notificationId: notification.id,
             notificationType: notification.type,
-            correlationId: data.correlationId || null,
+            correlationId: deliveryData.correlationId || null,
           },
         }),
       });
@@ -214,7 +225,8 @@ class NotificationService {
       return false;
     }
 
-    const message = this.interpolate(template.smsTemplate, data);
+    const deliveryData = this.getDeliveryTemplateData(data);
+    const message = this.interpolate(template.smsTemplate, deliveryData);
 
     try {
       const response = await fetch(`${BAMBOOGLI_SERVICE_URL}/api/messages/send/sms`, {
@@ -225,15 +237,15 @@ class NotificationService {
         body: JSON.stringify({
           to: user.mobilePhone,
           body: message,
-          contactId: data.contactId,
-          opportunityId: data.opportunityId || notification.opportunityId,
-          accountId: data.accountId || notification.accountId,
+          contactId: deliveryData.contactId,
+          opportunityId: deliveryData.opportunityId || notification.opportunityId,
+          accountId: deliveryData.accountId || notification.accountId,
           sentById: 'system', // System notification
           internalNotification: true,
           metadata: {
             notificationId: notification.id,
             notificationType: notification.type,
-            correlationId: data.correlationId || null,
+            correlationId: deliveryData.correlationId || null,
           },
         }),
       });
@@ -319,6 +331,24 @@ class NotificationService {
     };
   }
 
+  async resolveActorId(actorId) {
+    if (!actorId) return null;
+
+    const directUser = await prisma.user.findUnique({
+      where: { id: actorId },
+      select: { id: true },
+    });
+    if (directUser?.id) {
+      return directUser.id;
+    }
+
+    const cognitoUser = await prisma.user.findFirst({
+      where: { cognitoId: actorId },
+      select: { id: true },
+    });
+    return cognitoUser?.id || null;
+  }
+
   /**
    * Update delivery status on notification
    */
@@ -389,6 +419,25 @@ class NotificationService {
     return template.replace(/\{\{(\w+)\}\}/g, (match, key) => {
       return data[key] !== undefined ? data[key] : match;
     });
+  }
+
+  resolveExternalActionUrl(actionUrl) {
+    const raw = String(actionUrl || '').trim();
+    if (!raw) return null;
+    if (/^https?:\/\//i.test(raw)) return raw;
+    if (raw.startsWith('//')) return `https:${raw}`;
+    const normalizedPath = raw.startsWith('/') ? raw : `/${raw}`;
+    return `${CRM_APP_URL}${normalizedPath}`;
+  }
+
+  getDeliveryTemplateData(data = {}) {
+    const externalActionUrl = this.resolveExternalActionUrl(data.actionUrl);
+    if (!externalActionUrl) return data;
+    return {
+      ...data,
+      // Keep database actionUrl untouched (relative), but send absolute URLs out to email/SMS.
+      actionUrl: externalActionUrl,
+    };
   }
 
   /**

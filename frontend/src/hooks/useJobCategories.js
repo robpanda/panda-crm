@@ -1,4 +1,5 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import { CATEGORIES, TAB_TO_CATEGORY } from '../components/SuperTabNav';
 
 /**
@@ -6,6 +7,7 @@ import { CATEGORIES, TAB_TO_CATEGORY } from '../components/SuperTabNav';
  * Replaces the single activeTab state with category + subTab structure
  */
 export default function useJobCategories(initialCategory = 'schedule') {
+  const location = useLocation();
   // Track if we're showing the details view (separate from categories)
   // Default to true so Details tab opens by default
   const [showDetails, setShowDetails] = useState(true);
@@ -70,6 +72,39 @@ export default function useJobCategories(initialCategory = 'schedule') {
 
   // Get the legacy tab ID for backward compatibility
   const legacyTabId = activeSubTab;
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search || '');
+    const tabParam = String(params.get('tab') || '').trim();
+    const commentIdParam = String(params.get('commentId') || '').trim();
+    const noteIdParam = String(params.get('noteId') || '').trim();
+
+    if (commentIdParam) {
+      navigateToTab('internalComments');
+      return;
+    }
+
+    if (noteIdParam) {
+      navigateToTab('internalNotes');
+      return;
+    }
+
+    if (!tabParam) return;
+
+    const tabAliases = {
+      notes: 'internalNotes',
+      internal: 'internalNotes',
+      'internal-notes': 'internalNotes',
+      'internal-comments': 'internalComments',
+      communications: 'activity',
+      messages: 'activity',
+    };
+
+    const targetTab = tabAliases[tabParam] || tabParam;
+    if (targetTab === 'details' || TAB_TO_CATEGORY[targetTab]) {
+      navigateToTab(targetTab);
+    }
+  }, [location.search, navigateToTab]);
 
   // Calculate badge counts for categories
   const calculateBadgeCounts = useCallback((data) => {

@@ -68,6 +68,7 @@ async function verifyToken(token) {
     try {
       const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
       const cognitoId = payload.sub;
+      const emailCandidate = payload.email || payload.username || payload['cognito:username'] || null;
 
       // Look up the user in the database to get the actual database ID
       const { PrismaClient } = await import('@prisma/client');
@@ -81,7 +82,7 @@ async function verifyToken(token) {
         if (dbUser) {
           return {
             id: dbUser.id, // Use database ID, not Cognito ID
-            email: dbUser.email || payload.email,
+            email: dbUser.email || emailCandidate,
             role: dbUser.role?.name || payload.role || 'user',
             roleType: dbUser.role?.roleType,
             cognitoId: cognitoId,
@@ -94,7 +95,7 @@ async function verifyToken(token) {
       // Fallback to payload values
       return {
         id: payload.userId || payload.sub,
-        email: payload.email,
+        email: emailCandidate,
         role: payload.role || 'user',
         cognitoId: payload.sub,
       };
@@ -116,7 +117,13 @@ async function verifyToken(token) {
   logger.info('Verifying token...');
   const payload = await verifier.verify(token);
   const cognitoId = payload.sub;
-  const email = payload.email;
+  const emailCandidates = [...new Set([
+    payload.email,
+    payload.username,
+    payload['cognito:username'],
+  ]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean))];
   logger.info('Token payload:', { sub: cognitoId, tokenUse: payload.token_use });
 
   // Look up user by email first (from ID token), then by cognitoId (from access token)
@@ -125,11 +132,17 @@ async function verifyToken(token) {
     let user = null;
 
     // Access tokens don't have email, so we primarily use cognitoId
-    if (email) {
-      user = await prisma.user.findUnique({
-        where: { email },
+    for (const emailCandidate of emailCandidates) {
+      user = await prisma.user.findFirst({
+        where: {
+          email: {
+            equals: emailCandidate,
+            mode: 'insensitive',
+          },
+        },
         include: { role: true },
       });
+      if (user) break;
     }
 
     if (!user && cognitoId) {
@@ -154,7 +167,7 @@ async function verifyToken(token) {
     logger.warn('User not found in database for cognitoId:', cognitoId);
     return {
       id: cognitoId,
-      email: email,
+      email: emailCandidates[0] || null,
       role: payload['custom:role'] || 'user',
       cognitoId: cognitoId,
       groups: payload['cognito:groups'] || [],

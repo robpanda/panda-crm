@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   MessageCircle,
@@ -41,8 +42,9 @@ function normalizeDepartment(dept) {
   };
 }
 
-export default function InternalComments({ entityType, entityId }) {
+export default function InternalComments({ entityType, entityId, highlightCommentId = null }) {
   const api = apiByEntity[entityType];
+  const location = useLocation();
   const queryClient = useQueryClient();
   const [newContent, setNewContent] = useState('');
   const [newMentions, setNewMentions] = useState([]);
@@ -53,6 +55,7 @@ export default function InternalComments({ entityType, entityId }) {
   const [replyingToId, setReplyingToId] = useState(null);
   const [replyContent, setReplyContent] = useState('');
   const [replyMentions, setReplyMentions] = useState([]);
+  const [highlightedCommentId, setHighlightedCommentId] = useState(null);
 
   const { data: comments = [], isLoading, error } = useQuery({
     queryKey: ['internalComments', entityType, entityId],
@@ -87,6 +90,40 @@ export default function InternalComments({ entityType, entityId }) {
     }
     return Array.from(unique.values());
   }, [departments]);
+
+  const deepLinkCommentId = useMemo(() => {
+    const paramFromProp = String(highlightCommentId || '').trim();
+    if (paramFromProp) return paramFromProp;
+    const params = new URLSearchParams(location.search || '');
+    const paramFromUrl = String(params.get('commentId') || '').trim();
+    return paramFromUrl || null;
+  }, [highlightCommentId, location.search]);
+
+  useEffect(() => {
+    if (!deepLinkCommentId || !Array.isArray(comments) || comments.length === 0) return;
+
+    const elementId = `internal-comment-${deepLinkCommentId}`;
+    let attempts = 0;
+
+    const scrollToComment = () => {
+      const el = document.getElementById(elementId);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        setHighlightedCommentId(String(deepLinkCommentId));
+        window.setTimeout(() => {
+          setHighlightedCommentId((current) => (current === String(deepLinkCommentId) ? null : current));
+        }, 2600);
+        return;
+      }
+
+      if (attempts < 10) {
+        attempts += 1;
+        window.setTimeout(scrollToComment, 120);
+      }
+    };
+
+    scrollToComment();
+  }, [deepLinkCommentId, comments]);
 
   const createMutation = useMutation({
     mutationFn: (data) => api.createInternalComment(entityId, data),
@@ -221,7 +258,14 @@ export default function InternalComments({ entityType, entityId }) {
     const contentText = comment.content ?? comment.body ?? comment.text ?? '';
     const attachmentUrls = comment.attachmentUrls || comment.attachments || [];
     return (
-      <div key={comment.id} style={{ marginLeft: depth * 16 }} className="border-l border-gray-200 pl-4">
+      <div
+        key={comment.id}
+        id={`internal-comment-${comment.id}`}
+        style={{ marginLeft: depth * 16 }}
+        className={`border-l border-gray-200 pl-4 rounded-md transition-colors ${
+          highlightedCommentId === String(comment.id) ? 'bg-yellow-50 ring-1 ring-yellow-300' : ''
+        }`}
+      >
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="flex items-center gap-2">
