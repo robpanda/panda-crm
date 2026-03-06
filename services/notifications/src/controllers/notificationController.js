@@ -4,6 +4,18 @@ import { dispatchMentions } from '../services/mentionDispatcher.js';
 
 const prisma = new PrismaClient();
 
+function isUnknownActorIncludeError(error) {
+  const message = String(error?.message || '');
+  return message.includes('Unknown field `actor` for include statement on model `Notification`');
+}
+
+function dropActorInclude(include = undefined) {
+  if (!include || typeof include !== 'object') return include;
+  if (!Object.prototype.hasOwnProperty.call(include, 'actor')) return include;
+  const { actor, ...rest } = include;
+  return rest;
+}
+
 // List notifications for a user with filtering
 export async function listNotifications(req, res, next) {
   try {
@@ -32,35 +44,45 @@ export async function listNotifications(req, res, next) {
       status: status || { not: 'DELETED' }, // Exclude deleted by default
     };
 
-    const [notifications, total] = await Promise.all([
-      prisma.notification.findMany({
-        where,
-        include: {
-          actor: {
-            select: { id: true, fullName: true, firstName: true, lastName: true, email: true },
-          },
-          opportunity: {
-            select: { id: true, name: true, stage: true },
-          },
-          account: {
-            select: { id: true, name: true },
-          },
-          contact: {
-            select: { id: true, fullName: true },
-          },
-          workOrder: {
-            select: { id: true, workOrderNumber: true, status: true },
-          },
-          case: {
-            select: { id: true, caseNumber: true, subject: true },
-          },
+    const findManyArgs = {
+      where,
+      include: {
+        actor: {
+          select: { id: true, fullName: true, firstName: true, lastName: true, email: true },
         },
-        orderBy: { createdAt: 'desc' },
-        skip: (parseInt(page) - 1) * parseInt(limit),
-        take: parseInt(limit),
-      }),
-      prisma.notification.count({ where }),
-    ]);
+        opportunity: {
+          select: { id: true, name: true, stage: true },
+        },
+        account: {
+          select: { id: true, name: true },
+        },
+        contact: {
+          select: { id: true, fullName: true },
+        },
+        workOrder: {
+          select: { id: true, workOrderNumber: true, status: true },
+        },
+        case: {
+          select: { id: true, caseNumber: true, subject: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      skip: (parseInt(page, 10) - 1) * parseInt(limit, 10),
+      take: parseInt(limit, 10),
+    };
+
+    const totalPromise = prisma.notification.count({ where });
+    let notifications;
+    try {
+      notifications = await prisma.notification.findMany(findManyArgs);
+    } catch (error) {
+      if (!isUnknownActorIncludeError(error)) throw error;
+      notifications = await prisma.notification.findMany({
+        ...findManyArgs,
+        include: dropActorInclude(findManyArgs.include),
+      });
+    }
+    const total = await totalPromise;
 
     res.json({
       data: notifications,
@@ -104,23 +126,33 @@ export async function listOutboxNotifications(req, res, next) {
       status: status || { not: 'DELETED' },
     };
 
-    const [notifications, total] = await Promise.all([
-      prisma.notification.findMany({
-        where,
-        include: {
-          user: {
-            select: { id: true, fullName: true, firstName: true, lastName: true, email: true },
-          },
-          actor: {
-            select: { id: true, fullName: true, firstName: true, lastName: true, email: true },
-          },
+    const findManyArgs = {
+      where,
+      include: {
+        user: {
+          select: { id: true, fullName: true, firstName: true, lastName: true, email: true },
         },
-        orderBy: { createdAt: 'desc' },
-        skip: (parseInt(page, 10) - 1) * parseInt(limit, 10),
-        take: parseInt(limit, 10),
-      }),
-      prisma.notification.count({ where }),
-    ]);
+        actor: {
+          select: { id: true, fullName: true, firstName: true, lastName: true, email: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      skip: (parseInt(page, 10) - 1) * parseInt(limit, 10),
+      take: parseInt(limit, 10),
+    };
+
+    const totalPromise = prisma.notification.count({ where });
+    let notifications;
+    try {
+      notifications = await prisma.notification.findMany(findManyArgs);
+    } catch (error) {
+      if (!isUnknownActorIncludeError(error)) throw error;
+      notifications = await prisma.notification.findMany({
+        ...findManyArgs,
+        include: dropActorInclude(findManyArgs.include),
+      });
+    }
+    const total = await totalPromise;
 
     res.json({
       data: notifications,
@@ -141,7 +173,7 @@ export async function getNotification(req, res, next) {
   try {
     const { id } = req.params;
 
-    const notification = await prisma.notification.findUnique({
+    const findUniqueArgs = {
       where: { id },
       include: {
         user: {
@@ -156,7 +188,18 @@ export async function getNotification(req, res, next) {
         workOrder: true,
         case: true,
       },
-    });
+    };
+
+    let notification;
+    try {
+      notification = await prisma.notification.findUnique(findUniqueArgs);
+    } catch (error) {
+      if (!isUnknownActorIncludeError(error)) throw error;
+      notification = await prisma.notification.findUnique({
+        ...findUniqueArgs,
+        include: dropActorInclude(findUniqueArgs.include),
+      });
+    }
 
     if (!notification) {
       return res.status(404).json({ error: 'Notification not found' });
@@ -213,7 +256,7 @@ export async function createNotification(req, res, next) {
       }
     }
 
-    const notification = await prisma.notification.create({
+    const createArgs = {
       data: {
         userId,
         type,
@@ -244,7 +287,18 @@ export async function createNotification(req, res, next) {
           select: { id: true, name: true },
         },
       },
-    });
+    };
+
+    let notification;
+    try {
+      notification = await prisma.notification.create(createArgs);
+    } catch (error) {
+      if (!isUnknownActorIncludeError(error)) throw error;
+      notification = await prisma.notification.create({
+        ...createArgs,
+        include: dropActorInclude(createArgs.include),
+      });
+    }
 
     // Queue email/SMS delivery if enabled in preferences
     // This would be handled by a separate delivery service
@@ -396,7 +450,7 @@ export async function getNotificationsByOpportunity(req, res, next) {
       ...(status ? { status } : { status: { not: 'DELETED' } }),
     };
 
-    const notifications = await prisma.notification.findMany({
+    const findManyArgs = {
       where,
       include: {
         user: {
@@ -407,8 +461,19 @@ export async function getNotificationsByOpportunity(req, res, next) {
         },
       },
       orderBy: { createdAt: 'desc' },
-      take: parseInt(limit),
-    });
+      take: parseInt(limit, 10),
+    };
+
+    let notifications;
+    try {
+      notifications = await prisma.notification.findMany(findManyArgs);
+    } catch (error) {
+      if (!isUnknownActorIncludeError(error)) throw error;
+      notifications = await prisma.notification.findMany({
+        ...findManyArgs,
+        include: dropActorInclude(findManyArgs.include),
+      });
+    }
 
     res.json(notifications);
   } catch (error) {

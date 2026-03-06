@@ -5,6 +5,95 @@ import { logger } from './logger.js';
 // In production, this will verify Cognito JWT tokens
 // For development, we accept a simple API key or mock token
 
+const PANDA_EMPLOYEE_EMAIL_DOMAINS = new Set(['pandaexteriors.com', 'panda-exteriors.com']);
+
+function normalizeCandidate(value) {
+  const normalized = String(value || '').trim();
+  return normalized || null;
+}
+
+function buildEmailLookupCandidates(values = []) {
+  const queue = Array.isArray(values) ? values : [values];
+  const candidates = [];
+  const seen = new Set();
+
+  const addCandidate = (value) => {
+    const candidate = normalizeCandidate(value);
+    if (!candidate) return;
+    const key = candidate.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push(candidate);
+  };
+
+  queue.forEach(addCandidate);
+  queue.map((value) => normalizeCandidate(value)?.toLowerCase()).filter(Boolean).forEach(addCandidate);
+
+  for (const rawCandidate of queue) {
+    const email = normalizeCandidate(rawCandidate)?.toLowerCase();
+    if (!email) continue;
+
+    const atIndex = email.lastIndexOf('@');
+    if (atIndex <= 0 || atIndex === email.length - 1) {
+      continue;
+    }
+
+    const localPart = email.slice(0, atIndex);
+    const domainPart = email.slice(atIndex + 1);
+    addCandidate(`${localPart}@${domainPart}`);
+
+    if (PANDA_EMPLOYEE_EMAIL_DOMAINS.has(domainPart)) {
+      const dotlessLocalPart = localPart.replace(/\./g, '');
+      for (const domain of PANDA_EMPLOYEE_EMAIL_DOMAINS) {
+        addCandidate(`${localPart}@${domain}`);
+        addCandidate(`${dotlessLocalPart}@${domain}`);
+      }
+    }
+  }
+
+  return candidates;
+}
+
+async function findDatabaseUser(prisma, { emailCandidates = [], cognitoCandidates = [], userIdCandidates = [] } = {}) {
+  let user = null;
+
+  for (const emailCandidate of emailCandidates) {
+    user = await prisma.user.findFirst({
+      where: {
+        email: {
+          equals: emailCandidate,
+          mode: 'insensitive',
+        },
+      },
+      include: { role: true },
+    });
+    if (user) return user;
+  }
+
+  for (const cognitoCandidate of cognitoCandidates) {
+    user = await prisma.user.findFirst({
+      where: { cognitoId: cognitoCandidate },
+      include: { role: true },
+    });
+    if (user) return user;
+  }
+
+  for (const userIdCandidate of userIdCandidates) {
+    user = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { id: userIdCandidate },
+          { cognitoId: userIdCandidate },
+        ],
+      },
+      include: { role: true },
+    });
+    if (user) return user;
+  }
+
+  return null;
+}
+
 export async function authMiddleware(req, res, next) {
   try {
     const authHeader = req.headers.authorization;
@@ -75,25 +164,31 @@ async function verifyToken(token) {
         .map((value) => String(value || '').trim())
         .filter(Boolean))];
       const cognitoId = cognitoCandidates[0] || null;
-      const emailCandidate = payload.email || payload.username || payload['cognito:username'] || null;
+      const emailCandidates = buildEmailLookupCandidates([
+        payload.email,
+        payload.username,
+        payload['cognito:username'],
+      ]);
+      const userIdCandidates = [...new Set([
+        normalizeCandidate(payload.userId),
+        normalizeCandidate(payload['custom:userId']),
+        normalizeCandidate(payload['custom:userid']),
+      ].filter(Boolean))];
 
       // Look up the user in the database to get the actual database ID
       const { PrismaClient } = await import('@prisma/client');
       const prisma = new PrismaClient();
       try {
-        let dbUser = null;
-        for (const cognitoCandidate of cognitoCandidates) {
-          dbUser = await prisma.user.findFirst({
-            where: { cognitoId: cognitoCandidate },
-            select: { id: true, email: true, roleId: true, role: { select: { name: true, roleType: true } } },
-          });
-          if (dbUser) break;
-        }
+        const dbUser = await findDatabaseUser(prisma, {
+          emailCandidates,
+          cognitoCandidates,
+          userIdCandidates,
+        });
 
         if (dbUser) {
           return {
             id: dbUser.id, // Use database ID, not Cognito ID
-            email: dbUser.email || emailCandidate,
+            email: dbUser.email || emailCandidates[0] || null,
             role: dbUser.role?.name || payload.role || 'user',
             roleType: dbUser.role?.roleType,
             cognitoId: cognitoId,
@@ -105,8 +200,8 @@ async function verifyToken(token) {
 
       // Fallback to payload values
       return {
-        id: payload.userId || payload['custom:userId'] || cognitoId,
-        email: emailCandidate,
+        id: cognitoId || userIdCandidates[0] || null,
+        email: emailCandidates[0] || null,
         role: payload.role || 'user',
         cognitoId,
       };
@@ -135,43 +230,26 @@ async function verifyToken(token) {
     .map((value) => String(value || '').trim())
     .filter(Boolean))];
   const cognitoId = cognitoCandidates[0] || null;
-  const emailCandidates = [...new Set([
+  const emailCandidates = buildEmailLookupCandidates([
     payload.email,
     payload.username,
     payload['cognito:username'],
-  ]
-    .map((value) => String(value || '').trim())
-    .filter(Boolean))];
+  ]);
+  const userIdCandidates = [...new Set([
+    normalizeCandidate(payload.userId),
+    normalizeCandidate(payload['custom:userId']),
+    normalizeCandidate(payload['custom:userid']),
+  ].filter(Boolean))];
   logger.info('Token payload:', { sub: cognitoId, tokenUse: payload.token_use });
 
-  // Look up user by email first (from ID token), then by cognitoId (from access token)
+  // Look up user by email variants first, then by cognitoId/custom user ID claims.
   const prisma = new PrismaClient();
   try {
-    let user = null;
-
-    // Access tokens don't have email, so we primarily use cognitoId
-    for (const emailCandidate of emailCandidates) {
-      user = await prisma.user.findFirst({
-        where: {
-          email: {
-            equals: emailCandidate,
-            mode: 'insensitive',
-          },
-        },
-        include: { role: true },
-      });
-      if (user) break;
-    }
-
-    if (!user) {
-      for (const cognitoCandidate of cognitoCandidates) {
-        user = await prisma.user.findFirst({
-          where: { cognitoId: cognitoCandidate },
-          include: { role: true },
-        });
-        if (user) break;
-      }
-    }
+    const user = await findDatabaseUser(prisma, {
+      emailCandidates,
+      cognitoCandidates,
+      userIdCandidates,
+    });
 
     if (user) {
       return {
@@ -187,7 +265,7 @@ async function verifyToken(token) {
     // User not in database - return basic info
     logger.warn('User not found in database for cognitoId:', cognitoId);
     return {
-      id: payload.userId || payload['custom:userId'] || cognitoId,
+      id: cognitoId || userIdCandidates[0] || null,
       email: emailCandidates[0] || null,
       role: payload['custom:role'] || 'user',
       cognitoId,

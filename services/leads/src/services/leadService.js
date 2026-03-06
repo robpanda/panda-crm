@@ -15,6 +15,7 @@ const LEGACY_INTERNAL_COMMENT_JSON_PREFIX = '__internal_comment__:';
 const NOTIFICATION_SERVICE_URL = process.env.NOTIFICATION_SERVICE_URL
   || (process.env.NODE_ENV === 'development' ? 'http://localhost:3011' : 'http://notifications-service:3011');
 const MENTION_DISPATCH_ENDPOINT = `${NOTIFICATION_SERVICE_URL}/api/notifications/mentions/dispatch`;
+const PANDA_EMPLOYEE_EMAIL_DOMAINS = new Set(['pandaexteriors.com', 'panda-exteriors.com']);
 
 function normalizeDepartmentTag(value) {
   const normalized = String(value || 'general')
@@ -174,6 +175,46 @@ function extractMentionUserId(mention) {
   if (!mention) return null;
   if (typeof mention === 'string') return mention;
   return mention.userId || mention.id || null;
+}
+
+function buildEmailLookupCandidates(values = []) {
+  const queue = Array.isArray(values) ? values : [values];
+  const candidates = [];
+  const seen = new Set();
+
+  const addCandidate = (value) => {
+    const candidate = String(value || '').trim();
+    if (!candidate) return;
+    const key = candidate.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push(candidate);
+  };
+
+  queue.forEach(addCandidate);
+  queue.map((value) => String(value || '').trim().toLowerCase()).filter(Boolean).forEach(addCandidate);
+
+  for (const rawCandidate of queue) {
+    const email = String(rawCandidate || '').trim().toLowerCase();
+    if (!email) continue;
+
+    const atIndex = email.lastIndexOf('@');
+    if (atIndex <= 0 || atIndex === email.length - 1) continue;
+
+    const localPart = email.slice(0, atIndex);
+    const domainPart = email.slice(atIndex + 1);
+    addCandidate(`${localPart}@${domainPart}`);
+
+    if (PANDA_EMPLOYEE_EMAIL_DOMAINS.has(domainPart)) {
+      const dotlessLocalPart = localPart.replace(/\./g, '');
+      for (const domain of PANDA_EMPLOYEE_EMAIL_DOMAINS) {
+        addCandidate(`${localPart}@${domain}`);
+        addCandidate(`${dotlessLocalPart}@${domain}`);
+      }
+    }
+  }
+
+  return candidates;
 }
 
 function buildCorrelationId(prefix, entityId) {
@@ -872,6 +913,23 @@ class LeadService {
     return user?.id || null;
   }
 
+  async resolveUserIdByEmail(email) {
+    const candidates = buildEmailLookupCandidates(email);
+    for (const candidate of candidates) {
+      const user = await prisma.user.findFirst({
+        where: {
+          email: {
+            equals: candidate,
+            mode: 'insensitive',
+          },
+        },
+        select: { id: true },
+      });
+      if (user?.id) return user.id;
+    }
+    return null;
+  }
+
   async resolveMentionActor(actor = null, fallbackUserId = null) {
     const candidateIds = [
       actor?.id,
@@ -888,16 +946,7 @@ class LeadService {
     }
 
     if (!resolvedUserId && actor?.email) {
-      const emailUser = await prisma.user.findFirst({
-        where: {
-          email: {
-            equals: String(actor.email || '').trim(),
-            mode: 'insensitive',
-          },
-        },
-        select: { id: true },
-      });
-      resolvedUserId = emailUser?.id || null;
+      resolvedUserId = await this.resolveUserIdByEmail(actor.email);
     }
 
     if (!resolvedUserId) {
@@ -920,6 +969,35 @@ class LeadService {
       lastName: actor?.lastName || null,
       email: actor?.email || null,
     };
+  }
+
+  async resolveMentionRecipientIds(mentions = []) {
+    const recipients = Array.isArray(mentions) ? mentions : [];
+    const resolvedIds = [];
+
+    for (const mention of recipients) {
+      if (!mention) continue;
+
+      const idCandidates = typeof mention === 'string'
+        ? [mention]
+        : [mention.userId, mention.id, mention.cognitoId, mention.sub];
+
+      let resolvedId = null;
+      for (const candidate of idCandidates) {
+        resolvedId = await this.resolveUserId(candidate);
+        if (resolvedId) break;
+      }
+
+      if (!resolvedId && typeof mention === 'object' && mention.email) {
+        resolvedId = await this.resolveUserIdByEmail(mention.email);
+      }
+
+      if (resolvedId) {
+        resolvedIds.push(resolvedId);
+      }
+    }
+
+    return [...new Set(resolvedIds)];
   }
 
   /**
@@ -2395,6 +2473,11 @@ class LeadService {
     }
 
     const resolvedCreatedById = await this.resolveUserId(createdBy);
+    if (!resolvedCreatedById) {
+      const error = new Error('Unable to resolve the logged-in user for this note');
+      error.name = 'ValidationError';
+      throw error;
+    }
 
     // Create the note
     const newNote = await prisma.note.create({
@@ -2443,9 +2526,7 @@ class LeadService {
   }
 
   async notifyLeadMentions({ leadId, content, mentions = [], actor = null, leadName = null, noteId = null, commentId = null, correlationId = null }) {
-    const mentionUserIds = [...new Set((mentions || [])
-      .map(extractMentionUserId)
-      .filter(Boolean))];
+    const mentionUserIds = await this.resolveMentionRecipientIds(mentions || []);
 
     if (mentionUserIds.length === 0) {
       return 0;
@@ -2540,13 +2621,18 @@ class LeadService {
     }
 
     const mentionActor = await this.resolveMentionActor(actor);
+    if (!mentionActor?.id) {
+      const error = new Error('Unable to resolve the logged-in user for this reply');
+      error.name = 'ValidationError';
+      throw error;
+    }
 
     const reply = await prisma.note.create({
       data: {
         leadId,
         title: `REPLY|${noteId}`,
         body: content,
-        createdById: mentionActor?.id || null,
+        createdById: mentionActor.id,
       },
       include: {
         createdBy: {
@@ -2707,35 +2793,10 @@ class LeadService {
     const isResolved = Object.prototype.hasOwnProperty.call(payload, 'isResolved')
       ? Boolean(payload.isResolved)
       : (parentMeta?.isResolved || false);
-    let createdById = await this.resolveUserId(actor?.id || actor?.userId || actor?.cognitoId || actor?.sub || null);
-    if (!createdById && actor?.email) {
-      const actorUser = await prisma.user.findFirst({
-        where: {
-          email: {
-            equals: String(actor.email || '').trim(),
-            mode: 'insensitive',
-          },
-        },
-        select: { id: true },
-      });
-      createdById = actorUser?.id || null;
-    }
+    const mentionActor = await this.resolveMentionActor(actor);
+    const createdById = mentionActor?.id || null;
     if (!createdById) {
-      createdById = lead.ownerId || lead.leadSetById || null;
-    }
-    if (!createdById) {
-      const latestAuthor = await prisma.note.findFirst({
-        where: {
-          leadId,
-          createdById: { not: null },
-        },
-        orderBy: { createdAt: 'desc' },
-        select: { createdById: true },
-      });
-      createdById = latestAuthor?.createdById || null;
-    }
-    if (!createdById) {
-      const error = new Error('Unable to resolve a valid author for this internal comment');
+      const error = new Error('Unable to resolve the logged-in user for this internal comment');
       error.name = 'ValidationError';
       throw error;
     }
@@ -2761,7 +2822,7 @@ class LeadService {
       leadId,
       content,
       mentions: payload.mentions || [],
-      actor: comment.createdBy || (createdById ? { id: createdById } : null),
+      actor: comment.createdBy || mentionActor || actor,
       leadName: `${lead.firstName || ''} ${lead.lastName || ''}`.trim(),
       commentId: comment.id,
       correlationId,

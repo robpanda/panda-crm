@@ -16,6 +16,7 @@ const S3_BUCKET = process.env.S3_BUCKET || 'pandasign-documents';
 const NOTIFICATION_SERVICE_URL = process.env.NOTIFICATION_SERVICE_URL
   || (process.env.NODE_ENV === 'development' ? 'http://localhost:3011' : 'http://notifications-service:3011');
 const MENTION_DISPATCH_ENDPOINT = `${NOTIFICATION_SERVICE_URL}/api/notifications/mentions/dispatch`;
+const PANDA_EMPLOYEE_EMAIL_DOMAINS = new Set(['pandaexteriors.com', 'panda-exteriors.com']);
 
 const DISPOSITION_CATEGORIES = {
   INSPECTION_NOT_COMPLETED: 'INSPECTION_NOT_COMPLETED',
@@ -313,6 +314,46 @@ function extractMentionUserId(mention) {
   if (!mention) return null;
   if (typeof mention === 'string') return mention;
   return mention.userId || mention.id || null;
+}
+
+function buildEmailLookupCandidates(values = []) {
+  const queue = Array.isArray(values) ? values : [values];
+  const candidates = [];
+  const seen = new Set();
+
+  const addCandidate = (value) => {
+    const candidate = String(value || '').trim();
+    if (!candidate) return;
+    const key = candidate.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push(candidate);
+  };
+
+  queue.forEach(addCandidate);
+  queue.map((value) => String(value || '').trim().toLowerCase()).filter(Boolean).forEach(addCandidate);
+
+  for (const rawCandidate of queue) {
+    const email = String(rawCandidate || '').trim().toLowerCase();
+    if (!email) continue;
+
+    const atIndex = email.lastIndexOf('@');
+    if (atIndex <= 0 || atIndex === email.length - 1) continue;
+
+    const localPart = email.slice(0, atIndex);
+    const domainPart = email.slice(atIndex + 1);
+    addCandidate(`${localPart}@${domainPart}`);
+
+    if (PANDA_EMPLOYEE_EMAIL_DOMAINS.has(domainPart)) {
+      const dotlessLocalPart = localPart.replace(/\./g, '');
+      for (const domain of PANDA_EMPLOYEE_EMAIL_DOMAINS) {
+        addCandidate(`${localPart}@${domain}`);
+        addCandidate(`${dotlessLocalPart}@${domain}`);
+      }
+    }
+  }
+
+  return candidates;
 }
 
 function buildCorrelationId(prefix, entityId) {
@@ -1240,6 +1281,23 @@ class OpportunityService {
     return cognitoUser?.id || null;
   }
 
+  async resolveUserIdByEmail(email) {
+    const candidates = buildEmailLookupCandidates(email);
+    for (const candidate of candidates) {
+      const user = await prisma.user.findFirst({
+        where: {
+          email: {
+            equals: candidate,
+            mode: 'insensitive',
+          },
+        },
+        select: { id: true },
+      });
+      if (user?.id) return user.id;
+    }
+    return null;
+  }
+
   async resolveMentionActor(actor = null, fallbackUserId = null) {
     const candidateIds = [
       actor?.id,
@@ -1256,16 +1314,7 @@ class OpportunityService {
     }
 
     if (!resolvedUserId && actor?.email) {
-      const emailUser = await prisma.user.findFirst({
-        where: {
-          email: {
-            equals: String(actor.email || '').trim(),
-            mode: 'insensitive',
-          },
-        },
-        select: { id: true },
-      });
-      resolvedUserId = emailUser?.id || null;
+      resolvedUserId = await this.resolveUserIdByEmail(actor.email);
     }
 
     if (!resolvedUserId) {
@@ -1288,6 +1337,35 @@ class OpportunityService {
       lastName: actor?.lastName || null,
       email: actor?.email || null,
     };
+  }
+
+  async resolveMentionRecipientIds(mentions = []) {
+    const recipients = Array.isArray(mentions) ? mentions : [];
+    const resolvedIds = [];
+
+    for (const mention of recipients) {
+      if (!mention) continue;
+
+      const idCandidates = typeof mention === 'string'
+        ? [mention]
+        : [mention.userId, mention.id, mention.cognitoId, mention.sub];
+
+      let resolvedId = null;
+      for (const candidate of idCandidates) {
+        resolvedId = await this.resolveUserId(candidate);
+        if (resolvedId) break;
+      }
+
+      if (!resolvedId && typeof mention === 'object' && mention.email) {
+        resolvedId = await this.resolveUserIdByEmail(mention.email);
+      }
+
+      if (resolvedId) {
+        resolvedIds.push(resolvedId);
+      }
+    }
+
+    return [...new Set(resolvedIds)];
   }
 
   async getPortalProject(token) {
@@ -2516,6 +2594,11 @@ Be factual and professional. Highlight anything that needs attention.`;
     }
 
     const mentionActor = await this.resolveMentionActor(user);
+    if (!mentionActor?.id) {
+      const error = new Error('Unable to resolve the logged-in user for this reply');
+      error.name = 'ValidationError';
+      throw error;
+    }
 
     // Create the note/reply
     const note = await prisma.note.create({
@@ -2523,7 +2606,7 @@ Be factual and professional. Highlight anything that needs attention.`;
         opportunityId,
         title: `CONVERSATION_REPLY|${channel || 'internal'}`,
         body: noteBody,
-        createdById: mentionActor?.id || null,
+        createdById: mentionActor.id,
       },
     });
 
@@ -5223,9 +5306,7 @@ Be factual and professional. Highlight anything that needs attention.`;
     commentId = null,
     correlationId = null,
   }) {
-    const mentionUserIds = [...new Set((mentions || [])
-      .map(extractMentionUserId)
-      .filter(Boolean))];
+    const mentionUserIds = await this.resolveMentionRecipientIds(mentions || []);
 
     if (mentionUserIds.length === 0) {
       return 0;
@@ -5413,48 +5494,10 @@ Be factual and professional. Highlight anything that needs attention.`;
     const isResolved = hasOwnField(payload, 'isResolved')
       ? Boolean(payload.isResolved)
       : (parentMeta?.isResolved || false);
-    let createdById = user?.id || user?.userId || user?.cognitoId || user?.sub || null;
-    if (createdById) {
-      const directUser = await prisma.user.findUnique({
-        where: { id: createdById },
-        select: { id: true },
-      });
-      if (!directUser) {
-        const cognitoUser = await prisma.user.findFirst({
-          where: { cognitoId: createdById },
-          select: { id: true },
-        });
-        createdById = cognitoUser?.id || null;
-      }
-    }
-    if (!createdById && user?.email) {
-      const emailUser = await prisma.user.findFirst({
-        where: {
-          email: {
-            equals: String(user.email || '').trim(),
-            mode: 'insensitive',
-          },
-        },
-        select: { id: true },
-      });
-      createdById = emailUser?.id || null;
-    }
+    const mentionActor = await this.resolveMentionActor(user);
+    const createdById = mentionActor?.id || null;
     if (!createdById) {
-      createdById = opportunity.ownerId || opportunity.account?.ownerId || null;
-    }
-    if (!createdById) {
-      const latestAuthor = await prisma.note.findFirst({
-        where: {
-          opportunityId,
-          createdById: { not: null },
-        },
-        orderBy: { createdAt: 'desc' },
-        select: { createdById: true },
-      });
-      createdById = latestAuthor?.createdById || null;
-    }
-    if (!createdById) {
-      const error = new Error('Unable to resolve a valid author for this internal comment');
+      const error = new Error('Unable to resolve the logged-in user for this internal comment');
       error.name = 'ValidationError';
       throw error;
     }
@@ -5480,7 +5523,7 @@ Be factual and professional. Highlight anything that needs attention.`;
       opportunityId,
       content,
       mentions: payload.mentions || [],
-      actor: comment.createdBy || (createdById ? { id: createdById } : user),
+      actor: comment.createdBy || mentionActor || user,
       opportunityName: opportunity.name,
       opportunityJobId: opportunity.jobId,
       commentId: comment.id,
@@ -5693,6 +5736,11 @@ Be factual and professional. Highlight anything that needs attention.`;
     logger.info(`Creating note for opportunity: ${opportunityId}`);
     const correlationId = data.correlationId || buildCorrelationId('opportunity-note', opportunityId);
     const mentionActor = await this.resolveMentionActor({ id: data.createdById });
+    if (!mentionActor?.id) {
+      const error = new Error('Unable to resolve the logged-in user for this note');
+      error.name = 'ValidationError';
+      throw error;
+    }
 
     // If this note is pinned, unpin any existing pinned notes
     if (data.isPinned) {
@@ -5709,7 +5757,7 @@ Be factual and professional. Highlight anything that needs attention.`;
         isPinned: data.isPinned || false,
         pinnedAt: data.isPinned ? new Date() : null,
         opportunityId,
-        createdById: mentionActor?.id || null,
+        createdById: mentionActor.id,
       },
       include: {
         createdBy: {
