@@ -30,6 +30,72 @@ function normalizePandaEmployeeEmail(email) {
   return `${localPart.replace(/\./g, '').toLowerCase()}@${domainPart}`;
 }
 
+function buildEmailLookupCandidates(email) {
+  if (typeof email !== 'string') return [];
+
+  const trimmed = email.trim();
+  if (!trimmed) return [];
+
+  const candidates = [];
+  const seen = new Set();
+
+  const addCandidate = (value) => {
+    const candidate = String(value || '').trim();
+    if (!candidate) return;
+    const key = candidate.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push(candidate);
+  };
+
+  const lowerEmail = trimmed.toLowerCase();
+  addCandidate(trimmed);
+  addCandidate(lowerEmail);
+
+  const atIndex = lowerEmail.lastIndexOf('@');
+  if (atIndex <= 0 || atIndex === lowerEmail.length - 1) {
+    return candidates;
+  }
+
+  const localPart = lowerEmail.slice(0, atIndex);
+  const domainPart = lowerEmail.slice(atIndex + 1);
+
+  addCandidate(`${localPart}@${domainPart}`);
+
+  if (PANDA_EMPLOYEE_EMAIL_DOMAINS.has(domainPart)) {
+    const dotlessLocalPart = localPart.replace(/\./g, '');
+    for (const domain of PANDA_EMPLOYEE_EMAIL_DOMAINS) {
+      addCandidate(`${localPart}@${domain}`);
+      addCandidate(`${dotlessLocalPart}@${domain}`);
+    }
+  }
+
+  return candidates;
+}
+
+function pickBestEmailMatch(users, emailCandidates) {
+  if (!Array.isArray(users) || !users.length) return null;
+  const rankedCandidates = emailCandidates.map((candidate) => candidate.toLowerCase());
+
+  const sorted = [...users].sort((a, b) => {
+    const aEmail = String(a.email || '').toLowerCase();
+    const bEmail = String(b.email || '').toLowerCase();
+    const aRank = rankedCandidates.indexOf(aEmail);
+    const bRank = rankedCandidates.indexOf(bEmail);
+    const safeARank = aRank === -1 ? Number.MAX_SAFE_INTEGER : aRank;
+    const safeBRank = bRank === -1 ? Number.MAX_SAFE_INTEGER : bRank;
+
+    if (safeARank !== safeBRank) return safeARank - safeBRank;
+    if (a.isActive !== b.isActive) return Number(b.isActive) - Number(a.isActive);
+
+    const aUpdatedAt = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+    const bUpdatedAt = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+    return bUpdatedAt - aUpdatedAt;
+  });
+
+  return sorted[0];
+}
+
 async function getDatabaseUserProfile(email) {
   if (!email) {
     logger.warn('Skipping DB user enrichment: Cognito user has no email attribute');
@@ -37,8 +103,19 @@ async function getDatabaseUserProfile(email) {
   }
 
   try {
-    const dbUser = await prisma.user.findUnique({
-      where: { email },
+    const emailCandidates = buildEmailLookupCandidates(email);
+    if (!emailCandidates.length) {
+      return { dbUser: null, isManager: false };
+    }
+    const dbUsers = await prisma.user.findMany({
+      where: {
+        OR: emailCandidates.map((candidate) => ({
+          email: {
+            equals: candidate,
+            mode: 'insensitive',
+          },
+        })),
+      },
       select: {
         id: true,
         email: true,
@@ -58,6 +135,7 @@ async function getDatabaseUserProfile(email) {
         roleId: true,
       },
     });
+    const dbUser = pickBestEmailMatch(dbUsers, emailCandidates);
 
     let isManager = false;
     if (dbUser?.id) {
@@ -75,12 +153,17 @@ async function getDatabaseUserProfile(email) {
 }
 
 function buildUserResponse(cognitoUser, dbUser, isManager) {
+  const fullName = dbUser?.fullName || cognitoUser.name ||
+    `${dbUser?.firstName || cognitoUser.firstName || ''} ${dbUser?.lastName || cognitoUser.lastName || ''}`.trim() ||
+    null;
+
   return {
     id: dbUser?.id || cognitoUser.username,
     email: cognitoUser.email || dbUser?.email || null,
     firstName: dbUser?.firstName || cognitoUser.firstName,
     lastName: dbUser?.lastName || cognitoUser.lastName,
-    fullName: dbUser?.fullName || cognitoUser.name,
+    fullName,
+    name: fullName,
     phone: dbUser?.phone || dbUser?.mobilePhone,
     department: dbUser?.department || cognitoUser.department,
     jobTitle: dbUser?.title,
