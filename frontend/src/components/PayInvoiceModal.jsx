@@ -132,7 +132,7 @@ function PaymentForm({
       }
     : {
         layout: 'tabs',
-        paymentMethodOrder: ['card', 'us_bank_account'],
+        paymentMethodOrder: ['card'],
         wallets: {
           applePay: 'never',
           googlePay: 'never',
@@ -169,7 +169,7 @@ function PaymentForm({
         </button>
         <button
           type="submit"
-          disabled={isProcessing || !stripe || !elements || !isElementReady}
+          disabled={isProcessing || !stripe || !elements}
           className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center justify-center gap-2"
         >
           {isProcessing ? (
@@ -499,7 +499,7 @@ export default function PayInvoiceModal({
                   <p className="text-xs text-gray-500 text-center">
                     {paymentContext === 'portal'
                       ? 'Payments are securely processed by Stripe. Available methods are based on your portal checkout options.'
-                      : 'Payments are securely processed by Stripe. Internal checkout only supports Credit Card and manual ACH entry.'}
+                      : 'Payments are securely processed by Stripe. Internal checkout supports Credit Card only.'}
                   </p>
                 </div>
               </Elements>
