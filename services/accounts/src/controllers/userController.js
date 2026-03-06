@@ -146,6 +146,41 @@ export const userController = {
     }
   },
 
+  // POST /users/:id/terminate
+  async terminate(req, res, next) {
+    try {
+      const result = await userService.terminateUser(req.params.id, {
+        transferToUserId: req.body.transferToUserId,
+        reason: req.body.reason,
+      });
+
+      res.json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // POST /users/merge
+  async merge(req, res, next) {
+    try {
+      const result = await userService.mergeUsers({
+        masterUserId: req.body.masterUserId,
+        duplicateUserIds: req.body.duplicateUserIds,
+        reason: req.body.reason,
+      });
+
+      res.json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
   // GET /users/:id/direct-reports
   async getDirectReports(req, res, next) {
     try {
