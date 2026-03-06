@@ -126,6 +126,64 @@ const normalizeInvoiceTotals = (invoice) => {
   };
 };
 
+const DOCUMENT_UPLOAD_CATEGORY_OPTIONS = [
+  { value: 'contract', label: 'Contract' },
+  { value: 'measurement', label: 'Measurement' },
+  { value: 'insurance', label: 'Insurance' },
+  { value: 'invoice', label: 'Invoice' },
+  { value: 'quote', label: 'Quote' },
+  { value: 'permit', label: 'Permit' },
+  { value: 'photo', label: 'Photo' },
+  { value: 'other', label: 'Other' },
+];
+
+const DOCUMENT_CATEGORY_LABELS = {
+  contract: 'Contract',
+  measurement: 'Measurement',
+  insurance: 'Insurance',
+  invoice: 'Invoice',
+  quote: 'Quote',
+  permit: 'Permit',
+  photo: 'Photo',
+  photos: 'Photo',
+  payment: 'Payment',
+  other: 'Other',
+};
+
+function normalizeDocumentCategory(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return DOCUMENT_CATEGORY_LABELS[normalized] ? normalized : 'other';
+}
+
+function getDocumentCategoryLabel(value) {
+  return DOCUMENT_CATEGORY_LABELS[normalizeDocumentCategory(value)] || 'Other';
+}
+
+function getDocumentCategoryBadgeClass(value) {
+  const normalized = normalizeDocumentCategory(value);
+  switch (normalized) {
+    case 'contract':
+      return 'bg-blue-100 text-blue-700';
+    case 'measurement':
+      return 'bg-purple-100 text-purple-700';
+    case 'insurance':
+      return 'bg-amber-100 text-amber-700';
+    case 'invoice':
+      return 'bg-green-100 text-green-700';
+    case 'quote':
+      return 'bg-cyan-100 text-cyan-700';
+    case 'permit':
+      return 'bg-indigo-100 text-indigo-700';
+    case 'photo':
+    case 'photos':
+      return 'bg-pink-100 text-pink-700';
+    case 'payment':
+      return 'bg-emerald-100 text-emerald-700';
+    default:
+      return 'bg-gray-100 text-gray-700';
+  }
+}
+
 // SMS Modal Component with Canned Responses (same as LeadDetail)
 function SmsModal({
   isOpen,
@@ -2266,6 +2324,9 @@ export default function OpportunityDetail() {
   const [selectedDocumentIndex, setSelectedDocumentIndex] = useState(0);
   const [showRepositoryFileGallery, setShowRepositoryFileGallery] = useState(false);
   const [selectedRepositoryFileIndex, setSelectedRepositoryFileIndex] = useState(0);
+  const [documentUploadCategory, setDocumentUploadCategory] = useState('');
+  const [isUploadingRepositoryFile, setIsUploadingRepositoryFile] = useState(false);
+  const repositoryUploadInputRef = useRef(null);
 
   // Contract signing modal state
   const [showContractSigningModal, setShowContractSigningModal] = useState(false);
@@ -2574,6 +2635,48 @@ export default function OpportunityDetail() {
       setActionError(error.message || 'Failed to download document');
     }
   }, [documents, selectedDocumentIndex, downloadRemoteFile]);
+
+  const openRepositoryUploadPicker = useCallback(() => {
+    if (!documentUploadCategory) {
+      setActionError('Select a document type before uploading.');
+      return;
+    }
+    repositoryUploadInputRef.current?.click();
+  }, [documentUploadCategory]);
+
+  const handleRepositoryFileUpload = useCallback(async (event) => {
+    const input = event.target;
+    const file = input?.files?.[0];
+    if (!file) return;
+
+    if (!documentUploadCategory) {
+      setActionError('Select a document type before uploading.');
+      input.value = '';
+      return;
+    }
+
+    setIsUploadingRepositoryFile(true);
+    setActionError(null);
+
+    try {
+      await documentsApi.uploadDocument(file, {
+        title: file.name,
+        category: documentUploadCategory,
+        opportunityId: id,
+        accountId: opportunity?.accountId || opportunity?.account?.id || null,
+      });
+
+      await queryClient.invalidateQueries({ queryKey: ['opportunityRepositoryFiles', id] });
+      setDocumentsSubTab('files');
+      setActionSuccess(`${file.name} uploaded successfully`);
+      setTimeout(() => setActionSuccess(null), 1500);
+    } catch (error) {
+      setActionError(error.message || 'Failed to upload file');
+    } finally {
+      setIsUploadingRepositoryFile(false);
+      input.value = '';
+    }
+  }, [documentUploadCategory, id, opportunity?.accountId, opportunity?.account?.id, queryClient]);
 
   // Cases (linked via Account) - service not yet deployed, disable retries
   const { data: cases } = useQuery({
@@ -7619,8 +7722,8 @@ export default function OpportunityDetail() {
 
                 {activeTab === 'documents' && (
                   <div className="space-y-4">
-                    {/* Sub-tab navigation for Contracts and Photos */}
-                    <div className="flex items-center justify-between border-b border-gray-200 pb-3">
+                    {/* Sub-tab navigation + shared actions */}
+                    <div className="flex flex-col gap-3 border-b border-gray-200 pb-3">
                       <div className="flex space-x-1 bg-gray-100 rounded-lg p-1">
                         <button
                           onClick={() => setDocumentsSubTab('contracts')}
@@ -7655,25 +7758,58 @@ export default function OpportunityDetail() {
                           )}
                         </button>
                       </div>
-                      {/* Contract Action Buttons - only show on contracts sub-tab */}
-                      {documentsSubTab === 'contracts' && (
-                        <div className="flex items-center space-x-2">
-                          <button
-                            onClick={() => setShowChangeOrderModal(true)}
-                            className="inline-flex items-center px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 shadow-sm"
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="flex items-center gap-2 min-w-[220px]">
+                          <Tag className="w-4 h-4 text-gray-500" />
+                          <select
+                            value={documentUploadCategory}
+                            onChange={(event) => setDocumentUploadCategory(event.target.value)}
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
                           >
-                            <Edit className="w-4 h-4 mr-2" />
-                            Change Order
-                          </button>
-                          <button
-                            onClick={() => setShowContractSigningModal(true)}
-                            className="inline-flex items-center px-4 py-2 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg hover:opacity-90 shadow-sm"
-                          >
-                            <Send className="w-4 h-4 mr-2" />
-                            Send Contract
-                          </button>
+                            <option value="">Select file type</option>
+                            {DOCUMENT_UPLOAD_CATEGORY_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
                         </div>
-                      )}
+                        <button
+                          type="button"
+                          onClick={() => setShowChangeOrderModal(true)}
+                          className="inline-flex items-center px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 shadow-sm"
+                        >
+                          <Edit className="w-4 h-4 mr-2" />
+                          Change Order
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowContractSigningModal(true)}
+                          className="inline-flex items-center px-4 py-2 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg hover:opacity-90 shadow-sm"
+                        >
+                          <Send className="w-4 h-4 mr-2" />
+                          Send Contract
+                        </button>
+                        <button
+                          type="button"
+                          onClick={openRepositoryUploadPicker}
+                          disabled={isUploadingRepositoryFile}
+                          className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
+                        >
+                          {isUploadingRepositoryFile ? (
+                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          ) : (
+                            <Upload className="w-4 h-4 mr-2" />
+                          )}
+                          {isUploadingRepositoryFile ? 'Uploading...' : 'Upload'}
+                        </button>
+                        <input
+                          ref={repositoryUploadInputRef}
+                          type="file"
+                          className="hidden"
+                          onChange={handleRepositoryFileUpload}
+                        />
+                      </div>
                     </div>
 
                     {/* Contracts Sub-tab Content */}
@@ -7896,9 +8032,15 @@ export default function OpportunityDetail() {
                                   {(() => {
                                     const fileUrl = getRepositoryFileUrl(file);
                                     const isImageFile = isRepositoryImageFile(file);
+                                    const fileCategoryLabel = getDocumentCategoryLabel(file.category);
 
                                     return (
                                       <>
+                                  <div className="mb-3">
+                                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold ${getDocumentCategoryBadgeClass(file.category)}`}>
+                                      {fileCategoryLabel}
+                                    </span>
+                                  </div>
                                   <div className="flex items-start space-x-3">
                                     <div className="flex-shrink-0">
                                       {isImageFile ? (
@@ -8002,6 +8144,9 @@ export default function OpportunityDetail() {
                               <p className="text-sm text-gray-300">
                                 {selectedRepositoryFileIndex + 1} of {repositoryFileList.length}
                               </p>
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold mt-1 ${getDocumentCategoryBadgeClass(selectedRepositoryFile.category)}`}>
+                                {getDocumentCategoryLabel(selectedRepositoryFile.category)}
+                              </span>
                             </div>
                           </div>
                           <button

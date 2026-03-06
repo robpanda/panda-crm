@@ -70,7 +70,6 @@ function parseS3Location(value) {
 
 async function getPresignedContentUrl(value, expiresIn = 3600) {
   if (!value || typeof value !== 'string') return null;
-  if (value.includes('X-Amz-Signature=')) return value;
 
   const s3Location = parseS3Location(value);
   if (!s3Location?.bucket || !s3Location?.key) {
@@ -90,6 +89,39 @@ async function getPresignedContentUrl(value, expiresIn = 3600) {
     );
     return value;
   }
+}
+
+function parseDocumentMetadata(rawMetadata) {
+  if (!rawMetadata) return {};
+  if (typeof rawMetadata === 'object') return rawMetadata;
+
+  if (typeof rawMetadata === 'string') {
+    try {
+      return JSON.parse(rawMetadata);
+    } catch {
+      return {};
+    }
+  }
+
+  return {};
+}
+
+const explicitCategorySet = new Set([
+  'contract',
+  'invoice',
+  'quote',
+  'insurance',
+  'photos',
+  'payment',
+  'permit',
+  'measurement',
+  'other',
+]);
+
+function normalizeExplicitCategory(value) {
+  if (!value) return null;
+  const normalized = String(value).trim().toLowerCase();
+  return explicitCategorySet.has(normalized) ? normalized : null;
 }
 
 /**
@@ -211,8 +243,8 @@ router.get('/', async (req, res, next) => {
         }
       });
 
-      // Determine document category based on title/extension patterns
-      const category = categorizeDocument(doc.title, doc.fileType);
+      const metadata = parseDocumentMetadata(doc.metadata);
+      const category = categorizeDocument(doc.title, doc.fileType, metadata.category);
 
       return {
         id: doc.id,
@@ -379,6 +411,7 @@ router.get('/by-job/:opportunityId', async (req, res, next) => {
     const transformedDocs = await Promise.all(
       documents.map(async (doc) => {
         const contentUrl = await getPresignedContentUrl(doc.contentUrl);
+        const metadata = parseDocumentMetadata(doc.metadata);
         return {
           id: doc.id,
           title: doc.title,
@@ -390,7 +423,7 @@ router.get('/by-job/:opportunityId', async (req, res, next) => {
           downloadUrl: contentUrl,
           createdAt: doc.createdAt,
           updatedAt: doc.updatedAt,
-          category: categorizeDocument(doc.title, doc.fileType),
+          category: categorizeDocument(doc.title, doc.fileType, metadata.category),
           linkedVia: doc.links.map((link) => ({
             type: link.linkedRecordType,
             accountId: link.accountId,
@@ -420,7 +453,12 @@ router.get('/by-job/:opportunityId', async (req, res, next) => {
 /**
  * Categorize document based on title and file type
  */
-function categorizeDocument(title, fileType) {
+function categorizeDocument(title, fileType, explicitCategory) {
+  const normalizedExplicitCategory = normalizeExplicitCategory(explicitCategory);
+  if (normalizedExplicitCategory) {
+    return normalizedExplicitCategory;
+  }
+
   const lowerTitle = (title || '').toLowerCase();
 
   // Contract-related
