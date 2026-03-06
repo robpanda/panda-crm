@@ -482,6 +482,8 @@ router.post('/invoices/:invoiceId/create-intent', async (req, res, next) => {
   try {
     const { invoiceId } = req.params;
     const { amount } = req.body;
+    const paymentContext = String(req.body?.context || 'internal').toLowerCase();
+    const isPortalContext = paymentContext === 'portal';
 
     const invoice = await prisma.invoice.findUnique({
       where: { id: invoiceId },
@@ -539,11 +541,24 @@ router.post('/invoices/:invoiceId/create-intent', async (req, res, next) => {
       amount: Math.round(paymentAmount * 100), // Convert to cents
       currency: 'usd',
       customerId: stripeCustomerId,
-      paymentMethodTypes: ['card', 'us_bank_account'],
+      ...(isPortalContext
+        ? {
+            automaticPaymentMethods: { enabled: true },
+          }
+        : {
+            paymentMethodTypes: ['card', 'us_bank_account'],
+            paymentMethodOptions: {
+              // Keep internal ACH entry manual and avoid Financial Connections flow.
+              us_bank_account: {
+                verification_method: 'microdeposits',
+              },
+            },
+          }),
       metadata: {
         invoiceId: invoice.id,
         invoiceNumber: invoice.invoiceNumber,
         accountId: invoice.accountId || '',
+        context: paymentContext,
       },
       description: `Payment for Invoice ${invoice.invoiceNumber}`,
     });
@@ -721,7 +736,6 @@ router.post('/invoices/:invoiceId/payment-link', async (req, res, next) => {
         accountId: invoice.accountId || '',
       },
       afterCompletionUrl: `${baseUrl}/success?invoice=${invoice.invoiceNumber}`,
-      paymentMethodTypes: ['card', 'us_bank_account'],
     });
 
     // Calculate expiration

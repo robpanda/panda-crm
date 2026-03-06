@@ -2666,8 +2666,11 @@ export const paymentsApi = {
     return response.data.data;
   },
 
-  async createPaymentIntentForInvoice(invoiceId, amount) {
-    const response = await api.post(`/api/payments/invoices/${invoiceId}/create-intent`, { amount });
+  async createPaymentIntentForInvoice(invoiceId, amount, options = {}) {
+    const response = await api.post(`/api/payments/invoices/${invoiceId}/create-intent`, {
+      amount,
+      ...options,
+    });
     return response.data.data;
   },
 

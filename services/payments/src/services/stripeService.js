@@ -52,6 +52,8 @@ export const stripeService = {
     metadata = {},
     description,
     paymentMethodTypes,
+    automaticPaymentMethods,
+    paymentMethodOptions,
   }) {
     logger.info('Creating payment intent', { amount, customerId });
 
@@ -68,9 +70,14 @@ export const stripeService = {
     if (Array.isArray(paymentMethodTypes) && paymentMethodTypes.length > 0) {
       paymentIntentData.payment_method_types = paymentMethodTypes;
     } else {
-      paymentIntentData.automatic_payment_methods = {
-        enabled: true,
-      };
+      paymentIntentData.automatic_payment_methods =
+        automaticPaymentMethods && typeof automaticPaymentMethods === 'object'
+          ? automaticPaymentMethods
+          : { enabled: true };
+    }
+
+    if (paymentMethodOptions && typeof paymentMethodOptions === 'object') {
+      paymentIntentData.payment_method_options = paymentMethodOptions;
     }
 
     // Only add customer if provided

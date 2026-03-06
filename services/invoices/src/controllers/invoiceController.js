@@ -576,7 +576,6 @@ export async function sendInvoice(req, res, next) {
 
         const paymentLinkData = await stripe.paymentLinks.create({
           line_items: [{ price: price.id, quantity: 1 }],
-          payment_method_types: ['card', 'us_bank_account'],
           metadata: {
             source: 'panda-crm',
             invoiceId: invoice.id,

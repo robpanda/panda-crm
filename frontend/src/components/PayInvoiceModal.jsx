@@ -27,7 +27,7 @@ const getStripePromise = (publishableKey) => {
 };
 
 // Payment Form Component (uses Stripe hooks)
-function PaymentForm({ invoice, paymentAmount, onSuccess, onCancel }) {
+function PaymentForm({ invoice, paymentAmount, onSuccess, onCancel, paymentContext = 'internal' }) {
   const stripe = useStripe();
   const elements = useElements();
   const queryClient = useQueryClient();
@@ -96,13 +96,23 @@ function PaymentForm({ invoice, paymentAmount, onSuccess, onCancel }) {
     }
   };
 
+  const paymentElementOptions = paymentContext === 'portal'
+    ? {
+        layout: 'tabs',
+      }
+    : {
+        layout: 'tabs',
+        paymentMethodOrder: ['card', 'us_bank_account'],
+        wallets: {
+          applePay: 'never',
+          googlePay: 'never',
+        },
+      };
+
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <PaymentElement
-        options={{
-          layout: 'tabs',
-          paymentMethodOrder: ['card', 'us_bank_account'],
-        }}
+        options={paymentElementOptions}
       />
 
       {paymentError && (
@@ -112,7 +122,7 @@ function PaymentForm({ invoice, paymentAmount, onSuccess, onCancel }) {
         </div>
       )}
 
-      <div className="flex gap-3 pt-4">
+      <div className="flex flex-col sm:flex-row gap-3 pt-4">
         <button
           type="button"
           onClick={onCancel}
@@ -159,6 +169,7 @@ export default function PayInvoiceModal({
   const [clientSecret, setClientSecret] = useState(null);
   const [paymentResult, setPaymentResult] = useState(null);
   const [error, setError] = useState(null);
+  const paymentContext = fullAmountOnly ? 'portal' : 'internal';
 
   const balanceDue = Number(invoice?.balanceDue ?? invoice?.total ?? invoice?.totalAmount ?? 0);
 
@@ -177,7 +188,9 @@ export default function PayInvoiceModal({
 
   // Create payment intent mutation
   const createIntentMutation = useMutation({
-    mutationFn: ({ invoiceId, amount }) => paymentsApi.createPaymentIntentForInvoice(invoiceId, amount),
+    mutationFn: ({ invoiceId, amount }) => paymentsApi.createPaymentIntentForInvoice(invoiceId, amount, {
+      context: paymentContext,
+    }),
     onSuccess: (data) => {
       setClientSecret(data.clientSecret);
       setStep(2);
@@ -259,9 +272,9 @@ export default function PayInvoiceModal({
         <div className="fixed inset-0 bg-black/50" onClick={onClose} />
 
         {/* Modal */}
-        <div className="relative bg-white rounded-xl shadow-2xl max-w-lg w-full">
+        <div className="relative bg-white rounded-xl shadow-2xl max-w-lg w-full max-h-[calc(100vh-2rem)] overflow-y-auto">
           {/* Header */}
-          <div className="flex items-center justify-between p-5 border-b border-gray-200">
+          <div className="flex items-center justify-between p-4 sm:p-5 border-b border-gray-200">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
                 <CreditCard className="w-5 h-5 text-green-600" />
@@ -280,7 +293,7 @@ export default function PayInvoiceModal({
           </div>
 
           {/* Content */}
-          <div className="p-5">
+          <div className="p-4 sm:p-5">
             {/* Step 1: Amount Selection */}
             {step === 1 && (
               <div className="space-y-5">
@@ -375,7 +388,7 @@ export default function PayInvoiceModal({
                 )}
 
                 {/* Continue Button */}
-                <div className="flex gap-3 pt-2">
+                <div className="flex flex-col sm:flex-row gap-3 pt-2">
                   <button
                     type="button"
                     onClick={onClose}
@@ -425,12 +438,15 @@ export default function PayInvoiceModal({
                   <PaymentForm
                     invoice={invoice}
                     paymentAmount={paymentAmount}
+                    paymentContext={paymentContext}
                     onSuccess={handlePaymentSuccess}
                     onCancel={() => setStep(1)}
                   />
 
                   <p className="text-xs text-gray-500 text-center">
-                    Payments are securely processed by Stripe. Available methods: Credit Card and ACH.
+                    {paymentContext === 'portal'
+                      ? 'Payments are securely processed by Stripe. Available methods are based on your portal checkout options.'
+                      : 'Payments are securely processed by Stripe. Internal checkout only supports Credit Card and manual ACH entry.'}
                   </p>
                 </div>
               </Elements>
