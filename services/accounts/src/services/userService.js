@@ -4,6 +4,150 @@ import { logger } from '../middleware/logger.js';
 
 const prisma = new PrismaClient();
 
+const uniqueIds = (ids = []) => [...new Set((ids || []).filter(Boolean).map((id) => String(id).trim()).filter(Boolean))];
+
+const userDisplayName = (user = {}) => {
+  return user.fullName || `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email || user.id;
+};
+
+const transferAssignments = async (tx, sourceUserIds, targetUserId) => {
+  const sourceIds = uniqueIds(sourceUserIds);
+  if (!sourceIds.length) {
+    return {
+      leads: 0,
+      leadSelfGen: 0,
+      opportunities: 0,
+      opportunityProjectManagers: 0,
+      appointments: 0,
+      tasks: 0,
+      accounts: 0,
+      commissions: 0,
+      serviceContracts: 0,
+      attentionItems: 0,
+      photoProjects: 0,
+      territories: 0,
+      supportTickets: 0,
+      managerReports: 0,
+      directorReports: 0,
+      regionalReports: 0,
+      executiveReports: 0,
+      total: 0,
+    };
+  }
+
+  const [
+    leads,
+    leadSelfGen,
+    opportunities,
+    opportunityProjectManagers,
+    appointments,
+    tasks,
+    accounts,
+    commissions,
+    serviceContracts,
+    attentionItems,
+    photoProjects,
+    territories,
+    supportTickets,
+    managerReports,
+    directorReports,
+    regionalReports,
+    executiveReports,
+  ] = await Promise.all([
+    tx.lead.updateMany({
+      where: { ownerId: { in: sourceIds } },
+      data: { ownerId: targetUserId },
+    }),
+    tx.lead.updateMany({
+      where: { selfGenRepId: { in: sourceIds } },
+      data: { selfGenRepId: targetUserId },
+    }),
+    tx.opportunity.updateMany({
+      where: { ownerId: { in: sourceIds } },
+      data: { ownerId: targetUserId },
+    }),
+    tx.opportunity.updateMany({
+      where: { projectManagerId: { in: sourceIds } },
+      data: { projectManagerId: targetUserId },
+    }),
+    tx.event.updateMany({
+      where: { ownerId: { in: sourceIds } },
+      data: { ownerId: targetUserId },
+    }),
+    tx.task.updateMany({
+      where: { assignedToId: { in: sourceIds } },
+      data: { assignedToId: targetUserId },
+    }),
+    tx.account.updateMany({
+      where: { ownerId: { in: sourceIds } },
+      data: { ownerId: targetUserId },
+    }),
+    tx.commission.updateMany({
+      where: { ownerId: { in: sourceIds } },
+      data: { ownerId: targetUserId },
+    }),
+    tx.serviceContract.updateMany({
+      where: { ownerId: { in: sourceIds } },
+      data: { ownerId: targetUserId },
+    }),
+    tx.attentionItem.updateMany({
+      where: { assignedToId: { in: sourceIds } },
+      data: { assignedToId: targetUserId },
+    }),
+    tx.photoProject.updateMany({
+      where: { ownerId: { in: sourceIds } },
+      data: { ownerId: targetUserId },
+    }),
+    tx.territory.updateMany({
+      where: { ownerId: { in: sourceIds } },
+      data: { ownerId: targetUserId },
+    }),
+    tx.support_tickets.updateMany({
+      where: { assigned_to_id: { in: sourceIds } },
+      data: { assigned_to_id: targetUserId },
+    }),
+    tx.user.updateMany({
+      where: { managerId: { in: sourceIds } },
+      data: { managerId: targetUserId },
+    }),
+    tx.user.updateMany({
+      where: { directorId: { in: sourceIds } },
+      data: { directorId: targetUserId },
+    }),
+    tx.user.updateMany({
+      where: { regionalManagerId: { in: sourceIds } },
+      data: { regionalManagerId: targetUserId },
+    }),
+    tx.user.updateMany({
+      where: { executiveId: { in: sourceIds } },
+      data: { executiveId: targetUserId },
+    }),
+  ]);
+
+  const summary = {
+    leads: leads.count,
+    leadSelfGen: leadSelfGen.count,
+    opportunities: opportunities.count,
+    opportunityProjectManagers: opportunityProjectManagers.count,
+    appointments: appointments.count,
+    tasks: tasks.count,
+    accounts: accounts.count,
+    commissions: commissions.count,
+    serviceContracts: serviceContracts.count,
+    attentionItems: attentionItems.count,
+    photoProjects: photoProjects.count,
+    territories: territories.count,
+    supportTickets: supportTickets.count,
+    managerReports: managerReports.count,
+    directorReports: directorReports.count,
+    regionalReports: regionalReports.count,
+    executiveReports: executiveReports.count,
+  };
+
+  summary.total = Object.values(summary).reduce((acc, val) => acc + val, 0);
+  return summary;
+};
+
 export const userService = {
   /**
    * Get users with pagination and filtering
@@ -37,7 +181,12 @@ export const userService = {
     }
 
     if (status) {
-      where.status = status;
+      const normalizedStatus = String(status).toLowerCase();
+      if (normalizedStatus === 'true' || normalizedStatus === 'false') {
+        where.isActive = normalizedStatus === 'true';
+      } else {
+        where.status = status;
+      }
     }
 
     if (department) {
@@ -358,6 +507,179 @@ export const userService = {
     });
 
     return users;
+  },
+
+  /**
+   * Terminate user and transfer active ownership assignments
+   */
+  async terminateUser(userId, { transferToUserId, reason } = {}) {
+    if (!transferToUserId) {
+      const error = new Error('transferToUserId is required');
+      error.code = 'VALIDATION_ERROR';
+      throw error;
+    }
+
+    if (transferToUserId === userId) {
+      const error = new Error('Cannot transfer ownership to the same user');
+      error.code = 'VALIDATION_ERROR';
+      throw error;
+    }
+
+    const [user, transferUser] = await Promise.all([
+      prisma.user.findUnique({
+        where: { id: userId },
+        select: { id: true, email: true, fullName: true, firstName: true, lastName: true, isActive: true, status: true },
+      }),
+      prisma.user.findUnique({
+        where: { id: transferToUserId },
+        select: { id: true, email: true, fullName: true, firstName: true, lastName: true, isActive: true },
+      }),
+    ]);
+
+    if (!user) {
+      const error = new Error('User not found');
+      error.code = 'NOT_FOUND';
+      throw error;
+    }
+
+    if (!transferUser || !transferUser.isActive) {
+      const error = new Error('Transfer owner must be an active user');
+      error.code = 'VALIDATION_ERROR';
+      throw error;
+    }
+
+    const reassignmentSummary = await prisma.$transaction(async (tx) => {
+      const summary = await transferAssignments(tx, [userId], transferToUserId);
+
+      await tx.user.update({
+        where: { id: userId },
+        data: {
+          isActive: false,
+          status: 'TERMINATED',
+        },
+      });
+
+      return summary;
+    });
+
+    logger.info('User terminated and assignments transferred', {
+      userId,
+      transferToUserId,
+      reason: reason || null,
+      reassignmentSummary,
+    });
+
+    return {
+      userId,
+      transferToUserId,
+      terminatedUser: {
+        id: user.id,
+        email: user.email,
+        name: userDisplayName(user),
+      },
+      transferUser: {
+        id: transferUser.id,
+        email: transferUser.email,
+        name: userDisplayName(transferUser),
+      },
+      reason: reason || null,
+      reassignmentSummary,
+    };
+  },
+
+  /**
+   * Merge duplicate users into a selected master user.
+   * Master remains active and duplicate records are deactivated.
+   */
+  async mergeUsers({ masterUserId, duplicateUserIds, reason } = {}) {
+    const duplicates = uniqueIds(duplicateUserIds);
+
+    if (!masterUserId) {
+      const error = new Error('masterUserId is required');
+      error.code = 'VALIDATION_ERROR';
+      throw error;
+    }
+
+    if (!duplicates.length) {
+      const error = new Error('duplicateUserIds must include at least one user');
+      error.code = 'VALIDATION_ERROR';
+      throw error;
+    }
+
+    if (duplicates.includes(masterUserId)) {
+      const error = new Error('masterUserId cannot be included in duplicateUserIds');
+      error.code = 'VALIDATION_ERROR';
+      throw error;
+    }
+
+    const allUserIds = uniqueIds([masterUserId, ...duplicates]);
+    const users = await prisma.user.findMany({
+      where: { id: { in: allUserIds } },
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        firstName: true,
+        lastName: true,
+        isActive: true,
+        status: true,
+      },
+    });
+
+    if (users.length !== allUserIds.length) {
+      const foundIds = new Set(users.map((u) => u.id));
+      const missingIds = allUserIds.filter((id) => !foundIds.has(id));
+      const error = new Error(`Some users were not found: ${missingIds.join(', ')}`);
+      error.code = 'NOT_FOUND';
+      throw error;
+    }
+
+    const masterUser = users.find((u) => u.id === masterUserId);
+    const duplicateUsers = users.filter((u) => duplicates.includes(u.id));
+
+    const reassignmentSummary = await prisma.$transaction(async (tx) => {
+      const summary = await transferAssignments(tx, duplicates, masterUserId);
+
+      await tx.user.update({
+        where: { id: masterUserId },
+        data: {
+          isActive: true,
+          status: 'ACTIVE',
+        },
+      });
+
+      await tx.user.updateMany({
+        where: { id: { in: duplicates } },
+        data: {
+          isActive: false,
+          status: 'INACTIVE',
+        },
+      });
+
+      return summary;
+    });
+
+    logger.info('Users merged into master user', {
+      masterUserId,
+      duplicateUserIds: duplicates,
+      reason: reason || null,
+      reassignmentSummary,
+    });
+
+    return {
+      masterUser: {
+        id: masterUser.id,
+        email: masterUser.email,
+        name: userDisplayName(masterUser),
+      },
+      mergedUsers: duplicateUsers.map((user) => ({
+        id: user.id,
+        email: user.email,
+        name: userDisplayName(user),
+      })),
+      reason: reason || null,
+      reassignmentSummary,
+    };
   },
 };
 

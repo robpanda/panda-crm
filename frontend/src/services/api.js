@@ -56,6 +56,16 @@ api.interceptors.request.use(
       return config;
     }
 
+    // Let the browser set multipart boundaries for file uploads.
+    if (typeof FormData !== 'undefined' && config.data instanceof FormData && config.headers) {
+      if (typeof config.headers.delete === 'function') {
+        config.headers.delete('Content-Type');
+      } else {
+        delete config.headers['Content-Type'];
+        delete config.headers['content-type'];
+      }
+    }
+
     const token = localStorage.getItem('accessToken');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
@@ -1596,8 +1606,21 @@ export const usersApi = {
     return response.data.data;
   },
 
+  async terminateUser(id, data) {
+    const response = await api.post(`/api/users/${id}/terminate`, data);
+    return response.data.data;
+  },
+
+  async mergeUsers(data) {
+    const response = await api.post('/api/users/merge', data);
+    return response.data.data;
+  },
+
   async resetUserPassword(email, newPassword) {
-    const response = await api.post(`/api/auth/admin/users/${encodeURIComponent(email)}/password`, { newPassword });
+    const response = await api.post(`/api/auth/admin/users/${encodeURIComponent(email)}/password`, {
+      password: newPassword,
+      newPassword,
+    });
     return response.data.data;
   },
 };
@@ -4560,15 +4583,54 @@ export const documentsApi = {
 
   // Upload document
   async uploadDocument(file, metadata = {}) {
-    const formData = new FormData();
-    formData.append('file', file);
-    Object.keys(metadata).forEach(key => {
-      formData.append(key, metadata[key]);
-    });
-    const response = await api.post('/api/documents/upload', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
-    return response.data;
+    if (!file) {
+      throw new Error('No file selected');
+    }
+
+    const uploadMetadata = { ...metadata };
+    if (!uploadMetadata.title) {
+      uploadMetadata.title = file.name || 'Uploaded document';
+    }
+
+    const directUploadPayload = {
+      ...uploadMetadata,
+      fileName: file.name,
+      fileSize: file.size,
+      contentType: file.type || 'application/octet-stream',
+    };
+
+    try {
+      const initResponse = await api.post('/api/documents/upload/init', directUploadPayload);
+      const initData = initResponse?.data?.data || {};
+
+      if (!initData.uploadUrl || !initData.uploadToken) {
+        throw new Error('Upload initialization failed');
+      }
+
+      await axios.put(initData.uploadUrl, file, {
+        headers: {
+          'Content-Type': initData.contentType || file.type || 'application/octet-stream',
+        },
+      });
+
+      const completeResponse = await api.post('/api/documents/upload/complete', {
+        uploadToken: initData.uploadToken,
+      });
+      return completeResponse.data;
+    } catch (directUploadError) {
+      console.warn('Direct upload failed, falling back to legacy upload endpoint:', directUploadError);
+
+      const formData = new FormData();
+      formData.append('file', file);
+      Object.keys(uploadMetadata).forEach((key) => {
+        formData.append(key, uploadMetadata[key]);
+      });
+
+      const fallbackResponse = await api.post('/api/documents/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      return fallbackResponse.data;
+    }
   },
 
   // ============================================================================
@@ -4640,6 +4702,12 @@ export const documentsApi = {
       params.includeAccountDocs = options.includeAccountDocs;
     }
     const response = await api.get(`/api/documents/repository/by-job/${opportunityId}`, { params });
+    return response.data;
+  },
+
+  // Delete/unlink a repository document
+  async deleteDocument(id, params = {}) {
+    const response = await api.delete(`/api/documents/repository/${id}`, { params });
     return response.data;
   },
 };

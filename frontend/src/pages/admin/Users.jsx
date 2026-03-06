@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { usersApi, rolesApi } from '../../services/api';
@@ -23,6 +23,8 @@ import {
   Trash2,
   AlertTriangle,
   Settings,
+  UserX,
+  GitMerge,
 } from 'lucide-react';
 import AdminLayout from '../../components/AdminLayout';
 
@@ -56,11 +58,13 @@ const roleTypeLabels = {
   viewer: 'Viewer',
 };
 
+const uniqueArray = (values = []) => [...new Set(values.filter(Boolean))];
+
 export default function Users() {
   const [search, setSearch] = useState('');
   const [departmentFilter, setDepartmentFilter] = useState('');
   const [officeFilter, setOfficeFilter] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('true');
   const [sortBy, setSortBy] = useState('lastName');
   const [sortOrder, setSortOrder] = useState('asc');
   const [page, setPage] = useState(1);
@@ -71,9 +75,15 @@ export default function Users() {
   const [showAddUserModal, setShowAddUserModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [showTerminateModal, setShowTerminateModal] = useState(false);
+  const [showMergeModal, setShowMergeModal] = useState(false);
   const [newUserForm, setNewUserForm] = useState({ email: '', firstName: '', lastName: '', password: '', roleId: '' });
   const [passwordForm, setPasswordForm] = useState({ newPassword: '', confirmPassword: '' });
+  const [terminateForm, setTerminateForm] = useState({ transferToUserId: '', reason: '', search: '' });
+  const [mergeForm, setMergeForm] = useState({ masterUserId: '', reason: '', search: '' });
+  const [selectedMergeUserIds, setSelectedMergeUserIds] = useState([]);
   const [actionError, setActionError] = useState('');
+  const [mergeError, setMergeError] = useState('');
 
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -83,7 +93,7 @@ export default function Users() {
     if (search) params.search = search;
     if (departmentFilter) params.department = departmentFilter;
     if (officeFilter) params.officeAssignment = officeFilter;
-    if (statusFilter) params.status = statusFilter;
+    if (statusFilter !== '') params.isActive = statusFilter;
     return params;
   }, [search, departmentFilter, officeFilter, statusFilter, sortBy, sortOrder, page]);
 
@@ -160,6 +170,38 @@ export default function Users() {
     },
   });
 
+  const terminateUserMutation = useMutation({
+    mutationFn: ({ userId, payload }) => usersApi.terminateUser(userId, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['users']);
+      queryClient.invalidateQueries(['userStats']);
+      setShowTerminateModal(false);
+      setShowUserModal(false);
+      setSelectedUser(null);
+      setTerminateForm({ transferToUserId: '', reason: '', search: '' });
+      setActionError('');
+    },
+    onError: (error) => {
+      setActionError(error.response?.data?.error?.message || error.message || 'Failed to terminate user');
+    },
+  });
+
+  const mergeUsersMutation = useMutation({
+    mutationFn: (payload) => usersApi.mergeUsers(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['users']);
+      queryClient.invalidateQueries(['userStats']);
+      setShowMergeModal(false);
+      setSelectedMergeUserIds([]);
+      setMergeForm({ masterUserId: '', reason: '', search: '' });
+      setMergeError('');
+      setActionError('');
+    },
+    onError: (error) => {
+      setMergeError(error.response?.data?.error?.message || error.message || 'Failed to merge users');
+    },
+  });
+
   const users = data?.data || [];
   const pagination = data?.pagination || {};
   const stats = statsData || { total: 0, active: 0, inactive: 0, byDepartment: {}, byOffice: {} };
@@ -201,11 +243,59 @@ export default function Users() {
     setSearch('');
     setDepartmentFilter('');
     setOfficeFilter('');
-    setStatusFilter('');
+    setStatusFilter('true');
     setPage(1);
   };
 
-  const hasActiveFilters = search || departmentFilter || officeFilter || statusFilter;
+  const hasActiveFilters = search || departmentFilter || officeFilter || statusFilter !== 'true';
+  const transferCandidates = (userOptions || [])
+    .filter((u) => u.id !== selectedUser?.id)
+    .filter((u) => {
+      const q = terminateForm.search.trim().toLowerCase();
+      if (!q) return true;
+      const name = (u.fullName || `${u.firstName || ''} ${u.lastName || ''}`).toLowerCase();
+      return name.includes(q) || (u.email || '').toLowerCase().includes(q);
+    });
+
+  useEffect(() => {
+    const visibleIds = new Set(users.map((u) => u.id));
+    setSelectedMergeUserIds((prev) => prev.filter((id) => visibleIds.has(id)));
+  }, [users]);
+
+  const selectedMergeUsers = useMemo(
+    () => users.filter((u) => selectedMergeUserIds.includes(u.id)),
+    [users, selectedMergeUserIds]
+  );
+
+  const filteredMasterOptions = selectedMergeUsers.filter((u) => {
+    const q = mergeForm.search.trim().toLowerCase();
+    if (!q) return true;
+    const name = (u.fullName || `${u.firstName || ''} ${u.lastName || ''}`).toLowerCase();
+    return name.includes(q) || (u.email || '').toLowerCase().includes(q);
+  });
+
+  const allVisibleSelected = users.length > 0 && users.every((u) => selectedMergeUserIds.includes(u.id));
+  const someVisibleSelected = users.some((u) => selectedMergeUserIds.includes(u.id));
+
+  const toggleUserForMerge = (userId, checked) => {
+    setSelectedMergeUserIds((prev) => {
+      if (checked) {
+        if (prev.includes(userId)) return prev;
+        return [...prev, userId];
+      }
+      return prev.filter((id) => id !== userId);
+    });
+  };
+
+  const toggleAllVisibleForMerge = (checked) => {
+    if (checked) {
+      const visibleIds = users.map((u) => u.id);
+      setSelectedMergeUserIds((prev) => uniqueArray([...prev, ...visibleIds]));
+      return;
+    }
+    const visibleIdSet = new Set(users.map((u) => u.id));
+    setSelectedMergeUserIds((prev) => prev.filter((id) => !visibleIdSet.has(id)));
+  };
 
   const startEditing = (user) => {
     setEditForm({
@@ -272,6 +362,17 @@ export default function Users() {
               </div>
               {!isEditing && (
                 <div className="flex items-center space-x-2">
+                  <button
+                    onClick={() => {
+                      setShowTerminateModal(true);
+                      setTerminateForm({ transferToUserId: '', reason: '', search: '' });
+                      setActionError('');
+                    }}
+                    className="flex items-center space-x-2 px-3 py-2 border border-red-200 rounded-lg text-red-700 hover:bg-red-50"
+                    title="Terminate Employee"
+                  >
+                    <UserX className="w-4 h-4" />
+                  </button>
                   <button
                     onClick={() => {
                       setShowPasswordModal(true);
@@ -725,6 +826,28 @@ export default function Users() {
           </button>
           <button
             onClick={() => {
+              if (selectedMergeUserIds.length < 2) {
+                setMergeError('Select at least 2 users to merge.');
+                return;
+              }
+              setShowMergeModal(true);
+              setMergeForm((prev) => ({
+                ...prev,
+                masterUserId: selectedMergeUserIds[0] || '',
+                reason: '',
+                search: '',
+              }));
+              setMergeError('');
+              setActionError('');
+            }}
+            disabled={selectedMergeUserIds.length < 2}
+            className="inline-flex items-center justify-center px-4 py-2.5 bg-white border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <GitMerge className="w-5 h-5 mr-2" />
+            <span>Merge Selected{selectedMergeUserIds.length ? ` (${selectedMergeUserIds.length})` : ''}</span>
+          </button>
+          <button
+            onClick={() => {
               setShowAddUserModal(true);
               setActionError('');
             }}
@@ -822,9 +945,9 @@ export default function Users() {
             onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
             className="px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-white"
           >
-            <option value="">All Status</option>
             <option value="true">Active</option>
             <option value="false">Inactive</option>
+            <option value="">All Status</option>
           </select>
           {hasActiveFilters && (
             <button
@@ -840,6 +963,29 @@ export default function Users() {
 
       {/* User Table */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+        {(selectedMergeUserIds.length > 0 || mergeError) && (
+          <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <div className="text-sm text-gray-700">
+              {selectedMergeUserIds.length > 0
+                ? `${selectedMergeUserIds.length} user${selectedMergeUserIds.length === 1 ? '' : 's'} selected for merge.`
+                : 'No users selected.'}
+            </div>
+            {selectedMergeUserIds.length > 0 && (
+              <button
+                onClick={() => {
+                  setSelectedMergeUserIds([]);
+                  setMergeError('');
+                }}
+                className="text-sm text-gray-600 hover:text-gray-900"
+              >
+                Clear selection
+              </button>
+            )}
+            {mergeError && !showMergeModal && (
+              <div className="text-sm text-red-600">{mergeError}</div>
+            )}
+          </div>
+        )}
         {isLoading ? (
           <div className="flex items-center justify-center h-64">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-panda-primary"></div>
@@ -854,6 +1000,15 @@ export default function Users() {
             <table className="w-full">
               <thead className="bg-gray-50 border-b border-gray-100">
                 <tr>
+                  <th className="px-4 py-3 text-left">
+                    <input
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      aria-checked={allVisibleSelected ? 'true' : someVisibleSelected ? 'mixed' : 'false'}
+                      onChange={(e) => toggleAllVisibleForMerge(e.target.checked)}
+                      className="w-4 h-4 text-panda-primary border-gray-300 rounded focus:ring-panda-primary"
+                    />
+                  </th>
                   <th
                     className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
                     onClick={() => handleSort('lastName')}
@@ -896,6 +1051,14 @@ export default function Users() {
               <tbody className="divide-y divide-gray-100">
                 {users.map((user) => (
                   <tr key={user.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-4">
+                      <input
+                        type="checkbox"
+                        checked={selectedMergeUserIds.includes(user.id)}
+                        onChange={(e) => toggleUserForMerge(user.id, e.target.checked)}
+                        className="w-4 h-4 text-panda-primary border-gray-300 rounded focus:ring-panda-primary"
+                      />
+                    </td>
                     <td className="px-4 py-4">
                       <div className="flex items-center">
                         <div className="w-10 h-10 rounded-full bg-gradient-to-r from-panda-primary to-panda-secondary flex items-center justify-center text-white text-sm font-medium flex-shrink-0">
@@ -1263,6 +1426,250 @@ export default function Users() {
           </div>
         </div>
         )}
+
+      {/* Terminate User Modal */}
+      {showTerminateModal && selectedUser && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-xl">
+            <div className="p-6 border-b border-gray-100">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-bold text-gray-900">Terminate Employee</h2>
+                  <p className="text-sm text-gray-500 mt-1">
+                    {selectedUser.firstName} {selectedUser.lastName} ({selectedUser.email})
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowTerminateModal(false);
+                    setTerminateForm({ transferToUserId: '', reason: '', search: '' });
+                    setActionError('');
+                  }}
+                  className="p-2 hover:bg-gray-100 rounded-full"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            <div className="p-6 space-y-4">
+              {actionError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2 text-red-700 text-sm">
+                  <AlertTriangle className="w-4 h-4" />
+                  {actionError}
+                </div>
+              )}
+              <div className="p-3 rounded-lg border border-amber-200 bg-amber-50 text-sm text-amber-900">
+                Termination will deactivate the employee and transfer ownership of jobs, leads, appointments,
+                tasks, and other assigned records.
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Transfer Ownership To *</label>
+                <input
+                  type="text"
+                  value={terminateForm.search}
+                  onChange={(e) => setTerminateForm((prev) => ({ ...prev, search: e.target.value }))}
+                  placeholder="Search active users..."
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary mb-2"
+                />
+                <select
+                  value={terminateForm.transferToUserId}
+                  onChange={(e) => setTerminateForm((prev) => ({ ...prev, transferToUserId: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                >
+                  <option value="">Select active user...</option>
+                  {transferCandidates.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.fullName || `${u.firstName || ''} ${u.lastName || ''}`.trim()} ({u.email})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Reason (optional)</label>
+                <textarea
+                  rows={3}
+                  value={terminateForm.reason}
+                  onChange={(e) => setTerminateForm((prev) => ({ ...prev, reason: e.target.value }))}
+                  placeholder="Termination reason"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                />
+              </div>
+            </div>
+            <div className="p-6 border-t border-gray-100 flex justify-end gap-3">
+              <button
+                onClick={() => {
+                  setShowTerminateModal(false);
+                  setTerminateForm({ transferToUserId: '', reason: '', search: '' });
+                  setActionError('');
+                }}
+                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (!terminateForm.transferToUserId) {
+                    setActionError('Please select an active user to transfer ownership');
+                    return;
+                  }
+                  terminateUserMutation.mutate({
+                    userId: selectedUser.id,
+                    payload: {
+                      transferToUserId: terminateForm.transferToUserId,
+                      reason: terminateForm.reason || undefined,
+                    },
+                  });
+                }}
+                disabled={terminateUserMutation.isPending}
+                className="px-4 py-2 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 disabled:opacity-50"
+              >
+                {terminateUserMutation.isPending ? 'Terminating...' : 'Terminate & Transfer'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Merge Users Modal */}
+      {showMergeModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl">
+            <div className="p-6 border-b border-gray-100">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-bold text-gray-900">Merge Duplicate Users</h2>
+                  <p className="text-sm text-gray-500 mt-1">
+                    Select the master record. All selected duplicates will be merged into it.
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowMergeModal(false);
+                    setMergeForm({ masterUserId: '', reason: '', search: '' });
+                    setMergeError('');
+                  }}
+                  className="p-2 hover:bg-gray-100 rounded-full"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {mergeError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2 text-red-700 text-sm">
+                  <AlertTriangle className="w-4 h-4" />
+                  {mergeError}
+                </div>
+              )}
+              <div className="p-3 rounded-lg border border-amber-200 bg-amber-50 text-sm text-amber-900">
+                The selected master user will remain active after merge. Duplicate users will be set to inactive.
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Find Master User</label>
+                <input
+                  type="text"
+                  value={mergeForm.search}
+                  onChange={(e) => setMergeForm((prev) => ({ ...prev, search: e.target.value }))}
+                  placeholder="Search selected users by name or email..."
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Master Record *</label>
+                <div className="max-h-72 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+                  {filteredMasterOptions.length === 0 ? (
+                    <div className="p-4 text-sm text-gray-500">No selected users match your search.</div>
+                  ) : (
+                    filteredMasterOptions.map((user) => {
+                      const userName = user.fullName || `${user.firstName || ''} ${user.lastName || ''}`.trim();
+                      return (
+                        <label key={user.id} className="flex items-start gap-3 p-3 cursor-pointer hover:bg-gray-50">
+                          <input
+                            type="radio"
+                            name="master-user"
+                            value={user.id}
+                            checked={mergeForm.masterUserId === user.id}
+                            onChange={(e) => setMergeForm((prev) => ({ ...prev, masterUserId: e.target.value }))}
+                            className="mt-1 w-4 h-4 text-panda-primary border-gray-300 focus:ring-panda-primary"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium text-gray-900">{userName || user.email}</span>
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                                user.isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'
+                              }`}>
+                                {user.isActive ? 'Active' : 'Inactive'}
+                              </span>
+                            </div>
+                            <div className="text-xs text-gray-500">{user.email}</div>
+                          </div>
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Reason (optional)</label>
+                <textarea
+                  rows={3}
+                  value={mergeForm.reason}
+                  onChange={(e) => setMergeForm((prev) => ({ ...prev, reason: e.target.value }))}
+                  placeholder="Why are these records being merged?"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                />
+              </div>
+            </div>
+
+            <div className="p-6 border-t border-gray-100 flex justify-end gap-3">
+              <button
+                onClick={() => {
+                  setShowMergeModal(false);
+                  setMergeForm({ masterUserId: '', reason: '', search: '' });
+                  setMergeError('');
+                }}
+                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (selectedMergeUserIds.length < 2) {
+                    setMergeError('Select at least 2 users to merge.');
+                    return;
+                  }
+                  if (!mergeForm.masterUserId || !selectedMergeUserIds.includes(mergeForm.masterUserId)) {
+                    setMergeError('Select a master user from the selected records.');
+                    return;
+                  }
+
+                  const duplicateUserIds = selectedMergeUserIds.filter((id) => id !== mergeForm.masterUserId);
+                  if (!duplicateUserIds.length) {
+                    setMergeError('Select at least one duplicate user to merge.');
+                    return;
+                  }
+
+                  mergeUsersMutation.mutate({
+                    masterUserId: mergeForm.masterUserId,
+                    duplicateUserIds,
+                    reason: mergeForm.reason || undefined,
+                  });
+                }}
+                disabled={mergeUsersMutation.isPending}
+                className="px-4 py-2 bg-panda-primary text-white rounded-lg font-medium hover:bg-panda-primary/90 disabled:opacity-50"
+              >
+                {mergeUsersMutation.isPending ? 'Merging...' : 'Merge Users'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       </div>
     </AdminLayout>
   );
