@@ -125,6 +125,64 @@ const normalizeInvoiceTotals = (invoice) => {
   };
 };
 
+const DOCUMENT_UPLOAD_CATEGORY_OPTIONS = [
+  { value: 'contract', label: 'Contract' },
+  { value: 'measurement', label: 'Measurement' },
+  { value: 'insurance', label: 'Insurance' },
+  { value: 'invoice', label: 'Invoice' },
+  { value: 'quote', label: 'Quote' },
+  { value: 'permit', label: 'Permit' },
+  { value: 'photo', label: 'Photo' },
+  { value: 'other', label: 'Other' },
+];
+
+const DOCUMENT_CATEGORY_LABELS = {
+  contract: 'Contract',
+  measurement: 'Measurement',
+  insurance: 'Insurance',
+  invoice: 'Invoice',
+  quote: 'Quote',
+  permit: 'Permit',
+  photo: 'Photo',
+  photos: 'Photo',
+  payment: 'Payment',
+  other: 'Other',
+};
+
+function normalizeDocumentCategory(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return DOCUMENT_CATEGORY_LABELS[normalized] ? normalized : 'other';
+}
+
+function getDocumentCategoryLabel(value) {
+  return DOCUMENT_CATEGORY_LABELS[normalizeDocumentCategory(value)] || 'Other';
+}
+
+function getDocumentCategoryBadgeClass(value) {
+  const normalized = normalizeDocumentCategory(value);
+  switch (normalized) {
+    case 'contract':
+      return 'bg-blue-100 text-blue-700';
+    case 'measurement':
+      return 'bg-purple-100 text-purple-700';
+    case 'insurance':
+      return 'bg-amber-100 text-amber-700';
+    case 'invoice':
+      return 'bg-green-100 text-green-700';
+    case 'quote':
+      return 'bg-cyan-100 text-cyan-700';
+    case 'permit':
+      return 'bg-indigo-100 text-indigo-700';
+    case 'photo':
+    case 'photos':
+      return 'bg-pink-100 text-pink-700';
+    case 'payment':
+      return 'bg-emerald-100 text-emerald-700';
+    default:
+      return 'bg-gray-100 text-gray-700';
+  }
+}
+
 // SMS Modal Component with Canned Responses (same as LeadDetail)
 function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {} }) {
   const [message, setMessage] = useState('');
@@ -1856,6 +1914,11 @@ export default function OpportunityDetail() {
   // Document gallery state
   const [showDocumentGallery, setShowDocumentGallery] = useState(false);
   const [selectedDocumentIndex, setSelectedDocumentIndex] = useState(0);
+  const [showRepositoryFileGallery, setShowRepositoryFileGallery] = useState(false);
+  const [selectedRepositoryFileIndex, setSelectedRepositoryFileIndex] = useState(0);
+  const [documentUploadCategory, setDocumentUploadCategory] = useState('');
+  const [isUploadingRepositoryFile, setIsUploadingRepositoryFile] = useState(false);
+  const repositoryUploadInputRef = useRef(null);
 
   // Contract signing modal state
   const [showContractSigningModal, setShowContractSigningModal] = useState(false);
@@ -2055,6 +2118,139 @@ export default function OpportunityDetail() {
     enabled: !!id,
   });
 
+  const repositoryFileList = useMemo(() => {
+    if (Array.isArray(repositoryFiles)) return repositoryFiles;
+    if (Array.isArray(repositoryFiles?.data)) return repositoryFiles.data;
+    if (Array.isArray(repositoryFiles?.documents)) return repositoryFiles.documents;
+    if (Array.isArray(repositoryFiles?.data?.documents)) return repositoryFiles.data.documents;
+    return [];
+  }, [repositoryFiles]);
+
+  const selectedRepositoryFile = useMemo(
+    () => repositoryFileList[selectedRepositoryFileIndex] || null,
+    [repositoryFileList, selectedRepositoryFileIndex]
+  );
+
+  const getRepositoryFileUrl = useCallback(
+    (file) => file?.contentUrl || file?.downloadUrl || file?.url || null,
+    []
+  );
+
+  const getRepositoryFileExtension = useCallback((file) => {
+    const normalizedExplicitType = (file?.fileType || file?.fileExtension || '')
+      .toString()
+      .toLowerCase()
+      .replace(/^\./, '');
+    if (normalizedExplicitType) return normalizedExplicitType;
+
+    const fileName = (file?.fileName || file?.title || '').toString().toLowerCase();
+    const extensionIndex = fileName.lastIndexOf('.');
+    return extensionIndex > -1 ? fileName.slice(extensionIndex + 1) : '';
+  }, []);
+
+  const isRepositoryImageFile = useCallback(
+    (file) => ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'svg'].includes(getRepositoryFileExtension(file)),
+    [getRepositoryFileExtension]
+  );
+
+  const isRepositoryPdfFile = useCallback(
+    (file) => getRepositoryFileExtension(file) === 'pdf',
+    [getRepositoryFileExtension]
+  );
+
+  const downloadRemoteFile = useCallback(async (url, preferredFileName) => {
+    if (!url) return;
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Download failed with status ${response.status}`);
+    }
+
+    const blob = await response.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = blobUrl;
+    anchor.download = preferredFileName || 'document';
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(blobUrl);
+  }, []);
+
+  const handleDownloadRepositoryFile = useCallback(async (file) => {
+    const fileUrl = getRepositoryFileUrl(file);
+    if (!fileUrl) {
+      setActionError('No file URL available');
+      return;
+    }
+
+    try {
+      await downloadRemoteFile(fileUrl, file?.fileName || file?.title || 'document');
+      setActionSuccess('Download started');
+      setTimeout(() => setActionSuccess(null), 1500);
+    } catch (error) {
+      setActionError(error.message || 'Failed to download file');
+    }
+  }, [downloadRemoteFile, getRepositoryFileUrl]);
+
+  const handleDownloadCurrentAgreement = useCallback(async () => {
+    const currentDocument = documents?.documents?.[selectedDocumentIndex];
+    const downloadUrl = currentDocument?.downloadUrl || currentDocument?.signedDocumentUrl || currentDocument?.documentUrl;
+    if (!downloadUrl) {
+      setActionError('No document URL available');
+      return;
+    }
+
+    try {
+      await downloadRemoteFile(downloadUrl, currentDocument?.fileName || currentDocument?.name || 'agreement.pdf');
+      setActionSuccess('Download started');
+      setTimeout(() => setActionSuccess(null), 1500);
+    } catch (error) {
+      setActionError(error.message || 'Failed to download document');
+    }
+  }, [documents, selectedDocumentIndex, downloadRemoteFile]);
+
+  const openRepositoryUploadPicker = useCallback(() => {
+    if (!documentUploadCategory) {
+      setActionError('Select a document type before uploading.');
+      return;
+    }
+    repositoryUploadInputRef.current?.click();
+  }, [documentUploadCategory]);
+
+  const handleRepositoryFileUpload = useCallback(async (event) => {
+    const input = event.target;
+    const file = input?.files?.[0];
+    if (!file) return;
+
+    if (!documentUploadCategory) {
+      setActionError('Select a document type before uploading.');
+      input.value = '';
+      return;
+    }
+
+    setIsUploadingRepositoryFile(true);
+    setActionError(null);
+
+    try {
+      await documentsApi.uploadDocument(file, {
+        title: file.name,
+        category: documentUploadCategory,
+        opportunityId: id,
+        accountId: opportunity?.accountId || opportunity?.account?.id || null,
+      });
+
+      await queryClient.invalidateQueries({ queryKey: ['opportunityRepositoryFiles', id] });
+      setDocumentsSubTab('files');
+      setActionSuccess(`${file.name} uploaded successfully`);
+      setTimeout(() => setActionSuccess(null), 1500);
+    } catch (error) {
+      setActionError(error.message || 'Failed to upload file');
+    } finally {
+      setIsUploadingRepositoryFile(false);
+      input.value = '';
+    }
+  }, [documentUploadCategory, id, opportunity?.accountId, opportunity?.account?.id, queryClient]);
   // Cases (linked via Account) - service not yet deployed, disable retries
   const { data: cases } = useQuery({
     queryKey: ['opportunityCases', id],
@@ -7011,8 +7207,8 @@ export default function OpportunityDetail() {
 
                 {activeTab === 'documents' && (
                   <div className="space-y-4">
-                    {/* Sub-tab navigation for Contracts and Photos */}
-                    <div className="flex items-center justify-between border-b border-gray-200 pb-3">
+                    {/* Sub-tab navigation + shared actions */}
+                    <div className="flex flex-col gap-3 border-b border-gray-200 pb-3">
                       <div className="flex space-x-1 bg-gray-100 rounded-lg p-1">
                         <button
                           onClick={() => setDocumentsSubTab('contracts')}
@@ -7047,25 +7243,58 @@ export default function OpportunityDetail() {
                           )}
                         </button>
                       </div>
-                      {/* Contract Action Buttons - only show on contracts sub-tab */}
-                      {documentsSubTab === 'contracts' && (
-                        <div className="flex items-center space-x-2">
-                          <button
-                            onClick={() => setShowChangeOrderModal(true)}
-                            className="inline-flex items-center px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 shadow-sm"
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="flex items-center gap-2 min-w-[220px]">
+                          <Tag className="w-4 h-4 text-gray-500" />
+                          <select
+                            value={documentUploadCategory}
+                            onChange={(event) => setDocumentUploadCategory(event.target.value)}
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
                           >
-                            <Edit className="w-4 h-4 mr-2" />
-                            Change Order
-                          </button>
-                          <button
-                            onClick={() => setShowContractSigningModal(true)}
-                            className="inline-flex items-center px-4 py-2 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg hover:opacity-90 shadow-sm"
-                          >
-                            <Send className="w-4 h-4 mr-2" />
-                            Send Contract
-                          </button>
+                            <option value="">Select file type</option>
+                            {DOCUMENT_UPLOAD_CATEGORY_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
                         </div>
-                      )}
+                        <button
+                          type="button"
+                          onClick={() => setShowChangeOrderModal(true)}
+                          className="inline-flex items-center px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 shadow-sm"
+                        >
+                          <Edit className="w-4 h-4 mr-2" />
+                          Change Order
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowContractSigningModal(true)}
+                          className="inline-flex items-center px-4 py-2 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg hover:opacity-90 shadow-sm"
+                        >
+                          <Send className="w-4 h-4 mr-2" />
+                          Send Contract
+                        </button>
+                        <button
+                          type="button"
+                          onClick={openRepositoryUploadPicker}
+                          disabled={isUploadingRepositoryFile}
+                          className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
+                        >
+                          {isUploadingRepositoryFile ? (
+                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          ) : (
+                            <Upload className="w-4 h-4 mr-2" />
+                          )}
+                          {isUploadingRepositoryFile ? 'Uploading...' : 'Upload'}
+                        </button>
+                        <input
+                          ref={repositoryUploadInputRef}
+                          type="file"
+                          className="hidden"
+                          onChange={handleRepositoryFileUpload}
+                        />
+                      </div>
                     </div>
 
                     {/* Contracts Sub-tab Content */}
@@ -7282,7 +7511,7 @@ export default function OpportunityDetail() {
                     {documentsSubTab === 'files' && (
                       <div className="space-y-4">
                         {(() => {
-                          const files = repositoryFiles?.data || repositoryFiles || [];
+                          const files = repositoryFileList;
                           if (files.length === 0) {
                             return (
                               <div className="text-center py-12">
@@ -7295,47 +7524,95 @@ export default function OpportunityDetail() {
                           return (
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                               {files.map((file) => (
-                                <div
-                                  key={file.id}
-                                  className="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow"
-                                >
-                                  <div className="flex items-start space-x-3">
-                                    <div className="flex-shrink-0">
-                                      <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center">
-                                        <FileText className="w-5 h-5 text-gray-500" />
-                                      </div>
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                      <p className="text-sm font-medium text-gray-900 truncate" title={file.title || file.fileName || 'Untitled'}>
-                                        {file.title || file.fileName || 'Untitled'}
-                                      </p>
-                                      <p className="text-xs text-gray-500 mt-1">
-                                        {file.fileType || file.fileExtension || 'File'}
-                                        {file.contentSize && ` • ${(file.contentSize / 1024).toFixed(1)} KB`}
-                                      </p>
-                                      <p className="text-xs text-gray-400 mt-1">
-                                        {file.createdAt && new Date(file.createdAt).toLocaleDateString()}
-                                      </p>
-                                    </div>
-                                  </div>
-                                  <div className="mt-3 flex space-x-2">
-                                    {file.contentUrl ? (
-                                      <a
-                                        href={file.contentUrl}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="flex-1 inline-flex items-center justify-center px-3 py-1.5 bg-panda-primary/10 text-panda-primary text-xs font-medium rounded-md hover:bg-panda-primary/20 transition-colors"
-                                      >
-                                        <Download className="w-3 h-3 mr-1" />
-                                        Download
-                                      </a>
-                                    ) : (
-                                      <span className="flex-1 inline-flex items-center justify-center px-3 py-1.5 bg-gray-100 text-gray-400 text-xs font-medium rounded-md">
-                                        <FileText className="w-3 h-3 mr-1" />
-                                        {file.category || 'Salesforce'}
-                                      </span>
-                                    )}
-                                  </div>
+                                <div key={file.id} className="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+                                  {(() => {
+                                    const fileUrl = getRepositoryFileUrl(file);
+                                    const isImageFile = isRepositoryImageFile(file);
+                                    const fileCategoryLabel = getDocumentCategoryLabel(file.category);
+
+                                    return (
+                                      <>
+                                        <div className="mb-3">
+                                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold ${getDocumentCategoryBadgeClass(file.category)}`}>
+                                            {fileCategoryLabel}
+                                          </span>
+                                        </div>
+                                        <div className="flex items-start space-x-3">
+                                          <div className="flex-shrink-0">
+                                            {isImageFile ? (
+                                              <button
+                                                type="button"
+                                                className="block w-10 h-10 rounded-lg overflow-hidden border border-gray-200 bg-gray-50"
+                                                onClick={() => {
+                                                  const index = files.findIndex((item) => item.id === file.id);
+                                                  if (index >= 0) {
+                                                    setSelectedRepositoryFileIndex(index);
+                                                    setShowRepositoryFileGallery(true);
+                                                  }
+                                                }}
+                                              >
+                                                <img
+                                                  src={fileUrl}
+                                                  alt={file.title || file.fileName || 'File preview'}
+                                                  className="w-full h-full object-cover"
+                                                  loading="lazy"
+                                                />
+                                              </button>
+                                            ) : (
+                                              <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center">
+                                                <FileText className="w-5 h-5 text-gray-500" />
+                                              </div>
+                                            )}
+                                          </div>
+                                          <div className="flex-1 min-w-0">
+                                            <p className="text-sm font-medium text-gray-900 truncate" title={file.title || file.fileName || 'Untitled'}>
+                                              {file.title || file.fileName || 'Untitled'}
+                                            </p>
+                                            <p className="text-xs text-gray-500 mt-1">
+                                              {file.fileType || file.fileExtension || 'File'}
+                                              {file.contentSize && ` • ${(file.contentSize / 1024).toFixed(1)} KB`}
+                                            </p>
+                                            <p className="text-xs text-gray-400 mt-1">
+                                              {file.createdAt && new Date(file.createdAt).toLocaleDateString()}
+                                            </p>
+                                          </div>
+                                        </div>
+                                        <div className="mt-3 flex space-x-2">
+                                          {fileUrl ? (
+                                            <>
+                                              <button
+                                                type="button"
+                                                className="flex-1 inline-flex items-center justify-center px-3 py-1.5 bg-panda-primary/10 text-panda-primary text-xs font-medium rounded-md hover:bg-panda-primary/20 transition-colors"
+                                                onClick={() => {
+                                                  const index = files.findIndex((item) => item.id === file.id);
+                                                  if (index >= 0) {
+                                                    setSelectedRepositoryFileIndex(index);
+                                                    setShowRepositoryFileGallery(true);
+                                                  }
+                                                }}
+                                              >
+                                                <ZoomIn className="w-3 h-3 mr-1" />
+                                                Preview
+                                              </button>
+                                              <button
+                                                type="button"
+                                                className="flex-1 inline-flex items-center justify-center px-3 py-1.5 bg-panda-secondary/10 text-panda-secondary text-xs font-medium rounded-md hover:bg-panda-secondary/20 transition-colors"
+                                                onClick={() => handleDownloadRepositoryFile(file)}
+                                              >
+                                                <Download className="w-3 h-3 mr-1" />
+                                                Download
+                                              </button>
+                                            </>
+                                          ) : (
+                                            <span className="flex-1 inline-flex items-center justify-center px-3 py-1.5 bg-gray-100 text-gray-400 text-xs font-medium rounded-md">
+                                              <FileText className="w-3 h-3 mr-1" />
+                                              {file.category || 'Salesforce'}
+                                            </span>
+                                          )}
+                                        </div>
+                                      </>
+                                    );
+                                  })()}
                                 </div>
                               ))}
                             </div>
@@ -7344,6 +7621,102 @@ export default function OpportunityDetail() {
                       </div>
                     )}
 
+                    {/* Repository File Gallery Modal */}
+                    {showRepositoryFileGallery && selectedRepositoryFile && (
+                      <div className="fixed inset-0 z-50 bg-black/90 flex flex-col">
+                        <div className="flex items-center justify-between p-4 bg-black/50">
+                          <div className="flex items-center space-x-4">
+                            <button
+                              type="button"
+                              onClick={() => setShowRepositoryFileGallery(false)}
+                              className="p-2 text-white hover:bg-white/10 rounded-lg"
+                            >
+                              <X className="w-6 h-6" />
+                            </button>
+                            <div className="text-white">
+                              <h3 className="font-medium">
+                                {selectedRepositoryFile.title || selectedRepositoryFile.fileName || 'Document'}
+                              </h3>
+                              <p className="text-sm text-gray-300">
+                                {selectedRepositoryFileIndex + 1} of {repositoryFileList.length}
+                              </p>
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold mt-1 ${getDocumentCategoryBadgeClass(selectedRepositoryFile.category)}`}>
+                                {getDocumentCategoryLabel(selectedRepositoryFile.category)}
+                              </span>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleDownloadRepositoryFile(selectedRepositoryFile)}
+                            className="flex items-center space-x-2 px-4 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90"
+                          >
+                            <Download className="w-4 h-4" />
+                            <span>Download</span>
+                          </button>
+                        </div>
+
+                        <div className="flex-1 flex items-center justify-center p-4 overflow-hidden">
+                          {(() => {
+                            const fileUrl = getRepositoryFileUrl(selectedRepositoryFile);
+                            if (!fileUrl) {
+                              return (
+                                <div className="text-center text-white">
+                                  <FileText className="w-24 h-24 mx-auto mb-4 text-gray-400" />
+                                  <p className="text-xl">No preview available</p>
+                                </div>
+                              );
+                            }
+
+                            if (isRepositoryImageFile(selectedRepositoryFile)) {
+                              return (
+                                <img
+                                  src={fileUrl}
+                                  alt={selectedRepositoryFile.title || selectedRepositoryFile.fileName || 'Document preview'}
+                                  className="max-w-full max-h-full rounded-lg bg-white object-contain"
+                                />
+                              );
+                            }
+
+                            if (isRepositoryPdfFile(selectedRepositoryFile)) {
+                              return (
+                                <iframe
+                                  src={fileUrl}
+                                  title={selectedRepositoryFile.title || selectedRepositoryFile.fileName || 'Document preview'}
+                                  className="w-full max-w-4xl h-full rounded-lg bg-white"
+                                />
+                              );
+                            }
+
+                            return (
+                              <div className="text-center text-white max-w-md">
+                                <FileText className="w-24 h-24 mx-auto mb-4 text-gray-400" />
+                                <p className="text-xl mb-2">Preview not available for this file type</p>
+                                <p className="text-sm text-gray-300">Use Download to open this file locally.</p>
+                              </div>
+                            );
+                          })()}
+                        </div>
+
+                        {repositoryFileList.length > 1 && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedRepositoryFileIndex((prev) => (prev === 0 ? repositoryFileList.length - 1 : prev - 1))}
+                              className="absolute left-4 top-1/2 -translate-y-1/2 p-3 bg-black/50 text-white rounded-full hover:bg-black/70"
+                            >
+                              <ChevronLeft className="w-6 h-6" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedRepositoryFileIndex((prev) => (prev === repositoryFileList.length - 1 ? 0 : prev + 1))}
+                              className="absolute right-4 top-1/2 -translate-y-1/2 p-3 bg-black/50 text-white rounded-full hover:bg-black/70"
+                            >
+                              <ChevronRight className="w-6 h-6" />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
 

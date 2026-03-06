@@ -3,10 +3,126 @@
 
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
+import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { logger } from '../middleware/logger.js';
 
 const router = express.Router();
 const prisma = new PrismaClient();
+const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-east-2' });
+const defaultS3Bucket = process.env.S3_BUCKET || 'pandasign-documents';
+
+function parseS3Location(value) {
+  if (!value || typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  if (trimmed.startsWith('s3://')) {
+    const withoutProtocol = trimmed.slice(5);
+    const slashIndex = withoutProtocol.indexOf('/');
+    if (slashIndex === -1) return null;
+    return {
+      bucket: withoutProtocol.slice(0, slashIndex),
+      key: decodeURIComponent(withoutProtocol.slice(slashIndex + 1)),
+    };
+  }
+
+  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+    return {
+      bucket: defaultS3Bucket,
+      key: trimmed.replace(/^\/+/, ''),
+    };
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return null;
+  }
+
+  const host = parsed.hostname;
+  const path = parsed.pathname.replace(/^\/+/, '');
+  if (!path) return null;
+
+  // Virtual-hosted-style URL, e.g. bucket.s3.us-east-2.amazonaws.com/key
+  const virtualHostedMatch = host.match(/^(.+)\.s3[.-][^.]+\.amazonaws\.com$/)
+    || host.match(/^(.+)\.s3\.amazonaws\.com$/);
+  if (virtualHostedMatch) {
+    return {
+      bucket: virtualHostedMatch[1],
+      key: decodeURIComponent(path),
+    };
+  }
+
+  // Path-style URL, e.g. s3.us-east-2.amazonaws.com/bucket/key
+  if (host.startsWith('s3.') || host === 's3.amazonaws.com') {
+    const slashIndex = path.indexOf('/');
+    if (slashIndex === -1) return null;
+    return {
+      bucket: path.slice(0, slashIndex),
+      key: decodeURIComponent(path.slice(slashIndex + 1)),
+    };
+  }
+
+  return null;
+}
+
+async function getPresignedContentUrl(value, expiresIn = 3600) {
+  if (!value || typeof value !== 'string') return null;
+
+  const s3Location = parseS3Location(value);
+  if (!s3Location?.bucket || !s3Location?.key) {
+    return value;
+  }
+
+  try {
+    const command = new GetObjectCommand({
+      Bucket: s3Location.bucket,
+      Key: s3Location.key,
+    });
+    return await getSignedUrl(s3Client, command, { expiresIn });
+  } catch (error) {
+    logger.warn(
+      `Could not pre-sign repository document URL (bucket=${s3Location.bucket}, key=${s3Location.key})`,
+      { error: error.message }
+    );
+    return value;
+  }
+}
+
+function parseDocumentMetadata(rawMetadata) {
+  if (!rawMetadata) return {};
+  if (typeof rawMetadata === 'object') return rawMetadata;
+
+  if (typeof rawMetadata === 'string') {
+    try {
+      return JSON.parse(rawMetadata);
+    } catch {
+      return {};
+    }
+  }
+
+  return {};
+}
+
+const explicitCategorySet = new Set([
+  'contract',
+  'invoice',
+  'quote',
+  'insurance',
+  'photos',
+  'payment',
+  'permit',
+  'measurement',
+  'other',
+]);
+
+function normalizeExplicitCategory(value) {
+  if (!value) return null;
+  const normalized = String(value).trim().toLowerCase();
+  return explicitCategorySet.has(normalized) ? normalized : null;
+}
 
 /**
  * GET /api/documents/repository
@@ -127,8 +243,8 @@ router.get('/', async (req, res, next) => {
         }
       });
 
-      // Determine document category based on title/extension patterns
-      const category = categorizeDocument(doc.title, doc.fileType);
+      const metadata = parseDocumentMetadata(doc.metadata);
+      const category = categorizeDocument(doc.title, doc.fileType, metadata.category);
 
       return {
         id: doc.id,
@@ -291,21 +407,31 @@ router.get('/by-job/:opportunityId', async (req, res, next) => {
       orderBy: { createdAt: 'desc' },
     });
 
-    // Transform and categorize
-    const transformedDocs = documents.map((doc) => ({
-      id: doc.id,
-      title: doc.title,
-      fileType: doc.fileType,
-      fileExtension: doc.fileExtension,
-      contentSize: doc.contentSize,
-      createdAt: doc.createdAt,
-      category: categorizeDocument(doc.title, doc.fileType),
-      linkedVia: doc.links.map((link) => ({
-        type: link.linkedRecordType,
-        accountId: link.accountId,
-        opportunityId: link.opportunityId,
-      })),
-    }));
+    // Transform and categorize, and pre-sign private S3 document URLs for UI preview/download.
+    const transformedDocs = await Promise.all(
+      documents.map(async (doc) => {
+        const contentUrl = await getPresignedContentUrl(doc.contentUrl);
+        const metadata = parseDocumentMetadata(doc.metadata);
+        return {
+          id: doc.id,
+          title: doc.title,
+          fileName: doc.fileName,
+          fileType: doc.fileType,
+          fileExtension: doc.fileExtension,
+          contentSize: doc.contentSize,
+          contentUrl,
+          downloadUrl: contentUrl,
+          createdAt: doc.createdAt,
+          updatedAt: doc.updatedAt,
+          category: categorizeDocument(doc.title, doc.fileType, metadata.category),
+          linkedVia: doc.links.map((link) => ({
+            type: link.linkedRecordType,
+            accountId: link.accountId,
+            opportunityId: link.opportunityId,
+          })),
+        };
+      })
+    );
 
     res.json({
       success: true,
@@ -327,7 +453,12 @@ router.get('/by-job/:opportunityId', async (req, res, next) => {
 /**
  * Categorize document based on title and file type
  */
-function categorizeDocument(title, fileType) {
+function categorizeDocument(title, fileType, explicitCategory) {
+  const normalizedExplicitCategory = normalizeExplicitCategory(explicitCategory);
+  if (normalizedExplicitCategory) {
+    return normalizedExplicitCategory;
+  }
+
   const lowerTitle = (title || '').toLowerCase();
 
   // Contract-related
