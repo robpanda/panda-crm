@@ -6,6 +6,7 @@ const prisma = new PrismaClient();
 
 const uniqueIds = (ids = []) => [...new Set((ids || []).filter(Boolean).map((id) => String(id).trim()).filter(Boolean))];
 const PANDA_EMPLOYEE_EMAIL_DOMAINS = new Set(['pandaexteriors.com', 'panda-exteriors.com']);
+const MERGED_USER_STATUS = 'MERGED';
 
 const userDisplayName = (user = {}) => {
   return user.fullName || `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email || user.id;
@@ -58,6 +59,14 @@ const getEmailMatchRank = (email, rankedCandidates) => {
   const rank = rankedCandidates.indexOf(normalized);
   return rank === -1 ? Number.MAX_SAFE_INTEGER : rank;
 };
+
+const withExcludedMergedUsers = (where = {}) => ({
+  ...where,
+  NOT: [
+    ...(Array.isArray(where.NOT) ? where.NOT : where.NOT ? [where.NOT] : []),
+    { status: MERGED_USER_STATUS },
+  ],
+});
 
 const transferAssignments = async (tx, sourceUserIds, targetUserId) => {
   const sourceIds = uniqueIds(sourceUserIds);
@@ -263,9 +272,11 @@ export const userService = {
     orderBy[sortBy] = sortOrder;
 
     // Execute query
+    const filteredWhere = withExcludedMergedUsers(where);
+
     const [users, total] = await Promise.all([
       prisma.user.findMany({
-        where,
+        where: filteredWhere,
         orderBy,
         skip,
         take: limit,
@@ -287,7 +298,7 @@ export const userService = {
           },
         },
       }),
-      prisma.user.count({ where }),
+      prisma.user.count({ where: filteredWhere }),
     ]);
 
     return {
@@ -477,7 +488,7 @@ export const userService = {
     }
 
     const users = await prisma.user.findMany({
-      where,
+      where: withExcludedMergedUsers(where),
       select: {
         id: true,
         fullName: true,
@@ -499,19 +510,21 @@ export const userService = {
    * Get user statistics
    */
   async getUserStats() {
+    const nonMergedWhere = withExcludedMergedUsers({});
+
     const [total, active, inactive, byDepartment, byOffice] = await Promise.all([
-      prisma.user.count(),
-      prisma.user.count({ where: { isActive: true } }),
-      prisma.user.count({ where: { isActive: false } }),
+      prisma.user.count({ where: nonMergedWhere }),
+      prisma.user.count({ where: withExcludedMergedUsers({ isActive: true }) }),
+      prisma.user.count({ where: withExcludedMergedUsers({ isActive: false }) }),
       prisma.user.groupBy({
         by: ['department'],
         _count: { id: true },
-        where: { department: { not: null } },
+        where: withExcludedMergedUsers({ department: { not: null } }),
       }),
       prisma.user.groupBy({
         by: ['officeAssignment'],
         _count: { id: true },
-        where: { officeAssignment: { not: null } },
+        where: withExcludedMergedUsers({ officeAssignment: { not: null } }),
       }),
     ]);
 
@@ -557,7 +570,7 @@ export const userService = {
    */
   async searchUsers(query, limit = 10) {
     const users = await prisma.user.findMany({
-      where: {
+      where: withExcludedMergedUsers({
         OR: [
           { firstName: { contains: query, mode: 'insensitive' } },
           { lastName: { contains: query, mode: 'insensitive' } },
@@ -565,7 +578,7 @@ export const userService = {
           { email: { contains: query, mode: 'insensitive' } },
         ],
         isActive: true,
-      },
+      }),
       select: {
         id: true,
         fullName: true,
@@ -726,7 +739,7 @@ export const userService = {
         where: { id: { in: duplicates } },
         data: {
           isActive: false,
-          status: 'INACTIVE',
+          status: MERGED_USER_STATUS,
         },
       });
 
