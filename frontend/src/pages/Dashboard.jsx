@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { useAuth, ROLE_TYPES } from '../context/AuthContext';
@@ -48,6 +49,7 @@ export default function Dashboard() {
   };
 
   const ownerFilter = getOwnerFilter();
+  const todayKey = format(new Date(), 'yyyy-MM-dd');
 
   // Build filter params for data fetching
   const buildFilterParams = (additionalParams = {}) => {
@@ -69,6 +71,14 @@ export default function Dashboard() {
   const teamOwnerIds = isTeamView && user?.teamMemberIds?.length > 0
     ? [user.id, ...user.teamMemberIds]
     : (isPersonalView && user?.id ? [user.id] : []);
+
+  const todaysWorkOrderParams = useMemo(() => {
+    return buildFilterParams({
+      limit: 10,
+      startDateFrom: todayKey,
+      startDateTo: todayKey,
+    });
+  }, [ownerFilter, user?.id, todayKey, user?.officeAssignment, user?.teamMemberIds?.join(',')]);
 
   // Fetch pipeline stage counts with appropriate filter
   const { data: stageCounts } = useQuery({
@@ -122,13 +132,13 @@ export default function Dashboard() {
 
   // Fetch work orders for today's schedule
   const { data: workOrders } = useQuery({
-    queryKey: ['todaysWorkOrders', ownerFilter, user?.id],
-    queryFn: () => workOrdersApi.getWorkOrders(buildFilterParams({
-      limit: 10,
-      startDateFrom: format(new Date(), 'yyyy-MM-dd'),
-      startDateTo: format(new Date(), 'yyyy-MM-dd'),
-    })),
+    queryKey: ['todaysWorkOrders', ownerFilter, user?.id, todayKey],
+    queryFn: () => workOrdersApi.getWorkOrders(todaysWorkOrderParams),
     enabled: !!user?.id,
+    staleTime: 5 * 60 * 1000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    refetchOnMount: false,
   });
 
   // Fetch real attention items from attention queue API

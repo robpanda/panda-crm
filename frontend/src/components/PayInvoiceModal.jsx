@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { loadStripe } from '@stripe/stripe-js';
 import {
@@ -16,6 +16,15 @@ import {
   Loader2,
   Building2,
 } from 'lucide-react';
+
+const stripePromiseCache = new Map();
+const getStripePromise = (publishableKey) => {
+  if (!publishableKey) return null;
+  if (!stripePromiseCache.has(publishableKey)) {
+    stripePromiseCache.set(publishableKey, loadStripe(publishableKey));
+  }
+  return stripePromiseCache.get(publishableKey);
+};
 
 // Payment Form Component (uses Stripe hooks)
 function PaymentForm({ invoice, paymentAmount, onSuccess, onCancel }) {
@@ -148,7 +157,6 @@ export default function PayInvoiceModal({
   const [customAmount, setCustomAmount] = useState('');
   const [paymentAmount, setPaymentAmount] = useState(0);
   const [clientSecret, setClientSecret] = useState(null);
-  const [stripePromise, setStripePromise] = useState(null);
   const [paymentResult, setPaymentResult] = useState(null);
   const [error, setError] = useState(null);
 
@@ -162,12 +170,10 @@ export default function PayInvoiceModal({
     enabled: isOpen,
   });
 
-  // Initialize Stripe when config is loaded
-  useEffect(() => {
-    if (stripeConfig?.publishableKey) {
-      setStripePromise(loadStripe(stripeConfig.publishableKey));
-    }
-  }, [stripeConfig]);
+  const stripePromise = useMemo(
+    () => getStripePromise(stripeConfig?.publishableKey),
+    [stripeConfig?.publishableKey]
+  );
 
   // Create payment intent mutation
   const createIntentMutation = useMutation({
