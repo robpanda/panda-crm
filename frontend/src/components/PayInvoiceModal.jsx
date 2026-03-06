@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { loadStripe } from '@stripe/stripe-js';
 import {
   Elements,
-  PaymentElement,
+  CardElement,
   useStripe,
   useElements,
 } from '@stripe/react-stripe-js';
@@ -27,7 +27,7 @@ const getStripePromise = (publishableKey) => {
 };
 
 // Payment Form Component (uses Stripe hooks)
-function PaymentForm({ invoice, paymentAmount, onSuccess, onCancel }) {
+function PaymentForm({ invoice, paymentAmount, clientSecret, onSuccess, onCancel }) {
   const stripe = useStripe();
   const elements = useElements();
   const queryClient = useQueryClient();
@@ -55,20 +55,17 @@ function PaymentForm({ invoice, paymentAmount, onSuccess, onCancel }) {
     setPaymentError(null);
 
     try {
-      // Confirm the payment with Stripe
-      const { error: submitError } = await elements.submit();
-      if (submitError) {
-        setPaymentError(submitError.message);
+      const cardElement = elements.getElement(CardElement);
+      if (!cardElement) {
+        setPaymentError('Payment form is still loading. Please wait a moment and try again.');
         setIsProcessing(false);
         return;
       }
 
-      const { error, paymentIntent } = await stripe.confirmPayment({
-        elements,
-        confirmParams: {
-          return_url: window.location.href,
+      const { error, paymentIntent } = await stripe.confirmCardPayment(clientSecret, {
+        payment_method: {
+          card: cardElement,
         },
-        redirect: 'if_required',
       });
 
       if (error) {
@@ -98,12 +95,14 @@ function PaymentForm({ invoice, paymentAmount, onSuccess, onCancel }) {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
-      <PaymentElement
-        options={{
-          layout: 'tabs',
-          paymentMethodOrder: ['card', 'us_bank_account'],
-        }}
-      />
+      <div className="border border-gray-300 rounded-lg px-3 py-3 bg-white">
+        <CardElement
+          options={{
+            disableLink: true,
+            hidePostalCode: false,
+          }}
+        />
+      </div>
 
       {paymentError && (
         <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
@@ -425,12 +424,13 @@ export default function PayInvoiceModal({
                   <PaymentForm
                     invoice={invoice}
                     paymentAmount={paymentAmount}
+                    clientSecret={clientSecret}
                     onSuccess={handlePaymentSuccess}
                     onCancel={() => setStep(1)}
                   />
 
                   <p className="text-xs text-gray-500 text-center">
-                    Payments are securely processed by Stripe. Available methods: Credit Card and ACH.
+                    Payments are securely processed by Stripe. Internal checkout supports Credit Card only.
                   </p>
                 </div>
               </Elements>
