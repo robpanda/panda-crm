@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { loadStripe } from '@stripe/stripe-js';
 import {
@@ -27,12 +27,28 @@ const getStripePromise = (publishableKey) => {
 };
 
 // Payment Form Component (uses Stripe hooks)
-function PaymentForm({ invoice, paymentAmount, onSuccess, onCancel, paymentContext = 'internal' }) {
+function PaymentForm({
+  invoice,
+  paymentAmount,
+  onSuccess,
+  onCancel,
+  paymentContext = 'internal',
+  onProcessingChange,
+}) {
   const stripe = useStripe();
   const elements = useElements();
   const queryClient = useQueryClient();
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentError, setPaymentError] = useState(null);
+  const isMountedRef = useRef(true);
+
+  useEffect(() => () => {
+    isMountedRef.current = false;
+  }, []);
+
+  useEffect(() => {
+    onProcessingChange?.(isProcessing);
+  }, [isProcessing, onProcessingChange]);
 
   const recordPaymentMutation = useMutation({
     mutationFn: (data) => paymentsApi.createPayment(data),
@@ -51,6 +67,7 @@ function PaymentForm({ invoice, paymentAmount, onSuccess, onCancel, paymentConte
       return;
     }
 
+    if (!isMountedRef.current) return;
     setIsProcessing(true);
     setPaymentError(null);
 
@@ -58,8 +75,10 @@ function PaymentForm({ invoice, paymentAmount, onSuccess, onCancel, paymentConte
       // Confirm the payment with Stripe
       const { error: submitError } = await elements.submit();
       if (submitError) {
-        setPaymentError(submitError.message);
-        setIsProcessing(false);
+        if (isMountedRef.current) {
+          setPaymentError(submitError.message);
+          setIsProcessing(false);
+        }
         return;
       }
 
@@ -72,8 +91,10 @@ function PaymentForm({ invoice, paymentAmount, onSuccess, onCancel, paymentConte
       });
 
       if (error) {
-        setPaymentError(error.message);
-        setIsProcessing(false);
+        if (isMountedRef.current) {
+          setPaymentError(error.message);
+          setIsProcessing(false);
+        }
         return;
       }
 
@@ -90,9 +111,13 @@ function PaymentForm({ invoice, paymentAmount, onSuccess, onCancel, paymentConte
         onSuccess(paymentIntent);
       }
     } catch (err) {
-      setPaymentError(err.message || 'An unexpected error occurred');
+      if (isMountedRef.current) {
+        setPaymentError(err.message || 'An unexpected error occurred');
+      }
     } finally {
-      setIsProcessing(false);
+      if (isMountedRef.current) {
+        setIsProcessing(false);
+      }
     }
   };
 
@@ -169,6 +194,7 @@ export default function PayInvoiceModal({
   const [clientSecret, setClientSecret] = useState(null);
   const [paymentResult, setPaymentResult] = useState(null);
   const [error, setError] = useState(null);
+  const [isPaymentProcessing, setIsPaymentProcessing] = useState(false);
   const paymentContext = fullAmountOnly ? 'portal' : 'internal';
 
   const balanceDue = Number(invoice?.balanceDue ?? invoice?.total ?? invoice?.totalAmount ?? 0);
@@ -225,8 +251,20 @@ export default function PayInvoiceModal({
       setClientSecret(null);
       setPaymentResult(null);
       setError(null);
+      setIsPaymentProcessing(false);
     }
   }, [isOpen]);
+
+  useEffect(() => {
+    if (step !== 2 && isPaymentProcessing) {
+      setIsPaymentProcessing(false);
+    }
+  }, [step, isPaymentProcessing]);
+
+  const handleRequestClose = () => {
+    if (isPaymentProcessing) return;
+    onClose?.();
+  };
 
   if (!isOpen || !invoice) return null;
 
@@ -269,7 +307,7 @@ export default function PayInvoiceModal({
     <div className="fixed inset-0 z-50 overflow-y-auto">
       <div className="flex min-h-screen items-center justify-center p-4">
         {/* Backdrop */}
-        <div className="fixed inset-0 bg-black/50" onClick={onClose} />
+        <div className="fixed inset-0 bg-black/50" onClick={handleRequestClose} />
 
         {/* Modal */}
         <div className="relative bg-white rounded-xl shadow-2xl max-w-lg w-full max-h-[calc(100vh-2rem)] overflow-y-auto">
@@ -285,8 +323,9 @@ export default function PayInvoiceModal({
               </div>
             </div>
             <button
-              onClick={onClose}
-              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              onClick={handleRequestClose}
+              disabled={isPaymentProcessing}
+              className="p-2 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <X className="w-5 h-5 text-gray-500" />
             </button>
@@ -391,8 +430,9 @@ export default function PayInvoiceModal({
                 <div className="flex flex-col sm:flex-row gap-3 pt-2">
                   <button
                     type="button"
-                    onClick={onClose}
-                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
+                    onClick={handleRequestClose}
+                    disabled={isPaymentProcessing}
+                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Cancel
                   </button>
@@ -421,6 +461,7 @@ export default function PayInvoiceModal({
             {/* Step 2: Payment Form */}
             {step === 2 && stripePromise && clientSecret && (
               <Elements
+                key={`${invoice.id}-${clientSecret}`}
                 stripe={stripePromise}
                 options={{
                   clientSecret,
@@ -441,6 +482,7 @@ export default function PayInvoiceModal({
                     paymentContext={paymentContext}
                     onSuccess={handlePaymentSuccess}
                     onCancel={() => setStep(1)}
+                    onProcessingChange={setIsPaymentProcessing}
                   />
 
                   <p className="text-xs text-gray-500 text-center">
