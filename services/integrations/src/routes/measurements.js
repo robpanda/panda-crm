@@ -201,6 +201,7 @@ router.post('/gaf/order', authMiddleware, async (req, res, next) => {
     const report = await measurementService.orderGAFReport({
       ...req.body,
       userId: req.user.id,
+      userEmail: req.user.email || null,
     });
 
     logger.info(`GAF QuickMeasure order placed: ${report.id} by ${req.user.email}`);
