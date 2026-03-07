@@ -762,7 +762,10 @@ class OpportunityService {
             account: true,
             contact: true,
             owner: {
-              select: { id: true, firstName: true, lastName: true, email: true },
+              select: { id: true, firstName: true, lastName: true, email: true, phone: true, mobilePhone: true },
+            },
+            projectManager: {
+              select: { id: true, firstName: true, lastName: true, email: true, phone: true, mobilePhone: true },
             },
             lineItems: {
               orderBy: { sortOrder: 'asc' },
@@ -2910,6 +2913,7 @@ Be factual and professional. Highlight anything that needs attention.`;
       accountId: data.accountId,
       contactId: data.contactId,
       ownerId: data.ownerId,
+      projectManagerId: data.projectManagerId,
       // Invoice workflow fields
       invoiceStatus: data.invoiceStatus,
       invoiceReadyDate: data.invoiceReadyDate ? new Date(data.invoiceReadyDate) : undefined,
@@ -2923,6 +2927,20 @@ Be factual and professional. Highlight anything that needs attention.`;
 
     if (hasOwnField(data, 'dateOfLoss')) {
       updateData.dateOfLoss = parseDate(data.dateOfLoss);
+    }
+
+    if (hasOwnField(data, 'ownerId')) {
+      updateData.owner = data.ownerId
+        ? { connect: { id: data.ownerId } }
+        : { disconnect: true };
+      delete updateData.ownerId;
+    }
+
+    if (hasOwnField(data, 'projectManagerId')) {
+      updateData.projectManager = data.projectManagerId
+        ? { connect: { id: data.projectManagerId } }
+        : { disconnect: true };
+      delete updateData.projectManagerId;
     }
 
     // Handle line items separately if provided
@@ -2954,7 +2972,8 @@ Be factual and professional. Highlight anything that needs attention.`;
       include: {
         account: { select: { id: true, name: true } },
         contact: { select: { id: true, firstName: true, lastName: true } },
-        owner: { select: { id: true, firstName: true, lastName: true } },
+        owner: { select: { id: true, firstName: true, lastName: true, email: true, phone: true, mobilePhone: true } },
+        projectManager: { select: { id: true, firstName: true, lastName: true, email: true, phone: true, mobilePhone: true } },
         lineItems: { include: { product: true } },
       },
     });
@@ -3263,6 +3282,28 @@ Be factual and professional. Highlight anything that needs attention.`;
       // Owner
       ownerId: opp.ownerId,
       ownerName: opp.owner ? `${opp.owner.firstName} ${opp.owner.lastName}` : 'Unassigned',
+      owner: opp.owner
+        ? {
+          id: opp.owner.id,
+          firstName: opp.owner.firstName || null,
+          lastName: opp.owner.lastName || null,
+          email: opp.owner.email || null,
+          phone: opp.owner.phone || null,
+          mobilePhone: opp.owner.mobilePhone || null,
+        }
+        : null,
+      projectManagerId: opp.projectManagerId || null,
+      projectManager: opp.projectManager
+        ? {
+          id: opp.projectManager.id,
+          firstName: opp.projectManager.firstName || null,
+          lastName: opp.projectManager.lastName || null,
+          email: opp.projectManager.email || null,
+          phone: opp.projectManager.phone || null,
+          mobilePhone: opp.projectManager.mobilePhone || null,
+          name: `${opp.projectManager.firstName || ''} ${opp.projectManager.lastName || ''}`.trim(),
+        }
+        : null,
       // Source lead attribution
       sourceLeadId: opp.sourceLeadId || null,
       leadSetById: opp.leadSetById || null,

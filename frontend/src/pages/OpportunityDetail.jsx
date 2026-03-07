@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { opportunitiesApi, companyCamApi, scheduleApi, casesApi, emailsApi, notificationsApi, bamboogliApi, approvalsApi, measurementsApi, contactsApi, ringCentralApi, usersApi, quotesApi, invoicesApi, paymentsApi, tasksApi, documentsApi } from '../services/api';
+import { opportunitiesApi, companyCamApi, scheduleApi, casesApi, emailsApi, notificationsApi, bamboogliApi, approvalsApi, measurementsApi, contactsApi, ringCentralApi, usersApi, quotesApi, invoicesApi, paymentsApi, tasksApi, documentsApi, agreementsApi } from '../services/api';
 import { useRingCentral } from '../context/RingCentralContext';
 import { useAuth } from '../context/AuthContext';
 import { addRecentItem } from '../utils/recentItems';
@@ -2346,6 +2346,10 @@ export default function OpportunityDetail() {
   const [selectedDocumentIndex, setSelectedDocumentIndex] = useState(0);
   const [showRepositoryFileGallery, setShowRepositoryFileGallery] = useState(false);
   const [selectedRepositoryFileIndex, setSelectedRepositoryFileIndex] = useState(0);
+  const [showUploadTypeModal, setShowUploadTypeModal] = useState(false);
+  const [pendingUploadFile, setPendingUploadFile] = useState(null);
+  const [pendingUploadCategory, setPendingUploadCategory] = useState('');
+  const [uploadTypeError, setUploadTypeError] = useState('');
   const [documentUploadCategory, setDocumentUploadCategory] = useState('');
   const [isUploadingRepositoryFile, setIsUploadingRepositoryFile] = useState(false);
   const repositoryUploadInputRef = useRef(null);
@@ -2383,6 +2387,10 @@ export default function OpportunityDetail() {
   const [transferOwnerSearchTerm, setTransferOwnerSearchTerm] = useState('');
   const [transferRelatedItems, setTransferRelatedItems] = useState(true);
   const [transferOwnerError, setTransferOwnerError] = useState('');
+  const [showProjectManagerModal, setShowProjectManagerModal] = useState(false);
+  const [selectedProjectManagerId, setSelectedProjectManagerId] = useState('');
+  const [projectManagerSearchTerm, setProjectManagerSearchTerm] = useState('');
+  const [projectManagerError, setProjectManagerError] = useState('');
 
   // Close actions menu when clicking outside
   useEffect(() => {
@@ -2661,46 +2669,71 @@ export default function OpportunityDetail() {
   }, [documents, selectedDocumentIndex, downloadRemoteFile]);
 
   const openRepositoryUploadPicker = useCallback(() => {
-    if (!documentUploadCategory) {
-      setActionError('Select a document type before uploading.');
-      return;
-    }
+    setActionError(null);
     repositoryUploadInputRef.current?.click();
-  }, [documentUploadCategory]);
+  }, []);
 
-  const handleRepositoryFileUpload = useCallback(async (event) => {
+  const closeUploadTypeModal = useCallback(() => {
+    setShowUploadTypeModal(false);
+    setPendingUploadFile(null);
+    setPendingUploadCategory('');
+    setUploadTypeError('');
+    if (repositoryUploadInputRef.current) {
+      repositoryUploadInputRef.current.value = '';
+    }
+  }, []);
+
+  const handleRepositoryFileUpload = useCallback((event) => {
     const input = event.target;
     const file = input?.files?.[0];
     if (!file) return;
 
-    if (!documentUploadCategory) {
-      setActionError('Select a document type before uploading.');
-      input.value = '';
+    setPendingUploadFile(file);
+    setPendingUploadCategory(documentUploadCategory || '');
+    setUploadTypeError('');
+    setShowUploadTypeModal(true);
+  }, [documentUploadCategory]);
+
+  const submitRepositoryFileUpload = useCallback(async () => {
+    if (!pendingUploadFile) return;
+
+    if (!pendingUploadCategory) {
+      setUploadTypeError('Please select a file type before uploading.');
       return;
     }
 
     setIsUploadingRepositoryFile(true);
     setActionError(null);
+    setUploadTypeError('');
 
     try {
-      await documentsApi.uploadDocument(file, {
-        title: file.name,
-        category: documentUploadCategory,
+      await documentsApi.uploadDocument(pendingUploadFile, {
+        title: pendingUploadFile.name,
+        category: pendingUploadCategory,
         opportunityId: id,
         accountId: opportunity?.accountId || opportunity?.account?.id || null,
       });
 
+      setDocumentUploadCategory(pendingUploadCategory);
       await queryClient.invalidateQueries({ queryKey: ['opportunityRepositoryFiles', id] });
       setDocumentsSubTab('files');
-      setActionSuccess(`${file.name} uploaded successfully`);
+      setActionSuccess(`${pendingUploadFile.name} uploaded successfully`);
       setTimeout(() => setActionSuccess(null), 1500);
+      closeUploadTypeModal();
     } catch (error) {
       setActionError(error.message || 'Failed to upload file');
     } finally {
       setIsUploadingRepositoryFile(false);
-      input.value = '';
     }
-  }, [documentUploadCategory, id, opportunity?.accountId, opportunity?.account?.id, queryClient]);
+  }, [
+    pendingUploadFile,
+    pendingUploadCategory,
+    id,
+    opportunity?.accountId,
+    opportunity?.account?.id,
+    queryClient,
+    closeUploadTypeModal,
+  ]);
 
   // Cases (linked via Account) - service not yet deployed, disable retries
   const { data: cases } = useQuery({
@@ -2803,6 +2836,54 @@ export default function OpportunityDetail() {
     },
   });
 
+  const assignProjectManagerMutation = useMutation({
+    mutationFn: (projectManagerId) =>
+      opportunitiesApi.updateOpportunity(id, {
+        projectManagerId: projectManagerId || null,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['opportunity', id]);
+      setShowProjectManagerModal(false);
+      setSelectedProjectManagerId('');
+      setProjectManagerSearchTerm('');
+      setProjectManagerError('');
+      setActionSuccess('Project manager updated successfully');
+      setTimeout(() => setActionSuccess(null), 3000);
+    },
+    onError: (error) => {
+      setProjectManagerError(error.message || 'Failed to update project manager');
+    },
+  });
+
+  const deleteRepositoryFileMutation = useMutation({
+    mutationFn: (file) =>
+      documentsApi.deleteDocument(file.id, {
+        opportunityId: id,
+        accountId: opportunity?.accountId || opportunity?.account?.id || undefined,
+        removeAllLinksForJob: true,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['opportunityRepositoryFiles', id]);
+      setActionSuccess('File deleted successfully');
+      setTimeout(() => setActionSuccess(null), 2500);
+    },
+    onError: (error) => {
+      setActionError(error.message || 'Failed to delete file');
+    },
+  });
+
+  const deleteContractMutation = useMutation({
+    mutationFn: (agreementId) => agreementsApi.deleteAgreement(agreementId),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['opportunityDocuments', id]);
+      setActionSuccess('Contract deleted successfully');
+      setTimeout(() => setActionSuccess(null), 2500);
+    },
+    onError: (error) => {
+      setActionError(error.message || 'Failed to delete contract');
+    },
+  });
+
   // Initialize claim form when opportunity data loads
   useEffect(() => {
     if (opportunity) {
@@ -2899,8 +2980,12 @@ export default function OpportunityDetail() {
       ),
       fieldAdjusterMobile: claimForm.fieldAdjusterMobile || null,
     };
-    updateMutation.mutate(updateData);
-    setIsEditingClaim(false);
+    try {
+      await updateMutation.mutateAsync(updateData);
+      setIsEditingClaim(false);
+    } catch {
+      // Keep form open so the user can correct and retry.
+    }
   };
 
   // Work Order mutations
@@ -3964,10 +4049,13 @@ export default function OpportunityDetail() {
     .slice(0, 2)
     .map((part) => part.charAt(0).toUpperCase())
     .join('');
-  const hasOwnerTeamMember = Boolean(ownerDisplayName || ownerDisplayId);
+  const allAssignableUsers = useMemo(
+    () => Array.isArray(assignableOwners) ? assignableOwners : [],
+    [assignableOwners]
+  );
   const availableTransferOwners = useMemo(
-    () => (assignableOwners || []).filter((teamUser) => teamUser.id !== ownerDisplayId),
-    [assignableOwners, ownerDisplayId]
+    () => allAssignableUsers.filter((teamUser) => teamUser.id !== ownerDisplayId),
+    [allAssignableUsers, ownerDisplayId]
   );
   const filteredTransferOwners = useMemo(() => {
     const query = transferOwnerSearchTerm.trim().toLowerCase();
@@ -3986,6 +4074,48 @@ export default function OpportunityDetail() {
       return haystack.includes(query);
     });
   }, [availableTransferOwners, transferOwnerSearchTerm]);
+  const projectManagerDisplayId = opportunity?.projectManager?.id || opportunity?.projectManagerId || null;
+  const availableProjectManagers = useMemo(
+    () => allAssignableUsers,
+    [allAssignableUsers]
+  );
+  const filteredProjectManagers = useMemo(() => {
+    const query = projectManagerSearchTerm.trim().toLowerCase();
+    if (!query) return availableProjectManagers;
+    return availableProjectManagers.filter((teamUser) => {
+      const haystack = [
+        teamUser.name,
+        teamUser.email,
+        teamUser.role,
+        teamUser.firstName,
+        teamUser.lastName,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [availableProjectManagers, projectManagerSearchTerm]);
+  const assignedCrewMembers = useMemo(() => {
+    if (!Array.isArray(appointments)) return [];
+    const unique = new Map();
+    appointments.forEach((apt) => {
+      const resource = apt?.assignedResource;
+      if (!resource?.id) return;
+      if (!unique.has(resource.id)) {
+        unique.set(resource.id, {
+          id: resource.id,
+          name: resource.name || 'Crew member',
+          phone: resource.phone || null,
+        });
+      }
+    });
+    return Array.from(unique.values());
+  }, [appointments]);
+  const primaryCrewAppointment = useMemo(() => {
+    if (!Array.isArray(appointments) || appointments.length === 0) return null;
+    return appointments[0];
+  }, [appointments]);
 
   // Calculate badge counts for the new category tabs (must be before early returns)
   const categoryBadgeCounts = useMemo(() => ({
@@ -5805,8 +5935,7 @@ export default function OpportunityDetail() {
                     {/* Team Members */}
                     <div className="space-y-3">
                       {/* Sales Rep / Owner */}
-                      {hasOwnerTeamMember && (
-                        <div className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-panda-primary transition-colors">
+                      <div className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-panda-primary transition-colors">
                           <div className="flex items-center space-x-3">
                             <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-500 to-emerald-500 flex items-center justify-center">
                               <span className="text-white text-sm font-medium">
@@ -5848,49 +5977,97 @@ export default function OpportunityDetail() {
                             )}
                           </div>
                         </div>
-                      )}
 
                       {/* Project Manager */}
-                      {opportunity?.projectManager && (
-                        <div className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-panda-primary transition-colors">
-                          <div className="flex items-center space-x-3">
-                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-violet-500 flex items-center justify-center">
-                              <span className="text-white text-sm font-medium">
-                                {opportunity.projectManager.firstName?.charAt(0)}{opportunity.projectManager.lastName?.charAt(0)}
-                              </span>
-                            </div>
-                            <div>
+                      <div className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-panda-primary transition-colors">
+                        <div className="flex items-center space-x-3">
+                          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-violet-500 flex items-center justify-center">
+                            <span className="text-white text-sm font-medium">
+                              {(opportunity?.projectManager?.firstName?.charAt(0) || 'P')}{(opportunity?.projectManager?.lastName?.charAt(0) || 'M')}
+                            </span>
+                          </div>
+                          <div>
+                            {opportunity?.projectManager?.id ? (
                               <Link
                                 to={`/users/${opportunity.projectManager.id}`}
                                 className="font-medium text-gray-900 hover:text-panda-primary"
                               >
-                                {opportunity.projectManager.firstName} {opportunity.projectManager.lastName}
+                                {opportunity.projectManager.name
+                                  || `${opportunity.projectManager.firstName || ''} ${opportunity.projectManager.lastName || ''}`.trim()
+                                  || 'Unassigned'}
                               </Link>
-                              <p className="text-sm text-gray-500">Project Manager</p>
-                            </div>
-                          </div>
-                          <div className="flex items-center space-x-2">
-                            {opportunity.projectManager.phone && (
-                              <a
-                                href={`tel:${opportunity.projectManager.phone}`}
-                                className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
-                                title="Call"
-                              >
-                                <Phone className="w-4 h-4" />
-                              </a>
+                            ) : (
+                              <p className="font-medium text-gray-900">Unassigned</p>
                             )}
-                            {opportunity.projectManager.email && (
-                              <a
-                                href={`mailto:${opportunity.projectManager.email}`}
-                                className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                                title="Email"
-                              >
-                                <Mail className="w-4 h-4" />
-                              </a>
-                            )}
+                            <p className="text-sm text-gray-500">Project Manager</p>
                           </div>
                         </div>
-                      )}
+                        <div className="flex items-center space-x-2">
+                          {opportunity?.projectManager?.phone && (
+                            <a
+                              href={`tel:${opportunity.projectManager.phone}`}
+                              className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                              title="Call"
+                            >
+                              <Phone className="w-4 h-4" />
+                            </a>
+                          )}
+                          {opportunity?.projectManager?.email && (
+                            <a
+                              href={`mailto:${opportunity.projectManager.email}`}
+                              className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                              title="Email"
+                            >
+                              <Mail className="w-4 h-4" />
+                            </a>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedProjectManagerId(projectManagerDisplayId || '');
+                              setProjectManagerSearchTerm('');
+                              setProjectManagerError('');
+                              setShowProjectManagerModal(true);
+                            }}
+                            className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-panda-primary bg-panda-primary/10 rounded-lg hover:bg-panda-primary/20"
+                          >
+                            {opportunity?.projectManager?.id ? 'Transfer' : 'Assign'}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Crew */}
+                      <div className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-panda-primary transition-colors">
+                        <div className="flex items-center space-x-3">
+                          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-sky-500 to-cyan-500 flex items-center justify-center">
+                            <Users className="w-5 h-5 text-white" />
+                          </div>
+                          <div>
+                            <p className="font-medium text-gray-900">
+                              {assignedCrewMembers.length > 0
+                                ? assignedCrewMembers.map((member) => member.name).join(', ')
+                                : 'Unassigned'}
+                            </p>
+                            <p className="text-sm text-gray-500">Crew</p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!primaryCrewAppointment?.id) {
+                              setActionError('Schedule an appointment before assigning a crew.');
+                              return;
+                            }
+
+                            setSelectedAppointmentForCrew(primaryCrewAppointment);
+                            setSelectedCrewId(primaryCrewAppointment.assignedResource?.id || '');
+                            setShowCrewModal(true);
+                          }}
+                          className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-panda-primary bg-panda-primary/10 rounded-lg hover:bg-panda-primary/20"
+                        >
+                          {assignedCrewMembers.length > 0 ? 'Transfer' : 'Assign'}
+                        </button>
+                      </div>
 
                       {/* Onboarded By */}
                       {opportunity?.onboardedBy && (
@@ -5976,13 +6153,6 @@ export default function OpportunityDetail() {
                         </div>
                       )}
 
-                      {/* Empty State */}
-                      {!hasOwnerTeamMember && !opportunity?.projectManager && !opportunity?.onboardedBy && !opportunity?.approvedBy && (
-                        <div className="text-center py-8 text-gray-500">
-                          <UserCircle className="w-12 h-12 mx-auto text-gray-300 mb-2" />
-                          <p>No team members assigned</p>
-                        </div>
-                      )}
                     </div>
                   </div>
                 )}
@@ -7811,21 +7981,6 @@ export default function OpportunityDetail() {
                         </button>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
-                        <div className="flex items-center gap-2 min-w-[220px]">
-                          <Tag className="w-4 h-4 text-gray-500" />
-                          <select
-                            value={documentUploadCategory}
-                            onChange={(event) => setDocumentUploadCategory(event.target.value)}
-                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
-                          >
-                            <option value="">Select file type</option>
-                            {DOCUMENT_UPLOAD_CATEGORY_OPTIONS.map((option) => (
-                              <option key={option.value} value={option.value}>
-                                {option.label}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
                         <button
                           type="button"
                           onClick={() => setShowChangeOrderModal(true)}
@@ -7855,6 +8010,12 @@ export default function OpportunityDetail() {
                           )}
                           {isUploadingRepositoryFile ? 'Uploading...' : 'Upload'}
                         </button>
+                        {documentUploadCategory && (
+                          <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold ${getDocumentCategoryBadgeClass(documentUploadCategory)}`}>
+                            <Tag className="w-3 h-3 mr-1" />
+                            Last type: {getDocumentCategoryLabel(documentUploadCategory)}
+                          </span>
+                        )}
                         <input
                           ref={repositoryUploadInputRef}
                           type="file"
@@ -7903,14 +8064,26 @@ export default function OpportunityDetail() {
                               }}
                             >
                               {/* PDF Thumbnail Preview */}
-                              <div className="aspect-[3/4] bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center relative">
+                              <div className="aspect-[3/4] bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center relative overflow-hidden">
                                 {(doc.signedDocumentUrl || doc.documentUrl) ? (
                                   <>
-                                    {/* PDF Icon as placeholder - could use pdf.js for actual thumbnails */}
-                                    <div className="text-center">
-                                      <FileSignature className="w-12 h-12 text-panda-primary mx-auto mb-2" />
-                                      <span className="text-xs text-gray-500 font-medium">PDF</span>
-                                    </div>
+                                    {doc.thumbnailUrl ? (
+                                      <object
+                                        data={`${doc.thumbnailUrl}#toolbar=0&navpanes=0&scrollbar=0`}
+                                        type="application/pdf"
+                                        className="absolute inset-0 w-full h-full pointer-events-none"
+                                      >
+                                        <div className="text-center">
+                                          <FileSignature className="w-12 h-12 text-panda-primary mx-auto mb-2" />
+                                          <span className="text-xs text-gray-500 font-medium">PDF</span>
+                                        </div>
+                                      </object>
+                                    ) : (
+                                      <div className="text-center">
+                                        <FileSignature className="w-12 h-12 text-panda-primary mx-auto mb-2" />
+                                        <span className="text-xs text-gray-500 font-medium">PDF</span>
+                                      </div>
+                                    )}
                                     {/* Status badge */}
                                     <div className={`absolute top-2 right-2 px-2 py-0.5 rounded text-[10px] font-semibold ${
                                       doc.status === 'SIGNED' ? 'bg-green-500 text-white' :
@@ -7944,6 +8117,60 @@ export default function OpportunityDetail() {
                                     : doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : '-'
                                   }
                                 </p>
+                                <div className="mt-3 flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedDocumentIndex(index);
+                                      setShowDocumentGallery(true);
+                                    }}
+                                    className="flex-1 inline-flex items-center justify-center px-2 py-1.5 text-xs rounded-md bg-panda-primary/10 text-panda-primary hover:bg-panda-primary/20"
+                                  >
+                                    <ZoomIn className="w-3 h-3 mr-1" />
+                                    Preview
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={async (e) => {
+                                      e.stopPropagation();
+                                      const downloadUrl = doc.downloadUrl || doc.signedDocumentUrl || doc.documentUrl;
+                                      if (!downloadUrl) {
+                                        setActionError('No document URL available');
+                                        return;
+                                      }
+                                      try {
+                                        await downloadRemoteFile(downloadUrl, doc.fileName || doc.name || doc.agreementNumber || 'agreement.pdf');
+                                        setActionSuccess('Download started');
+                                        setTimeout(() => setActionSuccess(null), 1500);
+                                      } catch (error) {
+                                        setActionError(error.message || 'Failed to download document');
+                                      }
+                                    }}
+                                    className="flex-1 inline-flex items-center justify-center px-2 py-1.5 text-xs rounded-md bg-panda-secondary/10 text-panda-secondary hover:bg-panda-secondary/20"
+                                  >
+                                    <Download className="w-3 h-3 mr-1" />
+                                    Download
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={doc.status !== 'DRAFT' || deleteContractMutation.isPending}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (doc.status !== 'DRAFT') {
+                                        setActionError('Only draft contracts can be deleted.');
+                                        return;
+                                      }
+                                      if (window.confirm(`Delete draft contract "${doc.name || doc.agreementNumber}"?`)) {
+                                        deleteContractMutation.mutate(doc.id);
+                                      }
+                                    }}
+                                    className="inline-flex items-center justify-center px-2 py-1.5 text-xs rounded-md bg-red-50 text-red-600 hover:bg-red-100 disabled:opacity-40 disabled:cursor-not-allowed"
+                                    title={doc.status !== 'DRAFT' ? 'Only draft contracts can be deleted' : 'Delete draft contract'}
+                                  >
+                                    <Trash2 className="w-3 h-3" />
+                                  </button>
+                                </div>
                               </div>
                             </div>
                           ))}
@@ -7985,6 +8212,30 @@ export default function OpportunityDetail() {
                                     <span>Download</span>
                                   </button>
                                 )}
+                                <button
+                                  type="button"
+                                  disabled={documents.documents[selectedDocumentIndex]?.status !== 'DRAFT' || deleteContractMutation.isPending}
+                                  className="flex items-center space-x-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const selected = documents.documents[selectedDocumentIndex];
+                                    if (!selected || selected.status !== 'DRAFT') {
+                                      setActionError('Only draft contracts can be deleted.');
+                                      return;
+                                    }
+                                    if (window.confirm(`Delete draft contract "${selected.name || selected.agreementNumber}"?`)) {
+                                      deleteContractMutation.mutate(selected.id, {
+                                        onSuccess: () => {
+                                          setShowDocumentGallery(false);
+                                          setSelectedDocumentIndex(0);
+                                        },
+                                      });
+                                    }
+                                  }}
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                  <span>Delete</span>
+                                </button>
                               </div>
                             </div>
 
@@ -8084,6 +8335,7 @@ export default function OpportunityDetail() {
                                   {(() => {
                                     const fileUrl = getRepositoryFileUrl(file);
                                     const isImageFile = isRepositoryImageFile(file);
+                                    const isPdfFile = isRepositoryPdfFile(file);
                                     const fileCategoryLabel = getDocumentCategoryLabel(file.category);
 
                                     return (
@@ -8093,45 +8345,43 @@ export default function OpportunityDetail() {
                                       {fileCategoryLabel}
                                     </span>
                                   </div>
-                                  <div className="flex items-start space-x-3">
-                                    <div className="flex-shrink-0">
-                                      {isImageFile ? (
-                                        <button
-                                          type="button"
-                                          className="block w-10 h-10 rounded-lg overflow-hidden border border-gray-200 bg-gray-50"
-                                          onClick={() => {
-                                            const index = files.findIndex((item) => item.id === file.id);
-                                            if (index >= 0) {
-                                              setSelectedRepositoryFileIndex(index);
-                                              setShowRepositoryFileGallery(true);
-                                            }
-                                          }}
-                                        >
-                                          <img
-                                            src={fileUrl}
-                                            alt={file.title || file.fileName || 'File preview'}
-                                            className="w-full h-full object-cover"
-                                            loading="lazy"
-                                          />
-                                        </button>
-                                      ) : (
-                                        <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center">
-                                          <FileText className="w-5 h-5 text-gray-500" />
+                                  <div className="mb-3 aspect-[4/3] border border-gray-200 rounded-lg bg-gray-50 overflow-hidden flex items-center justify-center">
+                                    {isImageFile && fileUrl ? (
+                                      <img
+                                        src={fileUrl}
+                                        alt={file.title || file.fileName || 'File preview'}
+                                        className="w-full h-full object-cover"
+                                        loading="lazy"
+                                      />
+                                    ) : isPdfFile && fileUrl ? (
+                                      <object
+                                        data={`${fileUrl}#toolbar=0&navpanes=0&scrollbar=0`}
+                                        type="application/pdf"
+                                        className="w-full h-full pointer-events-none"
+                                      >
+                                        <div className="text-center">
+                                          <FileSignature className="w-10 h-10 text-panda-primary mx-auto mb-2" />
+                                          <p className="text-xs text-gray-500">PDF</p>
                                         </div>
-                                      )}
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                      <p className="text-sm font-medium text-gray-900 truncate" title={file.title || file.fileName || 'Untitled'}>
-                                        {file.title || file.fileName || 'Untitled'}
-                                      </p>
-                                      <p className="text-xs text-gray-500 mt-1">
-                                        {file.fileType || file.fileExtension || 'File'}
-                                        {file.contentSize && ` • ${(file.contentSize / 1024).toFixed(1)} KB`}
-                                      </p>
-                                      <p className="text-xs text-gray-400 mt-1">
-                                        {file.createdAt && new Date(file.createdAt).toLocaleDateString()}
-                                      </p>
-                                    </div>
+                                      </object>
+                                    ) : (
+                                      <div className="text-center">
+                                        <FileText className="w-10 h-10 text-gray-400 mx-auto mb-2" />
+                                        <p className="text-xs text-gray-500">No preview</p>
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div className="min-w-0">
+                                    <p className="text-sm font-medium text-gray-900 truncate" title={file.title || file.fileName || 'Untitled'}>
+                                      {file.title || file.fileName || 'Untitled'}
+                                    </p>
+                                    <p className="text-xs text-gray-500 mt-1">
+                                      {file.fileType || file.fileExtension || 'File'}
+                                      {file.contentSize && ` • ${(file.contentSize / 1024).toFixed(1)} KB`}
+                                    </p>
+                                    <p className="text-xs text-gray-400 mt-1">
+                                      {file.createdAt && new Date(file.createdAt).toLocaleDateString()}
+                                    </p>
                                   </div>
                                   <div className="mt-3 flex space-x-2">
                                     {fileUrl ? (
@@ -8158,12 +8408,40 @@ export default function OpportunityDetail() {
                                           <Download className="w-3 h-3 mr-1" />
                                           Download
                                         </button>
+                                        <button
+                                          type="button"
+                                          className="inline-flex items-center justify-center px-3 py-1.5 bg-red-50 text-red-600 text-xs font-medium rounded-md hover:bg-red-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                          onClick={() => {
+                                            if (window.confirm(`Delete "${file.title || file.fileName || 'this file'}"?`)) {
+                                              deleteRepositoryFileMutation.mutate(file);
+                                            }
+                                          }}
+                                          disabled={deleteRepositoryFileMutation.isPending}
+                                          title="Delete file"
+                                        >
+                                          <Trash2 className="w-3 h-3" />
+                                        </button>
                                       </>
                                     ) : (
-                                      <span className="flex-1 inline-flex items-center justify-center px-3 py-1.5 bg-gray-100 text-gray-400 text-xs font-medium rounded-md">
-                                        <FileText className="w-3 h-3 mr-1" />
-                                        {file.category || 'Salesforce'}
-                                      </span>
+                                      <>
+                                        <span className="flex-1 inline-flex items-center justify-center px-3 py-1.5 bg-gray-100 text-gray-400 text-xs font-medium rounded-md">
+                                          <FileText className="w-3 h-3 mr-1" />
+                                          {file.category || 'Salesforce'}
+                                        </span>
+                                        <button
+                                          type="button"
+                                          className="inline-flex items-center justify-center px-3 py-1.5 bg-red-50 text-red-600 text-xs font-medium rounded-md hover:bg-red-100 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                          onClick={() => {
+                                            if (window.confirm(`Delete "${file.title || file.fileName || 'this file'}"?`)) {
+                                              deleteRepositoryFileMutation.mutate(file);
+                                            }
+                                          }}
+                                          disabled={deleteRepositoryFileMutation.isPending}
+                                          title="Delete file"
+                                        >
+                                          <Trash2 className="w-3 h-3" />
+                                        </button>
+                                      </>
                                     )}
                                   </div>
                                       </>
@@ -8201,14 +8479,35 @@ export default function OpportunityDetail() {
                               </span>
                             </div>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => handleDownloadRepositoryFile(selectedRepositoryFile)}
-                            className="flex items-center space-x-2 px-4 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90"
-                          >
-                            <Download className="w-4 h-4" />
-                            <span>Download</span>
-                          </button>
+                          <div className="flex items-center space-x-2">
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadRepositoryFile(selectedRepositoryFile)}
+                              className="flex items-center space-x-2 px-4 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90"
+                            >
+                              <Download className="w-4 h-4" />
+                              <span>Download</span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={deleteRepositoryFileMutation.isPending}
+                              onClick={() => {
+                                const label = selectedRepositoryFile.title || selectedRepositoryFile.fileName || 'this file';
+                                if (window.confirm(`Delete "${label}"?`)) {
+                                  deleteRepositoryFileMutation.mutate(selectedRepositoryFile, {
+                                    onSuccess: () => {
+                                      setShowRepositoryFileGallery(false);
+                                      setSelectedRepositoryFileIndex(0);
+                                    },
+                                  });
+                                }
+                              }}
+                              className="flex items-center space-x-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                              <span>Delete</span>
+                            </button>
+                          </div>
                         </div>
 
                         <div className="flex-1 flex items-center justify-center p-4 overflow-hidden">
@@ -8663,16 +8962,16 @@ export default function OpportunityDetail() {
                             className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
                             placeholder="(555) 123-4567"
                           />
-                        </div>
-                        <div>
-                          <label className="block text-sm text-gray-500 mb-1">Extension</label>
-                          <input
-                            type="text"
-                            value={claimForm.adjusterOfficeExtension}
-                            onChange={(e) => setClaimForm({ ...claimForm, adjusterOfficeExtension: e.target.value })}
-                            className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
-                            placeholder="Ext"
-                          />
+                          <div className="mt-2 max-w-[180px]">
+                            <label className="block text-xs text-gray-500 mb-1">Extension</label>
+                            <input
+                              type="text"
+                              value={claimForm.adjusterOfficeExtension}
+                              onChange={(e) => setClaimForm({ ...claimForm, adjusterOfficeExtension: e.target.value })}
+                              className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                              placeholder="Ext"
+                            />
+                          </div>
                         </div>
                         <div>
                           <label className="block text-sm text-gray-500 mb-1">Field Adjuster Mobile</label>
@@ -8758,11 +9057,8 @@ export default function OpportunityDetail() {
                         <p className={`font-medium ${parsedAdjusterOfficePhone.phone ? 'text-gray-900' : 'text-gray-500 italic'}`}>
                           {parsedAdjusterOfficePhone.phone || 'Not set'}
                         </p>
-                      </div>
-                      <div>
-                        <label className="text-sm text-gray-500">Extension</label>
-                        <p className={`font-medium ${parsedAdjusterOfficePhone.extension ? 'text-gray-900' : 'text-gray-500 italic'}`}>
-                          {parsedAdjusterOfficePhone.extension || 'Not set'}
+                        <p className={`text-sm mt-1 ${parsedAdjusterOfficePhone.extension ? 'text-gray-700' : 'text-gray-500 italic'}`}>
+                          {parsedAdjusterOfficePhone.extension ? `Ext ${parsedAdjusterOfficePhone.extension}` : 'Ext not set'}
                         </p>
                       </div>
                       <div>
@@ -9052,6 +9348,7 @@ export default function OpportunityDetail() {
                   setShowTransferOwnerModal(false);
                   setTransferOwnerSearchTerm('');
                   setTransferOwnerError('');
+                  setSelectedTransferOwnerId('');
                 }}
                 className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"
               >
@@ -9078,27 +9375,49 @@ export default function OpportunityDetail() {
                 />
 
                 <label className="block text-sm font-medium text-gray-700 mb-1">New Owner</label>
-                <select
-                  value={selectedTransferOwnerId}
-                  onChange={(e) => {
-                    setSelectedTransferOwnerId(e.target.value);
-                    setTransferOwnerError('');
-                  }}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
-                >
-                  <option value="">Select an owner...</option>
-                  {filteredTransferOwners.map((teamUser) => (
-                    <option key={teamUser.id} value={teamUser.id}>
-                      {teamUser.name || `${teamUser.firstName || ''} ${teamUser.lastName || ''}`.trim() || teamUser.email}
-                      {teamUser.role ? ` • ${teamUser.role}` : ''}
-                    </option>
-                  ))}
-                </select>
-                {availableTransferOwners.length === 0 && (
-                  <p className="mt-2 text-xs text-gray-500">No alternate owners available.</p>
-                )}
-                {availableTransferOwners.length > 0 && filteredTransferOwners.length === 0 && (
-                  <p className="mt-2 text-xs text-gray-500">No owners match your search.</p>
+                <div className="border border-gray-200 rounded-lg max-h-56 overflow-y-auto divide-y divide-gray-100">
+                  {filteredTransferOwners.map((teamUser) => {
+                    const isSelected = selectedTransferOwnerId === teamUser.id;
+                    const displayName = teamUser.name
+                      || `${teamUser.firstName || ''} ${teamUser.lastName || ''}`.trim()
+                      || teamUser.email
+                      || 'Unknown User';
+
+                    return (
+                      <button
+                        key={teamUser.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedTransferOwnerId(teamUser.id);
+                          setTransferOwnerError('');
+                        }}
+                        className={`w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center justify-between ${isSelected ? 'bg-panda-primary/5' : ''}`}
+                      >
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-gray-900 truncate">{displayName}</p>
+                          <p className="text-xs text-gray-500 truncate">
+                            {[teamUser.email, teamUser.role].filter(Boolean).join(' • ') || 'Active user'}
+                          </p>
+                        </div>
+                        {isSelected && (
+                          <CheckCircle className="w-4 h-4 text-panda-primary flex-shrink-0 ml-2" />
+                        )}
+                      </button>
+                    );
+                  })}
+                  {availableTransferOwners.length === 0 && (
+                    <p className="px-3 py-2 text-xs text-gray-500">No alternate owners available.</p>
+                  )}
+                  {availableTransferOwners.length > 0 && filteredTransferOwners.length === 0 && (
+                    <p className="px-3 py-2 text-xs text-gray-500">No owners match your search.</p>
+                  )}
+                </div>
+                {selectedTransferOwnerId && (
+                  <p className="mt-2 text-xs text-gray-600">
+                    Selected: {filteredTransferOwners.find((u) => u.id === selectedTransferOwnerId)?.name
+                      || availableTransferOwners.find((u) => u.id === selectedTransferOwnerId)?.name
+                      || 'Owner selected'}
+                  </p>
                 )}
               </div>
 
@@ -9132,6 +9451,7 @@ export default function OpportunityDetail() {
                   setShowTransferOwnerModal(false);
                   setTransferOwnerSearchTerm('');
                   setTransferOwnerError('');
+                  setSelectedTransferOwnerId('');
                 }}
                 className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-lg"
               >
@@ -9157,6 +9477,195 @@ export default function OpportunityDetail() {
                   <Loader2 className="w-4 h-4 animate-spin" />
                 )}
                 <span>Transfer Owner</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showProjectManagerModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg">
+            <div className="flex items-center justify-between p-5 border-b border-gray-100">
+              <h2 className="text-lg font-semibold text-gray-900">Assign Project Manager</h2>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowProjectManagerModal(false);
+                  setProjectManagerSearchTerm('');
+                  setProjectManagerError('');
+                  setSelectedProjectManagerId('');
+                }}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="p-3 rounded-lg bg-gray-50 border border-gray-100">
+                <p className="text-xs uppercase tracking-wide text-gray-500 font-medium">Current Project Manager</p>
+                <p className="mt-1 text-sm font-medium text-gray-900">
+                  {opportunity?.projectManager?.name
+                    || `${opportunity?.projectManager?.firstName || ''} ${opportunity?.projectManager?.lastName || ''}`.trim()
+                    || 'Unassigned'}
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Search Active Users</label>
+                <input
+                  type="text"
+                  value={projectManagerSearchTerm}
+                  onChange={(event) => setProjectManagerSearchTerm(event.target.value)}
+                  placeholder="Search by name, email, or role"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none mb-3"
+                />
+
+                <div className="border border-gray-200 rounded-lg max-h-56 overflow-y-auto divide-y divide-gray-100">
+                  {filteredProjectManagers.map((teamUser) => {
+                    const isSelected = selectedProjectManagerId === teamUser.id;
+                    const displayName = teamUser.name
+                      || `${teamUser.firstName || ''} ${teamUser.lastName || ''}`.trim()
+                      || teamUser.email
+                      || 'Unknown User';
+
+                    return (
+                      <button
+                        key={teamUser.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedProjectManagerId(teamUser.id);
+                          setProjectManagerError('');
+                        }}
+                        className={`w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center justify-between ${isSelected ? 'bg-panda-primary/5' : ''}`}
+                      >
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-gray-900 truncate">{displayName}</p>
+                          <p className="text-xs text-gray-500 truncate">
+                            {[teamUser.email, teamUser.role].filter(Boolean).join(' • ') || 'Active user'}
+                          </p>
+                        </div>
+                        {isSelected && (
+                          <CheckCircle className="w-4 h-4 text-panda-primary flex-shrink-0 ml-2" />
+                        )}
+                      </button>
+                    );
+                  })}
+                  {availableProjectManagers.length === 0 && (
+                    <p className="px-3 py-2 text-xs text-gray-500">No active users available.</p>
+                  )}
+                  {availableProjectManagers.length > 0 && filteredProjectManagers.length === 0 && (
+                    <p className="px-3 py-2 text-xs text-gray-500">No users match your search.</p>
+                  )}
+                </div>
+              </div>
+
+              {projectManagerError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                  <span>{projectManagerError}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-3 p-5 border-t border-gray-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowProjectManagerModal(false);
+                  setProjectManagerSearchTerm('');
+                  setProjectManagerError('');
+                  setSelectedProjectManagerId('');
+                }}
+                className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!selectedProjectManagerId) {
+                    setProjectManagerError('Please select a project manager');
+                    return;
+                  }
+                  assignProjectManagerMutation.mutate(selectedProjectManagerId);
+                }}
+                disabled={!selectedProjectManagerId || assignProjectManagerMutation.isPending}
+                className="px-4 py-2 text-sm font-medium text-white bg-panda-primary rounded-lg hover:bg-panda-dark disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
+              >
+                {assignProjectManagerMutation.isPending && (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                )}
+                <span>Assign</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showUploadTypeModal && pendingUploadFile && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md">
+            <div className="flex items-center justify-between p-5 border-b border-gray-100">
+              <h2 className="text-lg font-semibold text-gray-900">Upload File</h2>
+              <button
+                type="button"
+                onClick={closeUploadTypeModal}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="p-3 rounded-lg bg-gray-50 border border-gray-100">
+                <p className="text-xs uppercase tracking-wide text-gray-500 font-medium">File</p>
+                <p className="mt-1 text-sm font-medium text-gray-900 truncate">{pendingUploadFile.name}</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Document Type</label>
+                <select
+                  value={pendingUploadCategory}
+                  onChange={(event) => {
+                    setPendingUploadCategory(event.target.value);
+                    setUploadTypeError('');
+                  }}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                >
+                  <option value="">Select file type</option>
+                  {DOCUMENT_UPLOAD_CATEGORY_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {uploadTypeError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                  <span>{uploadTypeError}</span>
+                </div>
+              )}
+            </div>
+            <div className="flex items-center justify-end gap-3 p-5 border-t border-gray-100">
+              <button
+                type="button"
+                onClick={closeUploadTypeModal}
+                className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-lg"
+                disabled={isUploadingRepositoryFile}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={submitRepositoryFileUpload}
+                disabled={isUploadingRepositoryFile}
+                className="px-4 py-2 text-sm font-medium text-white bg-panda-primary rounded-lg hover:bg-panda-dark disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
+              >
+                {isUploadingRepositoryFile && <Loader2 className="w-4 h-4 animate-spin" />}
+                <span>{isUploadingRepositoryFile ? 'Uploading...' : 'Upload File'}</span>
               </button>
             </div>
           </div>

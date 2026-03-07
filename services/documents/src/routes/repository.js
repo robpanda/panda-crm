@@ -124,6 +124,10 @@ function normalizeExplicitCategory(value) {
   return explicitCategorySet.has(normalized) ? normalized : null;
 }
 
+function isTruthyFlag(value) {
+  return value === true || value === 'true' || value === '1' || value === 1;
+}
+
 /**
  * GET /api/documents/repository
  * List all documents with pagination, filtering, and search
@@ -421,6 +425,7 @@ router.get('/by-job/:opportunityId', async (req, res, next) => {
           contentSize: doc.contentSize,
           contentUrl,
           downloadUrl: contentUrl,
+          thumbnailUrl: contentUrl,
           createdAt: doc.createdAt,
           updatedAt: doc.updatedAt,
           category: categorizeDocument(doc.title, doc.fileType, metadata.category),
@@ -446,6 +451,106 @@ router.get('/by-job/:opportunityId', async (req, res, next) => {
     });
   } catch (error) {
     logger.error('Error fetching documents for job:', error);
+    next(error);
+  }
+});
+
+/**
+ * DELETE /api/documents/repository/:id
+ * Unlink document from a job/account or delete it entirely when no links remain.
+ * Query params:
+ * - opportunityId (optional) unlink this opportunity relation
+ * - accountId (optional) unlink this account relation
+ * - removeAllLinksForJob=true (optional) unlink both opportunity + account links for this job context
+ * - hardDelete=true (optional) force delete the document and all links
+ */
+router.delete('/:id', async (req, res, next) => {
+  try {
+    const documentId = req.params.id;
+    const opportunityId = req.query?.opportunityId ? String(req.query.opportunityId).trim() : null;
+    const accountId = req.query?.accountId ? String(req.query.accountId).trim() : null;
+    const removeAllLinksForJob = isTruthyFlag(req.query?.removeAllLinksForJob);
+    const hardDelete = isTruthyFlag(req.query?.hardDelete);
+
+    const existing = await prisma.document.findUnique({
+      where: { id: documentId },
+      select: { id: true },
+    });
+
+    if (!existing) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Document not found' },
+      });
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      if (hardDelete) {
+        const removed = await tx.documentLink.deleteMany({ where: { documentId } });
+        await tx.document.delete({ where: { id: documentId } });
+        return {
+          removedLinks: removed.count,
+          remainingLinks: 0,
+          deletedDocument: true,
+          mode: 'hard-delete',
+        };
+      }
+
+      const linkFilters = [];
+      if (opportunityId) {
+        linkFilters.push({ opportunityId });
+      }
+
+      if (removeAllLinksForJob) {
+        if (accountId) {
+          linkFilters.push({ accountId });
+        }
+      } else if (accountId) {
+        linkFilters.push({ accountId });
+      }
+
+      let removedCount = 0;
+      if (linkFilters.length > 0) {
+        const removed = await tx.documentLink.deleteMany({
+          where: {
+            documentId,
+            OR: linkFilters,
+          },
+        });
+        removedCount = removed.count;
+      } else {
+        const removed = await tx.documentLink.deleteMany({ where: { documentId } });
+        removedCount = removed.count;
+      }
+
+      const remainingLinks = await tx.documentLink.count({ where: { documentId } });
+      if (remainingLinks === 0) {
+        await tx.document.delete({ where: { id: documentId } });
+        return {
+          removedLinks: removedCount,
+          remainingLinks: 0,
+          deletedDocument: true,
+          mode: 'unlink-and-delete',
+        };
+      }
+
+      return {
+        removedLinks: removedCount,
+        remainingLinks,
+        deletedDocument: false,
+        mode: 'unlink-only',
+      };
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        id: documentId,
+        ...result,
+      },
+    });
+  } catch (error) {
+    logger.error('Error deleting repository document:', error);
     next(error);
   }
 });
