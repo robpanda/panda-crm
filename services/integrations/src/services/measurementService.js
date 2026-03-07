@@ -150,6 +150,15 @@ const OPPORTUNITY_MEASUREMENT_SELECT = {
   },
 };
 
+const isNumericOrderNumber = (value) => /^\d+$/.test(String(value || '').trim());
+
+const resolveDisplayOrderNumber = ({ externalId, orderNumber, subscriberOrderNumber }) => {
+  if (externalId && isNumericOrderNumber(externalId)) return String(externalId);
+  if (orderNumber && isNumericOrderNumber(orderNumber)) return String(orderNumber);
+  if (subscriberOrderNumber && isNumericOrderNumber(subscriberOrderNumber)) return String(subscriberOrderNumber);
+  return null;
+};
+
 class MeasurementService {
   /**
    * Look up internal User ID from Cognito ID
@@ -1055,7 +1064,12 @@ class MeasurementService {
         where: { id: report.id },
         data: {
           externalId: gafOrder.orderId || null,
-          orderNumber: gafOrder.subscriberOrderNumber || gafOrder.orderNumber || report.id,
+          // Display/store the vendor's numeric order number whenever available.
+          orderNumber: resolveDisplayOrderNumber({
+            externalId: gafOrder.orderId,
+            orderNumber: gafOrder.orderNumber,
+            subscriberOrderNumber: gafOrder.subscriberOrderNumber,
+          }),
           orderStatus: 'ORDERED',
           rawData: {
             ...(report.rawData || {}),
@@ -1435,6 +1449,10 @@ class MeasurementService {
     ) || null;
     const externalId = gafData?.GAFOrderNumber || gafData?.gafOrderNumber || null;
     const subscriberOrderNumber = gafData?.SubscriberOrderNumber || gafData?.subscriberOrderNumber || null;
+    const displayOrderNumber = resolveDisplayOrderNumber({
+      externalId,
+      subscriberOrderNumber,
+    });
 
     await prisma.measurementReport.update({
       where: { id: reportId },
@@ -1442,7 +1460,7 @@ class MeasurementService {
         orderStatus: 'DELIVERED',
         deliveredAt: new Date(),
         ...(externalId ? { externalId: String(externalId) } : {}),
-        ...(subscriberOrderNumber ? { orderNumber: String(subscriberOrderNumber) } : {}),
+        ...(displayOrderNumber ? { orderNumber: displayOrderNumber } : {}),
         reportUrl,
         reportPdfUrl,
         reportXmlUrl,
