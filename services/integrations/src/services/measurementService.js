@@ -12,7 +12,7 @@ const prisma = new PrismaClient();
 const secretsClient = new SecretsManagerClient({ region: process.env.AWS_REGION || 'us-east-2' });
 
 // S3 configuration for document storage
-const S3_BUCKET = process.env.MEASUREMENT_DOCS_BUCKET || 'panda-crm-measurement-docs';
+const S3_BUCKET = process.env.MEASUREMENT_DOCS_BUCKET || 'panda-crm-documents';
 const S3_REGION = process.env.AWS_REGION || 'us-east-2';
 const s3Client = new S3Client({ region: S3_REGION });
 const lambdaClient = new LambdaClient({ region: S3_REGION });
