@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { opportunitiesApi, companyCamApi, scheduleApi, casesApi, emailsApi, notificationsApi, bamboogliApi, approvalsApi, measurementsApi, contactsApi, ringCentralApi, usersApi, quotesApi, invoicesApi, tasksApi, documentsApi } from '../services/api';
+import { opportunitiesApi, companyCamApi, scheduleApi, casesApi, emailsApi, notificationsApi, bamboogliApi, approvalsApi, measurementsApi, contactsApi, ringCentralApi, usersApi, quotesApi, invoicesApi, tasksApi, documentsApi, paymentsApi } from '../services/api';
 import { useRingCentral } from '../context/RingCentralContext';
 import { useAuth } from '../context/AuthContext';
 import { addRecentItem } from '../utils/recentItems';
@@ -1883,6 +1883,14 @@ export default function OpportunityDetail() {
     staleTime: 5 * 60 * 1000, // Cache for 5 minutes
   });
   const users = usersForDropdown || [];
+
+  const { data: assignableUsers = [] } = useQuery({
+    queryKey: ['opportunityAssignableUsers'],
+    queryFn: () => opportunitiesApi.getAssignableUsers(),
+    enabled: !!id,
+    staleTime: 5 * 60 * 1000,
+  });
+
   const assignableUserList = useMemo(
     () => (assignableUsers?.data || assignableUsers || []).filter((user) => !!user?.id),
     [assignableUsers]
@@ -1938,13 +1946,6 @@ export default function OpportunityDetail() {
     () => repositoryFiles?.documents || repositoryFiles?.data?.documents || [],
     [repositoryFiles]
   );
-
-  const { data: assignableUsers = [] } = useQuery({
-    queryKey: ['opportunityAssignableUsers'],
-    queryFn: () => opportunitiesApi.getAssignableUsers(),
-    enabled: !!id,
-    staleTime: 5 * 60 * 1000,
-  });
 
   // Cases (linked via Account) - service not yet deployed, disable retries
   const { data: cases } = useQuery({
