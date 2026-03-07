@@ -247,6 +247,10 @@ model Opportunity {
   claimNumber              String?                 @map("claim_number")
   claimFiledDate           DateTime?               @map("claim_filed_date")
   insuranceCarrier         String?                 @map("insurance_carrier")
+  adjuster_name            String?
+  adjuster_email           String?
+  adjuster_office_phone    String?
+  field_adjuster_mobile    String?
   rcvAmount                Decimal?                @map("rcv_amount") @db.Decimal(12, 2)
   acvAmount                Decimal?                @map("acv_amount") @db.Decimal(12, 2)
   deductible               Decimal?                @db.Decimal(12, 2)

@@ -462,7 +462,10 @@ class OpportunityService {
           account: true,
           contact: true,
           owner: {
-            select: { id: true, firstName: true, lastName: true, email: true },
+            select: { id: true, firstName: true, lastName: true, email: true, phone: true, mobilePhone: true },
+          },
+          projectManager: {
+            select: { id: true, firstName: true, lastName: true, email: true, phone: true, mobilePhone: true },
           },
           lineItems: {
             orderBy: { sortOrder: 'asc' },
@@ -1966,6 +1969,10 @@ Be factual and professional. Highlight anything that needs attention.`;
         claimNumber: true,
         claimFiledDate: true,
         insuranceCarrier: true,
+        adjusterName: true,
+        adjusterEmail: true,
+        adjusterOfficePhone: true,
+        fieldAdjusterMobile: true,
         isPandaClaims: true,
         type: true,
         rcvAmount: true,
@@ -1979,6 +1986,72 @@ Be factual and professional. Highlight anything that needs attention.`;
       },
     });
 
+    const updateData = {
+      name: data.name,
+      description: data.description,
+      stage: data.stage,
+      stageName: data.stageName,
+      status: data.status,
+      probability: data.probability,
+      closeDate: data.closeDate ? new Date(data.closeDate) : undefined,
+      appointmentDate: data.appointmentDate ? new Date(data.appointmentDate) : undefined,
+      soldDate: data.soldDate ? new Date(data.soldDate) : undefined,
+      amount: data.amount,
+      contractTotal: data.contractTotal,
+      type: data.type,
+      workType: data.workType,
+      leadSource: data.leadSource,
+      isSelfGen: data.isSelfGen,
+      isPandaClaims: data.isPandaClaims,
+      isApproved: data.isApproved,
+      claimNumber: data.claimNumber,
+      claimFiledDate: data.claimFiledDate ? new Date(data.claimFiledDate) : undefined,
+      insuranceCarrier: data.insuranceCarrier,
+      adjusterName: data.adjusterName,
+      adjusterEmail: data.adjusterEmail,
+      adjusterOfficePhone: data.adjusterOfficePhone,
+      fieldAdjusterMobile: data.fieldAdjusterMobile,
+      rcvAmount: data.rcvAmount,
+      acvAmount: data.acvAmount,
+      deductible: data.deductible,
+      supplementsTotal: data.supplementsTotal,
+      // Address fields
+      street: data.street,
+      city: data.city,
+      state: data.state,
+      postalCode: data.postalCode,
+      accountId: data.accountId,
+      contactId: data.contactId,
+      ownerId: data.ownerId,
+      projectManagerId: data.projectManagerId,
+      // Invoice workflow fields
+      invoiceStatus: data.invoiceStatus,
+      invoiceReadyDate: data.invoiceReadyDate ? new Date(data.invoiceReadyDate) : undefined,
+      invoicedDate: data.invoicedDate ? new Date(data.invoicedDate) : undefined,
+      followUpDate: data.followUpDate ? new Date(data.followUpDate) : undefined,
+    };
+
+    if (hasOwnField(data, 'damageLocation')) {
+      updateData.damageLocation = data.damageLocation || null;
+    }
+
+    if (hasOwnField(data, 'dateOfLoss')) {
+      updateData.dateOfLoss = parseDate(data.dateOfLoss);
+    }
+
+    if (hasOwnField(data, 'ownerId')) {
+      updateData.owner = data.ownerId
+        ? { connect: { id: data.ownerId } }
+        : { disconnect: true };
+      delete updateData.ownerId;
+    }
+
+    if (hasOwnField(data, 'projectManagerId')) {
+      updateData.projectManager = data.projectManagerId
+        ? { connect: { id: data.projectManagerId } }
+        : { disconnect: true };
+      delete updateData.projectManagerId;
+    }
     // Handle line items separately if provided
     if (data.lineItems !== undefined) {
       // Delete existing line items and recreate
@@ -2004,49 +2077,12 @@ Be factual and professional. Highlight anything that needs attention.`;
 
     const opportunity = await prisma.opportunity.update({
       where: { id },
-      data: {
-        name: data.name,
-        description: data.description,
-        stage: data.stage,
-        status: data.status,
-        stageName: data.stageName,
-        probability: data.probability,
-        closeDate: data.closeDate ? new Date(data.closeDate) : undefined,
-        appointmentDate: data.appointmentDate ? new Date(data.appointmentDate) : undefined,
-        soldDate: data.soldDate ? new Date(data.soldDate) : undefined,
-        amount: data.amount,
-        contractTotal: data.contractTotal,
-        type: data.type,
-        workType: data.workType,
-        leadSource: data.leadSource,
-        isSelfGen: data.isSelfGen,
-        isPandaClaims: data.isPandaClaims,
-        isApproved: data.isApproved,
-        claimNumber: data.claimNumber,
-        claimFiledDate: data.claimFiledDate ? new Date(data.claimFiledDate) : undefined,
-        insuranceCarrier: data.insuranceCarrier,
-        rcvAmount: data.rcvAmount,
-        acvAmount: data.acvAmount,
-        deductible: data.deductible,
-        supplementsTotal: data.supplementsTotal,
-        // Address fields
-        street: data.street,
-        city: data.city,
-        state: data.state,
-        postalCode: data.postalCode,
-        accountId: data.accountId,
-        contactId: data.contactId,
-        ownerId: data.ownerId,
-        // Invoice workflow fields
-        invoiceStatus: data.invoiceStatus,
-        invoiceReadyDate: data.invoiceReadyDate ? new Date(data.invoiceReadyDate) : undefined,
-        invoicedDate: data.invoicedDate ? new Date(data.invoicedDate) : undefined,
-        followUpDate: data.followUpDate ? new Date(data.followUpDate) : undefined,
-      },
+      data: updateData,
       include: {
         account: { select: { id: true, name: true } },
         contact: { select: { id: true, firstName: true, lastName: true } },
-        owner: { select: { id: true, firstName: true, lastName: true } },
+        owner: { select: { id: true, firstName: true, lastName: true, email: true, phone: true, mobilePhone: true } },
+        projectManager: { select: { id: true, firstName: true, lastName: true, email: true, phone: true, mobilePhone: true } },
         lineItems: { include: { product: true } },
       },
     });
@@ -2351,6 +2387,10 @@ Be factual and professional. Highlight anything that needs attention.`;
    * Create opportunity wrapper with computed fields
    */
   createOpportunityWrapper(opp, includeDetails = false) {
+    const leadSetByName = opp.leadSetByName
+      || (opp.leadSetBy ? `${opp.leadSetBy.firstName || ''} ${opp.leadSetBy.lastName || ''}`.trim() : null)
+      || null;
+
     const wrapper = {
       id: opp.id,
       name: opp.name,
@@ -2376,6 +2416,10 @@ Be factual and professional. Highlight anything that needs attention.`;
       currentDispositionReason: opp.currentDispositionReason,
       damageLocation: opp.damageLocation,
       dateOfLoss: opp.dateOfLoss,
+      adjusterName: opp.adjusterName,
+      adjusterEmail: opp.adjusterEmail,
+      adjusterOfficePhone: opp.adjusterOfficePhone,
+      fieldAdjusterMobile: opp.fieldAdjusterMobile,
       isClosed: ['CLOSED_WON', 'CLOSED_LOST'].includes(opp.stage),
       isWon: opp.stage === 'CLOSED_WON',
       // Account
@@ -2390,6 +2434,47 @@ Be factual and professional. Highlight anything that needs attention.`;
       // Owner
       ownerId: opp.ownerId,
       ownerName: opp.owner ? `${opp.owner.firstName} ${opp.owner.lastName}` : 'Unassigned',
+      owner: opp.owner
+        ? {
+          id: opp.owner.id,
+          firstName: opp.owner.firstName || null,
+          lastName: opp.owner.lastName || null,
+          email: opp.owner.email || null,
+          phone: opp.owner.phone || null,
+          mobilePhone: opp.owner.mobilePhone || null,
+        }
+        : null,
+      projectManagerId: opp.projectManagerId || null,
+      projectManager: opp.projectManager
+        ? {
+          id: opp.projectManager.id,
+          firstName: opp.projectManager.firstName || null,
+          lastName: opp.projectManager.lastName || null,
+          email: opp.projectManager.email || null,
+          phone: opp.projectManager.phone || null,
+          mobilePhone: opp.projectManager.mobilePhone || null,
+          name: `${opp.projectManager.firstName || ''} ${opp.projectManager.lastName || ''}`.trim(),
+        }
+        : null,
+      // Source lead attribution
+      sourceLeadId: opp.sourceLeadId || null,
+      leadSetById: opp.leadSetById || null,
+      leadSetByName,
+      leadSetBy: opp.leadSetBy
+        ? {
+          id: opp.leadSetBy.id,
+          firstName: opp.leadSetBy.firstName,
+          lastName: opp.leadSetBy.lastName,
+          managerId: opp.leadSetBy.managerId || null,
+          manager: opp.leadSetBy.manager
+            ? {
+              id: opp.leadSetBy.manager.id,
+              firstName: opp.leadSetBy.manager.firstName,
+              lastName: opp.leadSetBy.manager.lastName,
+            }
+            : null,
+        }
+        : null,
       // Timestamps
       createdAt: opp.createdAt,
       updatedAt: opp.updatedAt,
