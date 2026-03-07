@@ -2450,8 +2450,14 @@ export default function CallCenterDashboard() {
   const formatApptDateTime = (dateStr, timeStr) => {
     if (!dateStr) return '-';
     const date = parseISO(dateStr.split('T')[0]);
-    const dateLabel = isToday(date) ? 'Today' : isTomorrow(date) ? 'Tomorrow' : format(date, 'EEE, MMM d');
-    return timeStr ? `${dateLabel} at ${timeStr}` : dateLabel;
+    const dateLabel = format(date, 'MM/dd/yyyy');
+    if (!timeStr) return dateLabel;
+    const [hourRaw, minuteRaw = '00'] = timeStr.split(':');
+    const numericHour = Number.parseInt(hourRaw, 10);
+    if (Number.isNaN(numericHour)) return `${dateLabel} at ${timeStr}`;
+    const meridiem = numericHour >= 12 ? 'PM' : 'AM';
+    const normalizedHour = numericHour % 12 || 12;
+    return `${dateLabel} at ${normalizedHour}:${minuteRaw} ${meridiem}`;
   };
 
   // Open SMS modal

@@ -19,6 +19,25 @@ import InternalComments from '../components/InternalComments';
 import CommunicationsTab from '../components/CommunicationsTab';
 import UserSearchDropdown from '../components/UserSearchDropdown';
 
+const formatDateDisplay = (value) => {
+  if (!value) return '-';
+  const datePart = value.toString().split('T')[0];
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(datePart)) return value;
+  const [year, month, day] = datePart.split('-');
+  return `${month}/${day}/${year}`;
+};
+
+const formatTimeDisplay = (value) => {
+  if (!value) return '-';
+  const match = value.toString().trim().match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return value;
+  let hour = parseInt(match[1], 10);
+  const minute = match[2];
+  const suffix = hour >= 12 ? 'PM' : 'AM';
+  hour = hour % 12 || 12;
+  return `${hour}:${minute} ${suffix}`;
+};
+
 // SMS Modal Component with Canned Responses
 function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {} }) {
   const [message, setMessage] = useState('');
@@ -1591,13 +1610,13 @@ export default function LeadDetail() {
                 <span className="text-gray-500">Tentative Date</span>
                 <span className="text-gray-900">
                   {lead.tentativeAppointmentDate
-                    ? lead.tentativeAppointmentDate.split('T')[0]
+                    ? formatDateDisplay(lead.tentativeAppointmentDate)
                     : '-'}
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">Tentative Time</span>
-                <span className="text-gray-900">{lead.tentativeAppointmentTime || '-'}</span>
+                <span className="text-gray-900">{formatTimeDisplay(lead.tentativeAppointmentTime)}</span>
               </div>
             </div>
           )}
@@ -1796,7 +1815,7 @@ export default function LeadDetail() {
               {isSuggestingInspectionSlot && 'Finding the next available inspection slot...'}
               {!isSuggestingInspectionSlot && noInspectionSuggestion?.found && (
                 <span>
-                  Suggested slot: {noInspectionSuggestion.appointmentDate} at {noInspectionSuggestion.appointmentTime}
+                  Suggested slot: {formatDateDisplay(noInspectionSuggestion.appointmentDate)} at {formatTimeDisplay(noInspectionSuggestion.appointmentTime)}
                 </span>
               )}
               {!isSuggestingInspectionSlot && noInspectionSuggestion && !noInspectionSuggestion.found && (

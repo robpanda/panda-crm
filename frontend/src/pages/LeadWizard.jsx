@@ -373,6 +373,25 @@ export default function LeadWizard() {
     return `${y}-${m}-${d}`;
   };
 
+  const formatDateForDisplay = (value) => {
+    if (!value) return '';
+    const datePart = value.toString().split('T')[0];
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(datePart)) return value;
+    const [year, month, day] = datePart.split('-');
+    return `${month}/${day}/${year}`;
+  };
+
+  const formatTimeForDisplay = (value) => {
+    if (!value) return '';
+    const match = value.toString().trim().match(/^(\d{1,2}):(\d{2})/);
+    if (!match) return value;
+    let hour = parseInt(match[1], 10);
+    const minute = match[2];
+    const suffix = hour >= 12 ? 'PM' : 'AM';
+    hour = hour % 12 || 12;
+    return `${hour}:${minute} ${suffix}`;
+  };
+
   const isAppointmentWithinWindow = (dateValue, timeValue) => {
     if (!dateValue || !timeValue) return false;
     const appointment = new Date(`${dateValue}T${timeValue}:00`);
@@ -759,6 +778,47 @@ export default function LeadWizard() {
     const candidate = new Date(`${slot.appointmentDate}T${slot.appointmentTime}:00`);
     if (Number.isNaN(candidate.getTime())) return null;
     return `${slot.appointmentDate}T${slot.appointmentTime}:00`;
+  };
+
+  const persistSelectedAppointmentChoice = async () => {
+    setAppointmentPromptError('');
+    setAppointmentPromptInfo('');
+
+    const preferredDateTime = buildPreferredDateTime();
+    if (!preferredDateTime) {
+      setAppointmentPromptError('Select a valid date and time before confirming.');
+      return { ready: false };
+    }
+
+    let leadId = resolveLeadId();
+    if (!leadId) {
+      leadId = await handleSave();
+    }
+    if (!leadId) {
+      setAppointmentPromptError('Please complete required lead fields before scheduling.');
+      return { ready: false };
+    }
+
+    try {
+      await leadsApi.updateLead(leadId, {
+        tentativeAppointmentDate: formData.tentativeAppointmentDate,
+        tentativeAppointmentTime: formData.tentativeAppointmentTime,
+      });
+
+      setHasManualAppointmentChange(false);
+      setPendingSuggestedSlot(null);
+      setLastSuggestedSlot({
+        appointmentDate: formData.tentativeAppointmentDate,
+        appointmentTime: formData.tentativeAppointmentTime,
+      });
+      setAppointmentPromptInfo('Appointment time confirmed.');
+
+      return { ready: true };
+    } catch (error) {
+      console.error('Failed to save selected appointment slot:', error);
+      setAppointmentPromptError(error?.message || 'Unable to save appointment time. Please try again.');
+      return { ready: false };
+    }
   };
 
   // Fetch SMS templates
@@ -3262,7 +3322,7 @@ export default function LeadWizard() {
             {pendingSuggestedSlot?.appointmentDate && pendingSuggestedSlot?.appointmentTime && (
               <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 flex flex-wrap items-center justify-between gap-2">
                 <span>
-                  Suggested slot: {pendingSuggestedSlot.appointmentDate} at {pendingSuggestedSlot.appointmentTime}
+                  Suggested slot: {formatDateForDisplay(pendingSuggestedSlot.appointmentDate)} at {formatTimeForDisplay(pendingSuggestedSlot.appointmentTime)}
                 </span>
                 <button
                   type="button"
@@ -3312,12 +3372,7 @@ export default function LeadWizard() {
               <button
                 type="button"
                 onClick={async () => {
-                  const preferredDateTime = buildPreferredDateTime();
-                  if (!preferredDateTime) {
-                    setAppointmentPromptError('Select a valid date and time before confirming.');
-                    return;
-                  }
-                  const result = await requestAppointmentSuggestion({ preferredDateTime, allowFallback: false });
+                  const result = await persistSelectedAppointmentChoice();
                   if (result?.ready) {
                     setShowAppointmentPrompt(false);
                     if (!formData.leadSource) {

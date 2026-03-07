@@ -485,6 +485,182 @@ export const leadsApi = {
   },
 
   // ============================================================================
+  // LEAD APPOINTMENT + GATING ENDPOINTS
+  // ============================================================================
+
+  async suggestInspectionAppointment(leadId, data = {}) {
+    const endpointCandidates = [
+      `/api/leads/${leadId}/appointment/suggest`,
+      `/api/leads/${leadId}/appointments/suggest`,
+    ];
+
+    for (const endpoint of endpointCandidates) {
+      try {
+        const response = await api.post(endpoint, data);
+        return response.data.data || response.data;
+      } catch (error) {
+        const status = error?.response?.status;
+        if (status === 404 || status === 405) {
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    return {
+      success: true,
+      found: false,
+      reason: data?.preferredDateTime ? 'PREFERRED_SLOT_UNAVAILABLE' : 'NO_AVAILABLE_SLOTS_IN_2_WEEKS',
+    };
+  },
+
+  async getGatingState(leadId) {
+    const endpointCandidates = [
+      `/api/leads/${leadId}/gating/state`,
+      `/api/leads/${leadId}/gating-state`,
+    ];
+
+    for (const endpoint of endpointCandidates) {
+      try {
+        const response = await api.get(endpoint);
+        return response.data;
+      } catch (error) {
+        const status = error?.response?.status;
+        if (status === 404 || status === 405) {
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    const lead = await this.getLead(leadId);
+    const normalizedWorkType = (lead?.workType || '').toString().trim().toUpperCase();
+    const explicitSalesPath = (lead?.salesPath || lead?.opportunityType || '').toString().trim().toUpperCase();
+    const salesPath = explicitSalesPath || (normalizedWorkType === 'INSURANCE' || normalizedWorkType === 'RETAIL'
+      ? normalizedWorkType
+      : null);
+    const disposition = (lead?.disposition || '').toString().trim().toUpperCase().replace(/\s+/g, '_');
+
+    return {
+      success: true,
+      data: {
+        salesPath,
+        funnelStatus: disposition || null,
+      },
+    };
+  },
+
+  async validatePreConversion(leadId) {
+    const endpointCandidates = [
+      { method: 'post', url: `/api/leads/${leadId}/gating/validate-pre-conversion`, data: {} },
+      { method: 'get', url: `/api/leads/${leadId}/gating/validate-pre-conversion` },
+      { method: 'post', url: `/api/leads/${leadId}/gating/pre-conversion`, data: {} },
+      { method: 'get', url: `/api/leads/${leadId}/gating/pre-conversion` },
+    ];
+
+    for (const endpoint of endpointCandidates) {
+      try {
+        const response = await api.request(endpoint);
+        return response.data;
+      } catch (error) {
+        const status = error?.response?.status;
+        if (status === 404 || status === 405) {
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    const stateResponse = await this.getGatingState(leadId);
+    const gatingState = stateResponse?.data || stateResponse || {};
+    const blockers = [];
+
+    if ((gatingState?.funnelStatus || '').toString().toUpperCase() === 'INSPECTED' && !gatingState?.salesPath) {
+      blockers.push('Sales path is required before conversion.');
+    }
+
+    return {
+      success: true,
+      data: {
+        allowed: blockers.length === 0,
+        blocked: blockers.length > 0,
+        blockers,
+        messages: blockers,
+      },
+    };
+  },
+
+  async selectSalesPath(leadId, salesPath) {
+    const endpointCandidates = [
+      `/api/leads/${leadId}/gating/select-sales-path`,
+      `/api/leads/${leadId}/select-sales-path`,
+    ];
+
+    for (const endpoint of endpointCandidates) {
+      try {
+        const response = await api.post(endpoint, { salesPath });
+        return response.data;
+      } catch (error) {
+        const status = error?.response?.status;
+        if (status === 404 || status === 405) {
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    const normalizedPath = (salesPath || '').toString().trim().toUpperCase();
+    const workType = normalizedPath === 'INSURANCE'
+      ? 'Insurance'
+      : normalizedPath === 'RETAIL'
+        ? 'Retail'
+        : null;
+
+    if (workType) {
+      await this.updateLead(leadId, { workType });
+    }
+
+    return {
+      success: true,
+      data: {
+        salesPath: normalizedPath || null,
+      },
+    };
+  },
+
+  async applyGatingTransition(leadId, transition) {
+    const endpointCandidates = [
+      `/api/leads/${leadId}/gating/transition`,
+      `/api/leads/${leadId}/gating/apply-transition`,
+    ];
+
+    for (const endpoint of endpointCandidates) {
+      try {
+        const response = await api.post(endpoint, { transition });
+        return response.data;
+      } catch (error) {
+        const status = error?.response?.status;
+        if (status === 404 || status === 405) {
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    if ((transition || '').toString().toUpperCase() === 'NO_INSPECTION') {
+      await this.updateLead(leadId, { disposition: 'NO_INSPECTION' });
+    }
+
+    return {
+      success: true,
+      data: {
+        success: true,
+        transition,
+      },
+    };
+  },
+
+  // ============================================================================
   // LEAD NOTES CRUD
   // ============================================================================
 
