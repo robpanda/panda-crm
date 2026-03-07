@@ -359,9 +359,8 @@ export default function OpportunityList() {
         </div>
 
         {/* Search and Filters */}
-        <div className="p-4 border-b border-gray-100">
-          <div className="flex items-center gap-4">
-            <div className="flex-1 relative">
+        <div className="p-4 border-b border-gray-100 space-y-3">
+          <div className="w-full relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
               <input
                 type="text"
@@ -370,11 +369,12 @@ export default function OpportunityList() {
                 placeholder="Search jobs..."
                 className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none"
               />
-            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[minmax(0,220px)_minmax(0,220px)_auto_auto_auto] gap-3 items-center">
             <select
               value={stage}
               onChange={(e) => { setStage(e.target.value); setPage(1); }}
-              className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none bg-white"
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none bg-white"
             >
               {stageOptions.map((opt) => (
                 <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -383,7 +383,7 @@ export default function OpportunityList() {
             <select
               value={type}
               onChange={(e) => { setType(e.target.value); setPage(1); }}
-              className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none bg-white"
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none bg-white"
             >
               {typeOptions.map((opt) => (
                 <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -391,7 +391,7 @@ export default function OpportunityList() {
             </select>
             <button
               onClick={() => setShowFilters(!showFilters)}
-              className={`inline-flex items-center px-4 py-2 border rounded-lg transition-colors ${
+              className={`inline-flex items-center justify-center px-4 py-2 border rounded-lg transition-colors ${
                 showFilters || hasActiveFilters
                   ? 'border-panda-primary bg-panda-primary/5 text-panda-primary'
                   : 'border-gray-200 text-gray-600 hover:bg-gray-50'
@@ -406,19 +406,21 @@ export default function OpportunityList() {
             {hasActiveFilters && (
               <button
                 onClick={clearFilters}
-                className="flex items-center space-x-1 px-3 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg"
+                className="inline-flex items-center justify-center space-x-1 px-3 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg"
               >
                 <X className="w-4 h-4" />
                 <span>Clear</span>
               </button>
             )}
-            <ColumnSelector
-              columns={COLUMN_DEFINITIONS}
-              visibleColumns={visibleColumns}
-              onChange={setVisibleColumns}
-              storageKey="opportunities-list"
-              defaultColumns={DEFAULT_COLUMNS}
-            />
+            <div className="w-full lg:w-auto">
+              <ColumnSelector
+                columns={COLUMN_DEFINITIONS}
+                visibleColumns={visibleColumns}
+                onChange={setVisibleColumns}
+                storageKey="opportunities-list"
+                defaultColumns={DEFAULT_COLUMNS}
+              />
+            </div>
           </div>
         </div>
 

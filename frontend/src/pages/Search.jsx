@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { accountsApi, contactsApi, leadsApi, opportunitiesApi } from '../services/api';
@@ -47,10 +47,10 @@ export default function Search() {
 
   const isLoading = accountsLoading || contactsLoading || leadsLoading || opportunitiesLoading;
 
-  const accounts = accountsData?.accounts || [];
-  const contacts = contactsData?.contacts || [];
-  const leads = leadsData?.leads || [];
-  const opportunities = opportunitiesData?.opportunities || [];
+  const accounts = accountsData?.data || accountsData?.accounts || [];
+  const contacts = contactsData?.data || contactsData?.contacts || [];
+  const leads = leadsData?.data || leadsData?.leads || [];
+  const opportunities = opportunitiesData?.data || opportunitiesData?.opportunities || [];
 
   const totalResults = accounts.length + contacts.length + leads.length + opportunities.length;
 
@@ -59,7 +59,7 @@ export default function Search() {
     { id: 'accounts', label: 'Accounts', count: accounts.length, icon: Building2 },
     { id: 'contacts', label: 'Contacts', count: contacts.length, icon: Users },
     { id: 'leads', label: 'Leads', count: leads.length, icon: UserPlus },
-    { id: 'opportunities', label: 'Opportunities', count: opportunities.length, icon: Target },
+    { id: 'opportunities', label: 'Jobs', count: opportunities.length, icon: Target },
   ];
 
   if (!query) {
@@ -231,7 +231,7 @@ export default function Search() {
                     </div>
                     <div>
                       <p className="font-medium text-gray-900">{opp.name}</p>
-                      <p className="text-sm text-gray-500">{opp.stageName}</p>
+                      <p className="text-sm text-gray-500">{opp.stageName || opp.stage || '-'}</p>
                     </div>
                   </div>
                   <ArrowRight className="w-4 h-4 text-gray-400" />
