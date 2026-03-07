@@ -850,6 +850,17 @@ class MeasurementService {
         if (measurementsResponse.ok) {
           const measurementData = await measurementsResponse.json();
           const measurements = this.parseGAFMeasurements(measurementData);
+          const pdfAssetId = this.extractGafPdfAssetId(statusData, measurementData, measurementReport.rawData);
+
+          let pdfStorage = null;
+          if (pdfAssetId) {
+            try {
+              pdfStorage = await this.downloadAndStoreGafPdf(pdfAssetId, measurementReportId, gafOrderNumber);
+              logger.info(`GAF PDF stored to S3 for report ${gafOrderNumber}: ${pdfStorage.s3Key}`);
+            } catch (err) {
+              logger.warn(`Could not download/store GAF PDF ${pdfAssetId}:`, err.message);
+            }
+          }
 
           await prisma.measurementReport.update({
             where: { id: measurementReportId },
@@ -857,9 +868,19 @@ class MeasurementService {
               orderStatus: 'DELIVERED',
               deliveredAt: new Date(),
               reportUrl: statusData.viewUrl || measurementData.viewUrl,
-              reportPdfUrl: statusData.pdfUrl || measurementData.pdfUrl,
+              reportPdfUrl:
+                pdfStorage?.presignedUrl ||
+                statusData.pdfUrl ||
+                measurementData.pdfUrl ||
+                (pdfAssetId ? `${GAF_API_BASE}/download/${pdfAssetId}` : null),
               ...measurements,
-              rawData: { statusData, measurementData },
+              rawData: {
+                statusData,
+                measurementData,
+                gafPdfAssetId: pdfAssetId || null,
+                pdfS3Key: pdfStorage?.s3Key || null,
+                pdfS3Url: pdfStorage?.s3Url || null,
+              },
             },
           });
 
@@ -1191,6 +1212,25 @@ class MeasurementService {
 
   async processGAFReport(reportId, gafData) {
     const measurements = this.parseGAFMeasurements(gafData);
+    const measurementReport = await prisma.measurementReport.findUnique({
+      where: { id: reportId },
+      select: {
+        id: true,
+        externalId: true,
+        rawData: true,
+      },
+    });
+
+    const pdfAssetId = this.extractGafPdfAssetId(gafData, measurementReport?.rawData);
+    let pdfStorage = null;
+    if (pdfAssetId) {
+      try {
+        pdfStorage = await this.downloadAndStoreGafPdf(pdfAssetId, reportId, measurementReport?.externalId);
+        logger.info(`GAF PDF stored via webhook for report ${reportId}: ${pdfStorage.s3Key}`);
+      } catch (err) {
+        logger.warn(`Could not download/store webhook GAF PDF ${pdfAssetId}:`, err.message);
+      }
+    }
 
     await prisma.measurementReport.update({
       where: { id: reportId },
@@ -1198,15 +1238,74 @@ class MeasurementService {
         orderStatus: 'DELIVERED',
         deliveredAt: new Date(),
         reportUrl: gafData.viewUrl,
-        reportPdfUrl: gafData.pdfUrl,
+        reportPdfUrl:
+          pdfStorage?.presignedUrl ||
+          gafData.pdfUrl ||
+          (pdfAssetId ? `${GAF_API_BASE}/download/${pdfAssetId}` : null),
         latitude: gafData.location?.latitude,
         longitude: gafData.location?.longitude,
         ...measurements,
-        rawData: gafData,
+        rawData: {
+          ...gafData,
+          gafPdfAssetId: pdfAssetId || null,
+          pdfS3Key: pdfStorage?.s3Key || null,
+          pdfS3Url: pdfStorage?.s3Url || null,
+        },
       },
     });
 
     logger.info(`GAF report processed: ${reportId}`);
+  }
+
+  /**
+   * Download/store GAF PDF for an existing measurement report and refresh URL.
+   * Useful for backfilling historical rows that still point to GAF auth-protected URLs.
+   */
+  async storeGafPdfForReport(measurementReportId) {
+    const report = await prisma.measurementReport.findUnique({
+      where: { id: measurementReportId },
+      select: {
+        id: true,
+        provider: true,
+        externalId: true,
+        reportPdfUrl: true,
+        rawData: true,
+      },
+    });
+
+    if (!report) {
+      throw new Error(`Measurement report not found: ${measurementReportId}`);
+    }
+
+    if (report.provider !== 'GAF_QUICKMEASURE') {
+      throw new Error(`Report ${measurementReportId} is not a GAF report`);
+    }
+
+    const pdfAssetId = this.extractGafPdfAssetId(report.rawData, { reportPdfUrl: report.reportPdfUrl });
+    if (!pdfAssetId) {
+      throw new Error(`No GAF PDF asset ID found for report ${measurementReportId}`);
+    }
+
+    const pdfStorage = await this.downloadAndStoreGafPdf(pdfAssetId, measurementReportId, report.externalId);
+
+    await prisma.measurementReport.update({
+      where: { id: measurementReportId },
+      data: {
+        reportPdfUrl: pdfStorage.presignedUrl,
+        rawData: {
+          ...(report.rawData || {}),
+          gafPdfAssetId: pdfAssetId,
+          pdfS3Key: pdfStorage.s3Key,
+          pdfS3Url: pdfStorage.s3Url,
+        },
+      },
+    });
+
+    return {
+      reportId: measurementReportId,
+      gafPdfAssetId: pdfAssetId,
+      ...pdfStorage,
+    };
   }
 
   parseGAFMeasurements(data) {
@@ -1226,6 +1325,86 @@ class MeasurementService {
       dripEdgeLength: roof.dripEdge,
       roofComplexity: this.calculateComplexity(roof.faceCount),
       suggestedWasteFactor: roof.recommendedWaste,
+    };
+  }
+
+  /**
+   * Extract GAF PDF asset ID from known payload shapes.
+   */
+  extractGafPdfAssetId(...sources) {
+    for (const source of sources) {
+      if (!source || typeof source !== 'object') continue;
+
+      const directAsset =
+        source?.roofMeasurement?.assets?.report ||
+        source?.RoofMeasurement?.Assets?.Report ||
+        source?.assets?.report ||
+        source?.Assets?.Report ||
+        source?.gafPdfAssetId;
+
+      if (typeof directAsset === 'string' && directAsset.trim()) {
+        return directAsset.trim();
+      }
+
+      const pdfUrl = source?.pdfUrl || source?.reportPdfUrl || source?.statusData?.pdfUrl;
+      if (typeof pdfUrl === 'string') {
+        const match = pdfUrl.match(/\/download\/([^/?#]+)/i);
+        if (match?.[1]) return decodeURIComponent(match[1]);
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Download GAF PDF by asset ID and store in S3.
+   */
+  async downloadAndStoreGafPdf(gafPdfAssetId, measurementReportId, gafOrderNumber = null) {
+    const accessToken = await this.getGAFAccessToken();
+    const encodedAssetId = encodeURIComponent(gafPdfAssetId);
+    const downloadUrl = `${GAF_API_BASE}/download/${encodedAssetId}`;
+
+    const response = await fetch(downloadUrl, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`GAF PDF download error (${response.status}): ${errorText}`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const s3Key = `gaf/${measurementReportId}/${gafPdfAssetId.replace(/[^a-zA-Z0-9._-]/g, '_')}_${timestamp}.pdf`;
+
+    const putCommand = new PutObjectCommand({
+      Bucket: S3_BUCKET,
+      Key: s3Key,
+      Body: buffer,
+      ContentType: response.headers.get('content-type') || 'application/pdf',
+      Metadata: {
+        'gaf-pdf-asset-id': gafPdfAssetId,
+        'gaf-order-number': gafOrderNumber || '',
+        'measurement-report-id': measurementReportId,
+        'uploaded-at': new Date().toISOString(),
+      },
+    });
+
+    await s3Client.send(putCommand);
+
+    const getCommand = new GetObjectCommand({
+      Bucket: S3_BUCKET,
+      Key: s3Key,
+    });
+    const presignedUrl = await getSignedUrl(s3Client, getCommand, { expiresIn: 7 * 24 * 60 * 60 });
+
+    return {
+      s3Key,
+      s3Url: `s3://${S3_BUCKET}/${s3Key}`,
+      presignedUrl,
     };
   }
 

@@ -256,6 +256,20 @@ router.post('/gaf/process-pending', authMiddleware, async (req, res, next) => {
 });
 
 /**
+ * POST /measurements/gaf/store-pdf/:id - Download/store GAF PDF for an existing report
+ * Used to backfill historical reports that have dead GAF links.
+ */
+router.post('/gaf/store-pdf/:id', authMiddleware, async (req, res, next) => {
+  try {
+    const result = await measurementService.storeGafPdfForReport(req.params.id);
+    logger.info(`GAF PDF stored for report ${req.params.id} by ${req.user.email}`);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * POST /measurements/process-all-pending - Process all pending reports (all providers)
  * Combined batch job endpoint
  */
