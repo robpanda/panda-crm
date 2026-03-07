@@ -624,6 +624,32 @@ router.patch('/:id', async (req, res, next) => {
   }
 });
 
+/**
+ * POST /:id/transfer
+ * Transfer job ownership to a new user.
+ * Body: { newOwnerId: string, transferRelatedAssignments?: boolean }
+ */
+router.post('/:id/transfer', async (req, res, next) => {
+  try {
+    const { newOwnerId, transferRelatedAssignments = true } = req.body || {};
+    const result = await opportunityService.transferOpportunityOwner(req.params.id, {
+      newOwnerId,
+      transferRelatedAssignments,
+      transferredById: req.user?.id,
+      transferredByEmail: req.user?.email,
+    });
+    res.json({
+      success: true,
+      data: result,
+      message: result.unchanged
+        ? 'Owner is already assigned to this user'
+        : 'Job owner transferred successfully',
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Delete opportunity
 router.delete('/:id', async (req, res, next) => {
   try {

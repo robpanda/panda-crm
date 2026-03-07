@@ -3,10 +3,64 @@
 
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
+import { S3Client, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { logger } from '../middleware/logger.js';
 
 const router = express.Router();
 const prisma = new PrismaClient();
+const documentsBucket = process.env.DOCUMENTS_BUCKET || 'panda-crm-documents';
+const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-east-2' });
+
+function extractS3Key(contentUrl) {
+  if (!contentUrl || typeof contentUrl !== 'string') return null;
+
+  try {
+    if (contentUrl.startsWith('s3://')) {
+      const prefix = `s3://${documentsBucket}/`;
+      return contentUrl.startsWith(prefix) ? contentUrl.slice(prefix.length) : null;
+    }
+
+    const parsed = new URL(contentUrl);
+    if (
+      parsed.hostname === `${documentsBucket}.s3.amazonaws.com` ||
+      parsed.hostname.startsWith(`${documentsBucket}.s3.`)
+    ) {
+      return decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
+    }
+  } catch {
+    // Keep raw value fallback below for direct keys
+  }
+
+  if (!contentUrl.startsWith('http://') && !contentUrl.startsWith('https://')) {
+    return contentUrl.replace(/^\/+/, '');
+  }
+
+  return null;
+}
+
+async function resolveDocumentUrl(contentUrl) {
+  const key = extractS3Key(contentUrl);
+  if (!key) return contentUrl || null;
+
+  try {
+    return await getSignedUrl(
+      s3Client,
+      new GetObjectCommand({
+        Bucket: documentsBucket,
+        Key: key,
+      }),
+      { expiresIn: 60 * 60 }
+    );
+  } catch (error) {
+    logger.warn(`Failed to create signed URL for key ${key}: ${error.message}`);
+    return contentUrl || null;
+  }
+}
+
+function buildDocumentType(fileType, fileExtension) {
+  return (fileType || fileExtension || 'FILE').toUpperCase();
+}
 
 /**
  * GET /api/documents/repository
@@ -102,7 +156,7 @@ router.get('/', async (req, res, next) => {
     ]);
 
     // Transform documents for response
-    const transformedDocs = documents.map((doc) => {
+    const transformedDocs = await Promise.all(documents.map(async (doc) => {
       // Get unique linked accounts and opportunities
       const linkedAccounts = [];
       const linkedOpportunities = [];
@@ -129,13 +183,20 @@ router.get('/', async (req, res, next) => {
 
       // Determine document category based on title/extension patterns
       const category = categorizeDocument(doc.title, doc.fileType);
+      const resolvedUrl = await resolveDocumentUrl(doc.contentUrl);
+      const fileTypeValue = buildDocumentType(doc.fileType, doc.fileExtension);
 
       return {
         id: doc.id,
         title: doc.title,
-        fileType: doc.fileType,
+        fileType: fileTypeValue,
         fileExtension: doc.fileExtension,
         contentSize: doc.contentSize,
+        contentUrl: resolvedUrl,
+        downloadUrl: resolvedUrl,
+        previewUrl: resolvedUrl,
+        thumbnailUrl: resolvedUrl,
+        sourceType: doc.sourceType,
         createdAt: doc.createdAt,
         updatedAt: doc.updatedAt,
         salesforceId: doc.salesforceId,
@@ -145,7 +206,7 @@ router.get('/', async (req, res, next) => {
         linkedOpportunities,
         linkCount: doc.links.length,
       };
-    });
+    }));
 
     res.json({
       success: true,
@@ -292,19 +353,28 @@ router.get('/by-job/:opportunityId', async (req, res, next) => {
     });
 
     // Transform and categorize
-    const transformedDocs = documents.map((doc) => ({
-      id: doc.id,
-      title: doc.title,
-      fileType: doc.fileType,
-      fileExtension: doc.fileExtension,
-      contentSize: doc.contentSize,
-      createdAt: doc.createdAt,
-      category: categorizeDocument(doc.title, doc.fileType),
-      linkedVia: doc.links.map((link) => ({
-        type: link.linkedRecordType,
-        accountId: link.accountId,
-        opportunityId: link.opportunityId,
-      })),
+    const transformedDocs = await Promise.all(documents.map(async (doc) => {
+      const resolvedUrl = await resolveDocumentUrl(doc.contentUrl);
+      const fileTypeValue = buildDocumentType(doc.fileType, doc.fileExtension);
+      return {
+        id: doc.id,
+        title: doc.title,
+        fileType: fileTypeValue,
+        fileExtension: doc.fileExtension,
+        contentSize: doc.contentSize,
+        createdAt: doc.createdAt,
+        category: categorizeDocument(doc.title, doc.fileType),
+        contentUrl: resolvedUrl,
+        downloadUrl: resolvedUrl,
+        previewUrl: resolvedUrl,
+        thumbnailUrl: resolvedUrl,
+        sourceType: doc.sourceType,
+        linkedVia: doc.links.map((link) => ({
+          type: link.linkedRecordType,
+          accountId: link.accountId,
+          opportunityId: link.opportunityId,
+        })),
+      };
     }));
 
     res.json({
@@ -320,6 +390,66 @@ router.get('/by-job/:opportunityId', async (req, res, next) => {
     });
   } catch (error) {
     logger.error('Error fetching documents for job:', error);
+    next(error);
+  }
+});
+
+/**
+ * DELETE /api/documents/repository/:id
+ * Delete uploaded repository documents.
+ */
+router.delete('/:id', async (req, res, next) => {
+  try {
+    const document = await prisma.document.findUnique({
+      where: { id: req.params.id },
+      select: {
+        id: true,
+        sourceType: true,
+        contentUrl: true,
+      },
+    });
+
+    if (!document) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Document not found' },
+      });
+    }
+
+    if (document.sourceType !== 'UPLOAD') {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Only uploaded documents can be deleted' },
+      });
+    }
+
+    const key = extractS3Key(document.contentUrl);
+
+    await prisma.$transaction([
+      prisma.documentLink.deleteMany({ where: { documentId: document.id } }),
+      prisma.document.delete({ where: { id: document.id } }),
+    ]);
+
+    if (key) {
+      try {
+        await s3Client.send(
+          new DeleteObjectCommand({
+            Bucket: documentsBucket,
+            Key: key,
+          })
+        );
+      } catch (error) {
+        logger.warn(`Deleted DB record but failed to remove S3 object (${key}): ${error.message}`);
+      }
+    }
+
+    res.json({
+      success: true,
+      data: { id: document.id },
+      message: 'Document deleted successfully',
+    });
+  } catch (error) {
+    logger.error('Error deleting repository document:', error);
     next(error);
   }
 });

@@ -324,6 +324,11 @@ model Opportunity {
   jobId                    String?                 @unique @map("job_id")
   damageLocation           String?                 @map("damage_location")
   dateOfLoss               DateTime?               @map("date_of_loss")
+  adjusterName             String?                 @map("adjuster_name")
+  adjusterEmail            String?                 @map("adjuster_email")
+  adjusterOfficePhone      String?                 @map("adjuster_office_phone")
+  adjusterOfficePhoneExt   String?                 @map("adjuster_office_phone_ext")
+  fieldAdjusterMobile      String?                 @map("field_adjuster_mobile")
   priority                 Priority                @default(NORMAL)
   priorityAutoEscalate     Boolean                 @default(true) @map("priority_auto_escalate")
   priorityReason           String?                 @map("priority_reason")
@@ -4604,6 +4609,8 @@ enum AttentionType {
   QUOTE_EXPIRING
   CONTRACT_ISSUE
   GENERAL
+  APPOINTMENT_TODAY
+  MENTION
 }
 
 enum AttentionCategory {

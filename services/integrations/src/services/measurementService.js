@@ -857,6 +857,12 @@ class MeasurementService {
             try {
               pdfStorage = await this.downloadAndStoreGafPdf(pdfAssetId, measurementReportId, gafOrderNumber);
               logger.info(`GAF PDF stored to S3 for report ${gafOrderNumber}: ${pdfStorage.s3Key}`);
+              await this.syncMeasurementPdfToRepository({
+                measurementReportId,
+                provider: 'GAF_QUICKMEASURE',
+                pdfAssetId,
+                pdfStorage,
+              });
             } catch (err) {
               logger.warn(`Could not download/store GAF PDF ${pdfAssetId}:`, err.message);
             }
@@ -1227,6 +1233,12 @@ class MeasurementService {
       try {
         pdfStorage = await this.downloadAndStoreGafPdf(pdfAssetId, reportId, measurementReport?.externalId);
         logger.info(`GAF PDF stored via webhook for report ${reportId}: ${pdfStorage.s3Key}`);
+        await this.syncMeasurementPdfToRepository({
+          measurementReportId: reportId,
+          provider: 'GAF_QUICKMEASURE',
+          pdfAssetId,
+          pdfStorage,
+        });
       } catch (err) {
         logger.warn(`Could not download/store webhook GAF PDF ${pdfAssetId}:`, err.message);
       }
@@ -1287,6 +1299,12 @@ class MeasurementService {
     }
 
     const pdfStorage = await this.downloadAndStoreGafPdf(pdfAssetId, measurementReportId, report.externalId);
+    await this.syncMeasurementPdfToRepository({
+      measurementReportId,
+      provider: 'GAF_QUICKMEASURE',
+      pdfAssetId,
+      pdfStorage,
+    });
 
     await prisma.measurementReport.update({
       where: { id: measurementReportId },
@@ -1405,7 +1423,135 @@ class MeasurementService {
       s3Key,
       s3Url: `s3://${S3_BUCKET}/${s3Key}`,
       presignedUrl,
+      contentType: response.headers.get('content-type') || 'application/pdf',
+      contentSize: buffer.length,
     };
+  }
+
+  buildMeasurementDocumentTitle(provider, report) {
+    const providerLabel = provider === 'GAF_QUICKMEASURE' ? 'GAF QuickMeasure' : provider || 'Measurement';
+    const orderRef = report.orderNumber || report.externalId || report.id;
+    return `${providerLabel} Report #${orderRef}`;
+  }
+
+  async syncMeasurementPdfToRepository({
+    measurementReportId,
+    provider,
+    pdfAssetId,
+    pdfStorage,
+  }) {
+    if (!measurementReportId || !pdfStorage?.s3Key) return null;
+
+    try {
+      const report = await prisma.measurementReport.findUnique({
+        where: { id: measurementReportId },
+        select: {
+          id: true,
+          orderNumber: true,
+          externalId: true,
+          orderedById: true,
+          opportunityId: true,
+          accountId: true,
+        },
+      });
+
+      if (!report?.opportunityId) {
+        return null;
+      }
+
+      const title = this.buildMeasurementDocumentTitle(provider, report);
+      const fileExtension = 'pdf';
+      const contentUrl = `https://${S3_BUCKET}.s3.${S3_REGION}.amazonaws.com/${pdfStorage.s3Key}`;
+      const metadata = JSON.stringify({
+        category: 'measurement',
+        provider,
+        measurementReportId: report.id,
+        orderNumber: report.orderNumber || report.externalId || null,
+        pdfAssetId: pdfAssetId || null,
+        pdfS3Key: pdfStorage.s3Key,
+        autoImported: true,
+        importedAt: new Date().toISOString(),
+      });
+
+      const existingDocument = await prisma.document.findFirst({
+        where: {
+          sourceType: 'MEASUREMENT_REPORT',
+          metadata: {
+            contains: `"measurementReportId":"${report.id}"`,
+          },
+          links: {
+            some: {
+              opportunityId: report.opportunityId,
+            },
+          },
+        },
+        select: { id: true },
+      });
+
+      let documentId = existingDocument?.id;
+
+      if (documentId) {
+        await prisma.document.update({
+          where: { id: documentId },
+          data: {
+            title,
+            fileName: `${title}.pdf`,
+            fileType: 'PDF',
+            fileExtension,
+            contentSize: pdfStorage.contentSize || null,
+            contentUrl,
+            ownerId: report.orderedById || null,
+            metadata,
+            sourceType: 'MEASUREMENT_REPORT',
+          },
+        });
+      } else {
+        const document = await prisma.document.create({
+          data: {
+            title,
+            fileName: `${title}.pdf`,
+            fileType: 'PDF',
+            fileExtension,
+            contentSize: pdfStorage.contentSize || null,
+            contentUrl,
+            ownerId: report.orderedById || null,
+            metadata,
+            sourceType: 'MEASUREMENT_REPORT',
+          },
+          select: { id: true },
+        });
+        documentId = document.id;
+      }
+
+      if (documentId) {
+        const existingLink = await prisma.documentLink.findFirst({
+          where: {
+            documentId,
+            opportunityId: report.opportunityId,
+          },
+          select: { id: true },
+        });
+
+        if (!existingLink) {
+          await prisma.documentLink.create({
+            data: {
+              documentId,
+              opportunityId: report.opportunityId,
+              accountId: report.accountId || null,
+              linkedRecordType: 'OPPORTUNITY',
+              shareType: 'V',
+              visibility: 'AllUsers',
+            },
+          });
+        }
+      }
+
+      logger.info(`Measurement PDF synced to repository for report ${report.id}`);
+      return { success: true, documentId };
+    } catch (error) {
+      logger.warn(`Failed to sync measurement PDF to repository for report ${measurementReportId}: ${error.message}`);
+      return null;
+    }
   }
 
   // ==========================================

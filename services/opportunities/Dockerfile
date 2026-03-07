@@ -8,6 +8,8 @@ WORKDIR /app
 
 # Copy shared modules
 COPY shared/prisma ./shared/prisma
+COPY shared/config ./shared/config
+COPY shared/config /shared/config
 
 # Copy service files
 COPY services/opportunities/package*.json ./

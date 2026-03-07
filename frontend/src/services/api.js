@@ -846,6 +846,12 @@ export const opportunitiesApi = {
     return response.data.data;
   },
 
+  // Transfer a single job to a new owner
+  async transferOwner(opportunityId, payload) {
+    const response = await api.post(`/api/opportunities/${opportunityId}/transfer`, payload);
+    return response.data;
+  },
+
   // Bulk reassign multiple jobs to a new owner
   async bulkReassignJobs(opportunityIds, newOwnerId) {
     const response = await api.post('/api/opportunities/bulk-reassign', { opportunityIds, newOwnerId });
@@ -4575,6 +4581,12 @@ export const documentsApi = {
       params.includeAccountDocs = options.includeAccountDocs;
     }
     const response = await api.get(`/api/documents/repository/by-job/${opportunityId}`, { params });
+    return response.data;
+  },
+
+  // Delete uploaded repository document
+  async deleteRepositoryDocument(documentId) {
+    const response = await api.delete(`/api/documents/repository/${documentId}`);
     return response.data;
   },
 };

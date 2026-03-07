@@ -101,6 +101,8 @@ import {
   Grid,
   Zap,
   UserCircle,
+  Trash2,
+  UserPlus,
 } from 'lucide-react';
 
 // SMS Modal Component with Canned Responses (same as LeadDetail)
@@ -1693,9 +1695,23 @@ export default function OpportunityDetail() {
 
   // Documents sub-tab state (contracts vs photos)
   const [documentsSubTab, setDocumentsSubTab] = useState('contracts');
+  const [showUploadFileModal, setShowUploadFileModal] = useState(false);
+  const [uploadCategory, setUploadCategory] = useState('other');
+  const [pendingUploadFiles, setPendingUploadFiles] = useState([]);
+  const [showRepositoryFilePreview, setShowRepositoryFilePreview] = useState(false);
+  const [selectedRepositoryFile, setSelectedRepositoryFile] = useState(null);
 
   // Details sub-tab state (status vs measurements)
   const [detailsSubTab, setDetailsSubTab] = useState('status');
+
+  // Job team transfer/assignment state
+  const [showTransferOwnerModal, setShowTransferOwnerModal] = useState(false);
+  const [ownerSearch, setOwnerSearch] = useState('');
+  const [selectedNewOwnerId, setSelectedNewOwnerId] = useState('');
+  const [transferRelatedAssignments, setTransferRelatedAssignments] = useState(true);
+  const [showProjectManagerModal, setShowProjectManagerModal] = useState(false);
+  const [projectManagerSearch, setProjectManagerSearch] = useState('');
+  const [selectedProjectManagerId, setSelectedProjectManagerId] = useState('');
 
   // Close actions menu when clicking outside
   useEffect(() => {
@@ -1708,6 +1724,22 @@ export default function OpportunityDetail() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  const toDateInputValue = useCallback((value) => {
+    if (!value) return '';
+    if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value)) {
+      return value.slice(0, 10);
+    }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toISOString().slice(0, 10);
+  }, []);
+
+  // Store date-only fields at midday UTC so timezone conversion never shifts the day.
+  const toDateOnlyIso = useCallback((value) => {
+    if (!value) return null;
+    return `${value}T12:00:00.000Z`;
+  }, []);
+
   // Claim information editing state
   const [isEditingClaim, setIsEditingClaim] = useState(false);
   const [claimForm, setClaimForm] = useState({
@@ -1716,6 +1748,11 @@ export default function OpportunityDetail() {
     dateOfLoss: '',
     claimFiledDate: '',
     damageLocation: '',
+    adjusterName: '',
+    adjusterEmail: '',
+    adjusterOfficePhone: '',
+    adjusterOfficePhoneExt: '',
+    fieldAdjusterMobile: '',
   });
 
   // Inline edit mode for job details
@@ -1789,11 +1826,15 @@ export default function OpportunityDetail() {
     enabled: !!id,
   });
 
-  const { data: appointments } = useQuery({
+  const { data: appointmentsResponse } = useQuery({
     queryKey: ['opportunityAppointments', id],
     queryFn: () => opportunitiesApi.getAppointments(id),
     enabled: !!id,
   });
+  const appointments = useMemo(
+    () => (Array.isArray(appointmentsResponse) ? appointmentsResponse : (appointmentsResponse?.appointments || [])),
+    [appointmentsResponse]
+  );
 
   const { data: contract } = useQuery({
     queryKey: ['opportunityContract', id],
@@ -1842,6 +1883,38 @@ export default function OpportunityDetail() {
     staleTime: 5 * 60 * 1000, // Cache for 5 minutes
   });
   const users = usersForDropdown || [];
+  const assignableUserList = useMemo(
+    () => (assignableUsers?.data || assignableUsers || []).filter((user) => !!user?.id),
+    [assignableUsers]
+  );
+  const ownerSearchText = ownerSearch.trim().toLowerCase();
+  const projectManagerSearchText = projectManagerSearch.trim().toLowerCase();
+  const filteredOwnerCandidates = useMemo(() => {
+    if (!ownerSearchText) return assignableUserList;
+    return assignableUserList.filter((user) => {
+      const haystack = `${user.firstName || ''} ${user.lastName || ''} ${user.email || ''}`.toLowerCase();
+      return haystack.includes(ownerSearchText);
+    });
+  }, [assignableUserList, ownerSearchText]);
+  const filteredProjectManagerCandidates = useMemo(() => {
+    if (!projectManagerSearchText) return assignableUserList;
+    return assignableUserList.filter((user) => {
+      const haystack = `${user.firstName || ''} ${user.lastName || ''} ${user.email || ''}`.toLowerCase();
+      return haystack.includes(projectManagerSearchText);
+    });
+  }, [assignableUserList, projectManagerSearchText]);
+  const assignedCrewMembers = useMemo(() => {
+    const unique = new Map();
+    appointments.forEach((apt) => {
+      (apt.crew || []).forEach((crewMember) => {
+        if (!crewMember?.id) return;
+        if (!unique.has(crewMember.id)) {
+          unique.set(crewMember.id, crewMember);
+        }
+      });
+    });
+    return Array.from(unique.values());
+  }, [appointments]);
 
   const { data: activityData } = useQuery({
     queryKey: ['opportunityActivity', id],
@@ -1860,6 +1933,17 @@ export default function OpportunityDetail() {
     queryKey: ['opportunityRepositoryFiles', id],
     queryFn: () => documentsApi.getDocumentsByJob(id),
     enabled: !!id,
+  });
+  const repositoryFileItems = useMemo(
+    () => repositoryFiles?.documents || repositoryFiles?.data?.documents || [],
+    [repositoryFiles]
+  );
+
+  const { data: assignableUsers = [] } = useQuery({
+    queryKey: ['opportunityAssignableUsers'],
+    queryFn: () => opportunitiesApi.getAssignableUsers(),
+    enabled: !!id,
+    staleTime: 5 * 60 * 1000,
   });
 
   // Cases (linked via Account) - service not yet deployed, disable retries
@@ -1936,12 +2020,17 @@ export default function OpportunityDetail() {
       setClaimForm({
         insuranceCarrier: opportunity.insuranceCarrier || '',
         claimNumber: opportunity.claimNumber || '',
-        dateOfLoss: opportunity.dateOfLoss ? new Date(opportunity.dateOfLoss).toISOString().split('T')[0] : '',
-        claimFiledDate: opportunity.claimFiledDate ? new Date(opportunity.claimFiledDate).toISOString().split('T')[0] : '',
+        dateOfLoss: toDateInputValue(opportunity.dateOfLoss),
+        claimFiledDate: toDateInputValue(opportunity.claimFiledDate),
         damageLocation: opportunity.damageLocation || '',
+        adjusterName: opportunity.adjusterName || '',
+        adjusterEmail: opportunity.adjusterEmail || '',
+        adjusterOfficePhone: opportunity.adjusterOfficePhone || '',
+        adjusterOfficePhoneExt: opportunity.adjusterOfficePhoneExt || '',
+        fieldAdjusterMobile: opportunity.fieldAdjusterMobile || '',
       });
     }
-  }, [opportunity]);
+  }, [opportunity, toDateInputValue]);
 
   // Initialize edit form when entering edit mode
   const enterEditMode = useCallback(() => {
@@ -2012,9 +2101,14 @@ export default function OpportunityDetail() {
     const updateData = {
       insuranceCarrier: claimForm.insuranceCarrier || null,
       claimNumber: claimForm.claimNumber || null,
-      dateOfLoss: claimForm.dateOfLoss ? new Date(claimForm.dateOfLoss).toISOString() : null,
-      claimFiledDate: claimForm.claimFiledDate ? new Date(claimForm.claimFiledDate).toISOString() : null,
+      dateOfLoss: toDateOnlyIso(claimForm.dateOfLoss),
+      claimFiledDate: toDateOnlyIso(claimForm.claimFiledDate),
       damageLocation: claimForm.damageLocation || null,
+      adjusterName: claimForm.adjusterName || null,
+      adjusterEmail: claimForm.adjusterEmail || null,
+      adjusterOfficePhone: claimForm.adjusterOfficePhone || null,
+      adjusterOfficePhoneExt: claimForm.adjusterOfficePhoneExt || null,
+      fieldAdjusterMobile: claimForm.fieldAdjusterMobile || null,
     };
     updateMutation.mutate(updateData);
     setIsEditingClaim(false);
@@ -2346,32 +2440,166 @@ export default function OpportunityDetail() {
     },
   });
 
-  // Contact form state
-  const [contactForm, setContactForm] = useState({
+  const buildEmptyContactForm = () => ({
     firstName: '',
     lastName: '',
     email: '',
     phone: '',
     mobilePhone: '',
+    mailingStreet: '',
+    mailingCity: '',
+    mailingState: '',
+    mailingPostalCode: '',
     isPrimary: false,
   });
+
+  // Contact form state
+  const [contactForm, setContactForm] = useState(buildEmptyContactForm);
+  const [editingContactId, setEditingContactId] = useState(null);
+  const buildContactPayload = (form) => ({
+    firstName: form.firstName,
+    lastName: form.lastName,
+    email: form.email,
+    phone: form.phone,
+    mobilePhone: form.mobilePhone,
+    mailingStreet: form.mailingStreet,
+    mailingCity: form.mailingCity,
+    mailingState: form.mailingState,
+    mailingPostalCode: form.mailingPostalCode,
+    isPrimary: form.isPrimary,
+  });
+
+  const openContactEditor = (contact) => {
+    setEditingContactId(contact.id);
+    setContactForm({
+      firstName: contact.firstName || '',
+      lastName: contact.lastName || '',
+      email: contact.email || '',
+      phone: contact.phone || '',
+      mobilePhone: contact.mobilePhone || '',
+      mailingStreet: contact.mailingStreet || contact.street || '',
+      mailingCity: contact.mailingCity || contact.city || '',
+      mailingState: contact.mailingState || contact.state || '',
+      mailingPostalCode: contact.mailingPostalCode || contact.postalCode || '',
+      isPrimary: contact.isPrimary || contact.isPrimaryContact || false,
+    });
+    setActiveQuickAction('editContact');
+    setShowQuickActionModal(true);
+  };
 
   // Contact mutation - add contact to account
   const addContactMutation = useMutation({
     mutationFn: (data) => contactsApi.createContact({
-      ...data,
+      ...buildContactPayload(data),
       accountId: opportunity?.accountId,
       fullName: `${data.firstName} ${data.lastName}`,
     }),
     onSuccess: () => {
       queryClient.invalidateQueries(['opportunityContacts', id]);
+      queryClient.invalidateQueries(['opportunities']);
       setActionSuccess('Contact added successfully');
       setShowQuickActionModal(false);
-      setContactForm({ firstName: '', lastName: '', email: '', phone: '', mobilePhone: '', isPrimary: false });
+      setContactForm(buildEmptyContactForm());
       setTimeout(() => setActionSuccess(null), 3000);
     },
     onError: (error) => {
       setActionError(error.message || 'Failed to add contact');
+    },
+  });
+
+  // Update contact mutation
+  const updateContactMutation = useMutation({
+    mutationFn: ({ contactId, data }) => contactsApi.updateContact(contactId, {
+      ...buildContactPayload(data),
+      fullName: `${data.firstName} ${data.lastName}`,
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['opportunityContacts', id]);
+      queryClient.invalidateQueries(['opportunities']);
+      setActionSuccess('Contact updated successfully');
+      setShowQuickActionModal(false);
+      setContactForm(buildEmptyContactForm());
+      setEditingContactId(null);
+      setTimeout(() => setActionSuccess(null), 3000);
+    },
+    onError: (error) => {
+      setActionError(error.message || 'Failed to update contact');
+    },
+  });
+
+  const transferOwnerMutation = useMutation({
+    mutationFn: (payload) => opportunitiesApi.transferOwner(id, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['opportunity', id]);
+      queryClient.invalidateQueries(['opportunities']);
+      queryClient.invalidateQueries(['opportunitySummary', id]);
+      queryClient.invalidateQueries(['opportunityAppointments', id]);
+      setShowTransferOwnerModal(false);
+      setOwnerSearch('');
+      setSelectedNewOwnerId('');
+      setTransferRelatedAssignments(true);
+      setActionSuccess('Job owner transferred successfully');
+      setTimeout(() => setActionSuccess(null), 3000);
+    },
+    onError: (error) => {
+      setActionError(error.message || 'Failed to transfer job owner');
+    },
+  });
+
+  const assignProjectManagerMutation = useMutation({
+    mutationFn: (projectManagerId) => opportunitiesApi.updateOpportunity(id, {
+      projectManagerId: projectManagerId || null,
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['opportunity', id]);
+      queryClient.invalidateQueries(['opportunitySummary', id]);
+      setShowProjectManagerModal(false);
+      setProjectManagerSearch('');
+      setSelectedProjectManagerId('');
+      setActionSuccess('Project manager updated successfully');
+      setTimeout(() => setActionSuccess(null), 3000);
+    },
+    onError: (error) => {
+      setActionError(error.message || 'Failed to update project manager');
+    },
+  });
+
+  const uploadRepositoryDocumentMutation = useMutation({
+    mutationFn: async () => {
+      if (!pendingUploadFiles.length) {
+        throw new Error('Please choose at least one file to upload');
+      }
+      const uploads = pendingUploadFiles.map((file) =>
+        documentsApi.uploadDocument(file, {
+          opportunityId: id,
+          accountId: opportunity?.accountId || '',
+          category: uploadCategory,
+        })
+      );
+      return Promise.all(uploads);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries(['opportunityRepositoryFiles', id]);
+      setShowUploadFileModal(false);
+      setPendingUploadFiles([]);
+      setUploadCategory('other');
+      setActionSuccess('File uploaded successfully');
+      setTimeout(() => setActionSuccess(null), 3000);
+    },
+    onError: (error) => {
+      setActionError(error.message || 'Failed to upload files');
+    },
+  });
+
+  const deleteRepositoryDocumentMutation = useMutation({
+    mutationFn: (documentId) => documentsApi.deleteRepositoryDocument(documentId),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['opportunityRepositoryFiles', id]);
+      setActionSuccess('File deleted successfully');
+      setTimeout(() => setActionSuccess(null), 3000);
+    },
+    onError: (error) => {
+      setActionError(error.message || 'Failed to delete file');
     },
   });
 
@@ -2968,10 +3196,10 @@ export default function OpportunityDetail() {
   const categoryBadgeCounts = useMemo(() => ({
     schedule: (appointments?.length || 0) + (tasks?.filter(t => t.status !== 'COMPLETED')?.length || 0),
     financial: (invoices?.length || 0) + (commissions?.length || 0) + (quotes?.length || 0),
-    documents: (documents?.documents?.length || 0) + (photos?.length || 0) + (activityData?.activities?.filter(a => a.sourceType !== 'ACCULYNX_IMPORT')?.length || 0),
+    documents: (documents?.documents?.length || 0) + repositoryFileItems.length + (photos?.length || 0) + (activityData?.activities?.filter(a => a.sourceType !== 'ACCULYNX_IMPORT')?.length || 0),
     team: (contacts?.length || 0) + (workOrders?.length || 0) + (cases?.length || 0),
     messages: totalUnread + unreadNotifications,
-  }), [appointments, tasks, invoices, commissions, quotes, documents, photos, activityData, contacts, workOrders, cases, totalUnread, unreadNotifications]);
+  }), [appointments, tasks, invoices, commissions, quotes, documents, repositoryFileItems.length, photos, activityData, contacts, workOrders, cases, totalUnread, unreadNotifications]);
 
   // Calculate sub-tab counts for the current category (must be before early returns)
   const subTabCounts = useMemo(() => {
@@ -2990,7 +3218,7 @@ export default function OpportunityDetail() {
         };
       case 'documents':
         return {
-          documents: (documents?.documents?.length || 0) + (photos?.length || 0),
+          documents: (documents?.documents?.length || 0) + repositoryFileItems.length + (photos?.length || 0),
           activity: activityData?.activities?.filter(a => a.sourceType !== 'ACCULYNX_IMPORT')?.length || 0,
         };
       case 'team':
@@ -3009,7 +3237,7 @@ export default function OpportunityDetail() {
       default:
         return {};
     }
-  }, [activeCategory, appointments, tasks, invoices, commissions, quotes, documents, photos, activityData, contacts, workOrders, cases, totalUnread, unreadNotifications]);
+  }, [activeCategory, appointments, tasks, invoices, commissions, quotes, documents, repositoryFileItems.length, photos, activityData, contacts, workOrders, cases, totalUnread, unreadNotifications]);
 
   // Early returns (after all hooks)
   if (isLoading) {
@@ -3050,7 +3278,7 @@ export default function OpportunityDetail() {
     { id: 'invoices', label: 'Invoices', icon: Receipt, count: summary?.counts?.invoices || invoices?.length || 0 },
     { id: 'payments', label: 'Payments', icon: CreditCard, count: payments?.length || 0 },
     { id: 'commissions', label: 'Commissions', icon: Percent, count: summary?.counts?.commissions || commissions?.length || 0 },
-    { id: 'documents', label: 'Documents', icon: FileSignature, count: (summary?.counts?.documents || documents?.documents?.length || 0) },
+    { id: 'documents', label: 'Documents', icon: FileSignature, count: (summary?.counts?.documents || 0) + repositoryFileItems.length },
     { id: 'activity', label: 'Activity', icon: Activity, count: activityData?.activities?.filter(a => a.sourceType !== 'ACCULYNX_IMPORT')?.length || 0 },
     { id: 'communications', label: 'Communications', icon: PhoneCall, count: activityData?.activities?.filter(a => a.sourceType === 'ACCULYNX_IMPORT')?.length || 0 },
     { id: 'tasks', label: 'Tasks', icon: CheckSquare, count: tasks?.filter(t => t.status !== 'COMPLETED')?.length || 0 },
@@ -4687,9 +4915,13 @@ export default function OpportunityDetail() {
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center space-x-2">
-                                <Link to={`/contacts/${contact.id}`} className="font-medium text-gray-900 hover:text-panda-primary">
+                                <button
+                                  type="button"
+                                  onClick={() => openContactEditor(contact)}
+                                  className="font-medium text-gray-900 hover:text-panda-primary"
+                                >
                                   {contact.firstName} {contact.lastName}
-                                </Link>
+                                </button>
                                 {isPrimary && (
                                   <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-medium rounded-full">Primary</span>
                                 )}
@@ -4726,13 +4958,13 @@ export default function OpportunityDetail() {
                               )}
                             </div>
                             {/* Edit button */}
-                            <Link
-                              to={`/contacts/${contact.id}`}
+                            <button
+                              onClick={() => openContactEditor(contact)}
                               className="p-2 text-gray-400 hover:text-panda-primary hover:bg-gray-100 rounded-lg transition-colors flex-shrink-0"
                               title="Edit Contact"
                             >
                               <Edit className="w-4 h-4" />
-                            </Link>
+                            </button>
                           </div>
                         </div>
                       );
@@ -4760,6 +4992,40 @@ export default function OpportunityDetail() {
                     {/* Header */}
                     <div className="flex items-center justify-between">
                       <h3 className="text-sm font-semibold text-gray-900">Job Team</h3>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          onClick={() => setShowTransferOwnerModal(true)}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
+                        >
+                          <UserPlus className="w-4 h-4" />
+                          Transfer Owner
+                        </button>
+                        <button
+                          onClick={() => {
+                            setSelectedProjectManagerId(opportunity?.projectManagerId || '');
+                            setShowProjectManagerModal(true);
+                          }}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
+                        >
+                          <Users className="w-4 h-4" />
+                          {opportunity?.projectManager ? 'Change PM' : 'Assign PM'}
+                        </button>
+                        <button
+                          onClick={() => {
+                            const targetAppointment = appointments?.[0];
+                            if (!targetAppointment) {
+                              setActionError('Create an appointment first to assign a crew');
+                              return;
+                            }
+                            setSelectedAppointmentForCrew(targetAppointment);
+                            setShowCrewModal(true);
+                          }}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50"
+                        >
+                          <Wrench className="w-4 h-4" />
+                          {assignedCrewMembers.length > 0 ? 'Change Crew' : 'Assign Crew'}
+                        </button>
+                      </div>
                     </div>
 
                     {/* Team Members */}
@@ -4780,7 +5046,7 @@ export default function OpportunityDetail() {
                               >
                                 {opportunity.owner.firstName} {opportunity.owner.lastName}
                               </Link>
-                              <p className="text-sm text-gray-500">Sales Rep</p>
+                              <p className="text-sm text-gray-500">Owner</p>
                             </div>
                           </div>
                           <div className="flex items-center space-x-2">
@@ -4802,51 +5068,104 @@ export default function OpportunityDetail() {
                                 <Mail className="w-4 h-4" />
                               </a>
                             )}
+                            <button
+                              onClick={() => setShowTransferOwnerModal(true)}
+                              className="p-2 text-gray-400 hover:text-panda-primary hover:bg-gray-100 rounded-lg transition-colors"
+                              title="Transfer Owner"
+                            >
+                              <Edit className="w-4 h-4" />
+                            </button>
                           </div>
                         </div>
                       )}
 
                       {/* Project Manager */}
-                      {opportunity?.projectManager && (
-                        <div className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-panda-primary transition-colors">
-                          <div className="flex items-center space-x-3">
-                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-violet-500 flex items-center justify-center">
-                              <span className="text-white text-sm font-medium">
-                                {opportunity.projectManager.firstName?.charAt(0)}{opportunity.projectManager.lastName?.charAt(0)}
-                              </span>
-                            </div>
-                            <div>
+                      <div className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-panda-primary transition-colors">
+                        <div className="flex items-center space-x-3">
+                          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-violet-500 flex items-center justify-center">
+                            <span className="text-white text-sm font-medium">
+                              {opportunity?.projectManager?.firstName?.charAt(0) || 'P'}{opportunity?.projectManager?.lastName?.charAt(0) || 'M'}
+                            </span>
+                          </div>
+                          <div>
+                            {opportunity?.projectManager ? (
                               <Link
                                 to={`/users/${opportunity.projectManager.id}`}
                                 className="font-medium text-gray-900 hover:text-panda-primary"
                               >
                                 {opportunity.projectManager.firstName} {opportunity.projectManager.lastName}
                               </Link>
-                              <p className="text-sm text-gray-500">Project Manager</p>
-                            </div>
-                          </div>
-                          <div className="flex items-center space-x-2">
-                            {opportunity.projectManager.phone && (
-                              <a
-                                href={`tel:${opportunity.projectManager.phone}`}
-                                className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
-                                title="Call"
-                              >
-                                <Phone className="w-4 h-4" />
-                              </a>
+                            ) : (
+                              <p className="font-medium text-gray-600">Unassigned</p>
                             )}
-                            {opportunity.projectManager.email && (
-                              <a
-                                href={`mailto:${opportunity.projectManager.email}`}
-                                className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                                title="Email"
-                              >
-                                <Mail className="w-4 h-4" />
-                              </a>
-                            )}
+                            <p className="text-sm text-gray-500">Project Manager</p>
                           </div>
                         </div>
-                      )}
+                        <div className="flex items-center space-x-2">
+                          {opportunity?.projectManager?.phone && (
+                            <a
+                              href={`tel:${opportunity.projectManager.phone}`}
+                              className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                              title="Call"
+                            >
+                              <Phone className="w-4 h-4" />
+                            </a>
+                          )}
+                          {opportunity?.projectManager?.email && (
+                            <a
+                              href={`mailto:${opportunity.projectManager.email}`}
+                              className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                              title="Email"
+                            >
+                              <Mail className="w-4 h-4" />
+                            </a>
+                          )}
+                          <button
+                            onClick={() => {
+                              setSelectedProjectManagerId(opportunity?.projectManagerId || '');
+                              setShowProjectManagerModal(true);
+                            }}
+                            className="p-2 text-gray-400 hover:text-panda-primary hover:bg-gray-100 rounded-lg transition-colors"
+                            title={opportunity?.projectManager ? 'Change Project Manager' : 'Assign Project Manager'}
+                          >
+                            <Edit className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Crew */}
+                      <div className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-panda-primary transition-colors">
+                        <div className="flex items-center space-x-3">
+                          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center">
+                            <Wrench className="w-5 h-5 text-white" />
+                          </div>
+                          <div>
+                            {assignedCrewMembers.length > 0 ? (
+                              <p className="font-medium text-gray-900">
+                                {assignedCrewMembers.map((crew) => crew.name).join(', ')}
+                              </p>
+                            ) : (
+                              <p className="font-medium text-gray-600">No crew assigned</p>
+                            )}
+                            <p className="text-sm text-gray-500">Crew</p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => {
+                            const targetAppointment = appointments?.[0];
+                            if (!targetAppointment) {
+                              setActionError('Create an appointment first to assign a crew');
+                              return;
+                            }
+                            setSelectedAppointmentForCrew(targetAppointment);
+                            setShowCrewModal(true);
+                          }}
+                          className="p-2 text-gray-400 hover:text-panda-primary hover:bg-gray-100 rounded-lg transition-colors"
+                          title={assignedCrewMembers.length > 0 ? 'Change Crew' : 'Assign Crew'}
+                        >
+                          <Edit className="w-4 h-4" />
+                        </button>
+                      </div>
 
                       {/* Onboarded By */}
                       {opportunity?.onboardedBy && (
@@ -4933,7 +5252,7 @@ export default function OpportunityDetail() {
                       )}
 
                       {/* Empty State */}
-                      {!opportunity?.owner && !opportunity?.projectManager && !opportunity?.onboardedBy && !opportunity?.approvedBy && (
+                      {!opportunity?.owner && !opportunity?.onboardedBy && !opportunity?.approvedBy && (
                         <div className="text-center py-8 text-gray-500">
                           <UserCircle className="w-12 h-12 mx-auto text-gray-300 mb-2" />
                           <p>No team members assigned</p>
@@ -5130,9 +5449,8 @@ export default function OpportunityDetail() {
                     </div>
 
                     {contacts && contacts.length > 0 ? contacts.map((contact) => (
-                      <Link
+                      <div
                         key={contact.id}
-                        to={`/contacts/${contact.id}`}
                         className="block border border-gray-200 rounded-lg p-4 hover:border-panda-primary transition-colors"
                       >
                         <div className="flex items-center space-x-3">
@@ -5143,7 +5461,13 @@ export default function OpportunityDetail() {
                           </div>
                           <div className="flex-1">
                             <div className="flex items-center space-x-2">
-                              <h4 className="font-medium text-gray-900">{contact.firstName} {contact.lastName}</h4>
+                              <button
+                                type="button"
+                                onClick={() => openContactEditor(contact)}
+                                className="font-medium text-gray-900 hover:text-panda-primary"
+                              >
+                                {contact.firstName} {contact.lastName}
+                              </button>
                               {contact.isPrimary && (
                                 <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-medium rounded-full">Primary</span>
                               )}
@@ -5164,7 +5488,7 @@ export default function OpportunityDetail() {
                             </div>
                           </div>
                         </div>
-                      </Link>
+                      </div>
                     )) : (
                       <div className="text-center py-8 text-gray-500">
                         <Users className="w-12 h-12 mx-auto text-gray-300 mb-2" />
@@ -6735,32 +7059,36 @@ export default function OpportunityDetail() {
                         >
                           <FileText className="w-4 h-4" />
                           <span>Files</span>
-                          {(repositoryFiles?.data?.length || repositoryFiles?.length || 0) > 0 && (
+                          {repositoryFileItems.length > 0 && (
                             <span className="ml-1 px-2 py-0.5 bg-panda-primary/10 text-panda-primary text-xs rounded-full">
-                              {repositoryFiles?.data?.length || repositoryFiles?.length || 0}
+                              {repositoryFileItems.length}
                             </span>
                           )}
                         </button>
                       </div>
-                      {/* Contract Action Buttons - only show on contracts sub-tab */}
-                      {documentsSubTab === 'contracts' && (
-                        <div className="flex items-center space-x-2">
-                          <button
-                            onClick={() => setShowChangeOrderModal(true)}
-                            className="inline-flex items-center px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 shadow-sm"
-                          >
-                            <Edit className="w-4 h-4 mr-2" />
-                            Change Order
-                          </button>
-                          <button
-                            onClick={() => setShowContractSigningModal(true)}
-                            className="inline-flex items-center px-4 py-2 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg hover:opacity-90 shadow-sm"
-                          >
-                            <Send className="w-4 h-4 mr-2" />
-                            Send Contract
-                          </button>
-                        </div>
-                      )}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          onClick={() => setShowChangeOrderModal(true)}
+                          className="inline-flex items-center px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 shadow-sm"
+                        >
+                          <Edit className="w-4 h-4 mr-2" />
+                          Change Order
+                        </button>
+                        <button
+                          onClick={() => setShowContractSigningModal(true)}
+                          className="inline-flex items-center px-4 py-2 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg hover:opacity-90 shadow-sm"
+                        >
+                          <Send className="w-4 h-4 mr-2" />
+                          Send Contract
+                        </button>
+                        <button
+                          onClick={() => setShowUploadFileModal(true)}
+                          className="inline-flex items-center px-4 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-dark shadow-sm"
+                        >
+                          <Upload className="w-4 h-4 mr-2" />
+                          Upload
+                        </button>
+                      </div>
                     </div>
 
                     {/* Contracts Sub-tab Content */}
@@ -6977,7 +7305,7 @@ export default function OpportunityDetail() {
                     {documentsSubTab === 'files' && (
                       <div className="space-y-4">
                         {(() => {
-                          const files = repositoryFiles?.data || repositoryFiles || [];
+                          const files = repositoryFileItems;
                           if (files.length === 0) {
                             return (
                               <div className="text-center py-12">
@@ -6992,14 +7320,39 @@ export default function OpportunityDetail() {
                               {files.map((file) => (
                                 <div
                                   key={file.id}
-                                  className="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow"
+                                  className="bg-white border border-gray-200 rounded-lg overflow-hidden hover:shadow-md transition-shadow"
                                 >
-                                  <div className="flex items-start space-x-3">
-                                    <div className="flex-shrink-0">
-                                      <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center">
-                                        <FileText className="w-5 h-5 text-gray-500" />
-                                      </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setSelectedRepositoryFile(file);
+                                      setShowRepositoryFilePreview(true);
+                                    }}
+                                    className="w-full"
+                                  >
+                                    <div className="h-40 bg-gray-50 border-b border-gray-100 flex items-center justify-center overflow-hidden relative">
+                                      {['JPG', 'JPEG', 'PNG', 'WEBP', 'GIF'].includes((file.fileType || '').toUpperCase()) && file.thumbnailUrl ? (
+                                        <img
+                                          src={file.thumbnailUrl}
+                                          alt={file.title || file.fileName || 'Document'}
+                                          className="w-full h-full object-cover"
+                                        />
+                                      ) : (
+                                        <div className="text-center">
+                                          <FileText className="w-10 h-10 text-gray-400 mx-auto mb-2" />
+                                          <span className="text-xs font-medium text-gray-500">
+                                            {(file.fileType || file.fileExtension || 'FILE').toUpperCase()}
+                                          </span>
+                                        </div>
+                                      )}
+                                      {file.category && (
+                                        <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-black/60 text-white uppercase">
+                                          {file.category}
+                                        </span>
+                                      )}
                                     </div>
+                                  </button>
+                                  <div className="p-4">
                                     <div className="flex-1 min-w-0">
                                       <p className="text-sm font-medium text-gray-900 truncate" title={file.title || file.fileName || 'Untitled'}>
                                         {file.title || file.fileName || 'Untitled'}
@@ -7012,24 +7365,47 @@ export default function OpportunityDetail() {
                                         {file.createdAt && new Date(file.createdAt).toLocaleDateString()}
                                       </p>
                                     </div>
-                                  </div>
-                                  <div className="mt-3 flex space-x-2">
-                                    {file.contentUrl ? (
-                                      <a
-                                        href={file.contentUrl}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="flex-1 inline-flex items-center justify-center px-3 py-1.5 bg-panda-primary/10 text-panda-primary text-xs font-medium rounded-md hover:bg-panda-primary/20 transition-colors"
-                                      >
-                                        <Download className="w-3 h-3 mr-1" />
-                                        Download
-                                      </a>
-                                    ) : (
-                                      <span className="flex-1 inline-flex items-center justify-center px-3 py-1.5 bg-gray-100 text-gray-400 text-xs font-medium rounded-md">
-                                        <FileText className="w-3 h-3 mr-1" />
-                                        {file.category || 'Salesforce'}
-                                      </span>
-                                    )}
+                                    <div className="mt-3 flex items-center gap-2">
+                                      {file.downloadUrl || file.contentUrl ? (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setSelectedRepositoryFile(file);
+                                            setShowRepositoryFilePreview(true);
+                                          }}
+                                          className="inline-flex items-center justify-center px-3 py-1.5 bg-gray-100 text-gray-700 text-xs font-medium rounded-md hover:bg-gray-200 transition-colors"
+                                        >
+                                          <Eye className="w-3 h-3 mr-1" />
+                                          Preview
+                                        </button>
+                                      ) : null}
+                                      {file.downloadUrl || file.contentUrl ? (
+                                        <a
+                                          href={file.downloadUrl || file.contentUrl}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="inline-flex items-center justify-center px-3 py-1.5 bg-panda-primary/10 text-panda-primary text-xs font-medium rounded-md hover:bg-panda-primary/20 transition-colors"
+                                        >
+                                          <Download className="w-3 h-3 mr-1" />
+                                          Download
+                                        </a>
+                                      ) : null}
+                                      {file.sourceType === 'UPLOAD' && (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            if (window.confirm(`Delete "${file.title || file.fileName || 'this file'}"?`)) {
+                                              deleteRepositoryDocumentMutation.mutate(file.id);
+                                            }
+                                          }}
+                                          className="inline-flex items-center justify-center px-3 py-1.5 bg-red-50 text-red-600 text-xs font-medium rounded-md hover:bg-red-100 transition-colors"
+                                          disabled={deleteRepositoryDocumentMutation.isPending}
+                                        >
+                                          <Trash2 className="w-3 h-3 mr-1" />
+                                          Delete
+                                        </button>
+                                      )}
+                                    </div>
                                   </div>
                                 </div>
                               ))}
@@ -7411,6 +7787,58 @@ export default function OpportunityDetail() {
                             placeholder="e.g., Roof, Siding, Gutters"
                           />
                         </div>
+                        <div>
+                          <label className="block text-sm text-gray-500 mb-1">Adjuster Name</label>
+                          <input
+                            type="text"
+                            value={claimForm.adjusterName}
+                            onChange={(e) => setClaimForm({ ...claimForm, adjusterName: e.target.value })}
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                            placeholder="Enter adjuster name"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm text-gray-500 mb-1">Adjuster Email</label>
+                          <input
+                            type="email"
+                            value={claimForm.adjusterEmail}
+                            onChange={(e) => setClaimForm({ ...claimForm, adjusterEmail: e.target.value })}
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                            placeholder="adjuster@example.com"
+                          />
+                        </div>
+                        <div className="col-span-2 grid grid-cols-3 gap-4">
+                          <div className="col-span-2">
+                            <label className="block text-sm text-gray-500 mb-1">Adjuster Office Phone</label>
+                            <input
+                              type="text"
+                              value={claimForm.adjusterOfficePhone}
+                              onChange={(e) => setClaimForm({ ...claimForm, adjusterOfficePhone: e.target.value })}
+                              className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                              placeholder="(555) 123-4567"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm text-gray-500 mb-1">Extension</label>
+                            <input
+                              type="text"
+                              value={claimForm.adjusterOfficePhoneExt}
+                              onChange={(e) => setClaimForm({ ...claimForm, adjusterOfficePhoneExt: e.target.value })}
+                              className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                              placeholder="123"
+                            />
+                          </div>
+                        </div>
+                        <div className="col-span-2">
+                          <label className="block text-sm text-gray-500 mb-1">Field Adjuster Mobile</label>
+                          <input
+                            type="text"
+                            value={claimForm.fieldAdjusterMobile}
+                            onChange={(e) => setClaimForm({ ...claimForm, fieldAdjusterMobile: e.target.value })}
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                            placeholder="(555) 987-6543"
+                          />
+                        </div>
                       </div>
                       <div className="flex justify-end space-x-3 pt-2">
                         <button
@@ -7464,6 +7892,36 @@ export default function OpportunityDetail() {
                           {opportunity.damageLocation || 'Not set'}
                         </p>
                       </div>
+                      <div>
+                        <label className="text-sm text-gray-500">Adjuster Name</label>
+                        <p className={`font-medium ${opportunity.adjusterName ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                          {opportunity.adjusterName || 'Not set'}
+                        </p>
+                      </div>
+                      <div>
+                        <label className="text-sm text-gray-500">Adjuster Email</label>
+                        <p className={`font-medium ${opportunity.adjusterEmail ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                          {opportunity.adjusterEmail || 'Not set'}
+                        </p>
+                      </div>
+                      <div>
+                        <label className="text-sm text-gray-500">Adjuster Office Phone</label>
+                        <p className={`font-medium ${opportunity.adjusterOfficePhone ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                          {opportunity.adjusterOfficePhone || 'Not set'}
+                        </p>
+                      </div>
+                      <div>
+                        <label className="text-sm text-gray-500">Extension</label>
+                        <p className={`font-medium ${opportunity.adjusterOfficePhoneExt ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                          {opportunity.adjusterOfficePhoneExt || 'Not set'}
+                        </p>
+                      </div>
+                      <div className="col-span-2">
+                        <label className="text-sm text-gray-500">Field Adjuster Mobile</label>
+                        <p className={`font-medium ${opportunity.fieldAdjusterMobile ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                          {opportunity.fieldAdjusterMobile || 'Not set'}
+                        </p>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -7474,7 +7932,18 @@ export default function OpportunityDetail() {
             <div className="bg-white rounded-xl shadow-sm border border-gray-200">
               <div className="p-5 border-b border-gray-100 flex items-center justify-between">
                 <h2 className="text-lg font-semibold text-gray-900">Appointments ({summary?.counts?.appointments || appointments?.length || 0})</h2>
-                <button className="text-panda-primary text-sm hover:underline">+ Add</button>
+                <button
+                  onClick={() => {
+                    setActiveQuickAction({
+                      type: 'scheduleAppointment',
+                      existingWorkOrderId: workOrders?.[0]?.id || null,
+                    });
+                    setShowQuickActionModal(true);
+                  }}
+                  className="text-panda-primary text-sm hover:underline"
+                >
+                  + Add
+                </button>
               </div>
               <div className="p-5">
                 {appointments && appointments.length > 0 ? (
@@ -7551,7 +8020,8 @@ export default function OpportunityDetail() {
                 {activeQuickAction === 'composeEmail' && 'Compose Email'}
                 {activeQuickAction === 'sendMessage' && 'Send Message'}
                 {activeQuickAction === 'addContact' && 'Add Contact'}
-                {!activeQuickAction?.type && !['createWorkOrder', 'gafQuickMeasure', 'eagleviewMeasure', 'hoverCapture', 'instantMeasure', 'requestEstimate', 'updateMeetingOutcome', 'createCase', 'composeEmail', 'sendMessage', 'addContact'].includes(activeQuickAction) && 'Quick Action'}
+                {activeQuickAction === 'editContact' && 'Edit Contact'}
+                {!activeQuickAction?.type && !['createWorkOrder', 'gafQuickMeasure', 'eagleviewMeasure', 'hoverCapture', 'instantMeasure', 'requestEstimate', 'updateMeetingOutcome', 'createCase', 'composeEmail', 'sendMessage', 'addContact', 'editContact'].includes(activeQuickAction) && 'Quick Action'}
               </h2>
               <button
                 onClick={() => {
@@ -9560,6 +10030,50 @@ export default function OpportunityDetail() {
                     </div>
                   </div>
 
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Street Address</label>
+                    <input
+                      type="text"
+                      value={contactForm.mailingStreet}
+                      onChange={(e) => setContactForm(prev => ({ ...prev, mailingStreet: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                      placeholder="123 Main St"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">City</label>
+                      <input
+                        type="text"
+                        value={contactForm.mailingCity}
+                        onChange={(e) => setContactForm(prev => ({ ...prev, mailingCity: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                        placeholder="Philadelphia"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">State</label>
+                      <input
+                        type="text"
+                        value={contactForm.mailingState}
+                        onChange={(e) => setContactForm(prev => ({ ...prev, mailingState: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                        placeholder="PA"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Postal Code</label>
+                      <input
+                        type="text"
+                        value={contactForm.mailingPostalCode}
+                        onChange={(e) => setContactForm(prev => ({ ...prev, mailingPostalCode: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                        placeholder="19103"
+                      />
+                    </div>
+                  </div>
+
                   <div className="flex items-center space-x-2">
                     <input
                       type="checkbox"
@@ -9576,7 +10090,7 @@ export default function OpportunityDetail() {
                       type="button"
                       onClick={() => {
                         setShowQuickActionModal(false);
-                        setContactForm({ firstName: '', lastName: '', email: '', phone: '', mobilePhone: '', isPrimary: false });
+                        setContactForm(buildEmptyContactForm());
                       }}
                       className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
                     >
@@ -9589,6 +10103,150 @@ export default function OpportunityDetail() {
                     >
                       {addContactMutation.isLoading && <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
                       <span>Add Contact</span>
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {/* Edit Contact Form */}
+              {activeQuickAction === 'editContact' && (
+                <form onSubmit={(e) => {
+                  e.preventDefault();
+                  updateContactMutation.mutate({ contactId: editingContactId, data: contactForm });
+                }} className="space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">First Name *</label>
+                      <input
+                        type="text"
+                        value={contactForm.firstName}
+                        onChange={(e) => setContactForm(prev => ({ ...prev, firstName: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                        placeholder="John"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Last Name *</label>
+                      <input
+                        type="text"
+                        value={contactForm.lastName}
+                        onChange={(e) => setContactForm(prev => ({ ...prev, lastName: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                        placeholder="Doe"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                    <input
+                      type="email"
+                      value={contactForm.email}
+                      onChange={(e) => setContactForm(prev => ({ ...prev, email: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                      placeholder="john@example.com"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
+                      <input
+                        type="tel"
+                        value={contactForm.phone}
+                        onChange={(e) => setContactForm(prev => ({ ...prev, phone: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                        placeholder="(555) 123-4567"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Mobile Phone</label>
+                      <input
+                        type="tel"
+                        value={contactForm.mobilePhone}
+                        onChange={(e) => setContactForm(prev => ({ ...prev, mobilePhone: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                        placeholder="(555) 987-6543"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Street Address</label>
+                    <input
+                      type="text"
+                      value={contactForm.mailingStreet}
+                      onChange={(e) => setContactForm(prev => ({ ...prev, mailingStreet: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                      placeholder="123 Main St"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">City</label>
+                      <input
+                        type="text"
+                        value={contactForm.mailingCity}
+                        onChange={(e) => setContactForm(prev => ({ ...prev, mailingCity: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                        placeholder="Philadelphia"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">State</label>
+                      <input
+                        type="text"
+                        value={contactForm.mailingState}
+                        onChange={(e) => setContactForm(prev => ({ ...prev, mailingState: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                        placeholder="PA"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Postal Code</label>
+                      <input
+                        type="text"
+                        value={contactForm.mailingPostalCode}
+                        onChange={(e) => setContactForm(prev => ({ ...prev, mailingPostalCode: e.target.value }))}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                        placeholder="19103"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="checkbox"
+                      id="editIsPrimary"
+                      checked={contactForm.isPrimary}
+                      onChange={(e) => setContactForm(prev => ({ ...prev, isPrimary: e.target.checked }))}
+                      className="w-4 h-4 text-panda-primary border-gray-300 rounded focus:ring-panda-primary"
+                    />
+                    <label htmlFor="editIsPrimary" className="text-sm text-gray-700">Set as Primary Contact</label>
+                  </div>
+
+                  <div className="flex items-center justify-end space-x-3 pt-4">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowQuickActionModal(false);
+                        setContactForm(buildEmptyContactForm());
+                        setEditingContactId(null);
+                      }}
+                      className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={updateContactMutation.isLoading || !contactForm.firstName || !contactForm.lastName}
+                      className="px-4 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-dark disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+                    >
+                      {updateContactMutation.isLoading && <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />}
+                      <span>Save Changes</span>
                     </button>
                   </div>
                 </form>
@@ -9643,6 +10301,298 @@ export default function OpportunityDetail() {
                 </div>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Transfer Owner Modal */}
+      {showTransferOwnerModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-lg w-full">
+            <div className="flex items-center justify-between p-4 border-b">
+              <h3 className="text-lg font-semibold">Transfer Job Owner</h3>
+              <button
+                onClick={() => {
+                  setShowTransferOwnerModal(false);
+                  setOwnerSearch('');
+                  setSelectedNewOwnerId('');
+                  setTransferRelatedAssignments(true);
+                }}
+                className="p-1 hover:bg-gray-100 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <div className="bg-gray-50 p-3 rounded-lg">
+                <p className="text-xs text-gray-500 uppercase mb-1">Current Owner</p>
+                <p className="text-sm font-semibold text-gray-900">
+                  {opportunity?.owner
+                    ? `${opportunity.owner.firstName || ''} ${opportunity.owner.lastName || ''}`.trim()
+                    : 'Unassigned'}
+                </p>
+              </div>
+              <div>
+                <label className="block text-sm text-gray-600 mb-2">New Owner</label>
+                <input
+                  type="text"
+                  value={ownerSearch}
+                  onChange={(e) => setOwnerSearch(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg mb-2"
+                  placeholder="Search active users..."
+                />
+                <div className="max-h-56 overflow-y-auto border border-gray-200 rounded-lg">
+                  {filteredOwnerCandidates.map((user) => (
+                    <button
+                      key={user.id}
+                      type="button"
+                      onClick={() => setSelectedNewOwnerId(user.id)}
+                      className={`w-full text-left px-3 py-2 border-b border-gray-100 last:border-b-0 hover:bg-gray-50 ${
+                        selectedNewOwnerId === user.id ? 'bg-panda-primary/10' : ''
+                      }`}
+                    >
+                      <p className="text-sm font-medium text-gray-900">{`${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email}</p>
+                      <p className="text-xs text-gray-500">{user.email || 'No email'}</p>
+                    </button>
+                  ))}
+                  {filteredOwnerCandidates.length === 0 && (
+                    <p className="px-3 py-4 text-sm text-gray-500">No active users found.</p>
+                  )}
+                </div>
+              </div>
+              <label className="flex items-start gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={transferRelatedAssignments}
+                  onChange={(e) => setTransferRelatedAssignments(e.target.checked)}
+                  className="mt-0.5"
+                />
+                <span>Transfer all related assignments (tasks, appointments/resources, commissions, and attention items).</span>
+              </label>
+            </div>
+            <div className="flex justify-end gap-2 p-4 border-t bg-gray-50 rounded-b-xl">
+              <button
+                onClick={() => {
+                  setShowTransferOwnerModal(false);
+                  setOwnerSearch('');
+                  setSelectedNewOwnerId('');
+                  setTransferRelatedAssignments(true);
+                }}
+                className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-100"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (!selectedNewOwnerId) {
+                    setActionError('Select a new owner first');
+                    return;
+                  }
+                  transferOwnerMutation.mutate({
+                    newOwnerId: selectedNewOwnerId,
+                    transferRelatedAssignments,
+                  });
+                }}
+                disabled={!selectedNewOwnerId || transferOwnerMutation.isPending}
+                className="px-4 py-2 text-sm bg-panda-primary text-white rounded-lg hover:bg-panda-dark disabled:opacity-50"
+              >
+                {transferOwnerMutation.isPending ? 'Transferring...' : 'Transfer Owner'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Assign Project Manager Modal */}
+      {showProjectManagerModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-lg w-full">
+            <div className="flex items-center justify-between p-4 border-b">
+              <h3 className="text-lg font-semibold">{opportunity?.projectManager ? 'Change Project Manager' : 'Assign Project Manager'}</h3>
+              <button
+                onClick={() => {
+                  setShowProjectManagerModal(false);
+                  setProjectManagerSearch('');
+                  setSelectedProjectManagerId('');
+                }}
+                className="p-1 hover:bg-gray-100 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <input
+                type="text"
+                value={projectManagerSearch}
+                onChange={(e) => setProjectManagerSearch(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                placeholder="Search active users..."
+              />
+              <div className="max-h-64 overflow-y-auto border border-gray-200 rounded-lg">
+                {filteredProjectManagerCandidates.map((user) => (
+                  <button
+                    key={user.id}
+                    type="button"
+                    onClick={() => setSelectedProjectManagerId(user.id)}
+                    className={`w-full text-left px-3 py-2 border-b border-gray-100 last:border-b-0 hover:bg-gray-50 ${
+                      selectedProjectManagerId === user.id ? 'bg-panda-primary/10' : ''
+                    }`}
+                  >
+                    <p className="text-sm font-medium text-gray-900">{`${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email}</p>
+                    <p className="text-xs text-gray-500">{user.email || 'No email'}</p>
+                  </button>
+                ))}
+                {filteredProjectManagerCandidates.length === 0 && (
+                  <p className="px-3 py-4 text-sm text-gray-500">No active users found.</p>
+                )}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 p-4 border-t bg-gray-50 rounded-b-xl">
+              <button
+                onClick={() => {
+                  setShowProjectManagerModal(false);
+                  setProjectManagerSearch('');
+                  setSelectedProjectManagerId('');
+                }}
+                className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-100"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => assignProjectManagerMutation.mutate(selectedProjectManagerId)}
+                disabled={assignProjectManagerMutation.isPending}
+                className="px-4 py-2 text-sm bg-panda-primary text-white rounded-lg hover:bg-panda-dark disabled:opacity-50"
+              >
+                {assignProjectManagerMutation.isPending ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Upload File Modal */}
+      {showUploadFileModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-lg w-full">
+            <div className="flex items-center justify-between p-4 border-b">
+              <h3 className="text-lg font-semibold">Upload Files</h3>
+              <button
+                onClick={() => {
+                  setShowUploadFileModal(false);
+                  setPendingUploadFiles([]);
+                  setUploadCategory('other');
+                }}
+                className="p-1 hover:bg-gray-100 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <div>
+                <label className="block text-sm text-gray-600 mb-2">File Type</label>
+                <select
+                  value={uploadCategory}
+                  onChange={(e) => setUploadCategory(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                >
+                  <option value="contract">Contract</option>
+                  <option value="measurement">Measurement</option>
+                  <option value="insurance">Insurance</option>
+                  <option value="invoice">Invoice</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm text-gray-600 mb-2">Files</label>
+                <input
+                  type="file"
+                  multiple
+                  onChange={(e) => setPendingUploadFiles(Array.from(e.target.files || []))}
+                  className="w-full"
+                />
+                {pendingUploadFiles.length > 0 && (
+                  <p className="text-xs text-gray-500 mt-2">
+                    {pendingUploadFiles.length} file{pendingUploadFiles.length === 1 ? '' : 's'} selected
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 p-4 border-t bg-gray-50 rounded-b-xl">
+              <button
+                onClick={() => {
+                  setShowUploadFileModal(false);
+                  setPendingUploadFiles([]);
+                  setUploadCategory('other');
+                }}
+                className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-100"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => uploadRepositoryDocumentMutation.mutate()}
+                disabled={pendingUploadFiles.length === 0 || uploadRepositoryDocumentMutation.isPending}
+                className="px-4 py-2 text-sm bg-panda-primary text-white rounded-lg hover:bg-panda-dark disabled:opacity-50"
+              >
+                {uploadRepositoryDocumentMutation.isPending ? 'Uploading...' : 'Upload'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Repository File Preview Modal */}
+      {showRepositoryFilePreview && selectedRepositoryFile && (
+        <div className="fixed inset-0 z-50 bg-black/90 flex flex-col">
+          <div className="flex items-center justify-between p-4 bg-black/40 text-white">
+            <div>
+              <h3 className="font-medium">{selectedRepositoryFile.title || selectedRepositoryFile.fileName || 'File'}</h3>
+              <p className="text-xs text-gray-300">
+                {(selectedRepositoryFile.fileType || selectedRepositoryFile.fileExtension || 'FILE').toUpperCase()}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              {(selectedRepositoryFile.downloadUrl || selectedRepositoryFile.contentUrl) && (
+                <a
+                  href={selectedRepositoryFile.downloadUrl || selectedRepositoryFile.contentUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center px-3 py-1.5 rounded-lg bg-panda-primary text-white hover:bg-panda-dark"
+                >
+                  <Download className="w-4 h-4 mr-1" />
+                  Download
+                </a>
+              )}
+              <button
+                onClick={() => {
+                  setShowRepositoryFilePreview(false);
+                  setSelectedRepositoryFile(null);
+                }}
+                className="p-2 rounded-lg hover:bg-white/10"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+          <div className="flex-1 p-4">
+            {(selectedRepositoryFile.previewUrl || selectedRepositoryFile.contentUrl) ? (
+              ['JPG', 'JPEG', 'PNG', 'WEBP', 'GIF'].includes((selectedRepositoryFile.fileType || '').toUpperCase()) ? (
+                <img
+                  src={selectedRepositoryFile.previewUrl || selectedRepositoryFile.contentUrl}
+                  alt={selectedRepositoryFile.title || 'File preview'}
+                  className="mx-auto max-h-full rounded-lg"
+                />
+              ) : (
+                <iframe
+                  src={selectedRepositoryFile.previewUrl || selectedRepositoryFile.contentUrl}
+                  className="w-full h-full bg-white rounded-lg"
+                  title="File Preview"
+                />
+              )
+            ) : (
+              <div className="h-full flex items-center justify-center text-white">
+                <p>Preview not available.</p>
+              </div>
+            )}
           </div>
         </div>
       )}

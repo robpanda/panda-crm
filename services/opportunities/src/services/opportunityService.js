@@ -374,7 +374,16 @@ class OpportunityService {
           account: true,
           contact: true,
           owner: {
-            select: { id: true, firstName: true, lastName: true, email: true },
+            select: { id: true, firstName: true, lastName: true, email: true, phone: true },
+          },
+          projectManager: {
+            select: { id: true, firstName: true, lastName: true, email: true, phone: true },
+          },
+          onboardedBy: {
+            select: { id: true, firstName: true, lastName: true, email: true, phone: true },
+          },
+          approvedBy: {
+            select: { id: true, firstName: true, lastName: true, email: true, phone: true },
           },
           lineItems: {
             orderBy: { sortOrder: 'asc' },
@@ -827,7 +836,7 @@ class OpportunityService {
             id: true,
             workOrderNumber: true,
             subject: true,
-            workType: { select: { name: true } },
+            workType: { select: { id: true, name: true } },
           },
         },
         assignedResources: {
@@ -861,6 +870,12 @@ class OpportunityService {
           subject: sa.workOrder.subject,
           workTypeName: sa.workOrder.workType?.name,
         },
+        workType: sa.workOrder.workType
+          ? {
+              id: sa.workOrder.workType.id,
+              name: sa.workOrder.workType.name,
+            }
+          : null,
         crew: sa.assignedResources.map((ar) => ({
           id: ar.serviceResource.id,
           name: ar.serviceResource.name,
@@ -868,6 +883,13 @@ class OpportunityService {
           type: ar.serviceResource.resourceType,
           isPrimary: ar.isPrimaryResource,
         })),
+        assignedResource: sa.assignedResources[0]
+          ? {
+              id: sa.assignedResources[0].serviceResource.id,
+              name: sa.assignedResources[0].serviceResource.name,
+              phone: sa.assignedResources[0].serviceResource.phone,
+            }
+          : null,
       })),
       summary: {
         total: appointments.length,
@@ -1881,7 +1903,6 @@ Be factual and professional. Highlight anything that needs attention.`;
       select: {
         stage: true,
         status: true,
-        stageName: true,
         isApproved: true,
         claimNumber: true,
         claimFiledDate: true,
@@ -1929,7 +1950,6 @@ Be factual and professional. Highlight anything that needs attention.`;
         description: data.description,
         stage: data.stage,
         status: data.status,
-        stageName: data.stageName,
         probability: data.probability,
         closeDate: data.closeDate ? new Date(data.closeDate) : undefined,
         appointmentDate: data.appointmentDate ? new Date(data.appointmentDate) : undefined,
@@ -1944,6 +1964,13 @@ Be factual and professional. Highlight anything that needs attention.`;
         isApproved: data.isApproved,
         claimNumber: data.claimNumber,
         claimFiledDate: data.claimFiledDate ? new Date(data.claimFiledDate) : undefined,
+        dateOfLoss: data.dateOfLoss ? new Date(data.dateOfLoss) : undefined,
+        damageLocation: data.damageLocation,
+        adjusterName: data.adjusterName,
+        adjusterEmail: data.adjusterEmail,
+        adjusterOfficePhone: data.adjusterOfficePhone,
+        adjusterOfficePhoneExt: data.adjusterOfficePhoneExt,
+        fieldAdjusterMobile: data.fieldAdjusterMobile,
         insuranceCarrier: data.insuranceCarrier,
         rcvAmount: data.rcvAmount,
         acvAmount: data.acvAmount,
@@ -1957,6 +1984,12 @@ Be factual and professional. Highlight anything that needs attention.`;
         accountId: data.accountId,
         contactId: data.contactId,
         ownerId: data.ownerId,
+        projectManagerId: data.projectManagerId,
+        onboardedById: data.onboardedById,
+        approvedById: data.approvedById,
+        approvedDate: data.approvedDate ? new Date(data.approvedDate) : undefined,
+        onboardingStartDate: data.onboardingStartDate ? new Date(data.onboardingStartDate) : undefined,
+        onboardingCompleteDate: data.onboardingCompleteDate ? new Date(data.onboardingCompleteDate) : undefined,
         // Invoice workflow fields
         invoiceStatus: data.invoiceStatus,
         invoiceReadyDate: data.invoiceReadyDate ? new Date(data.invoiceReadyDate) : undefined,
@@ -1966,7 +1999,10 @@ Be factual and professional. Highlight anything that needs attention.`;
       include: {
         account: { select: { id: true, name: true } },
         contact: { select: { id: true, firstName: true, lastName: true } },
-        owner: { select: { id: true, firstName: true, lastName: true } },
+        owner: { select: { id: true, firstName: true, lastName: true, email: true, phone: true } },
+        projectManager: { select: { id: true, firstName: true, lastName: true, email: true, phone: true } },
+        onboardedBy: { select: { id: true, firstName: true, lastName: true, email: true, phone: true } },
+        approvedBy: { select: { id: true, firstName: true, lastName: true, email: true, phone: true } },
         lineItems: { include: { product: true } },
       },
     });
@@ -1982,7 +2018,6 @@ Be factual and professional. Highlight anything that needs attention.`;
       try {
         // Build changes object to pass to triggers
         const changes = {
-          stageName: data.stageName,
           stage: data.stage,
           status: data.status,
           isApproved: data.isApproved,
@@ -1994,7 +2029,6 @@ Be factual and professional. Highlight anything that needs attention.`;
           acvAmount: data.acvAmount,
           deductible: data.deductible,
           // Include previous values for comparison
-          _previousStageName: previousState.stageName,
           _previousStage: previousState.stage,
           _previousStatus: previousState.status,
           _previousIsApproved: previousState.isApproved,
@@ -2003,7 +2037,6 @@ Be factual and professional. Highlight anything that needs attention.`;
 
         // Only trigger if there was an actual change in relevant fields
         const hasRelevantChange =
-          changes.stageName !== previousState.stageName ||
           changes.stage !== previousState.stage ||
           changes.status !== previousState.status ||
           changes.isApproved !== previousState.isApproved ||
@@ -2173,6 +2206,48 @@ Be factual and professional. Highlight anything that needs attention.`;
       // Owner
       ownerId: opp.ownerId,
       ownerName: opp.owner ? `${opp.owner.firstName} ${opp.owner.lastName}` : 'Unassigned',
+      owner: opp.owner
+        ? {
+            id: opp.owner.id,
+            firstName: opp.owner.firstName,
+            lastName: opp.owner.lastName,
+            email: opp.owner.email || null,
+            phone: opp.owner.phone || null,
+          }
+        : null,
+      projectManagerId: opp.projectManagerId || null,
+      projectManager: opp.projectManager
+        ? {
+            id: opp.projectManager.id,
+            firstName: opp.projectManager.firstName,
+            lastName: opp.projectManager.lastName,
+            email: opp.projectManager.email || null,
+            phone: opp.projectManager.phone || null,
+          }
+        : null,
+      onboardedById: opp.onboardedById || null,
+      onboardedBy: opp.onboardedBy
+        ? {
+            id: opp.onboardedBy.id,
+            firstName: opp.onboardedBy.firstName,
+            lastName: opp.onboardedBy.lastName,
+            email: opp.onboardedBy.email || null,
+            phone: opp.onboardedBy.phone || null,
+          }
+        : null,
+      approvedById: opp.approvedById || null,
+      approvedBy: opp.approvedBy
+        ? {
+            id: opp.approvedBy.id,
+            firstName: opp.approvedBy.firstName,
+            lastName: opp.approvedBy.lastName,
+            email: opp.approvedBy.email || null,
+            phone: opp.approvedBy.phone || null,
+          }
+        : null,
+      approvedDate: opp.approvedDate || null,
+      onboardingStartDate: opp.onboardingStartDate || null,
+      onboardingCompleteDate: opp.onboardingCompleteDate || null,
       // Timestamps
       createdAt: opp.createdAt,
       updatedAt: opp.updatedAt,
@@ -2193,6 +2268,13 @@ Be factual and professional. Highlight anything that needs attention.`;
     if (opp.type === 'INSURANCE') {
       wrapper.claimNumber = opp.claimNumber;
       wrapper.claimFiledDate = opp.claimFiledDate;
+      wrapper.dateOfLoss = opp.dateOfLoss;
+      wrapper.damageLocation = opp.damageLocation;
+      wrapper.adjusterName = opp.adjusterName || null;
+      wrapper.adjusterEmail = opp.adjusterEmail || null;
+      wrapper.adjusterOfficePhone = opp.adjusterOfficePhone || null;
+      wrapper.adjusterOfficePhoneExt = opp.adjusterOfficePhoneExt || null;
+      wrapper.fieldAdjusterMobile = opp.fieldAdjusterMobile || null;
       wrapper.insuranceCarrier = opp.insuranceCarrier;
       wrapper.rcvAmount = opp.rcvAmount ? Number(opp.rcvAmount) : null;
       wrapper.acvAmount = opp.acvAmount ? Number(opp.acvAmount) : null;
@@ -3231,16 +3313,19 @@ Be factual and professional. Highlight anything that needs attention.`;
     const users = await prisma.user.findMany({
       where: {
         isActive: true,
-        role: {
-          in: ['SALES_REP', 'PROJECT_MANAGER', 'SALES_MANAGER', 'OFFICE_MANAGER', 'ADMIN'],
-        },
       },
       select: {
         id: true,
         firstName: true,
         lastName: true,
         email: true,
-        role: true,
+        role: {
+          select: {
+            id: true,
+            name: true,
+            roleType: true,
+          },
+        },
         officeAssignment: true,
         _count: {
           select: {
@@ -3263,10 +3348,206 @@ Be factual and professional. Highlight anything that needs attention.`;
       firstName: user.firstName,
       lastName: user.lastName,
       email: user.email,
-      role: user.role,
+      role: user.role?.name || null,
+      roleType: user.role?.roleType || null,
       office: user.officeAssignment,
       activeJobCount: user._count.ownedOpportunities,
     }));
+  }
+
+  /**
+   * Transfer a single job to a new owner.
+   * Optionally moves related owner/assignment fields to the new owner.
+   */
+  async transferOpportunityOwner(opportunityId, options = {}) {
+    const {
+      newOwnerId,
+      transferRelatedAssignments = true,
+      transferredById = null,
+      transferredByEmail = null,
+    } = options;
+
+    if (!newOwnerId) {
+      const error = new Error('New owner is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const [opportunity, newOwner] = await Promise.all([
+      prisma.opportunity.findUnique({
+        where: { id: opportunityId },
+        select: {
+          id: true,
+          name: true,
+          ownerId: true,
+          accountId: true,
+        },
+      }),
+      prisma.user.findUnique({
+        where: { id: newOwnerId },
+        select: { id: true, firstName: true, lastName: true, email: true, isActive: true },
+      }),
+    ]);
+
+    if (!opportunity) {
+      const error = new Error('Opportunity not found');
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    if (!newOwner || !newOwner.isActive) {
+      const error = new Error('New owner must be an active user');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    if (opportunity.ownerId === newOwnerId) {
+      return {
+        opportunityId,
+        ownerId: newOwnerId,
+        ownerName: `${newOwner.firstName} ${newOwner.lastName}`.trim(),
+        transferRelatedAssignments,
+        transferredCounts: {},
+        unchanged: true,
+      };
+    }
+
+    const oldOwnerId = opportunity.ownerId;
+
+    const result = await prisma.$transaction(async (tx) => {
+      const updatedOpportunity = await tx.opportunity.update({
+        where: { id: opportunityId },
+        data: { ownerId: newOwnerId },
+        include: {
+          account: true,
+          contact: true,
+          owner: { select: { id: true, firstName: true, lastName: true, email: true, phone: true } },
+          projectManager: { select: { id: true, firstName: true, lastName: true, email: true, phone: true } },
+          onboardedBy: { select: { id: true, firstName: true, lastName: true, email: true, phone: true } },
+          approvedBy: { select: { id: true, firstName: true, lastName: true, email: true, phone: true } },
+          lineItems: { include: { product: true }, orderBy: { sortOrder: 'asc' } },
+          quotes: { take: 10, orderBy: { createdAt: 'desc' } },
+          orders: { take: 10, orderBy: { createdAt: 'desc' } },
+          serviceContract: true,
+          commissions: true,
+          notes: {
+            orderBy: { createdAt: 'desc' },
+            take: 20,
+            include: { createdBy: { select: { firstName: true, lastName: true } } },
+          },
+          tasks: {
+            orderBy: { dueDate: 'asc' },
+            include: { assignedTo: { select: { firstName: true, lastName: true } } },
+          },
+          measurementReports: {
+            orderBy: { createdAt: 'desc' },
+            take: 5,
+            include: { orderedBy: { select: { firstName: true, lastName: true } } },
+          },
+        },
+      });
+
+      const transferredCounts = {
+        tasks: 0,
+        events: 0,
+        attentionItems: 0,
+        commissions: 0,
+        serviceContracts: 0,
+        photoProjects: 0,
+        measurementReports: 0,
+      };
+
+      if (transferRelatedAssignments && oldOwnerId) {
+        const [
+          tasks,
+          events,
+          attentionItems,
+          commissions,
+          serviceContracts,
+          photoProjects,
+          measurementReports,
+        ] = await Promise.all([
+          tx.task.updateMany({
+            where: { opportunityId, assignedToId: oldOwnerId },
+            data: { assignedToId: newOwnerId },
+          }),
+          tx.event.updateMany({
+            where: { opportunityId, ownerId: oldOwnerId },
+            data: { ownerId: newOwnerId },
+          }),
+          tx.attentionItem.updateMany({
+            where: { opportunityId, assignedToId: oldOwnerId },
+            data: { assignedToId: newOwnerId },
+          }),
+          tx.commission.updateMany({
+            where: { opportunityId, ownerId: oldOwnerId },
+            data: { ownerId: newOwnerId },
+          }),
+          tx.serviceContract.updateMany({
+            where: { opportunityId, ownerId: oldOwnerId },
+            data: { ownerId: newOwnerId },
+          }),
+          tx.photoProject.updateMany({
+            where: { opportunityId, ownerId: oldOwnerId },
+            data: { ownerId: newOwnerId },
+          }),
+          tx.measurementReport.updateMany({
+            where: { opportunityId, orderedById: oldOwnerId },
+            data: { orderedById: newOwnerId },
+          }),
+        ]);
+
+        transferredCounts.tasks = tasks.count;
+        transferredCounts.events = events.count;
+        transferredCounts.attentionItems = attentionItems.count;
+        transferredCounts.commissions = commissions.count;
+        transferredCounts.serviceContracts = serviceContracts.count;
+        transferredCounts.photoProjects = photoProjects.count;
+        transferredCounts.measurementReports = measurementReports.count;
+      }
+
+      await tx.activity.create({
+        data: {
+          type: 'OWNER_CHANGED',
+          subType: 'JOB_TRANSFER',
+          subject: 'Job owner transferred',
+          description: `Owner transferred to ${newOwner.firstName} ${newOwner.lastName}${transferredByEmail ? ` by ${transferredByEmail}` : ''}`,
+          occurredAt: new Date(),
+          opportunityId,
+          accountId: opportunity.accountId,
+          userId: transferredById || newOwnerId,
+          sourceType: 'MANUAL',
+          metadata: {
+            oldOwnerId,
+            newOwnerId,
+            transferRelatedAssignments,
+            transferredCounts,
+          },
+        },
+      });
+
+      return {
+        opportunity: this.createOpportunityWrapper(updatedOpportunity, true),
+        transferredCounts,
+      };
+    });
+
+    logger.info(`Opportunity owner transferred: ${opportunityId} -> ${newOwnerId}`, {
+      transferRelatedAssignments,
+      transferredById,
+      transferredByEmail,
+      ...result.transferredCounts,
+    });
+
+    return {
+      opportunityId,
+      ownerId: newOwnerId,
+      ownerName: `${newOwner.firstName} ${newOwner.lastName}`.trim(),
+      transferRelatedAssignments,
+      transferredCounts: result.transferredCounts,
+      opportunity: result.opportunity,
+      unchanged: false,
+    };
   }
 
   /**
