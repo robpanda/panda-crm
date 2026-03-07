@@ -12,6 +12,7 @@ import leadRoutes from './routes/leads.js';
 import leadAssignmentRoutes from './routes/leadAssignment.js';
 import callCenterRoutes from './routes/callCenter.js';
 import callListRoutes from './routes/callLists.js';
+import salesRabbitWebhookRoutes from './routes/salesRabbitWebhook.js';
 
 const prisma = new PrismaClient();
 
@@ -36,6 +37,9 @@ app.use(morgan('combined', { stream: { write: (message) => logger.info(message.t
 app.get('/health', (req, res) => {
   res.json({ status: 'healthy', service: 'leads', timestamp: new Date().toISOString(), buildSha: process.env.BUILD_SHA || process.env.GITHUB_SHA || 'unknown', buildTime: process.env.BUILD_TIME || process.env.GITHUB_RUN_ID || null });
 });
+
+// SalesRabbit webhook routes - must be before auth middleware
+app.use('/api/leads/salesrabbit', salesRabbitWebhookRoutes);
 
 // Apply auth middleware to all routes below
 app.use(authMiddleware);
