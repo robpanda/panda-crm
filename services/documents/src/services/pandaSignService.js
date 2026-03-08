@@ -8,6 +8,15 @@ import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../middleware/logger.js';
 import { pdfService } from './pdfService.js';
+import { buildPreviewFieldMapReport } from './pandaSignV2PreviewService.js';
+import {
+  buildPreviewPdfRenderConfig,
+  buildPageNumberLabel,
+} from './pandaSignV2PdfService.js';
+import {
+  buildRoleIsolatedFieldSet,
+  resolveSignaturePlacement,
+} from './pandaSignV2PdfBurnInService.js';
 
 const prisma = new PrismaClient();
 const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-east-2' });
@@ -15,6 +24,163 @@ const sesClient = new SESClient({ region: process.env.AWS_REGION || 'us-east-2' 
 
 const S3_BUCKET = process.env.DOCUMENTS_BUCKET || 'panda-crm-documents';
 const SIGNING_BASE_URL = process.env.SIGNING_BASE_URL || 'https://sign.pandaexteriors.com';
+const SIGNER_ROLE = {
+  CUSTOMER: 'CUSTOMER',
+  AGENT: 'AGENT',
+};
+
+function normalizeSignerRole(value, fallback = SIGNER_ROLE.CUSTOMER) {
+  const role = String(value || '').trim().toUpperCase();
+  if (role === SIGNER_ROLE.AGENT) return SIGNER_ROLE.AGENT;
+  if (role === SIGNER_ROLE.CUSTOMER) return SIGNER_ROLE.CUSTOMER;
+  return fallback;
+}
+
+function normalizeSignatureType(value) {
+  const type = String(value || '').trim().toUpperCase();
+  return type.includes('INITIAL') ? 'INITIAL' : 'SIGNATURE';
+}
+
+function normalizeNumeric(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function normalizeTemplateSignatureFields(signatureFields = []) {
+  return (Array.isArray(signatureFields) ? signatureFields : []).map((field, index) => {
+    const sourceName = String(field?.name || field?.id || '').toLowerCase();
+    const fallbackRole = sourceName.includes('host') || sourceName.includes('agent')
+      ? SIGNER_ROLE.AGENT
+      : SIGNER_ROLE.CUSTOMER;
+    const role = normalizeSignerRole(field?.role ?? field?.signerRole ?? field?.signer_type, fallbackRole);
+    return {
+      id: field?.id || field?.name || `signature-field-${index + 1}`,
+      role,
+      type: normalizeSignatureType(field?.type ?? field?.fieldType ?? field?.name),
+      x: normalizeNumeric(field?.x, role === SIGNER_ROLE.AGENT ? 350 : 100),
+      y: normalizeNumeric(field?.y, 150),
+      w: normalizeNumeric(field?.width ?? field?.w, 200),
+      h: normalizeNumeric(field?.height ?? field?.h, 50),
+      page: Math.max(1, Math.floor(normalizeNumeric(field?.page, 1))),
+      source: field || {},
+    };
+  });
+}
+
+function normalizeSubmittedSignatureRect(rect) {
+  if (!rect || typeof rect !== 'object') return null;
+  return {
+    x: normalizeNumeric(rect.x, 0),
+    y: normalizeNumeric(rect.y, 0),
+    w: normalizeNumeric(rect.w ?? rect.width, 0),
+    h: normalizeNumeric(rect.h ?? rect.height, 0),
+    page: Math.max(1, Math.floor(normalizeNumeric(rect.page, 1))),
+  };
+}
+
+export function resolvePipelinePageNumberLabel(currentPage, totalPages) {
+  return buildPageNumberLabel(currentPage, totalPages);
+}
+
+export function resolveRoleSignatureField(signatureFields, signerRole) {
+  const normalizedRole = normalizeSignerRole(signerRole);
+  const normalizedFields = normalizeTemplateSignatureFields(signatureFields);
+  const roleFields = buildRoleIsolatedFieldSet(normalizedFields, normalizedRole);
+  const roleSignatureField = roleFields.find((field) => field.type === 'SIGNATURE') || roleFields[0];
+  if (roleSignatureField) {
+    return roleSignatureField;
+  }
+
+  if (normalizedRole === SIGNER_ROLE.CUSTOMER) {
+    // Customer fallback must never use AGENT placeholders.
+    const customerOnlyFallback = normalizedFields.find((field) => field.role !== SIGNER_ROLE.AGENT);
+    return customerOnlyFallback || {
+      id: 'customer-default-signature',
+      role: SIGNER_ROLE.CUSTOMER,
+      type: 'SIGNATURE',
+      x: 100,
+      y: 150,
+      w: 200,
+      h: 50,
+      page: 1,
+      source: null,
+    };
+  }
+
+  const agentFallback = normalizedFields.find((field) => field.role === SIGNER_ROLE.AGENT);
+  return agentFallback || {
+    id: 'agent-default-signature',
+    role: SIGNER_ROLE.AGENT,
+    type: 'SIGNATURE',
+    x: 350,
+    y: 150,
+    w: 200,
+    h: 50,
+    page: 1,
+    source: null,
+  };
+}
+
+export function buildPipelinePreviewArtifacts(agreement) {
+  try {
+    const template = agreement?.template || {};
+    const mergeData = agreement?.mergeData || {};
+    const rawHtmlBody = template.htmlBody || template.content || '';
+    const htmlBody = typeof rawHtmlBody === 'string'
+      ? rawHtmlBody
+      : JSON.stringify(rawHtmlBody || '');
+    const fieldMapData = buildPreviewFieldMapReport({
+      htmlBody,
+      tokenReport: mergeData?.tokenReport || {},
+      strictRequiredAnchors: false,
+    });
+    const renderConfig = buildPreviewPdfRenderConfig({
+      headerHtml: String(template?.headerHtml || ''),
+      footerHtml: String(template?.footerHtml || ''),
+      safeArea: mergeData?.safeArea || {},
+    });
+
+    return {
+      fieldMapReport: fieldMapData.fieldMapReport,
+      checklist: fieldMapData.checklist,
+      safeToProceed: fieldMapData.safeToProceed,
+      warnings: [
+        ...(fieldMapData.fieldMapReport?.warnings || []),
+        ...(renderConfig.safeAreaReport?.warnings || []),
+      ],
+      safeAreaReport: renderConfig.safeAreaReport || null,
+    };
+  } catch (error) {
+    return {
+      fieldMapReport: null,
+      checklist: null,
+      safeToProceed: true,
+      warnings: [{
+        code: 'PREVIEW_REPORT_UNAVAILABLE',
+        message: error?.message || 'Preview report unavailable',
+      }],
+      safeAreaReport: null,
+    };
+  }
+}
+
+export function resolveSignaturePlacementForPipeline({
+  signatureFields,
+  signerRole,
+  signatureRect,
+}) {
+  const expectedField = resolveRoleSignatureField(signatureFields, signerRole);
+  const submittedRect = normalizeSubmittedSignatureRect(signatureRect);
+  const placementReport = resolveSignaturePlacement({
+    expectedRect: expectedField,
+    submittedRect: submittedRect || expectedField,
+  });
+
+  return {
+    field: expectedField,
+    placementReport,
+  };
+}
 
 /**
  * PandaSign Service - Custom e-signature solution
@@ -88,9 +254,16 @@ export const pandaSignService = {
 
     logger.info(`Agreement created: ${agreement.id}`);
 
+    const previewReport = buildPipelinePreviewArtifacts({
+      ...agreement,
+      template,
+      mergeData,
+    });
+
     return {
       ...agreement,
       documentUrl: pdfUrl,
+      previewReport,
     };
   },
 
@@ -178,10 +351,25 @@ export const pandaSignService = {
       });
     }
 
-    // Add signature fields metadata
-    const signatureFields = template.signatureFields || [
-      { name: 'primary_signature', page: 1, x: 100, y: 150, width: 200, height: 50 },
-    ];
+    const previewPdfConfig = buildPreviewPdfRenderConfig({
+      headerHtml: String(template?.headerHtml || ''),
+      footerHtml: String(template?.footerHtml || ''),
+      safeArea: mergeData?.safeArea || {},
+    });
+
+    if (previewPdfConfig?.safeAreaReport?.warnings?.length) {
+      logger.warn(`PandaSign preview safe-area warnings for agreement ${agreement.id}`, {
+        agreementId: agreement.id,
+        warnings: previewPdfConfig.safeAreaReport.warnings,
+      });
+    }
+
+    // Add page-number fallback labels. This is additive and does not block document generation.
+    this.applyPageNumberFooterToPdf(pdfDoc, font, {
+      x: 520,
+      y: 24,
+      size: 9,
+    });
 
     // Save document to S3
     const pdfBytes = await pdfDoc.save();
@@ -386,6 +574,8 @@ Panda Exteriors
       }, null);
     }
 
+    agreement.previewReport = buildPipelinePreviewArtifacts(agreement);
+
     return agreement;
   },
 
@@ -400,6 +590,7 @@ Panda Exteriors
     userAgent,
     signerName,
     signerEmail,
+    signatureRect,
   }) {
     const agreement = await this.getAgreementByToken(token);
 
@@ -435,7 +626,11 @@ Panda Exteriors
     });
 
     // Generate signed document with signature embedded
-    const signedDocumentUrl = await this.embedSignature(agreement, signatureData);
+    const signatureEmbed = await this.embedSignature(agreement, signatureData, {
+      signatureRect,
+      signerRole: SIGNER_ROLE.CUSTOMER,
+    });
+    const signedDocumentUrl = signatureEmbed.signedDocumentUrl;
 
     // Determine if agreement is now complete (change orders have agent signature already)
     const hasAgentSignature = agreement.agentSignedAt || agreement.agentSignerName;
@@ -503,13 +698,14 @@ Panda Exteriors
     return {
       agreement: updated,
       signature,
+      placementReport: signatureEmbed.placementReport,
     };
   },
 
   /**
    * Embed signature into PDF and generate Certificate of Completion
    */
-  async embedSignature(agreement, signatureData) {
+  async embedSignature(agreement, signatureData, { signatureRect, signerRole = SIGNER_ROLE.CUSTOMER } = {}) {
     // Load the original document
     const s3Key = `agreements/${agreement.id}/document.pdf`;
     const response = await s3Client.send(new GetObjectCommand({
@@ -524,21 +720,29 @@ Panda Exteriors
     const signatureBuffer = Buffer.from(signatureData.replace(/^data:image\/\w+;base64,/, ''), 'base64');
     const signatureImage = await pdfDoc.embedPng(signatureBuffer);
 
-    // Get first page (or page specified in template)
     const pages = pdfDoc.getPages();
-    const page = pages[0];
+    const signatureFields = agreement.template?.signatureFields || [];
+    const placementResult = resolveSignaturePlacementForPipeline({
+      signatureFields,
+      signerRole,
+      signatureRect,
+    });
+    const field = placementResult.placementReport.placement;
+    const pageIndex = Math.max(0, Math.min(pages.length - 1, Number(field.page || 1) - 1));
+    const page = pages[pageIndex] || pages[0];
 
-    // Add signature at the signature field location
-    const signatureFields = agreement.template?.signatureFields || [
-      { x: 100, y: 150, width: 200, height: 50 },
-    ];
+    if (placementResult.placementReport?.warnings?.length) {
+      logger.warn(`PandaSign signature placement normalized for agreement ${agreement.id}`, {
+        agreementId: agreement.id,
+        warnings: placementResult.placementReport.warnings,
+      });
+    }
 
-    const field = signatureFields[0];
     page.drawImage(signatureImage, {
       x: field.x,
       y: field.y,
-      width: field.width,
-      height: field.height,
+      width: field.w,
+      height: field.h,
     });
 
     // Add Certificate of Completion page
@@ -612,6 +816,12 @@ Panda Exteriors
       color: rgb(0.4, 0.4, 0.4),
     });
 
+    this.applyPageNumberFooterToPdf(pdfDoc, font, {
+      x: 520,
+      y: 20,
+      size: 8,
+    });
+
     // Save signed document
     const signedPdfBytes = await pdfDoc.save();
     const signedKey = `agreements/${agreement.id}/signed-document.pdf`;
@@ -628,11 +838,16 @@ Panda Exteriors
     }));
 
     // Return presigned URL
-    return await getSignedUrl(
+    const signedDocumentUrl = await getSignedUrl(
       s3Client,
       new GetObjectCommand({ Bucket: S3_BUCKET, Key: signedKey }),
       { expiresIn: 3600 * 24 * 365 } // 1 year
     );
+
+    return {
+      signedDocumentUrl,
+      placementReport: placementResult.placementReport,
+    };
   },
 
   /**
@@ -702,6 +917,32 @@ ${agreement.signedDocumentUrl}
    */
   generateDocumentHash(pdfBytes) {
     return crypto.createHash('sha256').update(Buffer.from(pdfBytes)).digest('hex');
+  },
+
+  /**
+   * Add non-blocking page labels with fallback formatting.
+   */
+  applyPageNumberFooterToPdf(pdfDoc, font, options = {}) {
+    if (!pdfDoc || typeof pdfDoc.getPages !== 'function' || !font) return;
+
+    const pages = pdfDoc.getPages();
+    if (!Array.isArray(pages) || pages.length === 0) return;
+
+    const x = normalizeNumeric(options.x, 520);
+    const y = normalizeNumeric(options.y, 20);
+    const size = normalizeNumeric(options.size, 8);
+    const color = options.color || rgb(0.45, 0.45, 0.45);
+
+    for (let index = 0; index < pages.length; index += 1) {
+      const label = resolvePipelinePageNumberLabel(index + 1, pages.length);
+      pages[index].drawText(label, {
+        x,
+        y,
+        size,
+        font,
+        color,
+      });
+    }
   },
 
   /**
@@ -1295,6 +1536,8 @@ ${agreement.signedDocumentUrl}
       }
     }
 
+    agreement.previewReport = buildPipelinePreviewArtifacts(agreement);
+
     return agreement;
   },
 
@@ -1308,6 +1551,7 @@ ${agreement.signedDocumentUrl}
     signerEmail,
     ipAddress,
     userAgent,
+    signatureRect,
   }) {
     const agreement = await this.getAgreementByHostToken(hostToken);
 
@@ -1344,7 +1588,11 @@ ${agreement.signedDocumentUrl}
     });
 
     // Generate fully signed document with both signatures
-    const signedDocumentUrl = await this.embedHostSignature(agreement, signatureData);
+    const signatureEmbed = await this.embedHostSignature(agreement, signatureData, {
+      signatureRect,
+      signerRole: SIGNER_ROLE.AGENT,
+    });
+    const signedDocumentUrl = signatureEmbed.signedDocumentUrl;
 
     // Update agreement status to COMPLETED (all signers have signed)
     const updated = await prisma.agreement.update({
@@ -1376,13 +1624,14 @@ ${agreement.signedDocumentUrl}
     return {
       agreement: updated,
       signature,
+      placementReport: signatureEmbed.placementReport,
     };
   },
 
   /**
    * Embed host signature into PDF (second signature position)
    */
-  async embedHostSignature(agreement, signatureData) {
+  async embedHostSignature(agreement, signatureData, { signatureRect, signerRole = SIGNER_ROLE.AGENT } = {}) {
     // Load the current document (may already have customer signature)
     const s3Key = agreement.signedDocumentUrl
       ? `agreements/${agreement.id}/signed-document.pdf`
@@ -1400,32 +1649,35 @@ ${agreement.signedDocumentUrl}
     const signatureBuffer = Buffer.from(signatureData.replace(/^data:image\/\w+;base64,/, ''), 'base64');
     const signatureImage = await pdfDoc.embedPng(signatureBuffer);
 
-    // Get the page for host signature (typically same page or designated page)
     const pages = pdfDoc.getPages();
-    const page = pages[0];
+    const placementResult = resolveSignaturePlacementForPipeline({
+      signatureFields: agreement.template?.signatureFields || [],
+      signerRole,
+      signatureRect,
+    });
+    const hostField = placementResult.placementReport.placement;
+    const pageIndex = Math.max(0, Math.min(pages.length - 1, Number(hostField.page || 1) - 1));
+    const page = pages[pageIndex] || pages[0];
 
-    // Add host signature at second signature field location
-    // (positioned to the right or below customer signature)
-    const signatureFields = agreement.template?.signatureFields || [];
-    const hostField = signatureFields.find(f => f.name === 'host_signature') || {
-      x: 350, // Right side of page
-      y: 150,
-      width: 200,
-      height: 50,
-    };
+    if (placementResult.placementReport?.warnings?.length) {
+      logger.warn(`PandaSign host signature placement normalized for agreement ${agreement.id}`, {
+        agreementId: agreement.id,
+        warnings: placementResult.placementReport.warnings,
+      });
+    }
 
     page.drawImage(signatureImage, {
       x: hostField.x,
       y: hostField.y,
-      width: hostField.width,
-      height: hostField.height,
+      width: hostField.w,
+      height: hostField.h,
     });
 
     // Add "Host/Agent Signature" label
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
     page.drawText('Agent/Representative:', {
       x: hostField.x,
-      y: hostField.y + hostField.height + 5,
+      y: hostField.y + hostField.h + 5,
       size: 9,
       font,
       color: rgb(0.3, 0.3, 0.3),
@@ -1462,6 +1714,12 @@ ${agreement.signedDocumentUrl}
       });
     }
 
+    this.applyPageNumberFooterToPdf(pdfDoc, font, {
+      x: 520,
+      y: 20,
+      size: 8,
+    });
+
     // Save completed document
     const completedPdfBytes = await pdfDoc.save();
     const completedKey = `agreements/${agreement.id}/completed-document.pdf`;
@@ -1479,11 +1737,16 @@ ${agreement.signedDocumentUrl}
     }));
 
     // Return presigned URL
-    return await getSignedUrl(
+    const signedDocumentUrl = await getSignedUrl(
       s3Client,
       new GetObjectCommand({ Bucket: S3_BUCKET, Key: completedKey }),
       { expiresIn: 3600 * 24 * 365 } // 1 year
     );
+
+    return {
+      signedDocumentUrl,
+      placementReport: placementResult.placementReport,
+    };
   },
 
   /**

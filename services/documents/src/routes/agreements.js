@@ -317,6 +317,9 @@ router.get('/host-sign/:token', async (req, res, next) => {
         signatureFields: agreement.template?.signatureFields,
         customerSignedAt: agreement.signedAt,
         customerName: agreement.recipientName,
+        fieldMapReport: agreement.previewReport?.fieldMapReport,
+        checklist: agreement.previewReport?.checklist,
+        previewWarnings: agreement.previewReport?.warnings || [],
       },
     });
   } catch (error) {
@@ -330,7 +333,7 @@ router.get('/host-sign/:token', async (req, res, next) => {
  */
 router.post('/host-sign/:token', async (req, res, next) => {
   try {
-    const { signatureData, signerName, signerEmail } = req.body;
+    const { signatureData, signerName, signerEmail, signatureRect } = req.body;
 
     if (!signatureData) {
       return res.status(400).json({
@@ -344,6 +347,7 @@ router.post('/host-sign/:token', async (req, res, next) => {
       signatureData,
       signerName,
       signerEmail,
+      signatureRect,
       ipAddress: req.ip || req.headers['x-forwarded-for'],
       userAgent: req.headers['user-agent'],
     });
@@ -355,6 +359,7 @@ router.post('/host-sign/:token', async (req, res, next) => {
         status: result.agreement.status,
         completedAt: result.agreement.completedAt,
         signedDocumentUrl: result.agreement.signedDocumentUrl,
+        placementReport: result.placementReport || null,
       },
     });
   } catch (error) {
@@ -384,6 +389,9 @@ router.get('/sign/:token', async (req, res, next) => {
         documentUrl: agreement.documentUrl,
         signatureFields: agreement.template?.signatureFields,
         expiresAt: agreement.expiresAt,
+        fieldMapReport: agreement.previewReport?.fieldMapReport,
+        checklist: agreement.previewReport?.checklist,
+        previewWarnings: agreement.previewReport?.warnings || [],
       },
     });
   } catch (error) {
@@ -396,7 +404,7 @@ router.get('/sign/:token', async (req, res, next) => {
  */
 router.post('/sign/:token', async (req, res, next) => {
   try {
-    const { signatureData, signerName, signerEmail } = req.body;
+    const { signatureData, signerName, signerEmail, signatureRect } = req.body;
 
     if (!signatureData) {
       return res.status(400).json({
@@ -410,6 +418,7 @@ router.post('/sign/:token', async (req, res, next) => {
       signatureData,
       signerName,
       signerEmail,
+      signatureRect,
       ipAddress: req.ip || req.headers['x-forwarded-for'],
       userAgent: req.headers['user-agent'],
     });
@@ -421,6 +430,7 @@ router.post('/sign/:token', async (req, res, next) => {
         status: result.agreement.status,
         signedAt: result.agreement.signedAt,
         signedDocumentUrl: result.agreement.signedDocumentUrl,
+        placementReport: result.placementReport || null,
       },
     });
   } catch (error) {
