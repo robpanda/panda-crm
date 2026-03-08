@@ -4584,6 +4584,78 @@ export const documentsApi = {
   },
 };
 
+const postFirstAvailable = async (paths, payload) => {
+  let lastNotFoundError = null;
+
+  for (const path of paths) {
+    try {
+      const response = await api.post(path, payload);
+      return response.data;
+    } catch (error) {
+      const status = error?.response?.status;
+      if (status === 404 || status === 405) {
+        lastNotFoundError = error;
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  if (lastNotFoundError) {
+    throw lastNotFoundError;
+  }
+
+  throw new Error('No compatible PandaSign endpoint is currently available');
+};
+
+// ==========================================
+// PANDASIGN V2 API (Step 1 additive surface)
+// ==========================================
+export const documentsApiV2 = {
+  // List published PandaSign templates
+  async getTemplates(params = {}) {
+    const response = await api.get('/api/documents/agreements/templates', { params });
+    return response.data;
+  },
+
+  // Verify required data for a selected template/mode/emails
+  async verifyRequiredFields(payload = {}) {
+    const paths = [];
+    if (payload.agreementId) {
+      paths.push(`/api/documents/agreements/${payload.agreementId}/verify-required-fields`);
+    }
+    paths.push('/api/documents/pandasign/agreements/verify-required-fields');
+    paths.push('/api/documents/pandasign/verify-required-fields');
+    paths.push('/api/documents/agreements/verify-required-fields');
+
+    return postFirstAvailable(paths, payload);
+  },
+
+  // Existing modal compatibility: template preview
+  async preview(payload = {}) {
+    return postFirstAvailable(
+      [
+        '/api/documents/pandasign/preview',
+        '/api/documents/pandasign/v2/preview',
+        '/api/documents/agreements/preview',
+      ],
+      payload
+    );
+  },
+
+  // Existing modal compatibility: send contract
+  async send(payload = {}) {
+    return postFirstAvailable(
+      [
+        '/api/documents/pandasign/send',
+        '/api/documents/pandasign/v2/send',
+        '/api/documents/agreements/send',
+      ],
+      payload
+    );
+  },
+};
+
 // ==========================================
 // PANDASIGN AGREEMENTS API
 // ==========================================

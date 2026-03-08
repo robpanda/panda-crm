@@ -23,6 +23,9 @@ import {
   Check,
 } from 'lucide-react';
 
+const FEATURE_PANDASIGN_V2 = String(import.meta.env.VITE_FEATURE_PANDASIGN_V2 || '').toLowerCase() === 'true';
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 /**
  * ContractSigningModal - PandaSign V2 contract signing modal
  *
@@ -54,6 +57,12 @@ export default function ContractSigningModal({
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
   const [copiedLink, setCopiedLink] = useState(null);
+  const [v2TemplateId, setV2TemplateId] = useState('');
+  const [v2Mode, setV2Mode] = useState('SIGN_NOW');
+  const [v2CustomerEmail, setV2CustomerEmail] = useState('');
+  const [v2AgentEmail, setV2AgentEmail] = useState('');
+  const [v2Verification, setV2Verification] = useState(null);
+  const [v2VerificationError, setV2VerificationError] = useState(null);
 
   // Fetch WYSIWYG templates from V2 API
   const { data: templatesData, isLoading: templatesLoading } = useQuery({
@@ -77,6 +86,11 @@ export default function ContractSigningModal({
       return acc;
     }, {});
   }, [templates]);
+
+  const selectedV2Template = useMemo(
+    () => templates.find((template) => template.id === v2TemplateId) || null,
+    [templates, v2TemplateId]
+  );
 
   // Extract signer roles from selected template
   const signerRoles = useMemo(() => {
@@ -131,8 +145,20 @@ export default function ContractSigningModal({
       setError(null);
       setResult(null);
       setCopiedLink(null);
+      setV2TemplateId('');
+      setV2Mode('SIGN_NOW');
+      setV2CustomerEmail('');
+      setV2AgentEmail('');
+      setV2Verification(null);
+      setV2VerificationError(null);
     }
   }, [isOpen]);
+
+  useEffect(() => {
+    if (!FEATURE_PANDASIGN_V2 || !isOpen) return;
+    setV2CustomerEmail(contact?.email || '');
+    setV2AgentEmail(currentUser?.email || '');
+  }, [isOpen, contact?.email, currentUser?.email]);
 
   // Preview generation mutation
   const previewMutation = useMutation({
@@ -195,6 +221,27 @@ export default function ContractSigningModal({
     },
   });
 
+  const verifyRequiredFieldsMutation = useMutation({
+    mutationFn: async (payload) => {
+      const response = await documentsApiV2.verifyRequiredFields(payload);
+      return response?.data || response;
+    },
+    onSuccess: (data) => {
+      setV2Verification(data || {});
+      setV2VerificationError(null);
+    },
+    onError: (err) => {
+      setV2Verification(null);
+      setV2VerificationError(err?.response?.data?.error?.message || err?.message || 'Required field verification failed');
+    },
+  });
+
+  useEffect(() => {
+    if (!FEATURE_PANDASIGN_V2) return;
+    setV2Verification(null);
+    setV2VerificationError(null);
+  }, [v2TemplateId, v2Mode, v2CustomerEmail, v2AgentEmail]);
+
   // Handlers
   const handleSelectTemplate = (template) => {
     setSelectedTemplate(template);
@@ -219,7 +266,7 @@ export default function ContractSigningModal({
         setError(`Please fill in name and email for ${getRoleLabel(roleKey)}`);
         return false;
       }
-      if (fields?.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fields.email)) {
+      if (fields?.email && !EMAIL_REGEX.test(fields.email)) {
         setError(`Invalid email format for ${getRoleLabel(roleKey)}`);
         return false;
       }
@@ -248,7 +295,240 @@ export default function ContractSigningModal({
     }
   };
 
+  const handleVerifyStepOne = () => {
+    if (!v2TemplateId) {
+      setV2VerificationError('Please select a template before verification.');
+      return;
+    }
+    if (!EMAIL_REGEX.test(v2CustomerEmail)) {
+      setV2VerificationError('Please enter a valid customer email address.');
+      return;
+    }
+    if (!EMAIL_REGEX.test(v2AgentEmail)) {
+      setV2VerificationError('Please enter a valid agent email address.');
+      return;
+    }
+
+    setV2VerificationError(null);
+    verifyRequiredFieldsMutation.mutate({
+      templateId: v2TemplateId,
+      mode: v2Mode,
+      emails: {
+        customer: v2CustomerEmail,
+        agent: v2AgentEmail,
+      },
+      customerEmail: v2CustomerEmail,
+      agentEmail: v2AgentEmail,
+      context: buildContext(),
+    });
+  };
+
   if (!isOpen) return null;
+
+  if (FEATURE_PANDASIGN_V2) {
+    const verifyBusy = verifyRequiredFieldsMutation.isPending;
+    const checklist = getChecklist(v2Verification);
+    const missingItems = getMissingItems(v2Verification);
+    const hasFailures = missingItems.length > 0;
+
+    return (
+      <div className="fixed inset-0 z-50">
+        <div className="fixed inset-0 bg-black/50 transition-opacity" onClick={onClose} />
+
+        <div className="relative flex h-[100dvh] w-full items-stretch justify-center p-0 sm:items-center sm:p-6">
+          <div
+            className="relative flex w-full max-w-2xl flex-col bg-white shadow-2xl h-[100dvh] sm:h-auto sm:max-h-[90dvh] rounded-none sm:rounded-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-gray-200">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-panda-primary to-panda-secondary flex items-center justify-center">
+                  <FileSignature className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">PandaSign Wizard</h2>
+                  <p className="text-sm text-gray-500">Step 1: Template, mode, and required-field verification</p>
+                </div>
+              </div>
+              <button
+                onClick={onClose}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 py-4 pb-28 sm:pb-32">
+              <div className="space-y-6">
+                {(v2VerificationError || error) && (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-start">
+                    <AlertCircle className="w-5 h-5 text-red-500 mr-3 flex-shrink-0 mt-0.5" />
+                    <p className="text-sm text-red-700">{v2VerificationError || error}</p>
+                  </div>
+                )}
+
+                <section className="space-y-2">
+                  <label htmlFor="pandasign-template" className="block text-sm font-medium text-gray-700">
+                    Template
+                  </label>
+                  <select
+                    id="pandasign-template"
+                    value={v2TemplateId}
+                    onChange={(e) => setV2TemplateId(e.target.value)}
+                    className="w-full px-3 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary"
+                  >
+                    <option value="">Select a published template...</option>
+                    {templates.map((template) => (
+                      <option key={template.id} value={template.id}>
+                        {template.name}
+                        {template.category ? ` (${template.category})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {templatesLoading && (
+                    <p className="text-xs text-gray-500">Loading templates...</p>
+                  )}
+                </section>
+
+                <section className="space-y-3">
+                  <p className="text-sm font-medium text-gray-700">Mode</p>
+                  <div className="grid grid-cols-1 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setV2Mode('SIGN_NOW')}
+                      className={`w-full rounded-lg border px-4 py-3 text-left transition ${
+                        v2Mode === 'SIGN_NOW'
+                          ? 'border-panda-primary bg-panda-primary/10 text-panda-primary'
+                          : 'border-gray-200 hover:border-panda-primary/50'
+                      }`}
+                    >
+                      <span className="block text-sm font-semibold">Sign Now</span>
+                      <span className="block text-xs text-gray-500 mt-0.5">In-person signing on this device.</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setV2Mode('SEND_TO_SIGN')}
+                      className={`w-full rounded-lg border px-4 py-3 text-left transition ${
+                        v2Mode === 'SEND_TO_SIGN'
+                          ? 'border-panda-primary bg-panda-primary/10 text-panda-primary'
+                          : 'border-gray-200 hover:border-panda-primary/50'
+                      }`}
+                    >
+                      <span className="block text-sm font-semibold">Send To Sign</span>
+                      <span className="block text-xs text-gray-500 mt-0.5">Email signing links to each signer.</span>
+                    </button>
+                  </div>
+                </section>
+
+                <section className="space-y-3">
+                  <h3 className="text-sm font-medium text-gray-700">Signer Emails</h3>
+                  <div>
+                    <label htmlFor="pandasign-customer-email" className="block text-xs font-medium text-gray-600 mb-1">
+                      Customer Email
+                    </label>
+                    <input
+                      id="pandasign-customer-email"
+                      type="email"
+                      autoComplete="email"
+                      value={v2CustomerEmail}
+                      onChange={(e) => setV2CustomerEmail(e.target.value)}
+                      className="w-full px-3 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary"
+                      placeholder="customer@example.com"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="pandasign-agent-email" className="block text-xs font-medium text-gray-600 mb-1">
+                      Agent Email
+                    </label>
+                    <input
+                      id="pandasign-agent-email"
+                      type="email"
+                      autoComplete="email"
+                      value={v2AgentEmail}
+                      onChange={(e) => setV2AgentEmail(e.target.value)}
+                      className="w-full px-3 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary"
+                      placeholder="agent@example.com"
+                    />
+                  </div>
+                </section>
+
+                {selectedV2Template && (
+                  <section className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                    <p className="text-xs text-gray-500">Selected template</p>
+                    <p className="text-sm font-medium text-gray-900">{selectedV2Template.name}</p>
+                    {selectedV2Template.description && (
+                      <p className="text-xs text-gray-500 mt-1">{selectedV2Template.description}</p>
+                    )}
+                  </section>
+                )}
+
+                {v2Verification && (
+                  <section className={`rounded-lg border p-3 ${hasFailures ? 'border-amber-200 bg-amber-50' : 'border-green-200 bg-green-50'}`}>
+                    <p className={`text-sm font-semibold ${hasFailures ? 'text-amber-700' : 'text-green-700'}`}>
+                      {hasFailures ? 'Verification completed with missing items' : 'Verification completed'}
+                    </p>
+
+                    {checklist.length > 0 && (
+                      <div className="mt-2">
+                        <p className="text-xs font-medium text-gray-600 mb-1">Checklist</p>
+                        <ul className="space-y-1">
+                          {checklist.map((item, index) => (
+                            <li key={`${item}-${index}`} className="text-xs text-gray-700">
+                              • {item}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {missingItems.length > 0 && (
+                      <div className="mt-2">
+                        <p className="text-xs font-medium text-amber-700 mb-1">Missing Required Fields</p>
+                        <ul className="space-y-1">
+                          {missingItems.map((item, index) => (
+                            <li key={`${item}-${index}`} className="text-xs text-amber-700">
+                              • {item}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </section>
+                )}
+              </div>
+            </div>
+
+            <div className="sticky bottom-0 border-t border-gray-200 bg-white/95 backdrop-blur px-4 sm:px-6 py-3">
+              <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="w-full sm:w-auto px-5 py-3 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleVerifyStepOne}
+                  disabled={verifyBusy || templatesLoading}
+                  className="w-full sm:w-auto inline-flex items-center justify-center px-5 py-3 rounded-lg bg-gradient-to-r from-panda-primary to-panda-secondary text-white disabled:opacity-50"
+                >
+                  {verifyBusy ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Verifying...
+                    </>
+                  ) : (
+                    'Verify Required Fields'
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const stepLabels = [
     { num: 1, label: 'Template' },
@@ -787,4 +1067,49 @@ function getRoleColor(role) {
     CO_SIGNER: 'bg-teal-100 text-teal-700',
   };
   return colors[role] || 'bg-gray-100 text-gray-700';
+}
+
+function getChecklist(verification) {
+  if (!verification || typeof verification !== 'object') return [];
+
+  if (Array.isArray(verification.checklist)) return verification.checklist;
+  if (Array.isArray(verification.validationChecklist)) return verification.validationChecklist;
+  if (Array.isArray(verification.data?.checklist)) return verification.data.checklist;
+  if (Array.isArray(verification.data?.validationChecklist)) return verification.data.validationChecklist;
+
+  return [];
+}
+
+function getMissingItems(verification) {
+  if (!verification || typeof verification !== 'object') return [];
+
+  const fromFailures = Array.isArray(verification.requiredFieldFailures)
+    ? verification.requiredFieldFailures
+    : Array.isArray(verification.data?.requiredFieldFailures)
+      ? verification.data.requiredFieldFailures
+      : [];
+
+  const fromMissing = Array.isArray(verification.missingTokens)
+    ? verification.missingTokens
+    : Array.isArray(verification.data?.missingTokens)
+      ? verification.data.missingTokens
+      : [];
+
+  const flattenedFailures = fromFailures
+    .map((item) => {
+      if (!item) return null;
+      if (typeof item === 'string') return item;
+      return item.field || item.key || item.name || item.message || null;
+    })
+    .filter(Boolean);
+
+  const flattenedMissing = fromMissing
+    .map((item) => {
+      if (!item) return null;
+      if (typeof item === 'string') return item;
+      return item.token || item.key || item.name || item.message || null;
+    })
+    .filter(Boolean);
+
+  return [...new Set([...flattenedFailures, ...flattenedMissing])];
 }
