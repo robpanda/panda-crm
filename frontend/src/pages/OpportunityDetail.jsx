@@ -628,7 +628,6 @@ function InvoiceDetailModal({ invoice, onClose }) {
       style: 'currency',
       currency: 'USD',
     }).format(Number(amount) || 0);
-    }).format(Number(amount) || 0);
   };
 
   const hydrateFormFromInvoice = useCallback((sourceInvoice) => ({
