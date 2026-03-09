@@ -187,6 +187,11 @@ export const authApi = {
     return response.data.data;
   },
 
+  async updateCurrentUserProfile(data) {
+    const response = await api.put('/api/auth/me', data);
+    return response.data.data;
+  },
+
   async logout(accessToken) {
     await axios.post(
       `${API_BASE}/api/auth/logout`,

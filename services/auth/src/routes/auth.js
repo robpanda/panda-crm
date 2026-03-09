@@ -8,6 +8,68 @@ const prisma = new PrismaClient();
 
 const router = Router();
 
+const INTERNAL_EMAIL_DOMAINS = ['pandaexteriors.com', 'panda-exteriors.com'];
+
+function buildEmailCandidates(email) {
+  if (!email || typeof email !== 'string' || !email.includes('@')) return [];
+
+  const normalized = email.trim().toLowerCase();
+  const [localRaw, domainRaw] = normalized.split('@');
+  if (!localRaw || !domainRaw) return [normalized];
+
+  const localNoDots = localRaw.replace(/\./g, '');
+  const domainCandidates = INTERNAL_EMAIL_DOMAINS.includes(domainRaw)
+    ? INTERNAL_EMAIL_DOMAINS
+    : [domainRaw];
+
+  return Array.from(new Set(domainCandidates.flatMap((domain) => ([
+    `${localRaw}@${domain}`,
+    `${localNoDots}@${domain}`,
+  ]))));
+}
+
+async function findDbUserFromCognito(cognitoUser) {
+  const select = {
+    id: true,
+    email: true,
+    firstName: true,
+    lastName: true,
+    fullName: true,
+    phone: true,
+    mobilePhone: true,
+    department: true,
+    division: true,
+    title: true,
+    officeAssignment: true,
+    managerId: true,
+    isActive: true,
+    createdAt: true,
+    updatedAt: true,
+    roleId: true,
+  };
+
+  // 1) Exact + tolerant email variants
+  const emailCandidates = buildEmailCandidates(cognitoUser?.email);
+  for (const candidate of emailCandidates) {
+    const user = await prisma.user.findUnique({
+      where: { email: candidate },
+      select,
+    });
+    if (user) return user;
+  }
+
+  // 2) Fallback by Cognito username if it happens to match local user id
+  if (cognitoUser?.username) {
+    const byId = await prisma.user.findUnique({
+      where: { id: cognitoUser.username },
+      select,
+    });
+    if (byId) return byId;
+  }
+
+  return null;
+}
+
 // Login
 router.post('/login', async (req, res, next) => {
   try {
@@ -242,28 +304,7 @@ router.get('/me', async (req, res, next) => {
     const accessToken = authHeader.split(' ')[1];
     const cognitoUser = await authService.getCurrentUser(accessToken);
 
-    // Look up full user record from database by email
-    const dbUser = await prisma.user.findUnique({
-      where: { email: cognitoUser.email },
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        fullName: true,
-        phone: true,
-        mobilePhone: true,
-        department: true,
-        division: true,
-        title: true,
-        officeAssignment: true,
-        managerId: true,
-        isActive: true,
-        createdAt: true,
-        updatedAt: true,
-        roleId: true,
-      },
-    });
+    const dbUser = await findDbUserFromCognito(cognitoUser);
 
     // Check if user has team members (is a manager)
     let isManager = false;
@@ -295,6 +336,120 @@ router.get('/me', async (req, res, next) => {
     };
 
     res.json({ success: true, data: user });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Update current user profile (self-service)
+router.put('/me', async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({
+        success: false,
+        error: { code: 'UNAUTHORIZED', message: 'Access token required' },
+      });
+    }
+
+    const accessToken = authHeader.split(' ')[1];
+    const cognitoUser = await authService.getCurrentUser(accessToken);
+    const existingUser = await findDbUserFromCognito(cognitoUser);
+
+    if (!existingUser) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'User profile not found in database' },
+      });
+    }
+
+    const {
+      firstName,
+      lastName,
+      phone,
+      department,
+      title,
+    } = req.body || {};
+
+    const updateData = {};
+
+    if (firstName !== undefined) {
+      updateData.firstName = typeof firstName === 'string' ? firstName.trim() : '';
+    }
+
+    if (lastName !== undefined) {
+      updateData.lastName = typeof lastName === 'string' ? lastName.trim() : '';
+    }
+
+    if (phone !== undefined) {
+      const phoneValue = typeof phone === 'string' ? phone.trim() : '';
+      updateData.phone = phoneValue || null;
+    }
+
+    if (department !== undefined) {
+      const departmentValue = typeof department === 'string' ? department.trim() : '';
+      updateData.department = departmentValue || null;
+    }
+
+    if (title !== undefined) {
+      const titleValue = typeof title === 'string' ? title.trim() : '';
+      updateData.title = titleValue || null;
+    }
+
+    if (Object.keys(updateData).length === 0) {
+      return res.json({
+        success: true,
+        data: {
+          id: existingUser.id,
+          email: existingUser.email,
+          firstName: existingUser.firstName || '',
+          lastName: existingUser.lastName || '',
+          fullName: existingUser.fullName || '',
+          phone: existingUser.phone || existingUser.mobilePhone || '',
+          department: existingUser.department || '',
+          title: existingUser.title || '',
+          updatedAt: existingUser.updatedAt,
+        },
+      });
+    }
+
+    const nextFirstName = updateData.firstName !== undefined ? updateData.firstName : (existingUser.firstName || '');
+    const nextLastName = updateData.lastName !== undefined ? updateData.lastName : (existingUser.lastName || '');
+    const fullName = `${nextFirstName} ${nextLastName}`.trim();
+    updateData.fullName = fullName || null;
+    updateData.updatedAt = new Date();
+
+    const updated = await prisma.user.update({
+      where: { id: existingUser.id },
+      data: updateData,
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        fullName: true,
+        phone: true,
+        mobilePhone: true,
+        department: true,
+        title: true,
+        updatedAt: true,
+      },
+    });
+
+    res.json({
+      success: true,
+      data: {
+        id: updated.id,
+        email: updated.email,
+        firstName: updated.firstName || '',
+        lastName: updated.lastName || '',
+        fullName: updated.fullName || '',
+        phone: updated.phone || updated.mobilePhone || '',
+        department: updated.department || '',
+        title: updated.title || '',
+        updatedAt: updated.updatedAt,
+      },
+    });
   } catch (error) {
     next(error);
   }
