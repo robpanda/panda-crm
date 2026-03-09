@@ -57,6 +57,10 @@ const extractProvidedSecret = (req) => {
     req.headers['x-salesrabbit-secret'],
     req.headers['x-api-key'],
     req.headers['x-salesrabbit-api-key'],
+    req.headers['x-auth-token'],
+    req.headers['x-auth-key'],
+    req.headers['x-webhook-token'],
+    req.headers['authorization-token'],
     req.query?.secret,
     req.query?.apiKey,
     req.query?.apikey,
@@ -69,11 +73,14 @@ const extractProvidedSecret = (req) => {
     req.body?.leadMetaData?.secret,
     req.body?.leadMetaData?.apiKey,
     req.body?.leadMetaData?.apikey,
+    req.body?.leadMetaData?.authToken,
     req.body?.leadMetadata?.secret,
     req.body?.leadMetadata?.apiKey,
     req.body?.leadMetadata?.apikey,
+    req.body?.leadMetadata?.authToken,
     authType === 'ApiKey' ? authToken : null,
     authType === 'Bearer' ? authToken : null,
+    authToken || null,
     authHeader && !authToken ? authHeader : null
   );
 };
