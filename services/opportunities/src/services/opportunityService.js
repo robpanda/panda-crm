@@ -22,6 +22,8 @@ const S3_BUCKET = process.env.S3_BUCKET || 'pandasign-documents';
 // SES client for email notifications
 const sesClient = new SESClient({ region: process.env.AWS_REGION || 'us-east-2' });
 const FROM_EMAIL = process.env.SES_FROM_EMAIL || 'notifications@pandaexteriors.com';
+const BAMBOOGLI_SERVICE_URL = process.env.BAMBOOGLI_SERVICE_URL || 'http://localhost:3012';
+const CRM_BASE_URL = (process.env.CRM_BASE_URL || process.env.FRONTEND_URL || 'https://crm.pandaadmin.com').replace(/\/+$/, '');
 
 const DEFAULT_IN_PERSON_DURATION_MINUTES = 120;
 
@@ -126,6 +128,11 @@ function extractMentionUserId(mention) {
   if (!mention) return null;
   if (typeof mention === 'string') return mention;
   return mention.userId || mention.id || null;
+}
+
+function getMentionPreference(typePreferences) {
+  if (!typePreferences || typeof typePreferences !== 'object') return null;
+  return typePreferences.MENTION || typePreferences.mention || null;
 }
 
 /**
@@ -1543,6 +1550,7 @@ Be factual and professional. Highlight anything that needs attention.`;
         where: { id: opportunityId },
         select: { name: true, jobId: true },
       });
+      const opportunityUrl = `${CRM_BASE_URL}/jobs/${opportunityId}`;
 
       const notificationPromises = mentions.map(async (mention) => {
         const mentionUserId = extractMentionUserId(mention);
@@ -1567,7 +1575,11 @@ Be factual and professional. Highlight anything that needs attention.`;
         // Get user email for email notification
         const mentionedUser = await prisma.user.findUnique({
           where: { id: mentionUserId },
-          select: { email: true, firstName: true },
+          select: { email: true, firstName: true, mobilePhone: true },
+        });
+        const preferencesForUser = await prisma.notificationPreference.findUnique({
+          where: { userId: mentionUserId },
+          select: { smsEnabled: true, typePreferences: true },
         });
 
         if (mentionedUser?.email) {
@@ -1580,6 +1592,26 @@ Be factual and professional. Highlight anything that needs attention.`;
             opportunityId,
             messagePreview: content.substring(0, 200),
           }).catch(err => console.error('Failed to send mention email:', err));
+        }
+
+        const mentionPref = getMentionPreference(preferencesForUser?.typePreferences);
+        const mentionEnabled = mentionPref?.enabled !== false;
+        const mentionSmsEnabled = mentionPref?.smsEnabled !== false;
+        const canSendSms = Boolean(
+          preferencesForUser?.smsEnabled &&
+          mentionEnabled &&
+          mentionSmsEnabled &&
+          mentionedUser?.mobilePhone
+        );
+
+        if (canSendSms) {
+          this.sendMentionSms({
+            toPhone: mentionedUser.mobilePhone,
+            mentionerName: `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || user?.email || 'Someone',
+            opportunityName: opportunity?.name || opportunity?.jobId || 'an opportunity',
+            opportunityUrl,
+            messagePreview: content.substring(0, 200),
+          }).catch((err) => logger.warn(`Failed to send mention SMS to ${mentionUserId}: ${err.message}`));
         }
       });
 
@@ -1639,6 +1671,29 @@ Be factual and professional. Highlight anything that needs attention.`;
       console.error('Error sending mention email:', error);
       throw error;
     }
+  }
+
+  async sendMentionSms({ toPhone, mentionerName, opportunityName, opportunityUrl, messagePreview }) {
+    const excerpt = (messagePreview || '').trim();
+    const body = `${mentionerName} mentioned you on ${opportunityName}: "${excerpt}" View: ${opportunityUrl}`.trim();
+
+    const response = await fetch(`${BAMBOOGLI_SERVICE_URL}/api/messages/send/sms`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        to: toPhone,
+        body,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData?.error || `SMS delivery failed with status ${response.status}`);
+    }
+
+    return response.json().catch(() => ({}));
   }
 
   /**
@@ -4381,12 +4436,19 @@ Be factual and professional. Highlight anything that needs attention.`;
 
     const users = await prisma.user.findMany({
       where: { id: { in: mentionUserIds } },
-      select: { id: true, email: true, firstName: true },
+      select: { id: true, email: true, firstName: true, mobilePhone: true },
+    });
+    const preferences = await prisma.notificationPreference.findMany({
+      where: { userId: { in: mentionUserIds } },
+      select: { userId: true, smsEnabled: true, typePreferences: true },
     });
     const userById = new Map(users.map((u) => [u.id, u]));
+    const prefByUserId = new Map(preferences.map((pref) => [pref.userId, pref]));
     const actorName = `${actor?.firstName || ''} ${actor?.lastName || ''}`.trim() || actor?.email || 'Someone';
     const subjectName = opportunityName || opportunityJobId || 'an opportunity';
     const preview = (content || '').substring(0, 100);
+    const actionUrl = `/jobs/${opportunityId}`;
+    const opportunityUrl = `${CRM_BASE_URL}${actionUrl}`;
 
     for (const userId of mentionUserIds) {
       const mentionedUser = userById.get(userId);
@@ -4399,7 +4461,7 @@ Be factual and professional. Highlight anything that needs attention.`;
           title: `${actorName} mentioned you`,
           message: `You were mentioned on ${subjectName}: "${preview}${(content || '').length > 100 ? '...' : ''}"`,
           opportunityId,
-          actionUrl: `/jobs/${opportunityId}`,
+          actionUrl,
           actionLabel: 'View Job',
           sourceType: 'OPPORTUNITY',
           sourceId: opportunityId,
@@ -4416,6 +4478,27 @@ Be factual and professional. Highlight anything that needs attention.`;
           opportunityId,
           messagePreview: (content || '').substring(0, 200),
         }).catch((err) => logger.warn(`Failed to send mention email to ${mentionedUser.email}: ${err.message}`));
+      }
+
+      const preferencesForUser = prefByUserId.get(userId);
+      const mentionPref = getMentionPreference(preferencesForUser?.typePreferences);
+      const mentionEnabled = mentionPref?.enabled !== false;
+      const mentionSmsEnabled = mentionPref?.smsEnabled !== false;
+      const canSendSms = Boolean(
+        preferencesForUser?.smsEnabled &&
+        mentionEnabled &&
+        mentionSmsEnabled &&
+        mentionedUser.mobilePhone
+      );
+
+      if (canSendSms) {
+        this.sendMentionSms({
+          toPhone: mentionedUser.mobilePhone,
+          mentionerName: actorName,
+          opportunityName: subjectName,
+          opportunityUrl,
+          messagePreview: (content || '').substring(0, 200),
+        }).catch((err) => logger.warn(`Failed to send mention SMS to ${userId}: ${err.message}`));
       }
     }
 
