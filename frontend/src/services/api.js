@@ -663,6 +663,19 @@ export const opportunitiesApi = {
     return response.data;
   },
 
+  async generatePortalLink(id, data = {}) {
+    try {
+      const response = await api.post(`/api/opportunities/${id}/portal-link`, data);
+      return response.data?.data || response.data;
+    } catch (error) {
+      if (error?.response?.status === 404) {
+        const fallback = await api.post(`/api/opportunities/${id}/portalLink`, data);
+        return fallback.data?.data || fallback.data;
+      }
+      throw error;
+    }
+  },
+
   async getWorkOrders(id) {
     const response = await api.get(`/api/opportunities/${id}/work-orders`);
     return response.data.data;

@@ -744,30 +744,6 @@ function InvoiceDetailModal({ invoice, onClose, onInvoiceUpdated, onOpenSendInvo
     },
   });
 
-  const sendInvoiceMutation = useMutation({
-    mutationFn: () => invoicesApi.sendInvoice(invoice.id),
-    onSuccess: (response) => {
-      const updatedInvoice = normalizeInvoiceTotals(
-        response?.data?.invoice || response?.invoice || response?.data || response
-      );
-      if (updatedInvoice?.id) {
-        onInvoiceUpdated?.(updatedInvoice);
-      }
-      setEditSuccess('Invoice sent successfully');
-      setEditError(null);
-      if (!updatedInvoice?.id) {
-        onOpenSendInvoice?.(invoice);
-      }
-    },
-    onError: (error) => {
-      const message = error?.response?.data?.error || error?.message || 'Failed to send invoice';
-      setEditError(message);
-      if (String(message).toLowerCase().includes('already sent')) {
-        onOpenSendInvoice?.(invoice);
-      }
-    },
-  });
-
   const handleLineItemChange = (index, key, value) => {
     setForm((prev) => {
       const updated = [...prev.lineItems];
@@ -862,15 +838,11 @@ function InvoiceDetailModal({ invoice, onClose, onInvoiceUpdated, onOpenSendInvo
             </button>
             {canSendOrResend && (
               <button
-                onClick={() => sendInvoiceMutation.mutate()}
-                disabled={sendInvoiceMutation.isPending}
+                onClick={() => onOpenSendInvoice?.(invoice)}
+                disabled={!onOpenSendInvoice}
                 className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
               >
-                {sendInvoiceMutation.isPending ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Mail className="h-4 w-4" />
-                )}
+                <Mail className="h-4 w-4" />
                 <span>{sendLabel}</span>
               </button>
             )}
