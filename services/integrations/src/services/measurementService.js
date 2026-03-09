@@ -125,6 +125,25 @@ let eagleViewTokenCache = { token: null, expiresAt: 0 };
 let gafTokenCache = { token: null, expiresAt: 0 };
 let hoverTokenCache = { accessToken: null, refreshToken: null, expiresAt: 0 };
 
+const firstNonEmptyValue = (...values) => {
+  for (const value of values) {
+    if (value === undefined || value === null) continue;
+    const text = String(value).trim();
+    if (text.length > 0) return text;
+  }
+  return null;
+};
+
+const toNumberOrNull = (value) => {
+  if (value === undefined || value === null || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const isHttpUrl = (value) => typeof value === 'string' && /^https?:\/\//i.test(value);
+
+const sanitizeFileName = (value) => String(value || 'asset').replace(/[^a-zA-Z0-9._-]/g, '_');
+
 class MeasurementService {
   /**
    * Look up internal User ID from Cognito ID
@@ -166,7 +185,14 @@ class MeasurementService {
     // Validate opportunity exists
     const opportunity = await prisma.opportunity.findUnique({
       where: { id: opportunityId },
-      include: { account: true },
+      include: {
+        account: true,
+        owner: {
+          select: {
+            email: true,
+          },
+        },
+      },
     });
 
     if (!opportunity) {
@@ -827,6 +853,11 @@ class MeasurementService {
         },
       });
 
+      if (response.status === 404 || response.status === 204) {
+        logger.info(`GAF report ${gafOrderNumber} status endpoint returned ${response.status}; waiting for webhook delivery`);
+        return { success: false, status: 'PENDING' };
+      }
+
       if (!response.ok) {
         const error = await response.text();
         throw new Error(`GAF API error: ${error}`);
@@ -981,6 +1012,19 @@ class MeasurementService {
         },
       });
 
+      const ownerEmail = opportunity.owner?.email || null;
+      const masterAccountEmail = process.env.GAF_MASTER_ACCOUNT_EMAIL
+        || process.env.GAF_NOTIFICATION_EMAIL
+        || ownerEmail
+        || 'christiancurry@panda-exteriors.com';
+      const adminRecipients = (process.env.GAF_ADMIN_EMAILS || '')
+        .split(',')
+        .map((email) => email.trim())
+        .filter(Boolean);
+      const recipientEmailAddresses = Array.from(
+        new Set([ownerEmail, ...adminRecipients].filter(Boolean))
+      ).join(',');
+
       // Submit to GAF API
       const gafOrder = await this.submitGAFOrder({
         address: report.propertyAddress,
@@ -993,6 +1037,9 @@ class MeasurementService {
         measurementInstructions,
         comments,
         referenceId: report.id,
+        ownerEmail,
+        masterEmail: masterAccountEmail,
+        recipientEmails: recipientEmailAddresses,
       });
 
       await prisma.measurementReport.update({
@@ -1071,7 +1118,11 @@ class MeasurementService {
       subscriberName: 'PAN',
       subscriberOrderNumber: orderData.referenceId || `GP-${Date.now()}`,
       SubscriberCustomField1: orderData.referenceId || '',
-      emailAddress: orderData.ownerEmail || process.env.GAF_NOTIFICATION_EMAIL || 'jasondaniel@panda-exteriors.com',
+      emailAddress: orderData.masterEmail
+        || process.env.GAF_MASTER_ACCOUNT_EMAIL
+        || process.env.GAF_NOTIFICATION_EMAIL
+        || orderData.ownerEmail
+        || 'christiancurry@panda-exteriors.com',
       productCode: this.getGAFProductCode(orderData.measurementType),
       address1: orderData.address,
       address2: '',
@@ -1084,7 +1135,7 @@ class MeasurementService {
       latitude: orderData.latitude?.toString() || '',
       longitude: orderData.longitude?.toString() || '',
       fullAddress: `${orderData.address} ${orderData.city} ${orderData.zip} ${orderData.country || 'USA'}`,
-      recipientEmailAddresses: orderData.recipientEmails || '',
+      recipientEmailAddresses: orderData.recipientEmails || orderData.ownerEmail || '',
       instructions: orderData.comments || '',
       isServiceOpen: false,
       susbcriberId: 0,
@@ -1165,44 +1216,240 @@ class MeasurementService {
   /**
    * Handle GAF webhook delivery
    */
-  async handleGAFWebhook(data) {
-    const { orderId, status, measurements } = data;
+  normalizeGAFWebhookStatus(rawStatus, hasMeasurementData, hasProblemCode) {
+    const normalized = firstNonEmptyValue(rawStatus)?.toUpperCase();
+    if (normalized) {
+      if (normalized === 'COMPLETE' || normalized === 'COMPLETED' || normalized === 'DELIVERED') {
+        return 'COMPLETED';
+      }
+      if (normalized === 'FAILED' || normalized === 'ERROR') {
+        return 'FAILED';
+      }
+      return normalized;
+    }
+    if (hasProblemCode) return 'FAILED';
+    if (hasMeasurementData) return 'COMPLETED';
+    return 'PROCESSING';
+  }
 
-    logger.info(`GAF webhook: order ${orderId} status ${status}`);
+  normalizeGAFWebhookPayload(data) {
+    const payload = data || {};
+    const roofMeasurement = payload.RoofMeasurement || payload.roofMeasurement || payload.measurements || null;
+    const assets = roofMeasurement?.Assets || roofMeasurement?.assets || payload.assets || {};
+    const hasProblemCode = Boolean(payload.ProblemCode || payload.problemCode);
+    const hasMeasurementData = Boolean(
+      roofMeasurement
+      || payload.measurements
+      || payload.reportPdfUrl
+      || payload.pdfUrl
+      || firstNonEmptyValue(assets.Report, assets.report, assets.HomeownerReport, assets.homeownerReport)
+    );
 
-    const measurementReport = await prisma.measurementReport.findFirst({
-      where: { externalId: orderId },
+    const orderId = firstNonEmptyValue(
+      payload.orderId,
+      payload.OrderId,
+      payload.orderNumber,
+      payload.OrderNumber,
+      payload.gafOrderNumber,
+      payload.GAFOrderNumber
+    );
+    const subscriberOrderNumber = firstNonEmptyValue(
+      payload.subscriberOrderNumber,
+      payload.SubscriberOrderNumber,
+      payload.SubscriberCustomField1,
+      payload.subscriberCustomField1,
+      payload.SubscriberReference,
+      payload.subscriberReference
+    );
+    const rawStatus = firstNonEmptyValue(
+      payload.status,
+      payload.Status,
+      payload.orderStatus,
+      payload.OrderStatus
+    );
+    const status = this.normalizeGAFWebhookStatus(rawStatus, hasMeasurementData, hasProblemCode);
+
+    const reportAsset = firstNonEmptyValue(assets.Report, assets.report);
+    const homeownerReportAsset = firstNonEmptyValue(assets.HomeownerReport, assets.homeownerReport);
+    const diagramAsset = firstNonEmptyValue(assets.Diagram, assets.diagram);
+    const xmlAsset = firstNonEmptyValue(assets.Acculynx, assets.acculynx);
+    const report3dUrl = firstNonEmptyValue(assets.Report3D, assets.report3D, assets.Report3d, assets.report3d);
+    const modelUrl = firstNonEmptyValue(assets.ModelUrl, assets.modelUrl);
+
+    return {
+      payload,
+      orderId,
+      subscriberOrderNumber,
+      status,
+      roofMeasurement,
+      assets,
+      hasMeasurementData,
+      reportAsset,
+      homeownerReportAsset,
+      diagramAsset,
+      xmlAsset,
+      report3dUrl,
+      modelUrl,
+      reportPdfUrl: firstNonEmptyValue(payload.reportPdfUrl, payload.pdfUrl),
+      reportUrl: firstNonEmptyValue(payload.reportUrl, payload.viewUrl, report3dUrl, modelUrl),
+      reportXmlUrl: firstNonEmptyValue(payload.reportXmlUrl, payload.xmlUrl),
+      reportJsonUrl: firstNonEmptyValue(payload.reportJsonUrl, payload.jsonUrl),
+    };
+  }
+
+  async downloadAndStoreGAFAsset(assetName, measurementReportId, accessToken, fallbackContentType = 'application/octet-stream') {
+    if (!assetName) return null;
+    if (isHttpUrl(assetName)) return { presignedUrl: assetName };
+
+    const downloadUrl = `${GAF_API_BASE}/download/${encodeURIComponent(assetName)}`;
+    const response = await fetch(downloadUrl, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
     });
 
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new Error(`GAF download failed (${response.status}): ${errorBody}`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    if (!arrayBuffer || arrayBuffer.byteLength === 0) {
+      throw new Error(`GAF download returned empty response for asset ${assetName}`);
+    }
+
+    const fileName = sanitizeFileName(assetName);
+    const s3Key = `gaf/${measurementReportId}/${Date.now()}_${fileName}`;
+    const contentType = response.headers.get('content-type') || fallbackContentType;
+    const putCommand = new PutObjectCommand({
+      Bucket: S3_BUCKET,
+      Key: s3Key,
+      Body: Buffer.from(arrayBuffer),
+      ContentType: contentType,
+      Metadata: {
+        'measurement-report-id': measurementReportId,
+        'gaf-asset-name': fileName,
+        'uploaded-at': new Date().toISOString(),
+      },
+    });
+    await s3Client.send(putCommand);
+
+    const getCommand = new GetObjectCommand({
+      Bucket: S3_BUCKET,
+      Key: s3Key,
+    });
+    const presignedUrl = await getSignedUrl(s3Client, getCommand, { expiresIn: 7 * 24 * 60 * 60 });
+    return {
+      s3Key,
+      s3Url: `s3://${S3_BUCKET}/${s3Key}`,
+      presignedUrl,
+      contentType,
+    };
+  }
+
+  async handleGAFWebhook(data) {
+    const normalized = this.normalizeGAFWebhookPayload(data);
+    logger.info(`GAF webhook: order ${normalized.orderId || 'unknown'} status ${normalized.status}`);
+
+    let measurementReport = null;
+    if (normalized.orderId) {
+      measurementReport = await prisma.measurementReport.findFirst({
+        where: { externalId: normalized.orderId },
+      });
+    }
+    if (!measurementReport && normalized.subscriberOrderNumber) {
+      measurementReport = await prisma.measurementReport.findFirst({
+        where: {
+          OR: [
+            { id: normalized.subscriberOrderNumber },
+            { externalId: normalized.subscriberOrderNumber },
+            { orderNumber: normalized.subscriberOrderNumber },
+          ],
+        },
+      });
+    }
+
     if (!measurementReport) {
-      logger.error(`No measurement report found for GAF order ${orderId}`);
+      logger.error(
+        `No measurement report found for GAF order ${normalized.orderId || 'unknown'}`
+      );
       return;
     }
 
-    if (status === 'COMPLETED' && measurements) {
-      await this.processGAFReport(measurementReport.id, measurements);
-    } else if (status === 'FAILED') {
+    if (normalized.status === 'COMPLETED' && normalized.hasMeasurementData) {
+      await this.processGAFReport(measurementReport.id, data);
+    } else if (normalized.status === 'FAILED') {
       await prisma.measurementReport.update({
         where: { id: measurementReport.id },
-        data: { orderStatus: 'FAILED' },
+        data: {
+          orderStatus: 'FAILED',
+          rawData: data,
+        },
+      });
+    } else {
+      await prisma.measurementReport.update({
+        where: { id: measurementReport.id },
+        data: {
+          orderStatus: 'PROCESSING',
+          rawData: data,
+        },
       });
     }
   }
 
   async processGAFReport(reportId, gafData) {
-    const measurements = this.parseGAFMeasurements(gafData);
+    const normalized = this.normalizeGAFWebhookPayload(gafData);
+    const measurements = this.parseGAFMeasurements({
+      RoofMeasurement: normalized.roofMeasurement,
+      roof: gafData?.roof,
+    });
+
+    let reportPdfUrl = normalized.reportPdfUrl;
+    let reportXmlUrl = normalized.reportXmlUrl;
+    let reportJsonUrl = normalized.reportJsonUrl;
+    const pdfAsset = normalized.reportAsset || normalized.homeownerReportAsset;
+    const xmlAsset = normalized.xmlAsset;
+    let pdfStorage = null;
+    let xmlStorage = null;
+
+    try {
+      const accessToken = await this.getGAFAccessToken();
+      if (!reportPdfUrl && pdfAsset) {
+        pdfStorage = await this.downloadAndStoreGAFAsset(pdfAsset, reportId, accessToken, 'application/pdf');
+        reportPdfUrl = pdfStorage?.presignedUrl || null;
+      }
+      if (!reportXmlUrl && xmlAsset) {
+        xmlStorage = await this.downloadAndStoreGAFAsset(xmlAsset, reportId, accessToken, 'application/xml');
+        reportXmlUrl = xmlStorage?.presignedUrl || null;
+      }
+    } catch (error) {
+      logger.warn(`GAF asset download warning for report ${reportId}: ${error.message}`);
+    }
 
     await prisma.measurementReport.update({
       where: { id: reportId },
       data: {
         orderStatus: 'DELIVERED',
         deliveredAt: new Date(),
-        reportUrl: gafData.viewUrl,
-        reportPdfUrl: gafData.pdfUrl,
-        latitude: gafData.location?.latitude,
-        longitude: gafData.location?.longitude,
+        reportUrl: normalized.reportUrl || reportPdfUrl,
+        reportPdfUrl: reportPdfUrl,
+        reportXmlUrl: reportXmlUrl,
+        reportJsonUrl: reportJsonUrl || normalized.modelUrl || normalized.report3dUrl || null,
+        latitude: toNumberOrNull(gafData?.location?.latitude || gafData?.RoofMeasurement?.Latitude),
+        longitude: toNumberOrNull(gafData?.location?.longitude || gafData?.RoofMeasurement?.Longitude),
         ...measurements,
-        rawData: gafData,
+        rawData: {
+          ...gafData,
+          normalizedWebhook: {
+            orderId: normalized.orderId,
+            subscriberOrderNumber: normalized.subscriberOrderNumber,
+            status: normalized.status,
+            assets: normalized.assets,
+            pdfS3Key: pdfStorage?.s3Key,
+            xmlS3Key: xmlStorage?.s3Key,
+          },
+        },
       },
     });
 
@@ -1210,22 +1457,27 @@ class MeasurementService {
   }
 
   parseGAFMeasurements(data) {
-    const roof = data.roof || {};
+    const roof = data.roof || data.RoofMeasurement || data.roofMeasurement || {};
+    const facets = toNumberOrNull(firstNonEmptyValue(roof.faceCount, roof.Facets));
+    const totalRoofArea = toNumberOrNull(firstNonEmptyValue(roof.totalSqFt, roof.Area));
+    const totalRoofSquares = toNumberOrNull(firstNonEmptyValue(roof.totalSquares, totalRoofArea ? totalRoofArea / 100 : null));
 
     return {
-      totalRoofArea: roof.totalSqFt,
-      totalRoofSquares: roof.totalSquares,
-      predominantPitch: roof.mainPitch,
-      pitches: roof.allPitches,
-      facets: roof.faceCount,
-      ridgeLength: roof.ridge,
-      hipLength: roof.hip,
-      valleyLength: roof.valley,
-      rakeLength: roof.rake,
-      eaveLength: roof.eave,
-      dripEdgeLength: roof.dripEdge,
-      roofComplexity: this.calculateComplexity(roof.faceCount),
-      suggestedWasteFactor: roof.recommendedWaste,
+      totalRoofArea,
+      totalRoofSquares,
+      predominantPitch: firstNonEmptyValue(roof.mainPitch, roof.Pitch),
+      pitches: roof.allPitches || roof.PitchToArea || null,
+      facets,
+      ridgeLength: toNumberOrNull(firstNonEmptyValue(roof.ridge, roof.Ridges)),
+      hipLength: toNumberOrNull(firstNonEmptyValue(roof.hip, roof.Hips)),
+      valleyLength: toNumberOrNull(firstNonEmptyValue(roof.valley, roof.Valleys)),
+      rakeLength: toNumberOrNull(firstNonEmptyValue(roof.rake, roof.Rakes)),
+      eaveLength: toNumberOrNull(firstNonEmptyValue(roof.eave, roof.Eaves)),
+      flashingLength: toNumberOrNull(firstNonEmptyValue(roof.flashingLength, roof.Flash)),
+      stepFlashingLength: toNumberOrNull(firstNonEmptyValue(roof.stepFlashingLength, roof.Step)),
+      dripEdgeLength: toNumberOrNull(firstNonEmptyValue(roof.dripEdge, roof.DripEdge)),
+      roofComplexity: this.calculateComplexity(facets || 0),
+      suggestedWasteFactor: toNumberOrNull(firstNonEmptyValue(roof.recommendedWaste, roof.SuggestedWaste)),
     };
   }
 
