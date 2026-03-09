@@ -872,6 +872,15 @@ export const opportunitiesApi = {
     return response.data.data;
   },
 
+  // Transfer job owner (kept for compatibility with OpportunityDetail transfer modal)
+  async transferOpportunity(opportunityId, newOwnerId, options = {}) {
+    const response = await api.post(`/api/opportunities/${opportunityId}/transfer`, {
+      newOwnerId,
+      ...options,
+    });
+    return response.data;
+  },
+
   // Bulk reassign multiple jobs to a new owner
   async bulkReassignJobs(opportunityIds, newOwnerId) {
     const response = await api.post('/api/opportunities/bulk-reassign', { opportunityIds, newOwnerId });
