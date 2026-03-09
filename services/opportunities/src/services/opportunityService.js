@@ -36,6 +36,12 @@ function parseDate(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+async function generateWorkOrderNumber() {
+  const count = await prisma.workOrder.count();
+  const next = count + 1;
+  return `WO-${String(next).padStart(6, '0')}`;
+}
+
 /**
  * Generate a pre-signed URL for an S3 document
  * @param {string} s3Url - The S3 URL or path
@@ -2560,8 +2566,10 @@ Be factual and professional. Highlight anything that needs attention.`;
 
     // Create work order if none exists
     if (!workOrder) {
+      const workOrderNumber = await generateWorkOrderNumber();
       workOrder = await prisma.workOrder.create({
         data: {
+          workOrderNumber,
           subject: `Inspection - ${opportunity.name}`,
           status: 'NEW',
           priority: 'NORMAL',

@@ -124,12 +124,37 @@ jobs:
         env:
           SERVICE_NAME: ${{ matrix.service.name }}
         run: |
-          # Force new deployment
+          # Resolve actual service naming in this cluster.
+          # Legacy workflows used "<name>-service", while production currently uses "panda-crm-<name>".
+          TARGET_SERVICE=""
+
+          if aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$SERVICE_NAME-service" \
+            --region "$AWS_REGION" \
+            --query 'services[0].status' \
+            --output text 2>/dev/null | grep -q '^ACTIVE$'; then
+            TARGET_SERVICE="$SERVICE_NAME-service"
+          elif aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "panda-crm-$SERVICE_NAME" \
+            --region "$AWS_REGION" \
+            --query 'services[0].status' \
+            --output text 2>/dev/null | grep -q '^ACTIVE$'; then
+            TARGET_SERVICE="panda-crm-$SERVICE_NAME"
+          fi
+
+          if [ -z "$TARGET_SERVICE" ]; then
+            echo "No ECS service found for $SERVICE_NAME. Skipping update."
+            exit 0
+          fi
+
+          echo "Updating ECS service: $TARGET_SERVICE"
           aws ecs update-service \
-            --cluster $ECS_CLUSTER \
-            --service $SERVICE_NAME-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$TARGET_SERVICE" \
             --force-new-deployment \
-            --region $AWS_REGION || echo "Service may not exist yet, skipping update"
+            --region "$AWS_REGION"
 
   notify:
     name: Deployment Notification
