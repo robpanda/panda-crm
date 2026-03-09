@@ -9,7 +9,12 @@ import { leadService } from '../services/leadService.js';
 const prisma = new PrismaClient();
 const router = express.Router();
 
-const SALESRABBIT_WEBHOOK_SECRET = process.env.SALESRABBIT_WEBHOOK_SECRET;
+const WEBHOOK_SECRETS = [
+  process.env.SALESRABBIT_WEBHOOK_SECRET,
+  process.env.SALESRABBIT_API_KEY,
+  process.env.SALES_RABBIT_API_KEY,
+  process.env.INTERNAL_API_KEY,
+].filter(Boolean);
 
 const pickFirstValue = (...values) => {
   for (const value of values) {
@@ -75,12 +80,13 @@ const validateWebhookSecret = (req, res, next) => {
     return next();
   }
 
-  if (!SALESRABBIT_WEBHOOK_SECRET) {
+  if (WEBHOOK_SECRETS.length === 0) {
     return next();
   }
 
   const providedSecret = extractProvidedSecret(req);
-  if (!secretsMatch(providedSecret, SALESRABBIT_WEBHOOK_SECRET)) {
+  const isAllowed = WEBHOOK_SECRETS.some((secret) => secretsMatch(providedSecret, secret));
+  if (!isAllowed) {
     logger.warn('SalesRabbit webhook: invalid or missing secret');
     return res.status(401).json({
       success: false,
