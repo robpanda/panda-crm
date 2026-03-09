@@ -409,6 +409,26 @@ export default function LeadWizard() {
     return null;
   };
 
+  const buildPreferredAppointmentSuggestion = (preferredDateTime) => {
+    if (!preferredDateTime) return null;
+    const preferred = new Date(preferredDateTime);
+    if (Number.isNaN(preferred.getTime())) return null;
+
+    const appointmentDate = formatDateForInput(preferred);
+    const appointmentTime = `${String(preferred.getHours()).padStart(2, '0')}:${String(preferred.getMinutes()).padStart(2, '0')}`;
+
+    if (!isAppointmentWithinWindow(appointmentDate, appointmentTime)) {
+      return null;
+    }
+
+    return {
+      found: true,
+      appointmentDate,
+      appointmentTime,
+      reason: 'PREFERRED_SLOT_ACCEPTED_LOCAL_FALLBACK',
+    };
+  };
+
   const applyAppointmentSuggestionToForm = (suggestion) => {
     if (!suggestion?.appointmentDate || !suggestion?.appointmentTime) return;
 
@@ -564,8 +584,10 @@ export default function LeadWizard() {
     setIsSuggestingAppointment(true);
     try {
       let suggestion = null;
+      let backendSuggestionUnavailable = false;
+      const hasBackendSuggestionApi = typeof leadsApi.suggestInspectionAppointment === 'function';
 
-      if (leadId) {
+      if (leadId && hasBackendSuggestionApi) {
         try {
           suggestion = await leadsApi.suggestInspectionAppointment(leadId, {
             workType: formData.workType || 'Inspection',
@@ -576,7 +598,10 @@ export default function LeadWizard() {
           });
         } catch (suggestionError) {
           console.error('Failed to fetch backend appointment suggestion:', suggestionError);
+          backendSuggestionUnavailable = true;
         }
+      } else if (leadId) {
+        backendSuggestionUnavailable = true;
       }
 
       if (!suggestion?.found && allowFallback) {
@@ -586,6 +611,15 @@ export default function LeadWizard() {
             found: true,
             ...localSuggestion,
           };
+        }
+      }
+
+      // If backend suggestion is unavailable, still allow explicitly requested
+      // slots that are within the accepted scheduling window.
+      if (!suggestion?.found && preferredDateTime && backendSuggestionUnavailable) {
+        const preferredSuggestion = buildPreferredAppointmentSuggestion(preferredDateTime);
+        if (preferredSuggestion) {
+          suggestion = preferredSuggestion;
         }
       }
 
