@@ -99,6 +99,7 @@ import {
   Send,
   ExternalLink,
   Download,
+  Trash2,
   ZoomIn,
   ChevronLeft,
   Grid,
