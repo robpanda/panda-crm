@@ -29,7 +29,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { useRingCentral } from '../context/RingCentralContext';
-import { ringCentralApi, googleCalendarApi, paymentsApi } from '../services/api';
+import { ringCentralApi, googleCalendarApi, paymentsApi, authApi } from '../services/api';
 import { CreditCard, FileText, Database } from 'lucide-react';
 
 const tabs = [
@@ -40,12 +40,29 @@ const tabs = [
   { id: 'preferences', label: 'Preferences', icon: Palette },
 ];
 
+const buildProfileState = (user) => {
+  const sourceName = user?.fullName || user?.name || '';
+  const nameParts = sourceName ? sourceName.trim().split(/\s+/) : [];
+  const fallbackFirst = nameParts[0] || '';
+  const fallbackLast = nameParts.slice(1).join(' ');
+
+  return {
+    firstName: user?.firstName || fallbackFirst,
+    lastName: user?.lastName || fallbackLast,
+    email: user?.email || '',
+    phone: user?.phone || user?.mobilePhone || '',
+    department: user?.department || '',
+    title: user?.jobTitle || user?.title || '',
+  };
+};
+
 export default function Settings() {
   const { user } = useAuth();
   const { isLoggedIn: rcLoggedIn, loadWidget, logout: rcLogout } = useRingCentral();
   const [activeTab, setActiveTab] = useState('profile');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState('');
   const [rcConnecting, setRcConnecting] = useState(false);
 
   // Google Calendar state
@@ -106,14 +123,11 @@ export default function Settings() {
   }, [user?.id]);
 
   // Profile state
-  const [profile, setProfile] = useState({
-    firstName: user?.name?.split(' ')[0] || '',
-    lastName: user?.name?.split(' ').slice(1).join(' ') || '',
-    email: user?.email || '',
-    phone: '',
-    department: user?.department || '',
-    title: '',
-  });
+  const [profile, setProfile] = useState(buildProfileState(user));
+
+  useEffect(() => {
+    setProfile(buildProfileState(user));
+  }, [user]);
 
   // Notification preferences
   const [notifications, setNotifications] = useState({
@@ -148,14 +162,42 @@ export default function Settings() {
 
   const handleSave = async () => {
     setSaving(true);
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    setSaving(false);
-    setSaved(true);
-    setTimeout(() => setSaved(false), 3000);
+    setSaveError('');
+    try {
+      if (activeTab === 'profile') {
+        const updated = await authApi.updateCurrentUserProfile({
+          firstName: profile.firstName,
+          lastName: profile.lastName,
+          phone: profile.phone,
+          department: profile.department,
+          title: profile.title,
+        });
+
+        // Keep profile state aligned with persisted values.
+        setProfile((prev) => ({
+          ...prev,
+          firstName: updated?.firstName ?? prev.firstName,
+          lastName: updated?.lastName ?? prev.lastName,
+          phone: updated?.phone ?? prev.phone,
+          department: updated?.department ?? prev.department,
+          title: updated?.title ?? prev.title,
+        }));
+      } else {
+        // Preserve existing non-profile behavior.
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+    } catch (error) {
+      setSaveError(error?.response?.data?.error?.message || 'Unable to save changes');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleProfileChange = (field, value) => {
+    setSaveError('');
     setProfile(prev => ({ ...prev, [field]: value }));
   };
 
@@ -1010,6 +1052,12 @@ export default function Settings() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
           <p className="text-gray-600 mt-1">Manage your account settings and preferences</p>
+          {saveError && (
+            <p className="text-sm text-red-600 mt-2 flex items-center">
+              <AlertCircle className="w-4 h-4 mr-1" />
+              {saveError}
+            </p>
+          )}
         </div>
         <button
           onClick={handleSave}
