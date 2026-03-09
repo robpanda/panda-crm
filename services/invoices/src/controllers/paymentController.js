@@ -4,6 +4,15 @@ import Decimal from 'decimal.js';
 
 const prisma = new PrismaClient();
 
+const PAYMENT_STATUS_LEGACY_MAP = {
+  COMPLETED: 'SETTLED',
+};
+
+function normalizePaymentStatus(status) {
+  if (!status) return status;
+  return PAYMENT_STATUS_LEGACY_MAP[status] || status;
+}
+
 // Validation schemas
 const createPaymentSchema = z.object({
   invoiceId: z.string(),
@@ -19,7 +28,8 @@ const updatePaymentSchema = z.object({
   paymentMethod: z.enum(['CHECK', 'CREDIT_CARD', 'ACH', 'WIRE', 'CASH', 'OTHER']).optional(),
   referenceNumber: z.string().optional(),
   notes: z.string().optional(),
-  status: z.enum(['PENDING', 'COMPLETED', 'FAILED', 'REFUNDED']).optional(),
+  // Accept legacy COMPLETED from older callers and normalize to SETTLED before persistence.
+  status: z.enum(['PENDING', 'PROCESSING', 'SETTLED', 'FAILED', 'REFUNDED', 'PARTIALLY_REFUNDED', 'COMPLETED']).optional(),
 });
 
 // Generate payment number
@@ -48,7 +58,7 @@ export async function listPayments(req, res, next) {
     const where = {};
 
     if (invoiceId) where.invoiceId = invoiceId;
-    if (status) where.status = status;
+    if (status) where.status = normalizePaymentStatus(status);
     if (paymentMethod) where.paymentMethod = paymentMethod;
 
     if (accountId) {
@@ -169,7 +179,7 @@ export async function createPayment(req, res, next) {
           paymentMethod: data.paymentMethod,
           referenceNumber: data.referenceNumber,
           notes: data.notes,
-          status: 'COMPLETED',
+          status: 'SETTLED',
         },
       });
 
@@ -231,6 +241,7 @@ export async function updatePayment(req, res, next) {
       where: { id },
       data: {
         ...data,
+        status: normalizePaymentStatus(data.status),
         paymentDate: data.paymentDate ? new Date(data.paymentDate) : undefined,
       },
       include: {
@@ -265,7 +276,7 @@ export async function refundPayment(req, res, next) {
       return res.status(400).json({ error: 'Payment already refunded' });
     }
 
-    if (payment.status !== 'COMPLETED') {
+    if (payment.status !== 'SETTLED') {
       return res.status(400).json({ error: 'Can only refund completed payments' });
     }
 
@@ -380,7 +391,7 @@ export async function getPaymentsByInvoice(req, res, next) {
       payments,
       summary: {
         totalPayments: payments.length,
-        completedPayments: payments.filter((p) => p.status === 'COMPLETED').length,
+        completedPayments: payments.filter((p) => p.status === 'SETTLED').length,
         refundedPayments: payments.filter((p) => p.status === 'REFUNDED').length,
       },
     });
@@ -394,7 +405,7 @@ export async function getPaymentStats(req, res, next) {
   try {
     const { dateFrom, dateTo, accountId } = req.query;
 
-    const where = { status: 'COMPLETED' };
+    const where = { status: 'SETTLED' };
 
     if (dateFrom || dateTo) {
       where.paymentDate = {};
@@ -510,7 +521,7 @@ export async function batchPayment(req, res, next) {
             paymentMethod: data.paymentMethod,
             referenceNumber: data.referenceNumber,
             notes: data.notes,
-            status: 'COMPLETED',
+            status: 'SETTLED',
           },
         });
 

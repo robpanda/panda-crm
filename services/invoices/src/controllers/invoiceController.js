@@ -449,7 +449,7 @@ export async function sendInvoice(req, res, next) {
         account: true,
         lineItems: true,
         payments: {
-          where: { status: 'COMPLETED' },
+          where: { status: 'SETTLED' },
           orderBy: { paymentDate: 'desc' },
         },
       },
@@ -973,7 +973,7 @@ export async function generateInvoicePdf(req, res, next) {
         account: true,
         lineItems: true,
         payments: {
-          where: { status: 'COMPLETED' },
+          where: { status: 'SETTLED' },
           orderBy: { paymentDate: 'desc' },
         },
       },
@@ -1018,7 +1018,7 @@ export async function getInvoicePdf(req, res, next) {
         account: true,
         lineItems: true,
         payments: {
-          where: { status: 'COMPLETED' },
+          where: { status: 'SETTLED' },
           orderBy: { paymentDate: 'desc' },
         },
       },
