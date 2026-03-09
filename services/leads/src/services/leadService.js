@@ -89,6 +89,27 @@ class LeadService {
     return null;
   }
 
+  normalizeTentativeAppointmentDate(value) {
+    if (!value) return null;
+
+    if (value instanceof Date) {
+      if (Number.isNaN(value.getTime())) return null;
+      return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate(), 0, 0, 0, 0));
+    }
+
+    const raw = String(value).trim();
+    if (!raw) return null;
+
+    const datePart = raw.includes('T') ? raw.split('T')[0] : raw;
+    const [year, month, day] = datePart.split('-').map((part) => Number(part));
+
+    if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
+      return null;
+    }
+
+    return new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+  }
+
   /**
    * Normalize optional text field to trimmed string or null
    */
@@ -526,8 +547,6 @@ class LeadService {
    * @param {string[]} ownerIds - Filter counts to multiple owner IDs
    */
   async getLeadCounts(currentUserId, ownerId = null, ownerIds = []) {
-    const counts = {};
-
     // Resolve user ID if it's a Cognito ID (starts with uuid format)
     let resolvedUserId = currentUserId;
     if (currentUserId) {
@@ -543,33 +562,23 @@ class LeadService {
       ownerWhere.ownerId = ownerId;
     }
 
-    // Total unconverted leads (with owner filter if specified)
-    counts.total = await prisma.lead.count({
-      where: { isConverted: false, deleted_at: null, ...ownerWhere },
+    const baseWhere = { isConverted: false, deleted_at: null, ...ownerWhere };
+    const knownStatuses = ['NEW', 'CONTACTED', 'QUALIFIED', 'UNQUALIFIED', 'NURTURING', 'CONVERTED'];
+
+    const [total, mine, ...statusBuckets] = await Promise.all([
+      prisma.lead.count({ where: baseWhere }),
+      resolvedUserId
+        ? prisma.lead.count({ where: { isConverted: false, deleted_at: null, ownerId: resolvedUserId } })
+        : Promise.resolve(0),
+      ...knownStatuses.map((status) =>
+        prisma.lead.count({ where: { ...baseWhere, status } })
+      ),
+    ]);
+
+    const counts = { total, mine };
+    knownStatuses.forEach((status, index) => {
+      counts[status] = statusBuckets[index] || 0;
     });
-
-    // My leads - always set this, even if 0
-    if (resolvedUserId) {
-      counts.mine = await prisma.lead.count({
-        where: { isConverted: false, deleted_at: null, ownerId: resolvedUserId },
-      });
-      logger.info(`getLeadCounts: mine=${counts.mine} for resolvedUserId=${resolvedUserId}`);
-    } else {
-      counts.mine = 0;
-    }
-
-    // By status (with owner filter if specified)
-    const statusCounts = await prisma.lead.groupBy({
-      by: ['status'],
-      where: { isConverted: false, deleted_at: null, ...ownerWhere },
-      _count: { id: true },
-    });
-
-    for (const item of statusCounts) {
-      if (item.status) {
-        counts[item.status] = item._count.id;
-      }
-    }
 
     return counts;
   }
@@ -594,18 +603,24 @@ class LeadService {
    */
   getLeadSources() {
     return [
-      { value: 'Web', label: 'Web' },
-      { value: 'Phone Inquiry', label: 'Phone Inquiry' },
-      { value: 'Partner Referral', label: 'Partner Referral' },
-      { value: 'Purchased List', label: 'Purchased List' },
-      { value: 'Door Knock', label: 'Door Knock' },
-      { value: 'Self-Gen', label: 'Self-Gen' },
-      { value: 'Marketing Campaign', label: 'Marketing Campaign' },
-      { value: 'Trade Show', label: 'Trade Show' },
-      { value: 'Employee Referral', label: 'Employee Referral' },
+      { value: 'Bath Lead', label: 'Bath Lead' },
+      { value: 'Company Vehicle', label: 'Company Vehicle' },
       { value: 'Customer Referral', label: 'Customer Referral' },
-      { value: 'Social Media', label: 'Social Media' },
-      { value: 'Other', label: 'Other' },
+      { value: 'Digital Marketing', label: 'Digital Marketing' },
+      { value: 'Employee Referral', label: 'Employee Referral' },
+      { value: 'Flyer', label: 'Flyer' },
+      { value: 'Insurance Marketing', label: 'Insurance Marketing' },
+      { value: 'Insurance Program', label: 'Insurance Program' },
+      { value: 'Lead Aggregator', label: 'Lead Aggregator' },
+      { value: 'Radio', label: 'Radio' },
+      { value: 'Retail Marketing', label: 'Retail Marketing' },
+      { value: 'Roof DRP', label: 'Roof DRP' },
+      { value: 'Self-Gen', label: 'Self-Gen' },
+      { value: 'Solar Marketing', label: 'Solar Marketing' },
+      { value: 'Telemarketing', label: 'Telemarketing' },
+      { value: 'Trade Show', label: 'Trade Show' },
+      { value: 'Vendor Referral', label: 'Vendor Referral' },
+      { value: 'Yard Sign', label: 'Yard Sign' },
     ];
   }
 
@@ -720,7 +735,7 @@ class LeadService {
         selfGenRepId: data.selfGenRepId,
         salesforceId: data.salesforceId,
         // Call Center - Tentative Appointment fields (per Setting A Lead SOP)
-        tentativeAppointmentDate: data.tentativeAppointmentDate ? new Date(data.tentativeAppointmentDate) : null,
+        tentativeAppointmentDate: this.normalizeTentativeAppointmentDate(data.tentativeAppointmentDate),
         tentativeAppointmentTime: data.tentativeAppointmentTime,
         leadSetById: leadSetById,
         disposition: data.disposition,
@@ -839,11 +854,11 @@ class LeadService {
         where: { id: leadId },
         data: {
           score: score,
-          lead_score: score,
-          lead_rank: rank,
-          score_factors: factors,
-          scored_at: new Date(),
-          score_version: 1,
+          leadScore: score,
+          leadRank: rank,
+          scoreFactors: factors,
+          scoredAt: new Date(),
+          scoreVersion: 1,
         },
       });
 
@@ -921,7 +936,7 @@ class LeadService {
     if (data.salesRabbitUser !== undefined) updateData.salesRabbitUser = data.salesRabbitUser || null;
     // Call Center - Tentative Appointment fields
     if (data.tentativeAppointmentDate !== undefined) {
-      updateData.tentativeAppointmentDate = data.tentativeAppointmentDate ? new Date(data.tentativeAppointmentDate) : null;
+      updateData.tentativeAppointmentDate = this.normalizeTentativeAppointmentDate(data.tentativeAppointmentDate);
     }
     if (data.tentativeAppointmentTime !== undefined) updateData.tentativeAppointmentTime = data.tentativeAppointmentTime || null;
     if (data.disposition !== undefined) updateData.disposition = data.disposition || null;
@@ -1237,16 +1252,16 @@ class LeadService {
       leadSetById: lead.leadSetById,
       leadSetByName: lead.leadSetBy ? `${lead.leadSetBy.firstName} ${lead.leadSetBy.lastName}` : null,
       // Lead Intelligence / Scoring fields (snake_case in DB)
-      leadScore: lead.lead_score,
-      leadRank: lead.lead_rank,
-      scoreFactors: lead.score_factors,
-      scoredAt: lead.scored_at,
+      leadScore: lead.leadScore,
+      leadRank: lead.leadRank,
+      scoreFactors: lead.scoreFactors,
+      scoredAt: lead.scoredAt,
       // Demographic enrichment (snake_case in DB)
-      medianHouseholdIncome: lead.median_household_income,
-      medianHomeValue: lead.median_home_value,
-      homeownershipRate: lead.homeownership_rate,
-      medianAge: lead.median_age,
-      enrichedAt: lead.enriched_at,
+      medianHouseholdIncome: lead.medianHouseholdIncome,
+      medianHomeValue: lead.medianHomeValue,
+      homeownershipRate: lead.homeownershipRate,
+      medianAge: lead.medianAge,
+      enrichedAt: lead.enrichedAt,
       // Champion Referral fields
       isChampionReferral: lead.isChampionReferral || false,
       championReferralId: lead.championReferralId,

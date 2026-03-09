@@ -162,12 +162,12 @@ const initializeLeadScoring = async () => {
 // Score existing unscored leads on startup (batched to avoid overload)
 const scoreUnscoredLeadsOnStartup = async () => {
   try {
-    // Find unscored leads (where score is 0 or null and scored_at is null)
+    // Find unscored leads (where score is 0 or null and scoredAt is null)
     const unscoredLeads = await prisma.lead.findMany({
       where: {
         OR: [
-          { scored_at: null },
-          { lead_score: null },
+          { scoredAt: null },
+          { leadScore: null },
           { score: 0 },
         ],
         isConverted: false,
@@ -263,11 +263,11 @@ const scoreLeadSimple = async (leadId) => {
     where: { id: leadId },
     data: {
       score: score,
-      lead_score: score,
-      lead_rank: rank,
-      score_factors: factors,
-      scored_at: new Date(),
-      score_version: 1,
+      leadScore: score,
+      leadRank: rank,
+      scoreFactors: factors,
+      scoredAt: new Date(),
+      scoreVersion: 1,
     },
   });
 };
