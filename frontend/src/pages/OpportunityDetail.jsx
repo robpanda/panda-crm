@@ -3508,6 +3508,7 @@ export default function OpportunityDetail() {
   const ownerDisplayId = opportunity?.owner?.id || opportunity?.ownerId || null;
   const ownerDisplayEmail = opportunity?.owner?.email || null;
   const ownerDisplayPhone = opportunity?.owner?.phone || null;
+  const hasOwnerTeamMember = Boolean(ownerDisplayId || ownerDisplayName);
   const parsedAdjusterOfficePhone = useMemo(
     () => parseAdjusterOfficePhone(opportunity?.adjusterOfficePhone || ''),
     [opportunity?.adjusterOfficePhone]
