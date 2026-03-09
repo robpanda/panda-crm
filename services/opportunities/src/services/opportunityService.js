@@ -79,7 +79,6 @@ function extractMentionUserId(mention) {
   if (typeof mention === 'string') return mention;
   return mention.userId || mention.id || null;
 }
-}
 
 /**
  * Generate a pre-signed URL for an S3 document
