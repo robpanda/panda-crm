@@ -78,6 +78,36 @@ const fingerprintSecret = (value) => {
   return crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, 12);
 };
 
+const collectCandidateSecretsFromObject = (input, depth = 0, maxDepth = 6) => {
+  if (!input || depth > maxDepth) return [];
+  if (Array.isArray(input)) {
+    return input.flatMap((item) => collectCandidateSecretsFromObject(item, depth + 1, maxDepth));
+  }
+  if (typeof input !== 'object') return [];
+
+  const out = [];
+  for (const [key, value] of Object.entries(input)) {
+    const normalizedKey = String(key).toLowerCase();
+    const looksLikeSecretKey = /(secret|token|api[_-]?key|auth)/i.test(normalizedKey);
+
+    if (looksLikeSecretKey) {
+      const candidate = pickFirstValue(value);
+      if (candidate) out.push(candidate);
+    }
+
+    if (value && typeof value === 'object') {
+      out.push(...collectCandidateSecretsFromObject(value, depth + 1, maxDepth));
+    } else if (typeof value === 'string') {
+      // Some providers send stringified nested JSON blocks
+      const asObj = toObject(value);
+      if (Object.keys(asObj).length > 0) {
+        out.push(...collectCandidateSecretsFromObject(asObj, depth + 1, maxDepth));
+      }
+    }
+  }
+  return out;
+};
+
 const normalizeOptionalValue = (value) => {
   if (value === undefined || value === null) return null;
   const normalized = String(value).trim();
@@ -101,6 +131,13 @@ const isSalesRabbitPath = (req) => req?.path === '/webhook' && req?.method === '
 const extractProvidedSecret = (req) => {
   const authHeader = req.headers.authorization;
   const [authType, authToken] = authHeader ? authHeader.split(' ') : [null, null];
+  const formData = toObject(req.body?.formData || req.body?.form_data || req.body?.payload);
+  const leadMetaData = toObject(req.body?.leadMetaData || req.body?.leadMetadata || req.body?.metadata || req.body?.metaData);
+  const collectedCandidates = [
+    ...collectCandidateSecretsFromObject(req.body),
+    ...collectCandidateSecretsFromObject(formData),
+    ...collectCandidateSecretsFromObject(leadMetaData),
+  ];
 
   return pickFirstValue(
     req.headers['x-webhook-secret'],
@@ -128,6 +165,19 @@ const extractProvidedSecret = (req) => {
     req.body?.leadMetadata?.apiKey,
     req.body?.leadMetadata?.apikey,
     req.body?.leadMetadata?.authToken,
+    formData?.secret,
+    formData?.apiKey,
+    formData?.apikey,
+    formData?.authToken,
+    formData?.auth_key,
+    formData?.api_key,
+    leadMetaData?.secret,
+    leadMetaData?.apiKey,
+    leadMetaData?.apikey,
+    leadMetaData?.authToken,
+    leadMetaData?.auth_key,
+    leadMetaData?.api_key,
+    ...collectedCandidates,
     authType === 'ApiKey' ? authToken : null,
     authType === 'Bearer' ? authToken : null,
     authToken || null,
