@@ -4585,6 +4585,124 @@ export const documentsApi = {
 };
 
 // ==========================================
+// PANDASIGN V2 COMPATIBILITY API
+// ==========================================
+// Additive compatibility layer for components expecting a v2-shaped API.
+export const documentsApiV2 = {
+  async getTemplates(params = {}) {
+    const response = await api.get('/api/documents/agreements/templates', { params });
+    return response.data;
+  },
+
+  async preview(payload = {}) {
+    try {
+      const response = await api.post('/api/documents/agreements/preview', payload);
+      return response.data;
+    } catch (error) {
+      // Some environments do not expose a dedicated preview endpoint yet.
+      if (error?.response?.status === 404 || error?.response?.status === 501) {
+        return {
+          success: true,
+          data: {
+            previewUnavailable: true,
+            warnings: ['Preview endpoint unavailable in this environment.'],
+          },
+        };
+      }
+      throw error;
+    }
+  },
+
+  async send(payload = {}) {
+    const {
+      templateId,
+      context = {},
+      recipients = {},
+      message,
+      expiresInDays,
+      instantSign = false,
+      mergeData = {},
+    } = payload;
+
+    const candidateRecipients = Object.entries(recipients)
+      .filter(([, value]) => value?.email && value?.name);
+
+    const preferredRoleOrder = ['CUSTOMER', 'CO_SIGNER', 'AGENT', 'PM', 'WITNESS'];
+    candidateRecipients.sort((a, b) => {
+      const ai = preferredRoleOrder.indexOf(a[0]);
+      const bi = preferredRoleOrder.indexOf(b[0]);
+      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+    });
+
+    const [, primaryRecipient] = candidateRecipients[0] || [];
+    if (!templateId || !primaryRecipient?.email || !primaryRecipient?.name) {
+      throw new Error('templateId and at least one signer name/email are required');
+    }
+
+    const createResponse = await api.post('/api/documents/agreements', {
+      templateId,
+      opportunityId: context.opportunityId,
+      accountId: context.accountId,
+      contactId: context.contactId,
+      recipientEmail: primaryRecipient.email,
+      recipientName: primaryRecipient.name,
+      mergeData: {
+        ...mergeData,
+        message,
+        expiresInDays,
+      },
+    });
+
+    const agreement = createResponse.data?.data || createResponse.data;
+    const agreementId = agreement?.id;
+
+    if (!agreementId) {
+      throw new Error('Agreement creation failed');
+    }
+
+    let sentAgreement = agreement;
+    if (instantSign || payload.sendImmediately !== false) {
+      const sendResponse = await api.post(`/api/documents/agreements/${agreementId}/send`);
+      sentAgreement = sendResponse.data?.data || sendResponse.data;
+    }
+
+    let signingUrl = null;
+    let signingLinks = null;
+
+    if (instantSign) {
+      const agent =
+        recipients.AGENT ||
+        recipients.PM ||
+        primaryRecipient;
+
+      try {
+        const hostResponse = await api.post(`/api/documents/agreements/${agreementId}/host-sign`, {
+          hostName: agent?.name || 'Agent',
+          hostEmail: agent?.email || null,
+        });
+        const hostData = hostResponse.data?.data || hostResponse.data;
+        signingUrl = hostData?.hostSigningUrl || hostData?.embeddedSigningUrl || null;
+        if (signingUrl) {
+          signingLinks = { AGENT: signingUrl };
+        }
+      } catch {
+        // Keep flow non-blocking if host signing session bootstrap is unavailable.
+      }
+    }
+
+    return {
+      success: true,
+      data: {
+        ...sentAgreement,
+        instantSign: Boolean(instantSign),
+        signingUrl,
+        signingLinks,
+      },
+    };
+  },
+};
+
+// ==========================================
 // PANDASIGN AGREEMENTS API
 // ==========================================
 export const agreementsApi = {
