@@ -303,10 +303,10 @@ export async function createInvoice(req, res, next) {
         total,
         amountPaid: 0,
         balanceDue: total,
-        // Insurance-specific fields
-        isInsuranceInvoice: data.isInsuranceInvoice || false,
-        insuranceCarrier: data.insuranceCarrier || null,
-        claimNumber: data.claimNumber || null,
+        // Insurance-specific fields (Prisma model uses snake_case columns)
+        is_insurance_invoice: data.isInsuranceInvoice || false,
+        insurance_carrier: data.insuranceCarrier || null,
+        claim_number: data.claimNumber || null,
         notes: data.notes || null,
         lineItems: {
           create: lineItems.map((item) => ({
