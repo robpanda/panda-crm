@@ -41,6 +41,13 @@ const lineItemSchema = z.object({
   unitPrice: z.number().nonnegative(),
 });
 
+const additionalChargeSchema = z.object({
+  name: z.string().min(1).default('Supplement'),
+  amount: z.number().nonnegative(),
+  notes: z.string().optional(),
+  chargeType: z.enum(['ADJUSTMENT', 'OTHER']).optional().default('ADJUSTMENT'),
+});
+
 const createInvoiceSchema = z.object({
   accountId: z.string(),
   opportunityId: z.string().optional(),
@@ -60,6 +67,9 @@ const updateInvoiceSchema = z.object({
   dueDate: z.string().datetime().optional(),
   terms: z.number().int().positive().optional(),
   tax: z.number().nonnegative().optional(),
+  notes: z.string().optional(),
+  lineItems: z.array(lineItemSchema).optional(),
+  additionalCharges: z.array(additionalChargeSchema).optional(),
   status: z.enum(['DRAFT', 'PENDING', 'SENT', 'PARTIAL', 'PAID', 'OVERDUE', 'VOID']).optional(),
 });
 
@@ -280,7 +290,13 @@ export async function updateInvoice(req, res, next) {
     const { id } = req.params;
     const data = updateInvoiceSchema.parse(req.body);
 
-    const existing = await prisma.invoice.findUnique({ where: { id } });
+    const existing = await prisma.invoice.findUnique({
+      where: { id },
+      include: {
+        lineItems: true,
+        additionalCharges: true,
+      },
+    });
     if (!existing) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
@@ -290,29 +306,95 @@ export async function updateInvoice(req, res, next) {
       return res.status(400).json({ error: `Cannot update ${existing.status.toLowerCase()} invoice` });
     }
 
-    const updateData = { ...data };
+    const hasLineItems = Array.isArray(data.lineItems);
+    const hasAdjustments = Array.isArray(data.additionalCharges);
+    const effectiveLineItems = hasLineItems ? data.lineItems : (existing.lineItems || []).map((item) => ({
+      description: item.description,
+      quantity: Number(item.quantity || 0),
+      unitPrice: Number(item.unitPrice || 0),
+    }));
+    const effectiveTax = data.tax !== undefined ? Number(data.tax || 0) : Number(existing.tax || 0);
+    const effectiveAdjustments = hasAdjustments
+      ? data.additionalCharges.filter((charge) => Number(charge.amount || 0) > 0)
+      : (existing.additionalCharges || []).filter((charge) => charge.chargeType === 'ADJUSTMENT').map((charge) => ({
+        name: charge.name || 'Supplement',
+        amount: Number(charge.amount || charge.fixedAmount || 0),
+        notes: charge.notes || '',
+        chargeType: 'ADJUSTMENT',
+      }));
 
-    // Recalculate due date if terms or invoice date changed
-    if (data.invoiceDate || data.terms) {
-      const invoiceDate = data.invoiceDate
-        ? new Date(data.invoiceDate)
-        : existing.invoiceDate;
+    const totals = calculateTotals(effectiveLineItems, effectiveTax);
+    const adjustmentTotal = effectiveAdjustments.reduce((sum, charge) => sum + Number(charge.amount || 0), 0);
+    const total = Number(new Decimal(totals.total).plus(adjustmentTotal).toNumber());
+    const amountPaid = Number(existing.amountPaid || 0);
+    const balanceDue = Math.max(total - amountPaid, 0);
+
+    let dueDate;
+    if (data.dueDate) {
+      dueDate = new Date(data.dueDate);
+    } else if (data.invoiceDate || data.terms) {
+      const invoiceDate = data.invoiceDate ? new Date(data.invoiceDate) : existing.invoiceDate;
       const terms = data.terms || existing.terms;
-      updateData.dueDate = addDays(invoiceDate, terms);
+      dueDate = addDays(invoiceDate, terms);
     }
 
-    const invoice = await prisma.invoice.update({
-      where: { id },
-      data: {
-        ...updateData,
-        invoiceDate: data.invoiceDate ? new Date(data.invoiceDate) : undefined,
-        dueDate: updateData.dueDate,
-      },
-      include: {
-        account: { select: { id: true, name: true } },
-        lineItems: true,
-        payments: true,
-      },
+    const invoice = await prisma.$transaction(async (tx) => {
+      if (hasLineItems) {
+        await tx.invoiceLineItem.deleteMany({ where: { invoiceId: id } });
+        if (effectiveLineItems.length > 0) {
+          await tx.invoiceLineItem.createMany({
+            data: totals.lineItems.map((item) => ({
+              invoiceId: id,
+              description: item.description,
+              quantity: Number(item.quantity || 1),
+              unitPrice: Number(item.unitPrice || 0),
+              totalPrice: Number(item.totalPrice || 0),
+            })),
+          });
+        }
+      }
+
+      if (hasAdjustments) {
+        await tx.invoiceAdditionalCharge.deleteMany({
+          where: {
+            invoiceId: id,
+            chargeType: 'ADJUSTMENT',
+          },
+        });
+        if (effectiveAdjustments.length > 0) {
+          await tx.invoiceAdditionalCharge.createMany({
+            data: effectiveAdjustments.map((charge) => ({
+              invoiceId: id,
+              name: charge.name?.trim() || 'Supplement',
+              chargeType: charge.chargeType || 'ADJUSTMENT',
+              amount: Number(charge.amount || 0),
+              fixedAmount: Number(charge.amount || 0),
+              notes: charge.notes || null,
+            })),
+          });
+        }
+      }
+
+      return tx.invoice.update({
+        where: { id },
+        data: {
+          status: data.status,
+          terms: data.terms,
+          notes: data.notes,
+          tax: effectiveTax,
+          subtotal: totals.subtotal,
+          total,
+          balanceDue,
+          invoiceDate: data.invoiceDate ? new Date(data.invoiceDate) : undefined,
+          dueDate,
+        },
+        include: {
+          account: { select: { id: true, name: true } },
+          lineItems: true,
+          additionalCharges: true,
+          payments: true,
+        },
+      });
     });
 
     res.json(invoice);
@@ -377,8 +459,8 @@ export async function sendInvoice(req, res, next) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
 
-    if (invoice.status !== 'DRAFT' && invoice.status !== 'PENDING') {
-      return res.status(400).json({ error: 'Invoice already sent or processed' });
+    if (invoice.status === 'VOID') {
+      return res.status(400).json({ error: 'Cannot send a void invoice' });
     }
 
     // Determine recipient email
@@ -603,8 +685,8 @@ ${Buffer.from(pdfResult.pdfBytes).toString('base64')}`;
         // Store payment link for reference
         ...(paymentLink && { stripePaymentLinkUrl: paymentLink }),
         ...(pdfResult && {
-          pdfUrl: pdfResult.downloadUrl,
-          pdfKey: pdfResult.key,
+          pdf_url: pdfResult.downloadUrl,
+          pdf_key: pdfResult.key,
         }),
       },
       include: {
@@ -662,7 +744,7 @@ ${Buffer.from(pdfResult.pdfBytes).toString('base64')}`;
       emailSent,
       emailError,
       paymentLinkUrl: paymentLink,
-      pdfUrl: pdfResult?.downloadUrl,
+      pdfUrl: pdfResult?.downloadUrl || updatedInvoice.pdf_url || null,
       sentTo: toEmail,
       ccEmails: ccEmails.filter(Boolean),
       quickbooks: qbSyncResult ? { synced: true, ...qbSyncResult } : (qbSyncError ? { synced: false, error: qbSyncError } : null),
@@ -908,8 +990,8 @@ export async function generateInvoicePdf(req, res, next) {
     await prisma.invoice.update({
       where: { id },
       data: {
-        pdfUrl: pdfResult.downloadUrl,
-        pdfKey: pdfResult.key,
+        pdf_url: pdfResult.downloadUrl,
+        pdf_key: pdfResult.key,
       },
     });
 
@@ -982,8 +1064,8 @@ export async function getInvoicePdf(req, res, next) {
     await prisma.invoice.update({
       where: { id },
       data: {
-        pdfUrl: pdfResult.downloadUrl,
-        pdfKey: pdfResult.key,
+        pdf_url: pdfResult.downloadUrl,
+        pdf_key: pdfResult.key,
       },
     });
 

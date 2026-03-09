@@ -23,7 +23,7 @@ const handleValidation = async (req, res, next) => {
 const validateCreate = [
   body('firstName').trim().notEmpty().withMessage('First name is required'),
   body('lastName').trim().notEmpty().withMessage('Last name is required'),
-  body('email').optional().isEmail().withMessage('Invalid email format'),
+  body('email').optional({ checkFalsy: true }).isEmail().withMessage('Invalid email format'),
 ];
 
 const validatePagination = [

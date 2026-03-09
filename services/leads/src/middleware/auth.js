@@ -8,6 +8,20 @@ import { logger } from './logger.js';
 export async function authMiddleware(req, res, next) {
   try {
     const authHeader = req.headers.authorization;
+    const fallbackApiKey = req.headers['x-api-key']
+      || req.headers['x_api_key']
+      || req.query?.apiKey
+      || req.query?.apikey
+      || null;
+
+    // Support integrations that cannot set Authorization headers.
+    if (!authHeader && fallbackApiKey) {
+      const allowedKeys = [process.env.INTERNAL_API_KEY, process.env.SALESRABBIT_API_KEY].filter(Boolean);
+      if (allowedKeys.includes(String(fallbackApiKey))) {
+        req.user = { id: 'system', role: 'system', isSystem: true };
+        return next();
+      }
+    }
 
     if (!authHeader) {
       return res.status(401).json({

@@ -1778,6 +1778,7 @@ export default function LeadWizard() {
        formData.lastName &&
        formData.leadSource &&
        (formData.phone || formData.mobilePhone || formData.email));
+  const hasAnyPhone = Boolean(formData.phone || formData.mobilePhone);
 
   // canConvert should match hasRequiredFields validation
   const canConvert = lead &&
@@ -1817,7 +1818,7 @@ export default function LeadWizard() {
   }
 
   return (
-    <div className="space-y-6 pb-28 sm:pb-32">
+    <div className="space-y-6 pb-40 sm:pb-44">
       {/* Header */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
         <div className="flex items-center justify-between">
@@ -2969,80 +2970,137 @@ export default function LeadWizard() {
       {!conversionResult && (
         <div className="fixed inset-x-0 bottom-0 z-50 px-3 pb-3 sm:px-6 sm:pb-4">
           <div className="mx-auto max-w-screen-2xl">
-            <div className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white/95 p-3 shadow-lg backdrop-blur sm:p-4">
-              <button
-                onClick={handlePrevious}
-                disabled={currentStep === 1}
-                className={`inline-flex items-center px-4 py-2 rounded-lg transition-colors ${
-                  currentStep === 1
-                    ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                <ChevronLeft className="w-5 h-5 mr-1" />
-                Previous
-              </button>
-
-              <div className="flex items-center space-x-2 sm:space-x-3">
+            <div className="rounded-xl border border-gray-200 bg-white/95 p-3 shadow-lg backdrop-blur sm:p-4">
+              <div className="mb-3 grid grid-cols-3 gap-2 sm:flex sm:items-center sm:justify-center sm:gap-4">
                 <button
-                  onClick={() => navigate(-1)}
-                  className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
-                >
-                  Cancel
-                </button>
-                {currentStep < totalSteps ? (
-                  <button
-                    onClick={handleNext}
-                    className="inline-flex items-center px-6 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90 transition-colors"
-                  >
-                    Next
-                    <ChevronRight className="w-5 h-5 ml-1" />
-                  </button>
-                ) : isCallCenter ? (
-                  <button
-                    onClick={handleOpenLeadRecord}
-                    disabled={isSaving || !formData.leadSource}
-                    className={`inline-flex items-center rounded-lg px-4 py-1.5 text-sm transition-colors ${
-                      isSaving || !formData.leadSource
-                        ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                        : 'bg-panda-primary text-white hover:bg-panda-primary/90'
-                    }`}
-                  >
-                    {isSaving ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Saving...
-                      </>
-                    ) : (
-                      <>
-                        {isNewLead ? 'Create & Open Lead' : 'Open Lead Record'}
-                        <ArrowRight className="ml-1 h-4 w-4" />
-                      </>
-                    )}
-                  </button>
-                ) : isNewLead ? (
-                  <button
-                    onClick={handleSave}
-                    disabled={isSaving || !hasRequiredFields}
-                    className={`inline-flex items-center px-6 py-2 rounded-lg transition-colors ${
-                      isSaving || !hasRequiredFields
-                        ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  type="button"
+                  onClick={async () => {
+                    const phoneNumber = formData.phone || formData.mobilePhone;
+                    if (!phoneNumber) return;
+                    if (!isRingCentralReady) {
+                      await loadWidget();
+                    }
+                    setRingCentralVisible(true);
+                    clickToCall(phoneNumber);
+                  }}
+                  disabled={!hasAnyPhone}
+                  className={`inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-all sm:px-5 ${
+                    hasAnyPhone
+                      ? currentCall
+                        ? 'bg-red-500 text-white hover:bg-red-600'
                         : 'bg-green-500 text-white hover:bg-green-600'
-                    }`}
+                      : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                  }`}
+                >
+                  {currentCall ? <PhoneCall className="h-4 w-4" /> : <Phone className="h-4 w-4" />}
+                  <span>{currentCall ? 'On Call' : 'Call'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSmsPhoneNumber(formData.mobilePhone || formData.phone || '');
+                    setShowSmsPanel(true);
+                  }}
+                  disabled={!hasAnyPhone}
+                  className={`inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-all sm:px-5 ${
+                    hasAnyPhone
+                      ? 'bg-blue-500 text-white hover:bg-blue-600'
+                      : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                  }`}
+                >
+                  <MessageSquare className="h-4 w-4" />
+                  <span>SMS</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowEmailPanel(true)}
+                  disabled={!formData.email}
+                  className={`inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-all sm:px-5 ${
+                    formData.email
+                      ? 'bg-purple-500 text-white hover:bg-purple-600'
+                      : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                  }`}
+                >
+                  <Mail className="h-4 w-4" />
+                  <span>Email</span>
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between gap-3">
+                <button
+                  onClick={handlePrevious}
+                  disabled={currentStep === 1}
+                  className={`inline-flex items-center px-4 py-2 rounded-lg transition-colors ${
+                    currentStep === 1
+                      ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  <ChevronLeft className="w-5 h-5 mr-1" />
+                  Previous
+                </button>
+
+                <div className="flex items-center space-x-2 sm:space-x-3">
+                  <button
+                    onClick={() => navigate(-1)}
+                    className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
                   >
-                    {isSaving ? (
-                      <>
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        Creating...
-                      </>
-                    ) : (
-                      <>
-                        <CheckCircle className="w-5 h-5 mr-2" />
-                        Create Lead
-                      </>
-                    )}
+                    Cancel
                   </button>
-                ) : null}
+                  {currentStep < totalSteps ? (
+                    <button
+                      onClick={handleNext}
+                      className="inline-flex items-center px-6 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90 transition-colors"
+                    >
+                      Next
+                      <ChevronRight className="w-5 h-5 ml-1" />
+                    </button>
+                  ) : isCallCenter ? (
+                    <button
+                      onClick={handleOpenLeadRecord}
+                      disabled={isSaving || !formData.leadSource}
+                      className={`inline-flex items-center rounded-lg px-4 py-1.5 text-sm transition-colors ${
+                        isSaving || !formData.leadSource
+                          ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                          : 'bg-panda-primary text-white hover:bg-panda-primary/90'
+                      }`}
+                    >
+                      {isSaving ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Saving...
+                        </>
+                      ) : (
+                        <>
+                          {isNewLead ? 'Create & Open Lead' : 'Open Lead Record'}
+                          <ArrowRight className="ml-1 h-4 w-4" />
+                        </>
+                      )}
+                    </button>
+                  ) : isNewLead ? (
+                    <button
+                      onClick={handleSave}
+                      disabled={isSaving || !hasRequiredFields}
+                      className={`inline-flex items-center px-6 py-2 rounded-lg transition-colors ${
+                        isSaving || !hasRequiredFields
+                          ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                          : 'bg-green-500 text-white hover:bg-green-600'
+                      }`}
+                    >
+                      {isSaving ? (
+                        <>
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          Creating...
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle className="w-5 h-5 mr-2" />
+                          Create Lead
+                        </>
+                      )}
+                    </button>
+                  ) : null}
+                </div>
               </div>
             </div>
           </div>
@@ -3433,86 +3491,9 @@ export default function LeadWizard() {
         </div>
       )}
 
-      {/* Quick Actions Bar - Fixed at bottom of page */}
+      {/* Communication panels */}
       {!conversionResult && (
         <>
-          {/* Quick Actions Bar */}
-          <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 shadow-lg z-40">
-            <div className="max-w-4xl mx-auto px-4 py-3">
-              <div className="flex items-center justify-center space-x-4">
-                {/* Call Button - RingCentral Integration */}
-                <button
-                  type="button"
-                  onClick={async () => {
-                    const phoneNumber = formData.phone || formData.mobilePhone;
-                    if (phoneNumber) {
-                      // Load widget first if not loaded, then show it and place call
-                      if (!isRingCentralReady) {
-                        await loadWidget();
-                      }
-                      setRingCentralVisible(true);
-                      clickToCall(phoneNumber);
-                    }
-                  }}
-                  disabled={!formData.phone && !formData.mobilePhone}
-                  className={`flex items-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all ${
-                    (formData.phone || formData.mobilePhone)
-                      ? currentCall
-                        ? 'bg-red-500 text-white hover:bg-red-600 animate-pulse'
-                        : 'bg-green-500 text-white hover:bg-green-600'
-                      : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                  }`}
-                >
-                  {currentCall ? (
-                    <>
-                      <PhoneCall className="w-5 h-5" />
-                      <span>On Call</span>
-                    </>
-                  ) : (
-                    <>
-                      <Phone className="w-5 h-5" />
-                      <span>Call</span>
-                    </>
-                  )}
-                </button>
-
-                {/* SMS Button */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    // Default to mobile phone, fall back to regular phone
-                    setSmsPhoneNumber(formData.mobilePhone || formData.phone || '');
-                    setShowSmsPanel(true);
-                  }}
-                  disabled={!formData.phone && !formData.mobilePhone}
-                  className={`flex items-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all ${
-                    formData.phone || formData.mobilePhone
-                      ? 'bg-blue-500 text-white hover:bg-blue-600'
-                      : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                  }`}
-                >
-                  <MessageSquare className="w-5 h-5" />
-                  <span>SMS</span>
-                </button>
-
-                {/* Email Button */}
-                <button
-                  type="button"
-                  onClick={() => setShowEmailPanel(true)}
-                  disabled={!formData.email}
-                  className={`flex items-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all ${
-                    formData.email
-                      ? 'bg-purple-500 text-white hover:bg-purple-600'
-                      : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                  }`}
-                >
-                  <Mail className="w-5 h-5" />
-                  <span>Email</span>
-                </button>
-              </div>
-            </div>
-          </div>
-
           {/* SMS Sliding Panel */}
           <div className={`fixed inset-x-0 bottom-0 transform transition-transform duration-300 ease-in-out z-50 ${
             showSmsPanel ? 'translate-y-0' : 'translate-y-full'

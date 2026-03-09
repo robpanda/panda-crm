@@ -425,9 +425,10 @@ function ActivityTab({ phone, email, leadName }) {
 // Constants from LeadWizard
 const LEAD_STATUSES = [
   { value: 'NEW', label: 'New' },
-  { value: 'CONTACTED', label: 'Contacted' },
+  { value: 'CONTACTED', label: 'Confirmed' },
   { value: 'QUALIFIED', label: 'Qualified' },
   { value: 'UNQUALIFIED', label: 'Unqualified' },
+  { value: 'NURTURING', label: 'Nurturing' },
   { value: 'CONVERTED', label: 'Converted' },
 ];
 
@@ -443,16 +444,24 @@ const LEAD_DISPOSITIONS = [
 ];
 
 const LEAD_SOURCES = [
-  { value: 'Website', label: 'Website' },
-  { value: 'Referral', label: 'Referral' },
-  { value: 'Door Knock', label: 'Door Knock' },
-  { value: 'Canvassing', label: 'Canvassing' },
+  { value: 'Bath Lead', label: 'Bath Lead' },
+  { value: 'Company Vehicle', label: 'Company Vehicle' },
+  { value: 'Customer Referral', label: 'Customer Referral' },
+  { value: 'Digital Marketing', label: 'Digital Marketing' },
+  { value: 'Employee Referral', label: 'Employee Referral' },
+  { value: 'Flyer', label: 'Flyer' },
+  { value: 'Insurance Marketing', label: 'Insurance Marketing' },
+  { value: 'Insurance Program', label: 'Insurance Program' },
+  { value: 'Lead Aggregator', label: 'Lead Aggregator' },
+  { value: 'Radio', label: 'Radio' },
+  { value: 'Retail Marketing', label: 'Retail Marketing' },
+  { value: 'Roof DRP', label: 'Roof DRP' },
   { value: 'Self-Gen', label: 'Self-Gen' },
-  { value: 'RingCentral', label: 'RingCentral' },
-  { value: 'Marketing', label: 'Marketing' },
+  { value: 'Solar Marketing', label: 'Solar Marketing' },
+  { value: 'Telemarketing', label: 'Telemarketing' },
   { value: 'Trade Show', label: 'Trade Show' },
-  { value: 'Partner', label: 'Partner' },
-  { value: 'Other', label: 'Other' },
+  { value: 'Vendor Referral', label: 'Vendor Referral' },
+  { value: 'Yard Sign', label: 'Yard Sign' },
 ];
 
 const PROPERTY_TYPES = [
@@ -548,6 +557,14 @@ export default function LeadDetail() {
     : leadSetByUserData?.manager
       ? `${leadSetByUserData.manager.firstName || ''} ${leadSetByUserData.manager.lastName || ''}`.trim()
       : '';
+
+  const formatTentativeDate = (value) => {
+    if (!value) return '-';
+    const datePart = String(value).split('T')[0];
+    const [year, month, day] = datePart.split('-');
+    if (!year || !month || !day) return datePart;
+    return `${day}/${month}/${year}`;
+  };
 
   useEffect(() => {
     const tabParam = new URLSearchParams(location.search).get('tab');
@@ -1410,7 +1427,9 @@ export default function LeadDetail() {
             <div className="space-y-3">
               <div className="flex justify-between">
                 <span className="text-gray-500">Status</span>
-                <span className="text-gray-900">{lead.status || '-'}</span>
+                <span className="text-gray-900">
+                  {LEAD_STATUSES.find((status) => status.value === lead.status)?.label || lead.status || '-'}
+                </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">Disposition</span>
@@ -1419,6 +1438,18 @@ export default function LeadDetail() {
               <div className="flex justify-between">
                 <span className="text-gray-500">Lead Source</span>
                 <span className="text-gray-900">{lead.source || lead.leadSource || '-'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Lead Set By</span>
+                <span className="text-gray-900">
+                  {lead.leadSetBy
+                    ? `${lead.leadSetBy.firstName} ${lead.leadSetBy.lastName}`
+                    : lead.leadSetByName || '-'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Manager</span>
+                <span className="text-gray-900">{leadSetByManagerName || '-'}</span>
               </div>
               {lead.isChampionReferral && (
                 <div className="mt-3 p-3 bg-amber-50 rounded-lg border border-amber-200">
@@ -1529,23 +1560,9 @@ export default function LeadDetail() {
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-gray-500">Lead Set By</span>
-                <span className="text-gray-900">
-                  {lead.leadSetBy
-                    ? `${lead.leadSetBy.firstName} ${lead.leadSetBy.lastName}`
-                    : lead.leadSetByName || '-'}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Manager</span>
-                <span className="text-gray-900">{leadSetByManagerName || '-'}</span>
-              </div>
-              <div className="flex justify-between">
                 <span className="text-gray-500">Tentative Date</span>
                 <span className="text-gray-900">
-                  {lead.tentativeAppointmentDate
-                    ? lead.tentativeAppointmentDate.split('T')[0]
-                    : '-'}
+                  {formatTentativeDate(lead.tentativeAppointmentDate)}
                 </span>
               </div>
               <div className="flex justify-between">

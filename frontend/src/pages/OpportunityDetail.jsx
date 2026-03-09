@@ -205,6 +205,23 @@ function formatAdjusterOfficePhone(phone, extension) {
   return `${normalizedPhone} ext ${normalizedExtension}`.trim();
 }
 
+function formatDateInput(value) {
+  if (!value) return '';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return String(value).split('T')[0] || '';
+  }
+  return parsed.toISOString().split('T')[0];
+}
+
+function formatDateOnlyDisplay(value) {
+  if (!value) return 'Not set';
+  const datePart = String(value).split('T')[0];
+  const [year, month, day] = datePart.split('-');
+  if (!year || !month || !day) return datePart;
+  return `${month}/${day}/${year}`;
+}
+
 // SMS Modal Component with Canned Responses (same as LeadDetail)
 function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {} }) {
   const [message, setMessage] = useState('');
@@ -594,27 +611,28 @@ function EmailModal({ isOpen, onClose, email, recipientName, onSent, mergeData =
 }
 
 // Invoice Detail Modal Component - Shows invoice details with payment history
-function InvoiceDetailModal({ invoice, onClose }) {
+function InvoiceDetailModal({ invoice, onClose, onInvoiceUpdated, onOpenSendInvoice, onOpenPayInvoice }) {
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    loadPayments();
-  }, [invoice.id]);
-
-  const loadPayments = async () => {
-    try {
-      const response = await paymentsApi.getPaymentsByInvoice(invoice.id);
-      setPayments(response.data || []);
-    } catch (err) {
-      console.error('Error loading payments:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [isEditing, setIsEditing] = useState(false);
+  const [editError, setEditError] = useState(null);
+  const [editSuccess, setEditSuccess] = useState(null);
+  const [form, setForm] = useState({
+    invoiceDate: formatDateInput(invoice?.invoiceDate),
+    dueDate: formatDateInput(invoice?.dueDate),
+    tax: Number(invoice?.tax || 0),
+    notes: invoice?.notes || '',
+    lineItems: [],
+    additionalCharges: [],
+  });
 
   const formatDate = (date) => {
     if (!date) return '-';
+    const raw = String(date);
+    if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
+      const [year, month, day] = raw.split('T')[0].split('-');
+      return `${month}/${day}/${year}`;
+    }
     return new Date(date).toLocaleDateString('en-US', {
       month: 'short',
       day: 'numeric',
@@ -687,7 +705,7 @@ function InvoiceDetailModal({ invoice, onClose }) {
 
   const canSendOrResend = (invoice.status || 'DRAFT') !== 'VOID';
   const sendLabel = ['SENT', 'OVERDUE', 'PARTIAL', 'PAID'].includes(invoice.status) ? 'Resend' : 'Send';
-  const canPay = invoice.status !== 'PAID' && Number(invoice.balanceDue || 0) > 0;
+  const canPay = invoice.status !== 'PAID' && Number(invoice.balanceDue || computedBalanceDue || 0) > 0;
 
   const updateInvoiceMutation = useMutation({
     mutationFn: (payload) => invoicesApi.updateInvoice(invoice.id, payload),
@@ -722,6 +740,30 @@ function InvoiceDetailModal({ invoice, onClose }) {
     },
     onError: (error) => {
       setEditError(error.message || 'Failed to download invoice PDF');
+    },
+  });
+
+  const sendInvoiceMutation = useMutation({
+    mutationFn: () => invoicesApi.sendInvoice(invoice.id),
+    onSuccess: (response) => {
+      const updatedInvoice = normalizeInvoiceTotals(
+        response?.data?.invoice || response?.invoice || response?.data || response
+      );
+      if (updatedInvoice?.id) {
+        onInvoiceUpdated?.(updatedInvoice);
+      }
+      setEditSuccess('Invoice sent successfully');
+      setEditError(null);
+      if (!updatedInvoice?.id) {
+        onOpenSendInvoice?.(invoice);
+      }
+    },
+    onError: (error) => {
+      const message = error?.response?.data?.error || error?.message || 'Failed to send invoice';
+      setEditError(message);
+      if (String(message).toLowerCase().includes('already sent')) {
+        onOpenSendInvoice?.(invoice);
+      }
     },
   });
 
@@ -804,34 +846,95 @@ function InvoiceDetailModal({ invoice, onClose }) {
               <p className="text-sm text-gray-500">Invoice Details</p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-          >
-            <X className="w-5 h-5 text-gray-500" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => downloadInvoicePdfMutation.mutate()}
+              disabled={downloadInvoicePdfMutation.isPending}
+              className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+            >
+              {downloadInvoicePdfMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+              <span>Download</span>
+            </button>
+            {canSendOrResend && (
+              <button
+                onClick={() => sendInvoiceMutation.mutate()}
+                disabled={sendInvoiceMutation.isPending}
+                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
+              >
+                {sendInvoiceMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Mail className="h-4 w-4" />
+                )}
+                <span>{sendLabel}</span>
+              </button>
+            )}
+            {canPay && (
+              <button
+                onClick={() => onOpenPayInvoice?.(invoice)}
+                className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700"
+              >
+                <CreditCard className="h-4 w-4" />
+                <span>Pay</span>
+              </button>
+            )}
+            {!isEditing ? (
+              <button
+                onClick={() => {
+                  setIsEditing(true);
+                  setEditError(null);
+                  setEditSuccess(null);
+                }}
+                className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+              >
+                <Edit className="h-4 w-4" />
+                <span>Edit</span>
+              </button>
+            ) : null}
+            <button
+              onClick={onClose}
+              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              <X className="w-5 h-5 text-gray-500" />
+            </button>
+          </div>
         </div>
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          {editError && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {editError}
+            </div>
+          )}
+          {editSuccess && (
+            <div className="rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700">
+              {editSuccess}
+            </div>
+          )}
+
           {/* Summary Grid */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div className="bg-gray-50 rounded-lg p-3">
               <p className="text-xs text-gray-500">Invoice Date</p>
-              <p className="text-sm font-medium">{formatDate(invoice.invoiceDate)}</p>
+              <p className="text-sm font-medium">{isEditing ? formatDate(form.invoiceDate) : formatDate(invoice.invoiceDate)}</p>
             </div>
             <div className="bg-gray-50 rounded-lg p-3">
               <p className="text-xs text-gray-500">Due Date</p>
-              <p className="text-sm font-medium">{formatDate(invoice.dueDate)}</p>
+              <p className="text-sm font-medium">{isEditing ? formatDate(form.dueDate) : formatDate(invoice.dueDate)}</p>
             </div>
             <div className="bg-gray-50 rounded-lg p-3">
               <p className="text-xs text-gray-500">Total Amount</p>
-              <p className="text-sm font-medium">{formatCurrency(invoice.totalAmount)}</p>
+              <p className="text-sm font-medium">{formatCurrency(isEditing ? computedTotal : invoice.totalAmount)}</p>
             </div>
             <div className="bg-gray-50 rounded-lg p-3">
               <p className="text-xs text-gray-500">Balance Due</p>
-              <p className={`text-sm font-medium ${parseFloat(invoice.balanceDue) > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                {formatCurrency(invoice.balanceDue)}
+              <p className={`text-sm font-medium ${(isEditing ? computedBalanceDue : parseFloat(invoice.balanceDue)) > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                {formatCurrency(isEditing ? computedBalanceDue : invoice.balanceDue)}
               </p>
             </div>
           </div>
@@ -849,33 +952,216 @@ function InvoiceDetailModal({ invoice, onClose }) {
             </span>
           </div>
 
-          {/* Line Items */}
-          {invoice.lineItems && invoice.lineItems.length > 0 && (
-            <div>
-              <h3 className="text-sm font-medium text-gray-900 mb-2">Line Items</h3>
-              <div className="border rounded-lg overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="text-left p-2 text-gray-600">Description</th>
-                      <th className="text-right p-2 text-gray-600">Qty</th>
-                      <th className="text-right p-2 text-gray-600">Price</th>
-                      <th className="text-right p-2 text-gray-600">Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {invoice.lineItems.map((item, idx) => (
-                      <tr key={idx} className="border-t">
-                        <td className="p-2">{item.description || item.name}</td>
-                        <td className="p-2 text-right">{item.quantity || 1}</td>
-                        <td className="p-2 text-right">{formatCurrency(item.unitPrice || item.price)}</td>
-                        <td className="p-2 text-right">{formatCurrency(item.totalAmount || item.total)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+          {isEditing ? (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-gray-600">Invoice Date</label>
+                  <input
+                    type="date"
+                    value={form.invoiceDate}
+                    onChange={(e) => setForm((prev) => ({ ...prev, invoiceDate: e.target.value }))}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-gray-600">Due Date</label>
+                  <input
+                    type="date"
+                    value={form.dueDate}
+                    onChange={(e) => setForm((prev) => ({ ...prev, dueDate: e.target.value }))}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-gray-600">Tax</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={form.tax}
+                    onChange={(e) => setForm((prev) => ({ ...prev, tax: Number(e.target.value || 0) }))}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <div className="mb-2 flex items-center justify-between">
+                  <h3 className="text-sm font-medium text-gray-900">Line Items</h3>
+                  <button
+                    type="button"
+                    onClick={() => setForm((prev) => ({
+                      ...prev,
+                      lineItems: [...prev.lineItems, { description: '', quantity: 1, unitPrice: 0 }],
+                    }))}
+                    className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
+                  >
+                    <Plus className="h-3 w-3" />
+                    Add Line
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {form.lineItems.map((item, idx) => (
+                    <div key={`line-item-${idx}`} className="grid grid-cols-12 gap-2 rounded-lg border border-gray-200 p-2">
+                      <input
+                        value={item.description}
+                        onChange={(e) => handleLineItemChange(idx, 'description', e.target.value)}
+                        placeholder="Description"
+                        className="col-span-12 rounded-lg border border-gray-300 px-2 py-2 text-sm md:col-span-6"
+                      />
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={item.quantity}
+                        onChange={(e) => handleLineItemChange(idx, 'quantity', e.target.value)}
+                        className="col-span-4 rounded-lg border border-gray-300 px-2 py-2 text-sm md:col-span-2"
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={item.unitPrice}
+                        onChange={(e) => handleLineItemChange(idx, 'unitPrice', e.target.value)}
+                        className="col-span-5 rounded-lg border border-gray-300 px-2 py-2 text-sm md:col-span-3"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setForm((prev) => ({
+                          ...prev,
+                          lineItems: prev.lineItems.filter((_, rowIdx) => rowIdx !== idx),
+                        }))}
+                        className="col-span-3 inline-flex items-center justify-center rounded-lg border border-red-200 px-2 py-2 text-xs text-red-600 hover:bg-red-50 md:col-span-1"
+                        aria-label="Remove line item"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <div className="mb-2 flex items-center justify-between">
+                  <h3 className="text-sm font-medium text-gray-900">Supplements / Additional Charges</h3>
+                  <button
+                    type="button"
+                    onClick={() => setForm((prev) => ({
+                      ...prev,
+                      additionalCharges: [...prev.additionalCharges, { name: 'Supplement', amount: 0, notes: '' }],
+                    }))}
+                    className="inline-flex items-center gap-1 rounded-lg border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-50"
+                  >
+                    <Plus className="h-3 w-3" />
+                    Add Charge
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {form.additionalCharges.map((charge, idx) => (
+                    <div key={`charge-${idx}`} className="grid grid-cols-12 gap-2 rounded-lg border border-gray-200 p-2">
+                      <input
+                        value={charge.name}
+                        onChange={(e) => handleAdditionalChargeChange(idx, 'name', e.target.value)}
+                        placeholder="Name"
+                        className="col-span-12 rounded-lg border border-gray-300 px-2 py-2 text-sm md:col-span-4"
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={charge.amount}
+                        onChange={(e) => handleAdditionalChargeChange(idx, 'amount', e.target.value)}
+                        className="col-span-5 rounded-lg border border-gray-300 px-2 py-2 text-sm md:col-span-3"
+                      />
+                      <input
+                        value={charge.notes || ''}
+                        onChange={(e) => handleAdditionalChargeChange(idx, 'notes', e.target.value)}
+                        placeholder="Notes"
+                        className="col-span-5 rounded-lg border border-gray-300 px-2 py-2 text-sm md:col-span-4"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setForm((prev) => ({
+                          ...prev,
+                          additionalCharges: prev.additionalCharges.filter((_, rowIdx) => rowIdx !== idx),
+                        }))}
+                        className="col-span-2 inline-flex items-center justify-center rounded-lg border border-red-200 px-2 py-2 text-xs text-red-600 hover:bg-red-50 md:col-span-1"
+                        aria-label="Remove additional charge"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-600">Notes</label>
+                <textarea
+                  value={form.notes}
+                  onChange={(e) => setForm((prev) => ({ ...prev, notes: e.target.value }))}
+                  rows={3}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                  placeholder="Invoice notes"
+                />
               </div>
             </div>
+          ) : (
+            <>
+              {/* Line Items */}
+              {invoice.lineItems && invoice.lineItems.length > 0 && (
+                <div>
+                  <h3 className="text-sm font-medium text-gray-900 mb-2">Line Items</h3>
+                  <div className="border rounded-lg overflow-hidden">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="text-left p-2 text-gray-600">Description</th>
+                          <th className="text-right p-2 text-gray-600">Qty</th>
+                          <th className="text-right p-2 text-gray-600">Price</th>
+                          <th className="text-right p-2 text-gray-600">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {invoice.lineItems.map((item, idx) => (
+                          <tr key={idx} className="border-t">
+                            <td className="p-2">{item.description || item.name}</td>
+                            <td className="p-2 text-right">{item.quantity || 1}</td>
+                            <td className="p-2 text-right">{formatCurrency(item.unitPrice || item.price)}</td>
+                            <td className="p-2 text-right">{formatCurrency(item.totalAmount || item.total)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {invoice.additionalCharges?.length > 0 && (
+                <div>
+                  <h3 className="text-sm font-medium text-gray-900 mb-2">Supplements / Additional Charges</h3>
+                  <div className="space-y-2">
+                    {invoice.additionalCharges.map((charge) => (
+                      <div key={charge.id} className="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                        <div>
+                          <p className="text-sm font-medium text-gray-900">{charge.name || 'Supplement'}</p>
+                          {charge.notes && <p className="text-xs text-gray-500">{charge.notes}</p>}
+                        </div>
+                        <p className="text-sm font-semibold text-gray-900">{formatCurrency(charge.amount || charge.fixedAmount || 0)}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <h3 className="text-sm font-medium text-gray-900 mb-2">Notes</h3>
+                <p className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">
+                  {invoice.notes || 'No notes'}
+                </p>
+              </div>
+            </>
           )}
 
           {/* Payment History */}
@@ -910,12 +1196,37 @@ function InvoiceDetailModal({ invoice, onClose }) {
 
         {/* Footer */}
         <div className="border-t p-4">
-          <button
-            onClick={onClose}
-            className="w-full py-2 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition-colors"
-          >
-            Close
-          </button>
+          {isEditing ? (
+            <div className="flex items-center justify-end gap-2">
+              <button
+                onClick={() => {
+                  setForm(hydrateFormFromInvoice(invoice));
+                  setIsEditing(false);
+                  setEditError(null);
+                }}
+                className="rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={updateInvoiceMutation.isPending}
+                className="inline-flex items-center gap-2 rounded-lg bg-panda-primary px-4 py-2 text-sm font-medium text-white hover:bg-panda-primary/90 disabled:opacity-60"
+              >
+                {updateInvoiceMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : null}
+                <span>Save Invoice</span>
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={onClose}
+              className="w-full py-2 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition-colors"
+            >
+              Close
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -2471,8 +2782,8 @@ export default function OpportunityDetail() {
       setClaimForm({
         insuranceCarrier: opportunity.insuranceCarrier || '',
         claimNumber: opportunity.claimNumber || '',
-        dateOfLoss: opportunity.dateOfLoss ? new Date(opportunity.dateOfLoss).toISOString().split('T')[0] : '',
-        claimFiledDate: opportunity.claimFiledDate ? new Date(opportunity.claimFiledDate).toISOString().split('T')[0] : '',
+        dateOfLoss: formatDateInput(opportunity.dateOfLoss),
+        claimFiledDate: formatDateInput(opportunity.claimFiledDate),
         damageLocation: opportunity.damageLocation || '',
         adjusterName: opportunity.adjusterName || '',
         adjusterEmail: opportunity.adjusterEmail || '',
@@ -2552,8 +2863,8 @@ export default function OpportunityDetail() {
     const updateData = {
       insuranceCarrier: claimForm.insuranceCarrier || null,
       claimNumber: claimForm.claimNumber || null,
-      dateOfLoss: claimForm.dateOfLoss ? new Date(claimForm.dateOfLoss).toISOString() : null,
-      claimFiledDate: claimForm.claimFiledDate ? new Date(claimForm.claimFiledDate).toISOString() : null,
+      dateOfLoss: claimForm.dateOfLoss || null,
+      claimFiledDate: claimForm.claimFiledDate || null,
       damageLocation: claimForm.damageLocation || null,
       adjusterName: claimForm.adjusterName || null,
       adjusterEmail: claimForm.adjusterEmail || null,
@@ -8612,7 +8923,7 @@ export default function OpportunityDetail() {
                         <label className="text-sm text-gray-500">Date of Loss</label>
                         <p className={`font-medium ${opportunity.dateOfLoss ? 'text-gray-900' : 'text-gray-500 italic'}`}>
                           {opportunity.dateOfLoss
-                            ? new Date(opportunity.dateOfLoss).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                            ? formatDateOnlyDisplay(opportunity.dateOfLoss)
                             : 'Not set'}
                         </p>
                       </div>
@@ -8620,7 +8931,7 @@ export default function OpportunityDetail() {
                         <label className="text-sm text-gray-500">Claim Filed Date</label>
                         <p className={`font-medium ${opportunity.claimFiledDate ? 'text-gray-900' : 'text-gray-500 italic'}`}>
                           {opportunity.claimFiledDate
-                            ? new Date(opportunity.claimFiledDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                            ? formatDateOnlyDisplay(opportunity.claimFiledDate)
                             : 'Not set'}
                         </p>
                       </div>
