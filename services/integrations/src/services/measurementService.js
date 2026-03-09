@@ -144,6 +144,13 @@ const isHttpUrl = (value) => typeof value === 'string' && /^https?:\/\//i.test(v
 
 const sanitizeFileName = (value) => String(value || 'asset').replace(/[^a-zA-Z0-9._-]/g, '_');
 
+const guessFileExtension = (fileName, fallback = 'bin') => {
+  const normalized = sanitizeFileName(fileName || '');
+  const lastDot = normalized.lastIndexOf('.');
+  if (lastDot === -1 || lastDot === normalized.length - 1) return fallback;
+  return normalized.slice(lastDot + 1).toLowerCase();
+};
+
 class MeasurementService {
   /**
    * Look up internal User ID from Cognito ID
@@ -1297,21 +1304,196 @@ class MeasurementService {
     };
   }
 
-  async downloadAndStoreGAFAsset(assetName, measurementReportId, accessToken, fallbackContentType = 'application/octet-stream') {
-    if (!assetName) return null;
-    if (isHttpUrl(assetName)) return { presignedUrl: assetName };
+  parseGAFBuildings(roofMeasurement) {
+    const rawBuildings = roofMeasurement?.Buildings || roofMeasurement?.buildings;
+    if (!rawBuildings) return [];
 
-    const downloadUrl = `${GAF_API_BASE}/download/${encodeURIComponent(assetName)}`;
-    const response = await fetch(downloadUrl, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
+    if (Array.isArray(rawBuildings)) {
+      return rawBuildings.filter((entry) => entry && typeof entry === 'object');
+    }
+
+    if (typeof rawBuildings === 'string') {
+      try {
+        const parsed = JSON.parse(rawBuildings);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((entry) => entry && typeof entry === 'object');
+        }
+        if (parsed && typeof parsed === 'object') {
+          return [parsed];
+        }
+      } catch {
+        return [];
+      }
+    }
+
+    if (rawBuildings && typeof rawBuildings === 'object') {
+      return [rawBuildings];
+    }
+
+    return [];
+  }
+
+  getGAFBuildingAssetUrl(roofMeasurement, candidateKeys) {
+    const buildings = this.parseGAFBuildings(roofMeasurement);
+    for (const building of buildings) {
+      const candidate = firstNonEmptyValue(...candidateKeys.map((key) => building?.[key]));
+      if (isHttpUrl(candidate)) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  async linkMeasurementAssetToRepository({
+    measurementReport,
+    storage,
+    title,
+    description = null,
+    category = 'measurement',
+    assetType = 'report',
+  }) {
+    if (!storage?.s3Url || !measurementReport?.opportunityId) {
+      return null;
+    }
+
+    if (!prisma.document || !prisma.documentLink) {
+      logger.warn('Measurement asset repository link skipped: Prisma document models unavailable');
+      return null;
+    }
+
+    const fileName = sanitizeFileName(storage.fileName || `${measurementReport.provider || 'measurement'}-${measurementReport.id}.pdf`);
+    const fileExtension = guessFileExtension(fileName, 'pdf').toUpperCase();
+    const metadata = JSON.stringify({
+      category,
+      assetType,
+      provider: measurementReport.provider,
+      measurementReportId: measurementReport.id,
+      orderNumber: measurementReport.orderNumber || measurementReport.externalId || null,
+      storageKey: storage.s3Key || null,
     });
 
-    if (!response.ok) {
-      const errorBody = await response.text();
-      throw new Error(`GAF download failed (${response.status}): ${errorBody}`);
+    try {
+      return await prisma.$transaction(async (tx) => {
+        let document = await tx.document.findFirst({
+          where: { contentUrl: storage.s3Url },
+          select: { id: true },
+        });
+
+        if (!document) {
+          document = await tx.document.create({
+            data: {
+              title,
+              description,
+              fileName,
+              fileType: fileExtension,
+              fileExtension,
+              contentSize: storage.sizeBytes || null,
+              contentUrl: storage.s3Url,
+              sourceType: 'UPLOAD',
+              ownerId: measurementReport.orderedById || null,
+              metadata,
+            },
+            select: { id: true },
+          });
+        }
+
+        const existingOppLink = await tx.documentLink.findFirst({
+          where: {
+            documentId: document.id,
+            opportunityId: measurementReport.opportunityId,
+          },
+          select: { id: true },
+        });
+
+        if (!existingOppLink) {
+          await tx.documentLink.create({
+            data: {
+              documentId: document.id,
+              opportunityId: measurementReport.opportunityId,
+              linkedRecordType: 'OPPORTUNITY',
+            },
+          });
+        }
+
+        if (measurementReport.accountId) {
+          const existingAccountLink = await tx.documentLink.findFirst({
+            where: {
+              documentId: document.id,
+              accountId: measurementReport.accountId,
+            },
+            select: { id: true },
+          });
+
+          if (!existingAccountLink) {
+            await tx.documentLink.create({
+              data: {
+                documentId: document.id,
+                accountId: measurementReport.accountId,
+                linkedRecordType: 'ACCOUNT',
+              },
+            });
+          }
+        }
+
+        return document.id;
+      });
+    } catch (error) {
+      logger.warn(`Measurement asset repository link skipped (${measurementReport.id}): ${error.message}`);
+      return null;
+    }
+  }
+
+  async downloadAndStoreGAFAsset(assetName, measurementReportId, accessToken, fallbackContentType = 'application/octet-stream') {
+    if (!assetName) return null;
+    const isDirectUrl = isHttpUrl(assetName);
+    const sanitizedName = sanitizeFileName(assetName);
+    const fileName = isDirectUrl
+      ? sanitizeFileName(assetName.split('/').pop()?.split('?')[0] || `${measurementReportId}.pdf`)
+      : sanitizedName;
+
+    let response;
+    if (isDirectUrl) {
+      const attempts = [];
+      if (accessToken) {
+        attempts.push({
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+      }
+      attempts.push({ headers: {} });
+
+      let lastError = null;
+      for (const attempt of attempts) {
+        const candidate = await fetch(assetName, {
+          method: 'GET',
+          headers: attempt.headers,
+        });
+        if (candidate.ok) {
+          response = candidate;
+          break;
+        }
+        lastError = candidate;
+      }
+
+      if (!response) {
+        const errorBody = lastError ? await lastError.text() : 'No response';
+        throw new Error(`GAF direct asset download failed (${lastError?.status || 0}): ${errorBody}`);
+      }
+    } else {
+      if (!accessToken) {
+        throw new Error('GAF access token is required to download named assets');
+      }
+      const downloadUrl = `${GAF_API_BASE}/download/${encodeURIComponent(assetName)}`;
+      response = await fetch(downloadUrl, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+        throw new Error(`GAF download failed (${response.status}): ${errorBody}`);
+      }
     }
 
     const arrayBuffer = await response.arrayBuffer();
@@ -1319,8 +1501,7 @@ class MeasurementService {
       throw new Error(`GAF download returned empty response for asset ${assetName}`);
     }
 
-    const fileName = sanitizeFileName(assetName);
-    const s3Key = `gaf/${measurementReportId}/${Date.now()}_${fileName}`;
+    const s3Key = `gaf/${measurementReportId}/${fileName}`;
     const contentType = response.headers.get('content-type') || fallbackContentType;
     const putCommand = new PutObjectCommand({
       Bucket: S3_BUCKET,
@@ -1345,6 +1526,8 @@ class MeasurementService {
       s3Url: `s3://${S3_BUCKET}/${s3Key}`,
       presignedUrl,
       contentType,
+      fileName,
+      sizeBytes: arrayBuffer.byteLength,
     };
   }
 
@@ -1399,6 +1582,22 @@ class MeasurementService {
   }
 
   async processGAFReport(reportId, gafData) {
+    const measurementReport = await prisma.measurementReport.findUnique({
+      where: { id: reportId },
+      select: {
+        id: true,
+        provider: true,
+        opportunityId: true,
+        accountId: true,
+        orderedById: true,
+        orderNumber: true,
+        externalId: true,
+      },
+    });
+    if (!measurementReport) {
+      throw new Error(`Measurement report not found: ${reportId}`);
+    }
+
     const normalized = this.normalizeGAFWebhookPayload(gafData);
     const measurements = this.parseGAFMeasurements({
       RoofMeasurement: normalized.roofMeasurement,
@@ -1410,21 +1609,50 @@ class MeasurementService {
     let reportJsonUrl = normalized.reportJsonUrl;
     const pdfAsset = normalized.reportAsset || normalized.homeownerReportAsset;
     const xmlAsset = normalized.xmlAsset;
+    const fallbackPdfUrl = this.getGAFBuildingAssetUrl(normalized.roofMeasurement, ['reportUrl', 'homeownerUrl', 'diagramUrl', 'coverUrl']);
+    const fallbackXmlUrl = this.getGAFBuildingAssetUrl(normalized.roofMeasurement, ['acculynxUrl']);
     let pdfStorage = null;
     let xmlStorage = null;
+    let pdfDocumentId = null;
+    let accessToken = null;
 
     try {
-      const accessToken = await this.getGAFAccessToken();
+      accessToken = await this.getGAFAccessToken();
+    } catch (error) {
+      logger.warn(`GAF token warning for report ${reportId}: ${error.message}`);
+    }
+
+    try {
       if (!reportPdfUrl && pdfAsset) {
         pdfStorage = await this.downloadAndStoreGAFAsset(pdfAsset, reportId, accessToken, 'application/pdf');
+        reportPdfUrl = pdfStorage?.presignedUrl || null;
+      }
+      if (!reportPdfUrl && fallbackPdfUrl) {
+        pdfStorage = await this.downloadAndStoreGAFAsset(fallbackPdfUrl, reportId, accessToken, 'application/pdf');
         reportPdfUrl = pdfStorage?.presignedUrl || null;
       }
       if (!reportXmlUrl && xmlAsset) {
         xmlStorage = await this.downloadAndStoreGAFAsset(xmlAsset, reportId, accessToken, 'application/xml');
         reportXmlUrl = xmlStorage?.presignedUrl || null;
       }
+      if (!reportXmlUrl && fallbackXmlUrl) {
+        xmlStorage = await this.downloadAndStoreGAFAsset(fallbackXmlUrl, reportId, accessToken, 'application/xml');
+        reportXmlUrl = xmlStorage?.presignedUrl || null;
+      }
     } catch (error) {
       logger.warn(`GAF asset download warning for report ${reportId}: ${error.message}`);
+    }
+
+    if (pdfStorage?.s3Url) {
+      const documentTitle = `GAF QuickMeasure Report ${measurementReport.orderNumber || measurementReport.externalId || measurementReport.id}`;
+      pdfDocumentId = await this.linkMeasurementAssetToRepository({
+        measurementReport,
+        storage: pdfStorage,
+        title: documentTitle,
+        description: 'Imported from GAF QuickMeasure delivery',
+        category: 'measurement',
+        assetType: 'gaf_report_pdf',
+      });
     }
 
     await prisma.measurementReport.update({
@@ -1448,12 +1676,39 @@ class MeasurementService {
             assets: normalized.assets,
             pdfS3Key: pdfStorage?.s3Key,
             xmlS3Key: xmlStorage?.s3Key,
+            pdfDocumentId,
           },
         },
       },
     });
 
     logger.info(`GAF report processed: ${reportId}`);
+  }
+
+  async hydrateGAFAssetsFromStoredPayload(reportId) {
+    const report = await prisma.measurementReport.findUnique({
+      where: { id: reportId },
+      select: {
+        id: true,
+        provider: true,
+        rawData: true,
+      },
+    });
+
+    if (!report) {
+      throw new Error('Measurement report not found');
+    }
+    if (report.provider !== 'GAF_QUICKMEASURE') {
+      throw new Error('Report is not a GAF QuickMeasure record');
+    }
+    if (!report.rawData || typeof report.rawData !== 'object') {
+      throw new Error('No stored GAF payload available to hydrate assets');
+    }
+
+    await this.processGAFReport(report.id, report.rawData);
+    return prisma.measurementReport.findUnique({
+      where: { id: report.id },
+    });
   }
 
   parseGAFMeasurements(data) {
