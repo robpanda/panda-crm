@@ -28,6 +28,56 @@ const pickFirstValue = (...values) => {
   return null;
 };
 
+const toObject = (value) => {
+  if (!value) return {};
+  if (typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed;
+      }
+    } catch (_) {
+      return {};
+    }
+  }
+  return {};
+};
+
+const getNestedValue = (source, path) => {
+  if (!source || !path) return null;
+  const segments = String(path).split('.');
+  let current = source;
+  for (const segment of segments) {
+    if (!current || typeof current !== 'object' || !(segment in current)) {
+      return null;
+    }
+    current = current[segment];
+  }
+  return current;
+};
+
+const pickFirstPathValue = (sources, paths) => {
+  for (const path of paths) {
+    for (const source of sources) {
+      const value = getNestedValue(source, path);
+      const picked = pickFirstValue(value);
+      if (picked) return picked;
+    }
+  }
+  return null;
+};
+
+const summarizeObjectKeys = (value, limit = 25) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  return Object.keys(value).slice(0, limit);
+};
+
+const fingerprintSecret = (value) => {
+  if (!value) return null;
+  return crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, 12);
+};
+
 const normalizeOptionalValue = (value) => {
   if (value === undefined || value === null) return null;
   const normalized = String(value).trim();
@@ -105,7 +155,20 @@ const validateWebhookSecret = (req, res, next) => {
   const providedSecret = extractProvidedSecret(req);
   const isAllowed = WEBHOOK_SECRETS.some((secret) => secretsMatch(providedSecret, secret));
   if (!isAllowed) {
-    logger.warn('SalesRabbit webhook: invalid or missing secret');
+    logger.warn('SalesRabbit webhook: invalid or missing secret', {
+      requestId: req.headers['x-request-id'] || null,
+      userAgent: req.headers['user-agent'] || null,
+      sourceIp: req.headers['x-forwarded-for'] || req.ip || null,
+      authHeaderType: req.headers.authorization ? String(req.headers.authorization).split(' ')[0] : null,
+      providedSecretFingerprint: fingerprintSecret(providedSecret),
+      providedSecretLength: providedSecret ? String(providedSecret).length : 0,
+      configuredSecretCount: WEBHOOK_SECRETS.length,
+      candidateHeaderKeys: Object.keys(req.headers || {}).filter((key) => (
+        key.includes('secret') || key.includes('token') || key.includes('auth') || key.includes('api-key') || key.includes('salesrabbit')
+      )),
+      queryKeys: summarizeObjectKeys(req.query),
+      bodyKeys: summarizeObjectKeys(req.body),
+    });
     return res.status(401).json({
       success: false,
       error: { code: 'UNAUTHORIZED', message: 'Invalid webhook secret' },
@@ -118,9 +181,14 @@ const validateWebhookSecret = (req, res, next) => {
 router.post('/webhook', validateWebhookSecret, async (req, res) => {
   try {
     const rawData = req.body || {};
-    const formData = rawData.formData || {};
-    const metaData = rawData.leadMetaData || rawData.leadMetadata || {};
+    const formData = toObject(rawData.formData || rawData.form_data || rawData.payload);
+    const metaData = toObject(rawData.leadMetaData || rawData.leadMetadata || rawData.metadata || rawData.metaData);
+    const contactData = toObject(rawData.contact || formData.contact || metaData.contact);
+    const customerData = toObject(rawData.customer || formData.customer || metaData.customer);
+    const leadData = toObject(rawData.lead || formData.lead || metaData.lead);
+    const homeownerData = toObject(rawData.homeowner || formData.homeowner || metaData.homeowner);
     const data = { ...metaData, ...formData, ...rawData };
+    const searchSources = [data, rawData, formData, metaData, contactData, customerData, leadData, homeownerData];
 
     logger.info('SalesRabbit webhook received');
 
@@ -155,17 +223,63 @@ router.post('/webhook', validateWebhookSecret, async (req, res) => {
       data.firstName,
       data.FirstName,
       data.First_Name,
-      data.contactFirstName
+      data.contactFirstName,
+      pickFirstPathValue(searchSources, [
+        'first_name',
+        'first',
+        'firstname',
+        'contact.firstName',
+        'contact.first_name',
+        'customer.firstName',
+        'customer.first_name',
+        'lead.firstName',
+        'lead.first_name',
+        'homeowner.firstName',
+        'homeowner.first_name',
+      ])
     );
     let lastName = pickFirstValue(
       data.lastName,
       data.LastName,
       data.Last_Name,
-      data.contactLastName
+      data.contactLastName,
+      pickFirstPathValue(searchSources, [
+        'last_name',
+        'last',
+        'lastname',
+        'contact.lastName',
+        'contact.last_name',
+        'customer.lastName',
+        'customer.last_name',
+        'lead.lastName',
+        'lead.last_name',
+        'homeowner.lastName',
+        'homeowner.last_name',
+      ])
     );
 
     if (!firstName && !lastName) {
-      const fullName = pickFirstValue(data.name, data.Name, data.fullName, data.FullName);
+      const fullName = pickFirstValue(
+        data.name,
+        data.Name,
+        data.fullName,
+        data.FullName,
+        pickFirstPathValue(searchSources, [
+          'full_name',
+          'contact.fullName',
+          'contact.full_name',
+          'contact.name',
+          'customer.fullName',
+          'customer.full_name',
+          'customer.name',
+          'lead.fullName',
+          'lead.full_name',
+          'lead.name',
+          'homeowner.fullName',
+          'homeowner.full_name',
+          'homeowner.name',
+        ])
+      );
       if (fullName) {
         const parts = fullName.split(/\s+/);
         if (parts.length >= 2) {
@@ -178,6 +292,18 @@ router.post('/webhook', validateWebhookSecret, async (req, res) => {
     }
 
     if (!firstName && !lastName) {
+      logger.warn('SalesRabbit webhook rejected: missing first/last name', {
+        requestId: req.headers['x-request-id'] || null,
+        userAgent: req.headers['user-agent'] || null,
+        sourceIp: req.headers['x-forwarded-for'] || req.ip || null,
+        topLevelKeys: summarizeObjectKeys(rawData),
+        formDataKeys: summarizeObjectKeys(formData),
+        metaDataKeys: summarizeObjectKeys(metaData),
+        contactKeys: summarizeObjectKeys(contactData),
+        customerKeys: summarizeObjectKeys(customerData),
+        leadKeys: summarizeObjectKeys(leadData),
+        homeownerKeys: summarizeObjectKeys(homeownerData),
+      });
       return res.status(400).json({
         success: false,
         error: { code: 'VALIDATION_ERROR', message: 'First name or last name is required' },
@@ -185,7 +311,24 @@ router.post('/webhook', validateWebhookSecret, async (req, res) => {
     }
 
     const email = normalizeEmail(
-      pickFirstValue(data.email, data.Email, data.emailAddress, data.EmailAddress)
+      pickFirstValue(
+        data.email,
+        data.Email,
+        data.emailAddress,
+        data.EmailAddress,
+        pickFirstPathValue(searchSources, [
+          'email',
+          'email_address',
+          'contact.email',
+          'contact.emailAddress',
+          'customer.email',
+          'customer.emailAddress',
+          'lead.email',
+          'lead.emailAddress',
+          'homeowner.email',
+          'homeowner.emailAddress',
+        ])
+      )
     );
 
     const phone = normalizeOptionalValue(
@@ -195,7 +338,21 @@ router.post('/webhook', validateWebhookSecret, async (req, res) => {
         data.Phone,
         data.phoneNumber,
         data.primaryPhone,
-        data.homePhone
+        data.homePhone,
+        pickFirstPathValue(searchSources, [
+          'phone_primary',
+          'phone',
+          'phone_number',
+          'contact.phone',
+          'contact.phonePrimary',
+          'contact.phone_number',
+          'customer.phone',
+          'customer.phone_number',
+          'lead.phone',
+          'lead.phone_number',
+          'homeowner.phone',
+          'homeowner.phone_number',
+        ])
       )
     );
 
@@ -207,11 +364,35 @@ router.post('/webhook', validateWebhookSecret, async (req, res) => {
         data.Mobile_Phone,
         data.cell,
         data.cellPhone,
-        data.mobile
+        data.mobile,
+        pickFirstPathValue(searchSources, [
+          'phone_secondary',
+          'mobile_phone',
+          'cell_phone',
+          'contact.mobilePhone',
+          'contact.mobile_phone',
+          'contact.cellPhone',
+          'customer.mobilePhone',
+          'customer.mobile_phone',
+          'lead.mobilePhone',
+          'lead.mobile_phone',
+          'homeowner.mobilePhone',
+          'homeowner.mobile_phone',
+        ])
       )
     );
 
     if (!email && !phone && !mobilePhone) {
+      logger.warn('SalesRabbit webhook rejected: missing contact method', {
+        requestId: req.headers['x-request-id'] || null,
+        userAgent: req.headers['user-agent'] || null,
+        sourceIp: req.headers['x-forwarded-for'] || req.ip || null,
+        hasFirstName: Boolean(firstName),
+        hasLastName: Boolean(lastName),
+        topLevelKeys: summarizeObjectKeys(rawData),
+        formDataKeys: summarizeObjectKeys(formData),
+        metaDataKeys: summarizeObjectKeys(metaData),
+      });
       return res.status(400).json({
         success: false,
         error: { code: 'VALIDATION_ERROR', message: 'At least one contact method is required' },
