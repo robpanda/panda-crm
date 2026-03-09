@@ -242,6 +242,19 @@ router.post('/gaf/poll/:id', authMiddleware, async (req, res, next) => {
 });
 
 /**
+ * POST /measurements/gaf/store-assets/:id - Rehydrate GAF assets from stored webhook payload
+ * Useful when measurement fields delivered but PDF/XML links were not stored.
+ */
+router.post('/gaf/store-assets/:id', authMiddleware, async (req, res, next) => {
+  try {
+    const report = await measurementService.hydrateGAFAssetsFromStoredPayload(req.params.id);
+    res.json({ success: true, data: report });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * POST /measurements/gaf/process-pending - Process all pending GAF reports
  * Batch job endpoint - can be called by scheduler or manually
  */
