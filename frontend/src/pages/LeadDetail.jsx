@@ -560,10 +560,37 @@ export default function LeadDetail() {
 
   const formatTentativeDate = (value) => {
     if (!value) return '-';
-    const datePart = String(value).split('T')[0];
-    const [year, month, day] = datePart.split('-');
-    if (!year || !month || !day) return datePart;
-    return `${day}/${month}/${year}`;
+    const raw = String(value).trim();
+    const datePart = raw.includes('T') ? raw.split('T')[0] : raw;
+
+    // ISO date: YYYY-MM-DD
+    if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+      const [year, month, day] = datePart.split('-');
+      return `${day}/${month}/${year}`;
+    }
+
+    // Slash date: can be DD/MM/YYYY or MM/DD/YYYY; normalize to DD/MM/YYYY
+    if (/^\d{2}\/\d{2}\/\d{4}$/.test(datePart)) {
+      const [first, second, year] = datePart.split('/');
+      const firstNum = Number(first);
+      const secondNum = Number(second);
+
+      if (firstNum > 12) return `${first}/${second}/${year}`; // already DD/MM/YYYY
+      if (secondNum > 12) return `${second}/${first}/${year}`; // MM/DD/YYYY -> DD/MM/YYYY
+
+      // Ambiguous date (both <= 12): keep input order to avoid unexpected flips.
+      return `${first}/${second}/${year}`;
+    }
+
+    const parsed = new Date(raw);
+    if (!Number.isNaN(parsed.getTime())) {
+      const day = String(parsed.getDate()).padStart(2, '0');
+      const month = String(parsed.getMonth() + 1).padStart(2, '0');
+      const year = String(parsed.getFullYear());
+      return `${day}/${month}/${year}`;
+    }
+
+    return datePart;
   };
 
   useEffect(() => {
