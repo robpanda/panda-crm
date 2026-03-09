@@ -119,17 +119,125 @@ jobs:
           docker push $ECR_REGISTRY/panda-crm/$SERVICE_NAME:$IMAGE_TAG
           docker push $ECR_REGISTRY/panda-crm/$SERVICE_NAME:latest
 
-      - name: Update ECS Service
+      - name: Resolve image digest
+        if: steps.check.outputs.should_deploy == 'true'
+        id: image
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+          SERVICE_NAME: ${{ matrix.service.name }}
+        run: |
+          IMAGE_DIGEST=$(aws ecr describe-images \
+            --repository-name panda-crm/$SERVICE_NAME \
+            --image-ids imageTag=$IMAGE_TAG \
+            --region $AWS_REGION \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)
+
+          if [ -z "$IMAGE_DIGEST" ] || [ "$IMAGE_DIGEST" = "None" ]; then
+            echo "::error::Unable to resolve ECR digest for panda-crm/$SERVICE_NAME:$IMAGE_TAG"
+            exit 1
+          fi
+
+          IMAGE_REF="$ECR_REGISTRY/panda-crm/$SERVICE_NAME@$IMAGE_DIGEST"
+          echo "image_ref=$IMAGE_REF" >> $GITHUB_OUTPUT
+          echo "Resolved image: $IMAGE_REF"
+
+      - name: Update ECS service with pinned task definition
         if: steps.check.outputs.should_deploy == 'true'
         env:
           SERVICE_NAME: ${{ matrix.service.name }}
+          IMAGE_REF: ${{ steps.image.outputs.image_ref }}
         run: |
-          # Force new deployment
+          set -euo pipefail
+
+          # Resolve actual ECS service name safely across legacy/current naming schemes.
+          CANDIDATES=(
+            "panda-crm-$SERVICE_NAME"
+            "$SERVICE_NAME-service"
+            "$SERVICE_NAME"
+          )
+
+          ECS_SERVICE_NAME=""
+          for CANDIDATE in "${CANDIDATES[@]}"; do
+            COUNT=$(aws ecs describe-services \
+              --cluster "$ECS_CLUSTER" \
+              --services "$CANDIDATE" \
+              --region "$AWS_REGION" \
+              --query 'length(services[?status!=`INACTIVE`])' \
+              --output text 2>/dev/null || echo "0")
+            if [ "${COUNT:-0}" = "1" ]; then
+              ECS_SERVICE_NAME="$CANDIDATE"
+              break
+            fi
+          done
+
+          if [ -z "$ECS_SERVICE_NAME" ]; then
+            echo "::error::No active ECS service found for $SERVICE_NAME (checked: ${CANDIDATES[*]})"
+            exit 1
+          fi
+
+          echo "Resolved ECS service: $ECS_SERVICE_NAME"
+
+          CURRENT_TASK_DEF_ARN=$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE_NAME" \
+            --region "$AWS_REGION" \
+            --query 'services[0].taskDefinition' \
+            --output text)
+
+          if [ -z "$CURRENT_TASK_DEF_ARN" ] || [ "$CURRENT_TASK_DEF_ARN" = "None" ]; then
+            echo "::error::Unable to resolve current task definition for service $ECS_SERVICE_NAME"
+            exit 1
+          fi
+
+          echo "Current task definition: $CURRENT_TASK_DEF_ARN"
+
+          NEW_TASK_DEF_JSON=$(aws ecs describe-task-definition \
+            --task-definition "$CURRENT_TASK_DEF_ARN" \
+            --region "$AWS_REGION" \
+            --query 'taskDefinition' \
+            --output json | jq \
+              --arg IMAGE_REF "$IMAGE_REF" \
+              --arg CONTAINER_NAME "$SERVICE_NAME" \
+              '
+              .containerDefinitions = (
+                .containerDefinitions
+                | if any(.[]; .name == $CONTAINER_NAME)
+                  then map(if .name == $CONTAINER_NAME then .image = $IMAGE_REF else . end)
+                  else (.[0].image = $IMAGE_REF | .)
+                  end
+              )
+              | del(
+                  .taskDefinitionArn,
+                  .revision,
+                  .status,
+                  .requiresAttributes,
+                  .compatibilities,
+                  .registeredAt,
+                  .registeredBy,
+                  .deregisteredAt
+                )
+              ')
+
+          NEW_TASK_DEF_ARN=$(aws ecs register-task-definition \
+            --region "$AWS_REGION" \
+            --cli-input-json "$NEW_TASK_DEF_JSON" \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+
+          echo "Registered task definition: $NEW_TASK_DEF_ARN"
+
           aws ecs update-service \
-            --cluster $ECS_CLUSTER \
-            --service $SERVICE_NAME-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE_NAME" \
+            --task-definition "$NEW_TASK_DEF_ARN" \
             --force-new-deployment \
-            --region $AWS_REGION || echo "Service may not exist yet, skipping update"
+            --region "$AWS_REGION"
+
+          aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE_NAME" \
+            --region "$AWS_REGION"
 
   notify:
     name: Deployment Notification
