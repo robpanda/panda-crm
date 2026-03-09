@@ -38,6 +38,7 @@ import AddressAutocomplete from '../components/AddressAutocomplete';
 import MentionTextarea from '../components/MentionTextarea';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { isValidPhoneFormat, isValidEmailFormat } from '../utils/formatters';
+import { resolveOpportunityTypeFromWorkType } from '../utils/leadConversion';
 
 const US_STATES = [
   { value: 'AL', label: 'Alabama' }, { value: 'AK', label: 'Alaska' },
@@ -1253,7 +1254,7 @@ export default function LeadWizard() {
   };
 
   const convertLeadWithOpportunityType = async (opportunityType, options = {}) => {
-    const effectiveWorkType = options.workType || formData.workType;
+    const effectiveWorkType = options.workType || formData.workType || null;
     const effectiveLeadStatus = options.leadStatus || formData.status;
     const effectiveLeadDisposition = options.leadDisposition || formData.leadDisposition;
     const effectiveTentativeAppointmentDate = options.tentativeAppointmentDate || formData.tentativeAppointmentDate;
@@ -1655,42 +1656,8 @@ export default function LeadWizard() {
         };
       }
 
-      // Gating: validate pre-conversion rules.
-      // Allow the flow to continue when the only blocker is missing Sales Path,
-      // because the modal handles that decision.
-      if (!canForceConvert) {
-        const gatingResult = await leadsApi.validatePreConversion(leadId);
-        const preConversion = gatingResult?.data || gatingResult;
-        const blockers = preConversion?.blockers || [];
-        const nonSalesPathBlockers = blockers.filter((msg) => !msg.toLowerCase().includes('sales path'));
-        if (!gatingResult?.success || (preConversion?.allowed === false && nonSalesPathBlockers.length > 0)) {
-          const blockerMessages = blockers.length > 0
-            ? blockers
-            : ['Lead cannot be converted. Please check all gating requirements.'];
-          alert(blockerMessages.join('\n'));
-          return;
-        }
-      }
-      const gatingStateResponse = await leadsApi.getGatingState(leadId);
-      const currentGatingState = gatingStateResponse?.data || gatingStateResponse;
-      setGatingState(currentGatingState);
+      const resolvedOpportunityType = resolveOpportunityTypeFromWorkType(formData.workType);
 
-      // Decision gate is only required for INSPECTED leads that do not yet have a sales path.
-      if (currentGatingState?.funnelStatus === 'INSPECTED' && !currentGatingState?.salesPath) {
-        setWasInspected(null);
-        setSelectedOpportunityType(null);
-        setShowInspectionModal(true);
-        return;
-      }
-
-      // When sales path is already set (or lead is not at decision gate), convert directly.
-      const resolvedOpportunityType = currentGatingState?.salesPath === 'RETAIL'
-        ? 'RETAIL'
-        : currentGatingState?.salesPath === 'INSURANCE'
-          ? 'INSURANCE'
-        : formData.workType === 'Retail'
-          ? 'RETAIL'
-          : 'INSURANCE';
       await convertLeadWithOpportunityType(resolvedOpportunityType, {
         leadId,
         tentativeAppointmentDate: appointmentResult?.suggestion?.appointmentDate,

@@ -18,6 +18,7 @@ import InternalNotesTabs from '../components/InternalNotesTabs';
 import InternalComments from '../components/InternalComments';
 import CommunicationsTab from '../components/CommunicationsTab';
 import UserSearchDropdown from '../components/UserSearchDropdown';
+import { resolveOpportunityTypeFromWorkType } from '../utils/leadConversion';
 
 // SMS Modal Component with Canned Responses
 function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {} }) {
@@ -512,8 +513,6 @@ export default function LeadDetail() {
   const location = useLocation();
   const [isScoreExpanded, setIsScoreExpanded] = useState(false); // AI Score card collapsed by default
   const [leadActionStep, setLeadActionStep] = useState(null);
-  const [noInspectionSuggestion, setNoInspectionSuggestion] = useState(null);
-  const [isSuggestingInspectionSlot, setIsSuggestingInspectionSlot] = useState(false);
   const hasShownLeadPromptRef = useRef(false);
 
   const { data: lead, isLoading } = useQuery({
@@ -599,24 +598,6 @@ export default function LeadDetail() {
     hasShownLeadPromptRef.current = true;
   }, [lead, isLeadReadyForOwnerAction, isOwner]);
 
-  useEffect(() => {
-    if (!lead || leadActionStep !== 'noInspection') return;
-    if (isSuggestingInspectionSlot) return;
-    setIsSuggestingInspectionSlot(true);
-    leadsApi.suggestInspectionAppointment(id, {
-      allowFallback: true,
-      workType: lead.workType || 'Inspection',
-      daysToSearch: 14,
-      durationMinutes: 120,
-    })
-      .then((result) => setNoInspectionSuggestion(result))
-      .catch((error) => {
-        console.error('Failed to suggest inspection slot:', error);
-        setNoInspectionSuggestion(null);
-      })
-      .finally(() => setIsSuggestingInspectionSlot(false));
-  }, [leadActionStep, lead, id, isSuggestingInspectionSlot]);
-
   // Sync formData when lead data loads/changes (replaces removed onSuccess)
   useEffect(() => {
     if (lead && !isEditing) {
@@ -664,13 +645,10 @@ export default function LeadDetail() {
 
   const convertMutation = useMutation({
     mutationFn: async (conversionOverrides = {}) => {
-      // Sales Path Gating: validate before conversion
-      const gatingResult = await leadsApi.validatePreConversion(id);
-      if (!gatingResult?.success || gatingResult?.data?.blocked) {
-        const messages = gatingResult?.data?.messages || ['Lead cannot be converted. Please check all gating requirements.'];
-        throw new Error(messages.join('\n'));
-      }
-      const conversionData = { ...conversionOverrides };
+      const conversionData = {
+        opportunityType: resolveOpportunityTypeFromWorkType(lead?.workType),
+        ...conversionOverrides,
+      };
       // Pass tentative date/time so backend creates a ServiceAppointment
       if (lead?.tentativeAppointmentDate) {
         conversionData.createServiceAppointment = true;
@@ -703,31 +681,6 @@ export default function LeadDetail() {
   const handleConvert = async (overrides = {}) => {
     await convertMutation.mutateAsync(overrides);
     setLeadActionStep(null);
-  };
-
-  const handleMarkInspected = async () => {
-    await leadsApi.updateLead(id, {
-      disposition: 'INSPECTED',
-      inspectionDate: new Date().toISOString(),
-      inspectionById: user?.id || null,
-      inspectionNotes: 'Inspection confirmed via quick action',
-    });
-    queryClient.invalidateQueries(['lead', id]);
-    setLeadActionStep('salesPath');
-  };
-
-  const handleSelectSalesPath = async (path) => {
-    try {
-      await leadsApi.selectSalesPath(id, path);
-      queryClient.invalidateQueries(['lead', id]);
-      const workType = path === 'RETAIL' ? 'Retail' : 'Insurance';
-      await handleConvert({
-        opportunityType: path,
-        workType,
-      });
-    } catch (error) {
-      alert(error?.message || 'Unable to select sales path.');
-    }
   };
 
   const handleInputChange = (e) => {
@@ -1008,7 +961,7 @@ export default function LeadDetail() {
               {/* Convert to Job Button */}
               {lead.status !== 'CONVERTED' && !lead.isConverted && (
                 <button
-                  onClick={() => setLeadActionStep('inspection')}
+                  onClick={() => handleConvert()}
                   disabled={convertMutation.isPending || !isOwner}
                   className={`flex items-center space-x-2 px-4 py-2 rounded-lg ${
                     convertMutation.isPending || !isOwner
@@ -1717,7 +1670,7 @@ export default function LeadDetail() {
               </button>
               <button
                 type="button"
-                onClick={() => setLeadActionStep('inspection')}
+                onClick={() => handleConvert()}
                 disabled={!isOwner}
                 className={`w-full px-4 py-2 rounded-lg ${
                   isOwner
@@ -1726,138 +1679,6 @@ export default function LeadDetail() {
                 }`}
               >
                 Convert to Job
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Inspection Prompt */}
-      {leadActionStep === 'inspection' && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-          <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl border border-gray-200">
-            <div className="flex items-start justify-between mb-4">
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900">Was Property Inspected?</h3>
-                <p className="text-sm text-gray-600 mt-1">
-                  Confirm inspection status to continue conversion.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setLeadActionStep(null)}
-                className="p-1 rounded hover:bg-gray-100"
-                aria-label="Close"
-              >
-                <X className="w-5 h-5 text-gray-400" />
-              </button>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                type="button"
-                onClick={() => setLeadActionStep('noInspection')}
-                className="px-4 py-2 rounded-lg border border-amber-300 text-amber-700 hover:bg-amber-50"
-              >
-                No
-              </button>
-              <button
-                type="button"
-                onClick={handleMarkInspected}
-                className="px-4 py-2 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700"
-              >
-                Yes
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* No Inspection Notice */}
-      {leadActionStep === 'noInspection' && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-          <div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl border border-gray-200">
-            <div className="flex items-start justify-between mb-4">
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900">Inspection Required</h3>
-                <p className="text-sm text-gray-600 mt-1">
-                  Unable to convert to a job until an inspection is complete.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setLeadActionStep(null)}
-                className="p-1 rounded hover:bg-gray-100"
-                aria-label="Close"
-              >
-                <X className="w-5 h-5 text-gray-400" />
-              </button>
-            </div>
-            <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-700">
-              {isSuggestingInspectionSlot && 'Finding the next available inspection slot...'}
-              {!isSuggestingInspectionSlot && noInspectionSuggestion?.found && (
-                <span>
-                  Suggested slot: {noInspectionSuggestion.appointmentDate} at {noInspectionSuggestion.appointmentTime}
-                </span>
-              )}
-              {!isSuggestingInspectionSlot && noInspectionSuggestion && !noInspectionSuggestion.found && (
-                <span>No inspection slots available in the next two weeks.</span>
-              )}
-            </div>
-            <div className="mt-4 flex flex-wrap justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setLeadActionStep(null)}
-                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800"
-              >
-                Close
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setLeadActionStep(null);
-                  navigate('/production-center?view=dispatch');
-                }}
-                className="px-4 py-2 text-sm bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90"
-              >
-                Open Scheduling
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Sales Path Selection */}
-      {leadActionStep === 'salesPath' && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
-          <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl border border-gray-200">
-            <div className="flex items-start justify-between mb-4">
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900">Select Sales Path</h3>
-                <p className="text-sm text-gray-600 mt-1">Choose Insurance or Retail.</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setLeadActionStep(null)}
-                className="p-1 rounded hover:bg-gray-100"
-                aria-label="Close"
-              >
-                <X className="w-5 h-5 text-gray-400" />
-              </button>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                type="button"
-                onClick={() => handleSelectSalesPath('INSURANCE')}
-                className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700"
-              >
-                Insurance
-              </button>
-              <button
-                type="button"
-                onClick={() => handleSelectSalesPath('RETAIL')}
-                className="px-4 py-2 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700"
-              >
-                Retail
               </button>
             </div>
           </div>

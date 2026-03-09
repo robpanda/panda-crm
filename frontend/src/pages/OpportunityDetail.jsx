@@ -1602,6 +1602,9 @@ function ActivityTimelineTab({ activities = [], onActivityClick }) {
 }
 
 export default function OpportunityDetail() {
+  const resultAppointmentWizardEnabled =
+    import.meta.env.VITE_FEATURE_RESULT_APPOINTMENT_WIZARD !== 'false';
+
   const { id } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -3302,13 +3305,15 @@ export default function OpportunityDetail() {
                       <Edit className="w-4 h-4" />
                       <span>Edit Job</span>
                     </button>
-                    <button
-                      onClick={() => setShowResultAppointmentWizard(true)}
-                      className="flex-1 flex items-center justify-center space-x-2 px-4 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium"
-                    >
-                      <ClipboardCheck className="w-4 h-4" />
-                      <span>Result Appointment</span>
-                    </button>
+                    {resultAppointmentWizardEnabled && (
+                      <button
+                        onClick={() => setShowResultAppointmentWizard(true)}
+                        className="flex-1 flex items-center justify-center space-x-2 px-4 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium"
+                      >
+                        <ClipboardCheck className="w-4 h-4" />
+                        <span>Result Appointment</span>
+                      </button>
+                    )}
                   </>
                 )}
 
@@ -10440,17 +10445,19 @@ export default function OpportunityDetail() {
       />
 
       {/* Result Appointment Wizard */}
-      <ResultAppointmentWizard
-        isOpen={showResultAppointmentWizard}
-        onClose={() => setShowResultAppointmentWizard(false)}
-        opportunityId={id}
-        appointmentId={appointments?.[0]?.id || null}
-        opportunity={opportunity}
-        onCompleted={() => {
-          setActionSuccess('Appointment result saved');
-          setTimeout(() => setActionSuccess(null), 4000);
-        }}
-      />
+      {resultAppointmentWizardEnabled && (
+        <ResultAppointmentWizard
+          isOpen={showResultAppointmentWizard}
+          onClose={() => setShowResultAppointmentWizard(false)}
+          opportunityId={id}
+          appointmentId={appointments?.[0]?.id || null}
+          opportunity={opportunity}
+          onCompleted={() => {
+            setActionSuccess('Appointment result saved');
+            setTimeout(() => setActionSuccess(null), 4000);
+          }}
+        />
+      )}
 
       {/* Create Insurance Invoice Modal */}
       {showCreateInsuranceInvoiceModal && (

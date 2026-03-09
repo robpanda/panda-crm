@@ -472,6 +472,7 @@ model AppointmentResult {
   id                  String       @id @default(cuid())
   opportunityId       String       @map("opportunity_id")
   appointmentId       String?      @map("appointment_id")
+  taskId              String?      @map("task_id")
   payload             Json
   dispositionCategory String       @map("disposition_category")
   dispositionReason   String?      @map("disposition_reason")
@@ -486,8 +487,10 @@ model AppointmentResult {
 
   opportunity         Opportunity  @relation("AppointmentResults", fields: [opportunityId], references: [id])
   createdBy           User?        @relation("AppointmentResultsCreatedBy", fields: [createdById], references: [id])
+  task                Task?        @relation(fields: [taskId], references: [id])
 
   @@index([opportunityId])
+  @@index([taskId])
   @@index([createdAt])
   @@map("appointment_results")
 }
@@ -1787,6 +1790,7 @@ model Task {
   assignedTo    User?        @relation("TaskAssignee", fields: [assignedToId], references: [id])
   lead          Lead?        @relation("LeadTasks", fields: [leadId], references: [id])
   opportunity   Opportunity? @relation("OpportunityTasks", fields: [opportunityId], references: [id])
+  appointmentResults AppointmentResult[]
 
   @@index([assignedToId])
   @@index([status])

@@ -9,6 +9,10 @@ export const STEPS = {
   RETAIL_QUOTE: 'retail_quote',
   CLAIM_INFO: 'claim_info',
   RETAIL_OUTCOME: 'retail_outcome',
+  RETAIL_NOT_SOLD_REASON: 'retail_not_sold_reason',
+  FOLLOW_UP_MODE: 'follow_up_mode',
+  VIRTUAL_FOLLOW_UP: 'virtual_follow_up',
+  IN_PERSON_FOLLOW_UP: 'in_person_follow_up',
   CONFIRM: 'confirm',
 };
 
@@ -28,8 +32,6 @@ export const DISPOSITION_CATEGORIES = {
 export const INSPECTION_NOT_COMPLETED_REASONS = [
   { value: 'NO_ANSWER', label: 'No answer' },
   { value: 'CANCELLED_AT_DOOR', label: 'Cancelled at door' },
-  { value: 'NO_SHOW', label: 'No show' },
-  { value: 'OTHER', label: 'Other' },
 ];
 
 export const NO_CLAIM_REASONS = [
@@ -48,12 +50,25 @@ export const NO_PITCH_RETAIL_REASONS = [
 
 export const RETAIL_NOT_SOLD_REASONS = [
   { value: 'PRICE_TOO_HIGH', label: 'Price too high' },
-  { value: 'SPOUSE', label: 'Needs to consult spouse' },
+  { value: 'NEEDS_TO_CONSULT_SPOUSE', label: 'Needs to consult spouse' },
   { value: 'NOT_INTERESTED', label: 'Not interested' },
-  { value: 'TIMING', label: 'Timing not right' },
+  { value: 'TIMING_NOT_RIGHT', label: 'Timing not right' },
   { value: 'ALREADY_HAS_CONTRACTOR', label: 'Already has contractor' },
   { value: 'OTHER', label: 'Other' },
 ];
+
+export const FOLLOW_UP_MODES = [
+  { value: 'VIRTUAL', label: 'Virtual', description: 'Creates a task follow-up (no calendar event).' },
+  { value: 'IN_PERSON', label: 'In-Person', description: 'Creates an appointment and calendar sync attempt.' },
+];
+
+export const VIRTUAL_TASK_TYPES = [
+  { value: 'CALL', label: 'Call' },
+  { value: 'EMAIL', label: 'Email' },
+  { value: 'OTHER', label: 'Other' },
+];
+
+export const DEFAULT_FOLLOW_UP_DURATION_MINUTES = 120;
 
 export const STEP_TITLES = {
   [STEPS.ROOF_INSPECTED]: 'Was the roof inspected?',
@@ -66,5 +81,9 @@ export const STEP_TITLES = {
   [STEPS.RETAIL_QUOTE]: 'Quote builder',
   [STEPS.CLAIM_INFO]: 'Enter claim information',
   [STEPS.RETAIL_OUTCOME]: 'Is customer moving forward?',
+  [STEPS.RETAIL_NOT_SOLD_REASON]: 'Why did it not sell?',
+  [STEPS.FOLLOW_UP_MODE]: 'Follow-up type',
+  [STEPS.VIRTUAL_FOLLOW_UP]: 'Virtual follow-up task',
+  [STEPS.IN_PERSON_FOLLOW_UP]: 'In-person follow-up appointment',
   [STEPS.CONFIRM]: 'Confirm result',
 };
