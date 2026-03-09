@@ -1622,25 +1622,37 @@ class MeasurementService {
       logger.warn(`GAF token warning for report ${reportId}: ${error.message}`);
     }
 
-    try {
-      if (!reportPdfUrl && pdfAsset) {
+    if (!reportPdfUrl && pdfAsset) {
+      try {
         pdfStorage = await this.downloadAndStoreGAFAsset(pdfAsset, reportId, accessToken, 'application/pdf');
         reportPdfUrl = pdfStorage?.presignedUrl || null;
+      } catch (error) {
+        logger.warn(`GAF named PDF download warning for report ${reportId}: ${error.message}`);
       }
-      if (!reportPdfUrl && fallbackPdfUrl) {
+    }
+    if (!reportPdfUrl && fallbackPdfUrl) {
+      try {
         pdfStorage = await this.downloadAndStoreGAFAsset(fallbackPdfUrl, reportId, accessToken, 'application/pdf');
         reportPdfUrl = pdfStorage?.presignedUrl || null;
+      } catch (error) {
+        logger.warn(`GAF fallback PDF download warning for report ${reportId}: ${error.message}`);
       }
-      if (!reportXmlUrl && xmlAsset) {
+    }
+    if (!reportXmlUrl && xmlAsset) {
+      try {
         xmlStorage = await this.downloadAndStoreGAFAsset(xmlAsset, reportId, accessToken, 'application/xml');
         reportXmlUrl = xmlStorage?.presignedUrl || null;
+      } catch (error) {
+        logger.warn(`GAF named XML download warning for report ${reportId}: ${error.message}`);
       }
-      if (!reportXmlUrl && fallbackXmlUrl) {
+    }
+    if (!reportXmlUrl && fallbackXmlUrl) {
+      try {
         xmlStorage = await this.downloadAndStoreGAFAsset(fallbackXmlUrl, reportId, accessToken, 'application/xml');
         reportXmlUrl = xmlStorage?.presignedUrl || null;
+      } catch (error) {
+        logger.warn(`GAF fallback XML download warning for report ${reportId}: ${error.message}`);
       }
-    } catch (error) {
-      logger.warn(`GAF asset download warning for report ${reportId}: ${error.message}`);
     }
 
     if (pdfStorage?.s3Url) {
