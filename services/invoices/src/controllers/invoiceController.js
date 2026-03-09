@@ -106,6 +106,61 @@ async function getFreshInvoicePdfUrl(pdfKey, expiresIn = 3600 * 24 * 7) {
   );
 }
 
+const DEFAULT_INVOICE_COMPANY = {
+  name: 'Panda Exteriors',
+  addressLine1: '14409 Greenview Dr Suite 202',
+  cityStateZip: 'Laurel, MD 20708',
+  phone: '(301) 276-4323',
+  email: 'info@pandaexteriors.com',
+};
+
+function getInvoiceCompanyInfo() {
+  const name = process.env.INVOICE_COMPANY_NAME || process.env.COMPANY_NAME || DEFAULT_INVOICE_COMPANY.name;
+  const addressLine1 = process.env.INVOICE_COMPANY_ADDRESS_LINE1
+    || process.env.INVOICE_COMPANY_ADDRESS_LINE_1
+    || process.env.COMPANY_ADDRESS_LINE1
+    || process.env.COMPANY_ADDRESS_LINE_1
+    || DEFAULT_INVOICE_COMPANY.addressLine1;
+  const cityStateZip = process.env.INVOICE_COMPANY_CITY_STATE_ZIP
+    || process.env.COMPANY_CITY_STATE_ZIP
+    || DEFAULT_INVOICE_COMPANY.cityStateZip;
+  const phone = process.env.INVOICE_COMPANY_PHONE || process.env.COMPANY_PHONE || DEFAULT_INVOICE_COMPANY.phone;
+  const email = process.env.INVOICE_COMPANY_EMAIL
+    || process.env.COMPANY_EMAIL
+    || process.env.EMAIL_FROM_ADDRESS
+    || DEFAULT_INVOICE_COMPANY.email;
+
+  return {
+    name,
+    address: addressLine1,
+    cityStateZip,
+    fullAddress: `${addressLine1}, ${cityStateZip}`,
+    phone,
+    email,
+  };
+}
+
+function normalizePortalUrl(value) {
+  if (!value) return null;
+  const url = String(value).trim();
+  if (!/^https?:\/\/\S+$/i.test(url)) return null;
+  return url;
+}
+
+function extractCustomerPortalUrlFromMessage(value) {
+  if (!value || typeof value !== 'string') return null;
+  const labeledMatch = value.match(/Customer\s*Portal\s*:\s*(https?:\/\/\S+)/i);
+  if (labeledMatch?.[1]) {
+    return normalizePortalUrl(labeledMatch[1]);
+  }
+
+  const directMatch = value.match(/https?:\/\/[^\s]*\/portal\/[^\s]+/i);
+  if (directMatch?.[0]) {
+    return normalizePortalUrl(directMatch[0]);
+  }
+  return null;
+}
+
 // List invoices
 export async function listInvoices(req, res, next) {
   try {
@@ -355,6 +410,8 @@ export async function sendInvoice(req, res, next) {
     const { id } = req.params;
     const {
       recipientEmail,    // Override email address
+      recipientType,     // homeowner | insurance
+      customerPortalUrl, // Optional explicit portal URL for homeowner email
       ccEmails = [],     // CC recipients
       subject,           // Custom subject
       message,           // Custom message body
@@ -446,6 +503,11 @@ export async function sendInvoice(req, res, next) {
     const dueDateFormatted = invoice.dueDate
       ? format(new Date(invoice.dueDate), 'MMMM d, yyyy')
       : 'Upon Receipt';
+    const companyInfo = getInvoiceCompanyInfo();
+    const resolvedCustomerPortalUrl = normalizePortalUrl(customerPortalUrl)
+      || extractCustomerPortalUrlFromMessage(message)
+      || null;
+    const showCustomerPortalButton = recipientType !== 'insurance' && Boolean(resolvedCustomerPortalUrl);
 
     const defaultMessage = `Dear ${invoice.account?.name || 'Customer'},
 
@@ -460,9 +522,10 @@ ${paymentLink ? `Pay Online: ${paymentLink}` : ''}
 
 Thank you for your business!
 
-Panda Exteriors
-(240) 801-6665
-info@pandaexteriors.com`;
+${companyInfo.name}
+${companyInfo.fullAddress}
+${companyInfo.phone}
+${companyInfo.email}`;
 
     const emailBody = message || defaultMessage;
 
@@ -478,12 +541,13 @@ info@pandaexteriors.com`;
     .invoice-box { background: #f5f5f5; border-radius: 8px; padding: 15px; margin: 15px 0; }
     .amount { font-size: 24px; color: #667eea; font-weight: bold; }
     .pay-button { display: inline-block; background: #667eea; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin: 15px 0; }
+    .portal-button { display: inline-block; background: #0f766e; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin: 10px 0 15px; }
     .footer { border-top: 1px solid #eee; padding-top: 15px; margin-top: 20px; font-size: 12px; color: #666; }
   </style>
 </head>
 <body>
   <div class="header">
-    <h1 style="margin:0;">Panda Exteriors</h1>
+    <h1 style="margin:0;">${companyInfo.name}</h1>
     <p style="margin:5px 0 0 0;">Invoice ${invoice.invoiceNumber}</p>
   </div>
   <div class="content">
@@ -499,12 +563,16 @@ info@pandaexteriors.com`;
     <p>Click the button below to pay securely online:</p>
     <a href="${paymentLink}" class="pay-button">Pay Now</a>
     ` : ''}
+    ${showCustomerPortalButton ? `
+    <p>You can also review this invoice in your Customer Portal:</p>
+    <a href="${resolvedCustomerPortalUrl}" class="portal-button">Open Customer Portal</a>
+    ` : ''}
     ${pdfResult ? `<p><em>Invoice PDF is attached to this email.</em></p>` : ''}
     <p>Thank you for your business!</p>
     <div class="footer">
-      <p><strong>Panda Exteriors</strong><br>
-      8825 Stanford Blvd Suite 201, Columbia, MD 21045<br>
-      (240) 801-6665 | info@pandaexteriors.com</p>
+      <p><strong>${companyInfo.name}</strong><br>
+      ${companyInfo.fullAddress}<br>
+      ${companyInfo.phone} | ${companyInfo.email}</p>
     </div>
   </div>
 </body>
@@ -678,13 +746,7 @@ async function generateInvoicePdfInternal(invoice) {
   const { v4: uuidv4 } = await import('uuid');
   const { PutObjectCommand } = await import('@aws-sdk/client-s3');
 
-  const COMPANY_INFO = {
-    name: 'Panda Exteriors',
-    address: '8825 Stanford Blvd Suite 201',
-    cityStateZip: 'Columbia, MD 21045',
-    phone: '(240) 801-6665',
-    email: 'info@pandaexteriors.com',
-  };
+  const COMPANY_INFO = getInvoiceCompanyInfo();
 
   const COLORS = {
     primary: rgb(0.4, 0.49, 0.92),
