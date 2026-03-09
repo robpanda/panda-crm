@@ -1,6 +1,6 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { documentsApiV2 } from '../services/api';
+import apiClient, { documentsApiV2, agreementsApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import {
   X,
@@ -21,6 +21,9 @@ import {
   ExternalLink,
   Copy,
   Check,
+  Pencil,
+  Type,
+  SkipForward,
 } from 'lucide-react';
 
 const FEATURE_PANDASIGN_V2 = String(import.meta.env.VITE_FEATURE_PANDASIGN_V2 || '').toLowerCase() === 'true';
@@ -68,6 +71,19 @@ export default function ContractSigningModal({
   const [v2PreviewUrl, setV2PreviewUrl] = useState(null);
   const [v2PreviewHash, setV2PreviewHash] = useState(null);
   const [v2PreviewError, setV2PreviewError] = useState(null);
+  const [v2SignError, setV2SignError] = useState(null);
+  const [v2AgreementData, setV2AgreementData] = useState(null);
+  const [v2CustomerSigningToken, setV2CustomerSigningToken] = useState(null);
+  const [v2HostSigningToken, setV2HostSigningToken] = useState(null);
+  const [v2CustomerSignSession, setV2CustomerSignSession] = useState(null);
+  const [v2AgentSignSession, setV2AgentSignSession] = useState(null);
+  const [v2CompletionData, setV2CompletionData] = useState(null);
+  const [v2SignatureMode, setV2SignatureMode] = useState('DRAW');
+  const [v2TypedSignature, setV2TypedSignature] = useState('');
+  const [v2SignatureData, setV2SignatureData] = useState(null);
+  const [v2IsDrawing, setV2IsDrawing] = useState(false);
+  const [v2ActiveRequiredIndex, setV2ActiveRequiredIndex] = useState(0);
+  const v2CanvasRef = useRef(null);
 
   // Fetch WYSIWYG templates from V2 API
   const { data: templatesData, isLoading: templatesLoading } = useQuery({
@@ -112,6 +128,32 @@ export default function ContractSigningModal({
     contactId: contact?.id || opportunity?.contactId,
     accountId: account?.id || opportunity?.accountId,
   });
+
+  const resetV2SignerTransientState = () => {
+    setV2SignatureMode('DRAW');
+    setV2TypedSignature('');
+    setV2SignatureData(null);
+    setV2IsDrawing(false);
+    setV2ActiveRequiredIndex(0);
+    setV2SignError(null);
+    if (v2CanvasRef.current) {
+      const canvas = v2CanvasRef.current;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
+    }
+  };
+
+  const resetV2SignFlowState = () => {
+    setV2AgreementData(null);
+    setV2CustomerSigningToken(null);
+    setV2HostSigningToken(null);
+    setV2CustomerSignSession(null);
+    setV2AgentSignSession(null);
+    setV2CompletionData(null);
+    resetV2SignerTransientState();
+  };
 
   // Pre-fill signer fields when template or contact changes
   useEffect(() => {
@@ -161,6 +203,7 @@ export default function ContractSigningModal({
       setV2PreviewUrl(null);
       setV2PreviewHash(null);
       setV2PreviewError(null);
+      resetV2SignFlowState();
     }
   }, [isOpen]);
 
@@ -255,6 +298,7 @@ export default function ContractSigningModal({
     setV2PreviewHash(null);
     setV2PreviewError(null);
     setV2Step(1);
+    resetV2SignFlowState();
   }, [v2TemplateId, v2Mode, v2CustomerEmail, v2AgentEmail]);
 
   const v2PreviewMutation = useMutation({
@@ -278,6 +322,146 @@ export default function ContractSigningModal({
       setV2Step(2);
     },
   });
+
+  const startV2SignNowMutation = useMutation({
+    mutationFn: async () => {
+      const customerName = getCustomerDisplayName(contact);
+      const created = unwrapApiEnvelope(await agreementsApi.createAgreement({
+        templateId: v2TemplateId,
+        opportunityId: opportunity?.id,
+        accountId: account?.id || opportunity?.accountId,
+        contactId: contact?.id || opportunity?.contactId,
+        recipientEmail: v2CustomerEmail,
+        recipientName: customerName,
+        mergeData: {},
+      }));
+
+      const agreementId = created?.id || created?.agreementId;
+      const customerToken = extractSigningToken(created);
+
+      if (!agreementId || !customerToken) {
+        throw new Error('Sign Now session is unavailable. Missing agreement or signing token.');
+      }
+
+      const customerSessionResp = await apiClient.get(`/api/documents/agreements/sign/${customerToken}`);
+      const customerSession = unwrapApiEnvelope(customerSessionResp?.data);
+
+      if (!customerSession || !customerSession.id) {
+        throw new Error('Customer signing session could not be loaded.');
+      }
+
+      return { created, customerToken, customerSession };
+    },
+    onSuccess: ({ created, customerToken, customerSession }) => {
+      setV2AgreementData(created);
+      setV2CustomerSigningToken(customerToken);
+      setV2CustomerSignSession(customerSession);
+      setV2SignError(null);
+      setV2Step(3);
+      resetV2SignerTransientState();
+    },
+    onError: (err) => {
+      setV2SignError(err?.response?.data?.error?.message || err?.message || 'Unable to start Sign Now flow.');
+    },
+  });
+
+  const submitV2CustomerSignatureMutation = useMutation({
+    mutationFn: async (signatureData) => {
+      if (!v2CustomerSigningToken) {
+        throw new Error('Customer signing token is missing.');
+      }
+
+      await apiClient.post(`/api/documents/agreements/sign/${v2CustomerSigningToken}`, {
+        signatureData,
+        signerName: getCustomerDisplayName(contact),
+        signerEmail: v2CustomerEmail,
+      });
+
+      const agreementId = v2AgreementData?.id || v2AgreementData?.agreementId;
+      if (!agreementId) {
+        throw new Error('Agreement id is missing for agent signing session.');
+      }
+
+      const hostName = getAgentDisplayName(currentUser, v2AgentEmail);
+      const hostInit = unwrapApiEnvelope(await agreementsApi.initiateHostSigning(agreementId, {
+        name: hostName,
+        email: v2AgentEmail || currentUser?.email,
+      }));
+      const hostToken = extractHostSigningToken(hostInit);
+
+      if (!hostToken) {
+        throw new Error('Agent signing session token is missing.');
+      }
+
+      const agentSession = unwrapApiEnvelope(await agreementsApi.getAgreementForHostSigning(hostToken));
+      if (!agentSession || !agentSession.id) {
+        throw new Error('Agent signing session could not be loaded.');
+      }
+
+      return { hostToken, agentSession };
+    },
+    onSuccess: ({ hostToken, agentSession }) => {
+      setV2HostSigningToken(hostToken);
+      setV2AgentSignSession(agentSession);
+      setV2Step(4);
+      setV2SignError(null);
+      resetV2SignerTransientState();
+    },
+    onError: (err) => {
+      setV2SignError(err?.response?.data?.error?.message || err?.message || 'Unable to submit customer signature.');
+    },
+  });
+
+  const submitV2AgentSignatureMutation = useMutation({
+    mutationFn: async (signatureData) => {
+      if (!v2HostSigningToken) {
+        throw new Error('Agent signing token is missing.');
+      }
+
+      const hostName = getAgentDisplayName(currentUser, v2AgentEmail);
+      const completion = unwrapApiEnvelope(await agreementsApi.applyHostSignature(
+        v2HostSigningToken,
+        signatureData,
+        {
+          name: hostName,
+          email: v2AgentEmail || currentUser?.email,
+        }
+      ));
+
+      return completion;
+    },
+    onSuccess: (completion) => {
+      setV2CompletionData(completion);
+      setV2Step(5);
+      setV2SignError(null);
+      resetV2SignerTransientState();
+      if (onSuccess) {
+        onSuccess(completion);
+      }
+    },
+    onError: (err) => {
+      setV2SignError(err?.response?.data?.error?.message || err?.message || 'Unable to submit agent signature.');
+    },
+  });
+
+  useEffect(() => {
+    if (!(v2Step === 3 || v2Step === 4) || v2SignatureMode !== 'DRAW' || !v2CanvasRef.current) return;
+
+    const canvas = v2CanvasRef.current;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+    canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+    ctx.scale(dpr, dpr);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = '#111827';
+    ctx.lineWidth = 2;
+    ctx.clearRect(0, 0, rect.width, rect.height);
+  }, [v2Step, v2SignatureMode]);
 
   // Handlers
   const handleSelectTemplate = (template) => {
@@ -377,6 +561,125 @@ export default function ContractSigningModal({
     });
   };
 
+  const getCanvasCoordinates = (event) => {
+    const canvas = v2CanvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    const source = event.touches?.[0] || event;
+    return {
+      x: source.clientX - rect.left,
+      y: source.clientY - rect.top,
+    };
+  };
+
+  const startV2Drawing = (event) => {
+    if (v2SignatureMode !== 'DRAW') return;
+    event.preventDefault();
+    const canvas = v2CanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const coords = getCanvasCoordinates(event);
+    setV2IsDrawing(true);
+    ctx.beginPath();
+    ctx.moveTo(coords.x, coords.y);
+  };
+
+  const drawV2Signature = (event) => {
+    if (!v2IsDrawing || v2SignatureMode !== 'DRAW') return;
+    event.preventDefault();
+    const canvas = v2CanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const coords = getCanvasCoordinates(event);
+    ctx.lineTo(coords.x, coords.y);
+    ctx.stroke();
+  };
+
+  const stopV2Drawing = () => {
+    if (!v2IsDrawing) return;
+    setV2IsDrawing(false);
+    if (!v2CanvasRef.current) return;
+    setV2SignatureData(v2CanvasRef.current.toDataURL('image/png'));
+  };
+
+  const clearV2SignatureCapture = () => {
+    resetV2SignerTransientState();
+  };
+
+  const handleStartV2SignNow = () => {
+    if (!validateV2StepOneInputs()) return;
+    if (v2Mode !== 'SIGN_NOW') {
+      setV2SignError('Send To Sign is not available in this phase yet. Use Sign Now.');
+      return;
+    }
+    setV2SignError(null);
+    startV2SignNowMutation.mutate();
+  };
+
+  const currentV2SignerRole = v2Step === 4 ? 'AGENT' : 'CUSTOMER';
+  const currentV2SignSession = v2Step === 4 ? v2AgentSignSession : v2CustomerSignSession;
+  const currentV2RequiredFields = getSignerRequiredFields(currentV2SignSession, currentV2SignerRole);
+
+  const handleV2JumpToNextRequired = () => {
+    if (!currentV2RequiredFields.length) return;
+    setV2ActiveRequiredIndex((prev) => (prev + 1) % currentV2RequiredFields.length);
+  };
+
+  const buildV2TypedSignatureData = () => {
+    const text = (v2TypedSignature || '').trim();
+    if (!text) return null;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 900;
+    canvas.height = 260;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#111827';
+    ctx.font = '600 72px "Brush Script MT", cursive';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, 24, 130);
+    return canvas.toDataURL('image/png');
+  };
+
+  const getCurrentV2SignatureData = () => {
+    if (v2SignatureMode === 'TYPE') {
+      return buildV2TypedSignatureData();
+    }
+    if (v2SignatureData) {
+      return v2SignatureData;
+    }
+    if (!v2CanvasRef.current) {
+      return null;
+    }
+    return v2CanvasRef.current.toDataURL('image/png');
+  };
+
+  const handleSubmitV2CurrentSigner = () => {
+    if (!currentV2SignSession) {
+      setV2SignError('Signing session data is unavailable. Go back to preview and restart Sign Now.');
+      return;
+    }
+    const signatureData = getCurrentV2SignatureData();
+    if (!signatureData) {
+      setV2SignError('Please provide a signature before continuing.');
+      return;
+    }
+
+    setV2SignError(null);
+    if (v2Step === 3) {
+      submitV2CustomerSignatureMutation.mutate(signatureData);
+      return;
+    }
+    if (v2Step === 4) {
+      submitV2AgentSignatureMutation.mutate(signatureData);
+    }
+  };
+
   if (!isOpen) return null;
 
   if (FEATURE_PANDASIGN_V2) {
@@ -395,6 +698,9 @@ export default function ContractSigningModal({
       (placeholderSummary.AGENT?.total || 0) > 0 ||
       (placeholderSummary.OTHER?.total || 0) > 0;
     const showPreviewUnavailable = v2Step === 2 && !previewBusy && !hasPreviewSource;
+    const signNowBusy = startV2SignNowMutation.isPending;
+    const customerSubmitBusy = submitV2CustomerSignatureMutation.isPending;
+    const agentSubmitBusy = submitV2AgentSignatureMutation.isPending;
 
     return (
       <div className="fixed inset-0 z-50">
@@ -413,9 +719,11 @@ export default function ContractSigningModal({
                 <div>
                   <h2 className="text-lg font-semibold text-gray-900">PandaSign Wizard</h2>
                   <p className="text-sm text-gray-500">
-                    {v2Step === 1
-                      ? 'Step 1: Template, mode, and required-field verification'
-                      : 'Step 2: Preview and checklist'}
+                    {v2Step === 1 && 'Step 1: Template, mode, and required-field verification'}
+                    {v2Step === 2 && 'Step 2: Preview and checklist'}
+                    {v2Step === 3 && 'Step 3A: Customer Signature'}
+                    {v2Step === 4 && 'Step 3A: Agent Signature'}
+                    {v2Step === 5 && 'Step 3A: Completed'}
                   </p>
                 </div>
               </div>
@@ -429,10 +737,10 @@ export default function ContractSigningModal({
 
             <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 sm:px-6 py-4 pb-32 sm:pb-36">
               <div className="space-y-6">
-                {(v2VerificationError || v2PreviewError || error) && (
+                {(v2VerificationError || v2PreviewError || v2SignError || error) && (
                   <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-start">
                     <AlertCircle className="w-5 h-5 text-red-500 mr-3 flex-shrink-0 mt-0.5" />
-                    <p className="text-sm text-red-700">{v2VerificationError || v2PreviewError || error}</p>
+                    <p className="text-sm text-red-700">{v2VerificationError || v2PreviewError || v2SignError || error}</p>
                   </div>
                 )}
 
@@ -680,30 +988,209 @@ export default function ContractSigningModal({
                         )}
                       </div>
                     </section>
+
+                    {v2Mode !== 'SIGN_NOW' && (
+                      <section className="rounded-lg border border-blue-200 bg-blue-50 p-3">
+                        <p className="text-sm text-blue-700">
+                          Send To Sign is not part of this phase yet. Switch mode to <strong>Sign Now</strong> to continue.
+                        </p>
+                      </section>
+                    )}
                   </>
+                )}
+
+                {(v2Step === 3 || v2Step === 4) && (
+                  <>
+                    <section className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                      <p className="text-xs text-gray-500">Current signer</p>
+                      <p className="text-sm font-medium text-gray-900">
+                        {currentV2SignerRole === 'CUSTOMER' ? 'Customer' : 'Agent'}
+                      </p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {currentV2SignerRole === 'CUSTOMER' ? v2CustomerEmail : v2AgentEmail}
+                      </p>
+                      {!currentV2SignSession && (
+                        <p className="text-xs text-red-600 mt-2">
+                          Signing session data is unavailable. Go back to preview and restart Sign Now.
+                        </p>
+                      )}
+                    </section>
+
+                    <section className="rounded-lg border border-gray-200 p-3">
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="text-sm font-semibold text-gray-700">Required Fields ({currentV2SignerRole})</h3>
+                        <button
+                          type="button"
+                          onClick={handleV2JumpToNextRequired}
+                          disabled={!currentV2RequiredFields.length}
+                          className="inline-flex items-center text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+                        >
+                          <SkipForward className="w-3.5 h-3.5 mr-1" />
+                          Jump Next
+                        </button>
+                      </div>
+                      {currentV2RequiredFields.length > 0 ? (
+                        <div className="space-y-2">
+                          {currentV2RequiredFields.map((field, index) => (
+                            <div
+                              key={`${field.id || field.key || field.label || index}`}
+                              className={`rounded p-2 text-xs border ${
+                                index === v2ActiveRequiredIndex
+                                  ? 'bg-panda-primary/10 border-panda-primary text-panda-primary'
+                                  : 'bg-white border-gray-200 text-gray-700'
+                              }`}
+                            >
+                              {field.label || field.name || `Required field ${index + 1}`}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-gray-500">
+                          No role-specific required fields were provided for this signer.
+                        </p>
+                      )}
+                    </section>
+
+                    <section className="rounded-lg border border-gray-200 p-3">
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="text-sm font-semibold text-gray-700">Capture Signature</h3>
+                        <button
+                          type="button"
+                          onClick={clearV2SignatureCapture}
+                          className="inline-flex items-center text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+                        >
+                          Clear
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 mb-3">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setV2SignatureMode('DRAW');
+                            setV2TypedSignature('');
+                            setV2SignatureData(null);
+                          }}
+                          className={`inline-flex items-center justify-center px-3 py-2 text-sm rounded border ${
+                            v2SignatureMode === 'DRAW'
+                              ? 'border-panda-primary bg-panda-primary/10 text-panda-primary'
+                              : 'border-gray-300 text-gray-700'
+                          }`}
+                        >
+                          <Pencil className="w-4 h-4 mr-1" />
+                          Draw
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setV2SignatureMode('TYPE');
+                            setV2SignatureData(null);
+                          }}
+                          className={`inline-flex items-center justify-center px-3 py-2 text-sm rounded border ${
+                            v2SignatureMode === 'TYPE'
+                              ? 'border-panda-primary bg-panda-primary/10 text-panda-primary'
+                              : 'border-gray-300 text-gray-700'
+                          }`}
+                        >
+                          <Type className="w-4 h-4 mr-1" />
+                          Type
+                        </button>
+                      </div>
+
+                      {v2SignatureMode === 'DRAW' && (
+                        <div className="border border-dashed border-gray-300 rounded-lg bg-white p-2">
+                          <div className="w-full h-44">
+                            <canvas
+                              ref={v2CanvasRef}
+                              className="w-full h-full touch-none rounded"
+                              onMouseDown={startV2Drawing}
+                              onMouseMove={drawV2Signature}
+                              onMouseUp={stopV2Drawing}
+                              onMouseLeave={stopV2Drawing}
+                              onTouchStart={startV2Drawing}
+                              onTouchMove={drawV2Signature}
+                              onTouchEnd={stopV2Drawing}
+                            />
+                          </div>
+                          <p className="text-xs text-gray-500 mt-2 text-center">
+                            Draw signature with touch or mouse
+                          </p>
+                        </div>
+                      )}
+
+                      {v2SignatureMode === 'TYPE' && (
+                        <div>
+                          <label htmlFor="v2-typed-signature" className="block text-xs text-gray-600 mb-1">
+                            Typed Signature
+                          </label>
+                          <input
+                            id="v2-typed-signature"
+                            type="text"
+                            value={v2TypedSignature}
+                            onChange={(e) => setV2TypedSignature(e.target.value)}
+                            className="w-full px-3 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary"
+                            placeholder="Type full name"
+                          />
+                        </div>
+                      )}
+                    </section>
+                  </>
+                )}
+
+                {v2Step === 5 && (
+                  <section className="text-center py-6">
+                    <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-4">
+                      <CheckCircle className="w-8 h-8 text-green-500" />
+                    </div>
+                    <h3 className="text-lg font-semibold text-gray-900 mb-2">Sign Now completed</h3>
+                    <p className="text-sm text-gray-500 mb-4">
+                      Customer and agent signatures were submitted successfully.
+                    </p>
+                    {(v2CompletionData?.signedDocumentUrl || v2AgreementData?.signedDocumentUrl || v2AgreementData?.documentUrl) && (
+                      <a
+                        href={v2CompletionData?.signedDocumentUrl || v2AgreementData?.signedDocumentUrl || v2AgreementData?.documentUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50"
+                      >
+                        <ExternalLink className="w-4 h-4 mr-1" />
+                        View Document
+                      </a>
+                    )}
+                  </section>
                 )}
               </div>
             </div>
 
             <div className="sticky bottom-0 border-t border-gray-200 bg-white/95 backdrop-blur px-4 sm:px-6 py-3">
               <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (v2Step === 2) {
-                      setV2Step(1);
-                      setV2PreviewData(null);
-                      setV2PreviewUrl(null);
-                      setV2PreviewHash(null);
-                      setV2PreviewError(null);
-                    } else {
-                      onClose();
-                    }
-                  }}
-                  className="w-full sm:w-auto px-5 py-3 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50"
-                >
-                  {v2Step === 2 ? 'Back' : 'Cancel'}
-                </button>
+                {(v2Step === 1 || v2Step === 2 || v2Step === 3 || v2Step === 4) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (v2Step === 1) {
+                        onClose();
+                        return;
+                      }
+
+                      if (v2Step === 2) {
+                        setV2Step(1);
+                        setV2PreviewData(null);
+                        setV2PreviewUrl(null);
+                        setV2PreviewHash(null);
+                        setV2PreviewError(null);
+                        return;
+                      }
+
+                      // Step 3A back-out returns to preview and clears signer transient state.
+                      setV2Step(2);
+                      resetV2SignFlowState();
+                    }}
+                    className="w-full sm:w-auto px-5 py-3 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50"
+                  >
+                    {v2Step === 1 ? 'Cancel' : 'Back'}
+                  </button>
+                )}
 
                 {v2Step === 1 && (
                   <>
@@ -742,20 +1229,83 @@ export default function ContractSigningModal({
                 )}
 
                 {v2Step === 2 && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleOpenV2Preview}
+                      disabled={previewBusy || signNowBusy}
+                      className="w-full sm:w-auto inline-flex items-center justify-center px-5 py-3 rounded-lg border border-panda-primary text-panda-primary hover:bg-panda-primary/5 disabled:opacity-50"
+                    >
+                      {previewBusy ? (
+                        <>
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          Refreshing...
+                        </>
+                      ) : (
+                        'Refresh Preview'
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleStartV2SignNow}
+                      disabled={previewBusy || signNowBusy || v2Mode !== 'SIGN_NOW'}
+                      className="w-full sm:w-auto inline-flex items-center justify-center px-5 py-3 rounded-lg bg-gradient-to-r from-panda-primary to-panda-secondary text-white disabled:opacity-50"
+                    >
+                      {signNowBusy ? (
+                        <>
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          Starting...
+                        </>
+                      ) : (
+                        'Start Sign Now'
+                      )}
+                    </button>
+                  </>
+                )}
+
+                {v2Step === 3 && (
                   <button
                     type="button"
-                    onClick={handleOpenV2Preview}
-                    disabled={previewBusy}
+                    onClick={handleSubmitV2CurrentSigner}
+                    disabled={customerSubmitBusy || agentSubmitBusy || signNowBusy || !v2CustomerSignSession}
                     className="w-full sm:w-auto inline-flex items-center justify-center px-5 py-3 rounded-lg bg-gradient-to-r from-panda-primary to-panda-secondary text-white disabled:opacity-50"
                   >
-                    {previewBusy ? (
+                    {customerSubmitBusy ? (
                       <>
                         <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        Refreshing...
+                        Submitting...
                       </>
                     ) : (
-                      'Refresh Preview'
+                      'Submit Customer Signature'
                     )}
+                  </button>
+                )}
+
+                {v2Step === 4 && (
+                  <button
+                    type="button"
+                    onClick={handleSubmitV2CurrentSigner}
+                    disabled={customerSubmitBusy || agentSubmitBusy || signNowBusy || !v2AgentSignSession}
+                    className="w-full sm:w-auto inline-flex items-center justify-center px-5 py-3 rounded-lg bg-gradient-to-r from-panda-primary to-panda-secondary text-white disabled:opacity-50"
+                  >
+                    {agentSubmitBusy ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Submitting...
+                      </>
+                    ) : (
+                      'Submit Agent Signature'
+                    )}
+                  </button>
+                )}
+
+                {v2Step === 5 && (
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    className="w-full sm:w-auto inline-flex items-center justify-center px-5 py-3 rounded-lg bg-gradient-to-r from-panda-primary to-panda-secondary text-white"
+                  >
+                    Done
                   </button>
                 )}
               </div>
@@ -1478,4 +2028,245 @@ function getMissingItems(verification) {
     .filter(Boolean);
 
   return [...new Set([...flattenedFailures, ...flattenedMissing])];
+}
+
+function unwrapApiEnvelope(payload) {
+  if (!payload || typeof payload !== 'object') return payload ?? null;
+  if (payload.data && typeof payload.data === 'object') return payload.data;
+  return payload;
+}
+
+function extractSigningToken(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+
+  const direct = [
+    payload.signingToken,
+    payload.customerSigningToken,
+    payload.customerToken,
+    payload.token,
+    payload.tokens?.CUSTOMER,
+    payload.tokens?.customer,
+    payload.signingTokens?.CUSTOMER,
+    payload.signingTokens?.customer,
+  ];
+  for (const token of direct) {
+    const normalized = normalizeTokenValue(token);
+    if (normalized) return normalized;
+  }
+
+  const links = [
+    payload.customerSigningUrl,
+    payload.customerLink,
+    payload.signingUrl,
+    payload.signingLinks?.CUSTOMER,
+    payload.signingLinks?.customer,
+    payload.links?.customer,
+  ];
+  for (const link of links) {
+    const extracted = extractTokenFromUrl(link);
+    if (extracted) return extracted;
+  }
+
+  return null;
+}
+
+function extractHostSigningToken(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+
+  const direct = [
+    payload.hostSigningToken,
+    payload.hostToken,
+    payload.token,
+    payload.signingToken,
+    payload.agentSigningToken,
+    payload.agentToken,
+  ];
+  for (const token of direct) {
+    const normalized = normalizeTokenValue(token);
+    if (normalized) return normalized;
+  }
+
+  const links = [
+    payload.hostSigningUrl,
+    payload.hostLink,
+    payload.agentSigningUrl,
+    payload.signingUrl,
+    payload.signingLinks?.AGENT,
+    payload.signingLinks?.agent,
+    payload.links?.agent,
+  ];
+  for (const link of links) {
+    const extracted = extractTokenFromUrl(link);
+    if (extracted) return extracted;
+  }
+
+  return null;
+}
+
+function normalizeTokenValue(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.includes('/')) return extractTokenFromUrl(trimmed);
+  return trimmed;
+}
+
+function extractTokenFromUrl(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (!trimmed.includes('/')) return trimmed;
+
+  let path = trimmed;
+  try {
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      path = new URL(trimmed).pathname;
+    }
+  } catch {
+    path = trimmed;
+  }
+
+  const segments = path.split('/').filter(Boolean);
+  if (!segments.length) return null;
+  const last = segments[segments.length - 1] || '';
+  return last.split('?')[0] || null;
+}
+
+function getCustomerDisplayName(contact) {
+  if (!contact || typeof contact !== 'object') return 'Customer';
+  const full = [contact.firstName, contact.lastName].filter(Boolean).join(' ').trim();
+  return contact.fullName || contact.name || full || 'Customer';
+}
+
+function getAgentDisplayName(currentUser, fallbackEmail) {
+  if (currentUser && typeof currentUser === 'object') {
+    const full = [currentUser.firstName, currentUser.lastName].filter(Boolean).join(' ').trim();
+    if (full) return full;
+    if (typeof currentUser.fullName === 'string' && currentUser.fullName.trim()) return currentUser.fullName.trim();
+    if (typeof currentUser.name === 'string' && currentUser.name.trim()) return currentUser.name.trim();
+    if (typeof currentUser.email === 'string' && currentUser.email.includes('@')) {
+      return currentUser.email.split('@')[0];
+    }
+  }
+  if (typeof fallbackEmail === 'string' && fallbackEmail.includes('@')) {
+    return fallbackEmail.split('@')[0];
+  }
+  return 'Agent';
+}
+
+function getSignerRequiredFields(signSession, requestedRole) {
+  if (!signSession || typeof signSession !== 'object') return [];
+
+  const targetRole = normalizeRole(requestedRole);
+  if (!targetRole) return [];
+
+  const roleSpecificSources = targetRole === 'CUSTOMER'
+    ? [
+      signSession.customerFieldsToSign,
+      signSession.customerRequiredFields,
+      signSession.customerFields,
+    ]
+    : [
+      signSession.agentFieldsToSign,
+      signSession.agentRequiredFields,
+      signSession.agentFields,
+    ];
+
+  const roleSpecific = roleSpecificSources
+    .flatMap((value) => (Array.isArray(value) ? value : []))
+    .filter((field) => field && typeof field === 'object');
+
+  if (roleSpecific.length > 0) {
+    return dedupeFieldList(roleSpecific.map((field, index) => normalizeFieldEntry(field, targetRole, index)));
+  }
+
+  const genericSources = [
+    signSession.fieldsToSign,
+    signSession.requiredFields,
+    signSession.fields,
+    signSession.signatureFields,
+    signSession.fieldMapReport?.fields,
+    signSession.previewReport?.fieldMapReport?.fields,
+  ];
+
+  const genericFields = genericSources
+    .flatMap((value) => (Array.isArray(value) ? value : []))
+    .filter((field) => field && typeof field === 'object');
+
+  if (!genericFields.length) {
+    return [];
+  }
+
+  const sessionRole = normalizeRole(
+    signSession.signerRole ||
+    signSession.role ||
+    signSession.signer?.role
+  );
+
+  const hasRoleMetadata = genericFields.some((field) => normalizeRole(
+    field.role ||
+    field.signerRole ||
+    field.ownerRole ||
+    field.dataPsRole
+  ));
+
+  if (hasRoleMetadata) {
+    const filtered = genericFields.filter((field) => normalizeRole(
+      field.role ||
+      field.signerRole ||
+      field.ownerRole ||
+      field.dataPsRole
+    ) === targetRole);
+    return dedupeFieldList(filtered.map((field, index) => normalizeFieldEntry(field, targetRole, index)));
+  }
+
+  // If role metadata is missing, rely on session role and avoid role leakage.
+  if (sessionRole && sessionRole !== targetRole) {
+    return [];
+  }
+  if (!sessionRole) {
+    return [];
+  }
+
+  return dedupeFieldList(genericFields.map((field, index) => normalizeFieldEntry(field, targetRole, index)));
+}
+
+function normalizeRole(value) {
+  if (!value) return null;
+  const normalized = String(value).trim().toUpperCase();
+  if (!normalized) return null;
+  if (normalized === 'CUSTOMER') return 'CUSTOMER';
+  if (normalized === 'AGENT') return 'AGENT';
+  return normalized;
+}
+
+function normalizeFieldEntry(field, role, index) {
+  const type = String(
+    field.type ||
+    field.fieldType ||
+    field.kind ||
+    field.inputType ||
+    'FIELD'
+  ).toUpperCase();
+
+  return {
+    ...field,
+    role,
+    type,
+    id: field.id || field.fieldId || field.dataPsId || field.key || `${role}-field-${index + 1}`,
+    key: field.key || field.id || field.fieldId || field.dataPsId || `${role}-field-${index + 1}`,
+    label: field.label || field.name || field.key || field.id || `Required field ${index + 1}`,
+  };
+}
+
+function dedupeFieldList(fields) {
+  const seen = new Set();
+  const result = [];
+  for (const field of fields) {
+    const dedupeKey = `${field.role || ''}:${field.id || field.key || field.label || ''}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    result.push(field);
+  }
+  return result;
 }
