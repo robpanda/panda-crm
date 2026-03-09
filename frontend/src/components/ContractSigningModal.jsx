@@ -63,6 +63,11 @@ export default function ContractSigningModal({
   const [v2AgentEmail, setV2AgentEmail] = useState('');
   const [v2Verification, setV2Verification] = useState(null);
   const [v2VerificationError, setV2VerificationError] = useState(null);
+  const [v2Step, setV2Step] = useState(1);
+  const [v2PreviewData, setV2PreviewData] = useState(null);
+  const [v2PreviewUrl, setV2PreviewUrl] = useState(null);
+  const [v2PreviewHash, setV2PreviewHash] = useState(null);
+  const [v2PreviewError, setV2PreviewError] = useState(null);
 
   // Fetch WYSIWYG templates from V2 API
   const { data: templatesData, isLoading: templatesLoading } = useQuery({
@@ -151,6 +156,11 @@ export default function ContractSigningModal({
       setV2AgentEmail('');
       setV2Verification(null);
       setV2VerificationError(null);
+      setV2Step(1);
+      setV2PreviewData(null);
+      setV2PreviewUrl(null);
+      setV2PreviewHash(null);
+      setV2PreviewError(null);
     }
   }, [isOpen]);
 
@@ -240,7 +250,34 @@ export default function ContractSigningModal({
     if (!FEATURE_PANDASIGN_V2) return;
     setV2Verification(null);
     setV2VerificationError(null);
+    setV2PreviewData(null);
+    setV2PreviewUrl(null);
+    setV2PreviewHash(null);
+    setV2PreviewError(null);
+    setV2Step(1);
   }, [v2TemplateId, v2Mode, v2CustomerEmail, v2AgentEmail]);
+
+  const v2PreviewMutation = useMutation({
+    mutationFn: async (payload) => {
+      const response = await documentsApiV2.preview(payload);
+      return response?.data || response;
+    },
+    onSuccess: (rawData) => {
+      const data = normalizePreviewPayload(rawData);
+      setV2PreviewData(data);
+      setV2PreviewUrl(getPreviewUrl(data));
+      setV2PreviewHash(getPreviewHash(data));
+      setV2PreviewError(null);
+      setV2Step(2);
+    },
+    onError: (err) => {
+      setV2PreviewData(null);
+      setV2PreviewUrl(null);
+      setV2PreviewHash(null);
+      setV2PreviewError(err?.response?.data?.error?.message || err?.message || 'Preview is unavailable right now.');
+      setV2Step(2);
+    },
+  });
 
   // Handlers
   const handleSelectTemplate = (template) => {
@@ -295,20 +332,24 @@ export default function ContractSigningModal({
     }
   };
 
-  const handleVerifyStepOne = () => {
+  const validateV2StepOneInputs = () => {
     if (!v2TemplateId) {
       setV2VerificationError('Please select a template before verification.');
-      return;
+      return false;
     }
     if (!EMAIL_REGEX.test(v2CustomerEmail)) {
       setV2VerificationError('Please enter a valid customer email address.');
-      return;
+      return false;
     }
     if (!EMAIL_REGEX.test(v2AgentEmail)) {
       setV2VerificationError('Please enter a valid agent email address.');
-      return;
+      return false;
     }
+    return true;
+  };
 
+  const handleVerifyStepOne = () => {
+    if (!validateV2StepOneInputs()) return;
     setV2VerificationError(null);
     verifyRequiredFieldsMutation.mutate({
       templateId: v2TemplateId,
@@ -323,13 +364,37 @@ export default function ContractSigningModal({
     });
   };
 
+  const handleOpenV2Preview = () => {
+    if (!validateV2StepOneInputs()) return;
+
+    setV2VerificationError(null);
+    setV2PreviewError(null);
+    v2PreviewMutation.mutate({
+      templateId: v2TemplateId,
+      mode: v2Mode,
+      context: buildContext(),
+      returnUrl: true,
+    });
+  };
+
   if (!isOpen) return null;
 
   if (FEATURE_PANDASIGN_V2) {
     const verifyBusy = verifyRequiredFieldsMutation.isPending;
+    const previewBusy = v2PreviewMutation.isPending;
     const checklist = getChecklist(v2Verification);
     const missingItems = getMissingItems(v2Verification);
     const hasFailures = missingItems.length > 0;
+    const previewMissingTokens = getPreviewMissingTokens(v2PreviewData);
+    const previewWarnings = getPreviewWarnings(v2PreviewData);
+    const placeholderSummary = getPlaceholderSummaryByRole(v2PreviewData);
+    const hasPreviewPayload = Boolean(v2PreviewData);
+    const hasPreviewSource = Boolean(v2PreviewUrl);
+    const hasAnyPlaceholders =
+      (placeholderSummary.CUSTOMER?.total || 0) > 0 ||
+      (placeholderSummary.AGENT?.total || 0) > 0 ||
+      (placeholderSummary.OTHER?.total || 0) > 0;
+    const showPreviewUnavailable = v2Step === 2 && !previewBusy && !hasPreviewSource;
 
     return (
       <div className="fixed inset-0 z-50">
@@ -337,7 +402,7 @@ export default function ContractSigningModal({
 
         <div className="relative flex h-[100dvh] w-full items-stretch justify-center p-0 sm:items-center sm:p-6">
           <div
-            className="relative flex w-full max-w-2xl flex-col bg-white shadow-2xl h-[100dvh] sm:h-auto sm:max-h-[90dvh] rounded-none sm:rounded-xl"
+            className="relative flex w-full max-w-4xl flex-col bg-white shadow-2xl h-[100dvh] sm:h-auto sm:max-h-[92dvh] rounded-none sm:rounded-xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-gray-200">
@@ -347,7 +412,11 @@ export default function ContractSigningModal({
                 </div>
                 <div>
                   <h2 className="text-lg font-semibold text-gray-900">PandaSign Wizard</h2>
-                  <p className="text-sm text-gray-500">Step 1: Template, mode, and required-field verification</p>
+                  <p className="text-sm text-gray-500">
+                    {v2Step === 1
+                      ? 'Step 1: Template, mode, and required-field verification'
+                      : 'Step 2: Preview and checklist'}
+                  </p>
                 </div>
               </div>
               <button
@@ -358,142 +427,260 @@ export default function ContractSigningModal({
               </button>
             </div>
 
-            <div className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 py-4 pb-28 sm:pb-32">
+            <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 sm:px-6 py-4 pb-32 sm:pb-36">
               <div className="space-y-6">
-                {(v2VerificationError || error) && (
+                {(v2VerificationError || v2PreviewError || error) && (
                   <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-start">
                     <AlertCircle className="w-5 h-5 text-red-500 mr-3 flex-shrink-0 mt-0.5" />
-                    <p className="text-sm text-red-700">{v2VerificationError || error}</p>
+                    <p className="text-sm text-red-700">{v2VerificationError || v2PreviewError || error}</p>
                   </div>
                 )}
 
-                <section className="space-y-2">
-                  <label htmlFor="pandasign-template" className="block text-sm font-medium text-gray-700">
-                    Template
-                  </label>
-                  <select
-                    id="pandasign-template"
-                    value={v2TemplateId}
-                    onChange={(e) => setV2TemplateId(e.target.value)}
-                    className="w-full px-3 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary"
-                  >
-                    <option value="">Select a published template...</option>
-                    {templates.map((template) => (
-                      <option key={template.id} value={template.id}>
-                        {template.name}
-                        {template.category ? ` (${template.category})` : ''}
-                      </option>
-                    ))}
-                  </select>
-                  {templatesLoading && (
-                    <p className="text-xs text-gray-500">Loading templates...</p>
-                  )}
-                </section>
+                {v2Step === 1 && (
+                  <>
+                    <section className="space-y-2">
+                      <label htmlFor="pandasign-template" className="block text-sm font-medium text-gray-700">
+                        Template
+                      </label>
+                      <select
+                        id="pandasign-template"
+                        value={v2TemplateId}
+                        onChange={(e) => setV2TemplateId(e.target.value)}
+                        className="w-full px-3 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary"
+                      >
+                        <option value="">Select a published template...</option>
+                        {templates.map((template) => (
+                          <option key={template.id} value={template.id}>
+                            {template.name}
+                            {template.category ? ` (${template.category})` : ''}
+                          </option>
+                        ))}
+                      </select>
+                      {templatesLoading && (
+                        <p className="text-xs text-gray-500">Loading templates...</p>
+                      )}
+                    </section>
 
-                <section className="space-y-3">
-                  <p className="text-sm font-medium text-gray-700">Mode</p>
-                  <div className="grid grid-cols-1 gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setV2Mode('SIGN_NOW')}
-                      className={`w-full rounded-lg border px-4 py-3 text-left transition ${
-                        v2Mode === 'SIGN_NOW'
-                          ? 'border-panda-primary bg-panda-primary/10 text-panda-primary'
-                          : 'border-gray-200 hover:border-panda-primary/50'
-                      }`}
-                    >
-                      <span className="block text-sm font-semibold">Sign Now</span>
-                      <span className="block text-xs text-gray-500 mt-0.5">In-person signing on this device.</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setV2Mode('SEND_TO_SIGN')}
-                      className={`w-full rounded-lg border px-4 py-3 text-left transition ${
-                        v2Mode === 'SEND_TO_SIGN'
-                          ? 'border-panda-primary bg-panda-primary/10 text-panda-primary'
-                          : 'border-gray-200 hover:border-panda-primary/50'
-                      }`}
-                    >
-                      <span className="block text-sm font-semibold">Send To Sign</span>
-                      <span className="block text-xs text-gray-500 mt-0.5">Email signing links to each signer.</span>
-                    </button>
-                  </div>
-                </section>
+                    <section className="space-y-3">
+                      <p className="text-sm font-medium text-gray-700">Mode</p>
+                      <div className="grid grid-cols-1 gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setV2Mode('SIGN_NOW')}
+                          className={`w-full rounded-lg border px-4 py-3 text-left transition ${
+                            v2Mode === 'SIGN_NOW'
+                              ? 'border-panda-primary bg-panda-primary/10 text-panda-primary'
+                              : 'border-gray-200 hover:border-panda-primary/50'
+                          }`}
+                        >
+                          <span className="block text-sm font-semibold">Sign Now</span>
+                          <span className="block text-xs text-gray-500 mt-0.5">In-person signing on this device.</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setV2Mode('SEND_TO_SIGN')}
+                          className={`w-full rounded-lg border px-4 py-3 text-left transition ${
+                            v2Mode === 'SEND_TO_SIGN'
+                              ? 'border-panda-primary bg-panda-primary/10 text-panda-primary'
+                              : 'border-gray-200 hover:border-panda-primary/50'
+                          }`}
+                        >
+                          <span className="block text-sm font-semibold">Send To Sign</span>
+                          <span className="block text-xs text-gray-500 mt-0.5">Email signing links to each signer.</span>
+                        </button>
+                      </div>
+                    </section>
 
-                <section className="space-y-3">
-                  <h3 className="text-sm font-medium text-gray-700">Signer Emails</h3>
-                  <div>
-                    <label htmlFor="pandasign-customer-email" className="block text-xs font-medium text-gray-600 mb-1">
-                      Customer Email
-                    </label>
-                    <input
-                      id="pandasign-customer-email"
-                      type="email"
-                      autoComplete="email"
-                      value={v2CustomerEmail}
-                      onChange={(e) => setV2CustomerEmail(e.target.value)}
-                      className="w-full px-3 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary"
-                      placeholder="customer@example.com"
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="pandasign-agent-email" className="block text-xs font-medium text-gray-600 mb-1">
-                      Agent Email
-                    </label>
-                    <input
-                      id="pandasign-agent-email"
-                      type="email"
-                      autoComplete="email"
-                      value={v2AgentEmail}
-                      onChange={(e) => setV2AgentEmail(e.target.value)}
-                      className="w-full px-3 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary"
-                      placeholder="agent@example.com"
-                    />
-                  </div>
-                </section>
+                    <section className="space-y-3">
+                      <h3 className="text-sm font-medium text-gray-700">Signer Emails</h3>
+                      <div>
+                        <label htmlFor="pandasign-customer-email" className="block text-xs font-medium text-gray-600 mb-1">
+                          Customer Email
+                        </label>
+                        <input
+                          id="pandasign-customer-email"
+                          type="email"
+                          autoComplete="email"
+                          value={v2CustomerEmail}
+                          onChange={(e) => setV2CustomerEmail(e.target.value)}
+                          className="w-full px-3 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary"
+                          placeholder="customer@example.com"
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="pandasign-agent-email" className="block text-xs font-medium text-gray-600 mb-1">
+                          Agent Email
+                        </label>
+                        <input
+                          id="pandasign-agent-email"
+                          type="email"
+                          autoComplete="email"
+                          value={v2AgentEmail}
+                          onChange={(e) => setV2AgentEmail(e.target.value)}
+                          className="w-full px-3 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary"
+                          placeholder="agent@example.com"
+                        />
+                      </div>
+                    </section>
 
-                {selectedV2Template && (
-                  <section className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-                    <p className="text-xs text-gray-500">Selected template</p>
-                    <p className="text-sm font-medium text-gray-900">{selectedV2Template.name}</p>
-                    {selectedV2Template.description && (
-                      <p className="text-xs text-gray-500 mt-1">{selectedV2Template.description}</p>
+                    {selectedV2Template && (
+                      <section className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                        <p className="text-xs text-gray-500">Selected template</p>
+                        <p className="text-sm font-medium text-gray-900">{selectedV2Template.name}</p>
+                        {selectedV2Template.description && (
+                          <p className="text-xs text-gray-500 mt-1">{selectedV2Template.description}</p>
+                        )}
+                      </section>
                     )}
-                  </section>
+
+                    {v2Verification && (
+                      <section className={`rounded-lg border p-3 ${hasFailures ? 'border-amber-200 bg-amber-50' : 'border-green-200 bg-green-50'}`}>
+                        <p className={`text-sm font-semibold ${hasFailures ? 'text-amber-700' : 'text-green-700'}`}>
+                          {hasFailures ? 'Verification completed with missing items' : 'Verification completed'}
+                        </p>
+
+                        {checklist.length > 0 && (
+                          <div className="mt-2">
+                            <p className="text-xs font-medium text-gray-600 mb-1">Checklist</p>
+                            <ul className="space-y-1">
+                              {checklist.map((item, index) => (
+                                <li key={`${item}-${index}`} className="text-xs text-gray-700">
+                                  • {item}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+
+                        {missingItems.length > 0 && (
+                          <div className="mt-2">
+                            <p className="text-xs font-medium text-amber-700 mb-1">Missing Required Fields</p>
+                            <ul className="space-y-1">
+                              {missingItems.map((item, index) => (
+                                <li key={`${item}-${index}`} className="text-xs text-amber-700">
+                                  • {item}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </section>
+                    )}
+                  </>
                 )}
 
-                {v2Verification && (
-                  <section className={`rounded-lg border p-3 ${hasFailures ? 'border-amber-200 bg-amber-50' : 'border-green-200 bg-green-50'}`}>
-                    <p className={`text-sm font-semibold ${hasFailures ? 'text-amber-700' : 'text-green-700'}`}>
-                      {hasFailures ? 'Verification completed with missing items' : 'Verification completed'}
-                    </p>
+                {v2Step === 2 && (
+                  <>
+                    <section className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                      <p className="text-xs text-gray-500">Template</p>
+                      <p className="text-sm font-medium text-gray-900">{selectedV2Template?.name || 'Not selected'}</p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Mode: {v2Mode === 'SEND_TO_SIGN' ? 'Send To Sign' : 'Sign Now'}
+                      </p>
+                      {v2PreviewHash && (
+                        <p className="text-xs text-gray-500 mt-1 break-all">Preview hash: {v2PreviewHash}</p>
+                      )}
+                    </section>
 
-                    {checklist.length > 0 && (
-                      <div className="mt-2">
-                        <p className="text-xs font-medium text-gray-600 mb-1">Checklist</p>
-                        <ul className="space-y-1">
-                          {checklist.map((item, index) => (
-                            <li key={`${item}-${index}`} className="text-xs text-gray-700">
-                              • {item}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
+                    <section className="space-y-3">
+                      <h3 className="text-sm font-semibold text-gray-700">Preview</h3>
+                      {previewBusy && (
+                        <div className="border border-gray-200 rounded-lg p-6 text-center bg-gray-50">
+                          <Loader2 className="w-6 h-6 text-panda-primary animate-spin mx-auto mb-2" />
+                          <p className="text-sm text-gray-600">Generating preview...</p>
+                        </div>
+                      )}
 
-                    {missingItems.length > 0 && (
-                      <div className="mt-2">
-                        <p className="text-xs font-medium text-amber-700 mb-1">Missing Required Fields</p>
-                        <ul className="space-y-1">
-                          {missingItems.map((item, index) => (
-                            <li key={`${item}-${index}`} className="text-xs text-amber-700">
-                              • {item}
-                            </li>
-                          ))}
-                        </ul>
+                      {!previewBusy && hasPreviewSource && (
+                        <div className="border border-gray-200 rounded-lg overflow-hidden bg-gray-100">
+                          <iframe
+                            src={v2PreviewUrl}
+                            className="w-full h-[48vh] sm:h-[56vh] lg:h-[62vh]"
+                            title="PandaSign V2 Preview"
+                          />
+                        </div>
+                      )}
+
+                      {showPreviewUnavailable && (
+                        <div className="border border-amber-200 rounded-lg p-4 bg-amber-50">
+                          <p className="text-sm font-medium text-amber-700">Preview unavailable</p>
+                          <p className="text-xs text-amber-700 mt-1">
+                            We could not render a preview URL from the current response. You can go back and adjust inputs.
+                          </p>
+                        </div>
+                      )}
+                    </section>
+
+                    <section className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                      <div className="rounded-lg border border-gray-200 p-3 bg-white">
+                        <p className="text-xs font-semibold text-gray-600 mb-2">Missing Tokens</p>
+                        {previewMissingTokens.length > 0 ? (
+                          <ul className="space-y-1">
+                            {previewMissingTokens.map((token, index) => (
+                              <li key={`${token}-${index}`} className="text-xs text-amber-700">
+                                • {token}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="text-xs text-gray-500">
+                            {hasPreviewPayload ? 'No missing tokens reported.' : 'No preview token data available.'}
+                          </p>
+                        )}
                       </div>
-                    )}
-                  </section>
+
+                      <div className="rounded-lg border border-gray-200 p-3 bg-white">
+                        <p className="text-xs font-semibold text-gray-600 mb-2">Signature Placeholders by Role</p>
+                        {hasAnyPlaceholders ? (
+                          <div className="space-y-2 text-xs text-gray-700">
+                            <div>
+                              <p className="font-medium text-gray-800">CUSTOMER</p>
+                              <p>
+                                Total: {placeholderSummary.CUSTOMER.total}
+                                {' • '}Signatures: {placeholderSummary.CUSTOMER.signature}
+                                {' • '}Initials: {placeholderSummary.CUSTOMER.initial}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="font-medium text-gray-800">AGENT</p>
+                              <p>
+                                Total: {placeholderSummary.AGENT.total}
+                                {' • '}Signatures: {placeholderSummary.AGENT.signature}
+                                {' • '}Initials: {placeholderSummary.AGENT.initial}
+                              </p>
+                            </div>
+                            {placeholderSummary.OTHER.total > 0 && (
+                              <div>
+                                <p className="font-medium text-gray-800">OTHER</p>
+                                <p>Total: {placeholderSummary.OTHER.total}</p>
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <p className="text-xs text-gray-500">
+                            {hasPreviewPayload ? 'No placeholder map reported.' : 'No preview placeholder data available.'}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="rounded-lg border border-gray-200 p-3 bg-white">
+                        <p className="text-xs font-semibold text-gray-600 mb-2">Warnings</p>
+                        {previewWarnings.length > 0 ? (
+                          <ul className="space-y-1">
+                            {previewWarnings.map((warning, index) => (
+                              <li key={`${warning}-${index}`} className="text-xs text-amber-700">
+                                • {warning}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="text-xs text-gray-500">
+                            {hasPreviewPayload ? 'No warnings reported.' : 'No preview warnings available.'}
+                          </p>
+                        )}
+                      </div>
+                    </section>
+                  </>
                 )}
               </div>
             </div>
@@ -502,26 +689,75 @@ export default function ContractSigningModal({
               <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
                 <button
                   type="button"
-                  onClick={onClose}
+                  onClick={() => {
+                    if (v2Step === 2) {
+                      setV2Step(1);
+                      setV2PreviewData(null);
+                      setV2PreviewUrl(null);
+                      setV2PreviewHash(null);
+                      setV2PreviewError(null);
+                    } else {
+                      onClose();
+                    }
+                  }}
                   className="w-full sm:w-auto px-5 py-3 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50"
                 >
-                  Cancel
+                  {v2Step === 2 ? 'Back' : 'Cancel'}
                 </button>
-                <button
-                  type="button"
-                  onClick={handleVerifyStepOne}
-                  disabled={verifyBusy || templatesLoading}
-                  className="w-full sm:w-auto inline-flex items-center justify-center px-5 py-3 rounded-lg bg-gradient-to-r from-panda-primary to-panda-secondary text-white disabled:opacity-50"
-                >
-                  {verifyBusy ? (
-                    <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Verifying...
-                    </>
-                  ) : (
-                    'Verify Required Fields'
-                  )}
-                </button>
+
+                {v2Step === 1 && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={handleVerifyStepOne}
+                      disabled={verifyBusy || previewBusy || templatesLoading}
+                      className="w-full sm:w-auto inline-flex items-center justify-center px-5 py-3 rounded-lg border border-panda-primary text-panda-primary hover:bg-panda-primary/5 disabled:opacity-50"
+                    >
+                      {verifyBusy ? (
+                        <>
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          Verifying...
+                        </>
+                      ) : (
+                        'Verify Required Fields'
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleOpenV2Preview}
+                      disabled={verifyBusy || previewBusy || templatesLoading}
+                      className="w-full sm:w-auto inline-flex items-center justify-center px-5 py-3 rounded-lg bg-gradient-to-r from-panda-primary to-panda-secondary text-white disabled:opacity-50"
+                    >
+                      {previewBusy ? (
+                        <>
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          Loading Preview...
+                        </>
+                      ) : (
+                        'Continue to Preview'
+                      )}
+                    </button>
+                  </>
+                )}
+
+                {v2Step === 2 && (
+                  <button
+                    type="button"
+                    onClick={handleOpenV2Preview}
+                    disabled={previewBusy}
+                    className="w-full sm:w-auto inline-flex items-center justify-center px-5 py-3 rounded-lg bg-gradient-to-r from-panda-primary to-panda-secondary text-white disabled:opacity-50"
+                  >
+                    {previewBusy ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Refreshing...
+                      </>
+                    ) : (
+                      'Refresh Preview'
+                    )}
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -1067,6 +1303,136 @@ function getRoleColor(role) {
     CO_SIGNER: 'bg-teal-100 text-teal-700',
   };
   return colors[role] || 'bg-gray-100 text-gray-700';
+}
+
+function normalizePreviewPayload(rawData) {
+  if (!rawData || typeof rawData !== 'object') return {};
+  const nested = rawData.data && typeof rawData.data === 'object' ? rawData.data : {};
+  return { ...rawData, ...nested };
+}
+
+function getPreviewUrl(previewData) {
+  if (!previewData || typeof previewData !== 'object') return null;
+  return (
+    previewData.previewUrl ||
+    previewData.documentUrl ||
+    previewData.url ||
+    previewData.pdfUrl ||
+    previewData.preview?.previewUrl ||
+    previewData.preview?.documentUrl ||
+    previewData.preview?.url ||
+    null
+  );
+}
+
+function getPreviewHash(previewData) {
+  if (!previewData || typeof previewData !== 'object') return null;
+  return (
+    previewData.previewHash ||
+    previewData.documentHash ||
+    previewData.preview?.previewHash ||
+    previewData.preview?.documentHash ||
+    null
+  );
+}
+
+function getPreviewMissingTokens(previewData) {
+  if (!previewData || typeof previewData !== 'object') return [];
+
+  const candidates = [
+    previewData.missingTokens,
+    previewData.previewReport?.missingTokens,
+    previewData.fieldMapReport?.missingTokens,
+    previewData.tokenReport?.missingTokens,
+    previewData.report?.missingTokens,
+  ];
+
+  return [...new Set(
+    candidates
+      .flatMap((candidate) => (Array.isArray(candidate) ? candidate : []))
+      .map((token) => {
+        if (!token) return null;
+        if (typeof token === 'string') return token;
+        return token.token || token.key || token.name || token.message || null;
+      })
+      .filter(Boolean)
+  )];
+}
+
+function getPreviewWarnings(previewData) {
+  if (!previewData || typeof previewData !== 'object') return [];
+
+  const candidates = [
+    previewData.previewWarnings,
+    previewData.warnings,
+    previewData.previewReport?.previewWarnings,
+    previewData.previewReport?.warnings,
+    previewData.report?.warnings,
+    previewData.fieldMapReport?.warnings,
+  ];
+
+  return [...new Set(
+    candidates
+      .flatMap((candidate) => (Array.isArray(candidate) ? candidate : []))
+      .map((warning) => {
+        if (!warning) return null;
+        if (typeof warning === 'string') return warning;
+        return warning.message || warning.warning || warning.code || null;
+      })
+      .filter(Boolean)
+  )];
+}
+
+function getPlaceholderSummaryByRole(previewData) {
+  const summary = {
+    CUSTOMER: { total: 0, signature: 0, initial: 0 },
+    AGENT: { total: 0, signature: 0, initial: 0 },
+    OTHER: { total: 0, signature: 0, initial: 0 },
+  };
+
+  if (!previewData || typeof previewData !== 'object') return summary;
+
+  const placeholders = [
+    ...getAsArray(previewData.fieldMapReport?.fields),
+    ...getAsArray(previewData.fieldMapReport),
+    ...getAsArray(previewData.previewReport?.fieldMapReport?.fields),
+    ...getAsArray(previewData.previewReport?.fieldMapReport),
+    ...getAsArray(previewData.signaturePlaceholders),
+    ...getAsArray(previewData.placeholders),
+  ];
+
+  placeholders.forEach((placeholder) => {
+    if (!placeholder || typeof placeholder !== 'object') return;
+    const rawRole = String(
+      placeholder.role ||
+      placeholder.signerRole ||
+      placeholder.dataPsRole ||
+      placeholder.ownerRole ||
+      'OTHER'
+    ).toUpperCase();
+    const role = rawRole === 'CUSTOMER' || rawRole === 'AGENT' ? rawRole : 'OTHER';
+
+    const rawType = String(
+      placeholder.type ||
+      placeholder.fieldType ||
+      placeholder.kind ||
+      placeholder.inputType ||
+      'FIELD'
+    ).toUpperCase();
+
+    summary[role].total += 1;
+    if (rawType.includes('INITIAL')) {
+      summary[role].initial += 1;
+    } else if (rawType.includes('SIGN')) {
+      summary[role].signature += 1;
+    }
+  });
+
+  return summary;
+}
+
+function getAsArray(value) {
+  return Array.isArray(value) ? value : [];
 }
 
 function getChecklist(verification) {
