@@ -249,6 +249,7 @@ export default function LeadWizard() {
 
   const roleName = (user?.role?.name || user?.role || '').toString().toLowerCase();
   const roleType = (user?.roleType || '').toString().toLowerCase();
+  const userTitle = (user?.title || user?.jobTitle || '').toString().toLowerCase();
 
   // Determine if user is call center based on role or department
   const isCallCenter = roleName.includes('call center') ||
