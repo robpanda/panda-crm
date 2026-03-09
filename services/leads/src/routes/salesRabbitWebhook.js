@@ -133,6 +133,14 @@ const extractProvidedSecret = (req) => {
   const [authType, authToken] = authHeader ? authHeader.split(' ') : [null, null];
   const formData = toObject(req.body?.formData || req.body?.form_data || req.body?.payload);
   const leadMetaData = toObject(req.body?.leadMetaData || req.body?.leadMetadata || req.body?.metadata || req.body?.metaData);
+  const headerCandidates = Object.entries(req.headers || {})
+    .flatMap(([key, value]) => (
+      /(salesrabbit|webhook|secret|auth|token|api[_-]?key|apikey)/i.test(String(key))
+        ? (Array.isArray(value) ? value : [value])
+        : []
+    ))
+    .map((value) => pickFirstValue(value))
+    .filter(Boolean);
   const collectedCandidates = [
     ...collectCandidateSecretsFromObject(req.body),
     ...collectCandidateSecretsFromObject(formData),
@@ -143,17 +151,33 @@ const extractProvidedSecret = (req) => {
     req.headers['x-webhook-secret'],
     req.headers['x-salesrabbit-secret'],
     req.headers['x-api-key'],
+    req.headers['x-apikey'],
+    req.headers.apikey,
+    req.headers['api-key'],
+    req.headers['api_key'],
     req.headers['x-salesrabbit-api-key'],
     req.headers['x-auth-token'],
+    req.headers['x-authtoken'],
     req.headers['x-auth-key'],
+    req.headers['x-authkey'],
     req.headers['x-webhook-token'],
     req.headers['authorization-token'],
     req.query?.secret,
+    req.query?.auth,
     req.query?.apiKey,
+    req.query?.api_key,
+    req.query?.authKey,
+    req.query?.auth_key,
+    req.query?.xApiKey,
     req.query?.apikey,
     req.query?.token,
     req.body?.secret,
+    req.body?.auth,
     req.body?.apiKey,
+    req.body?.api_key,
+    req.body?.authKey,
+    req.body?.auth_key,
+    req.body?.xApiKey,
     req.body?.apikey,
     req.body?.token,
     req.body?.authToken,
@@ -165,6 +189,7 @@ const extractProvidedSecret = (req) => {
     req.body?.leadMetadata?.apiKey,
     req.body?.leadMetadata?.apikey,
     req.body?.leadMetadata?.authToken,
+    ...headerCandidates,
     formData?.secret,
     formData?.apiKey,
     formData?.apikey,
@@ -214,7 +239,13 @@ const validateWebhookSecret = (req, res, next) => {
       providedSecretLength: providedSecret ? String(providedSecret).length : 0,
       configuredSecretCount: WEBHOOK_SECRETS.length,
       candidateHeaderKeys: Object.keys(req.headers || {}).filter((key) => (
-        key.includes('secret') || key.includes('token') || key.includes('auth') || key.includes('api-key') || key.includes('salesrabbit')
+        key.includes('secret')
+        || key.includes('token')
+        || key.includes('auth')
+        || key.includes('api-key')
+        || key.includes('api_key')
+        || key.includes('apikey')
+        || key.includes('salesrabbit')
       )),
       queryKeys: summarizeObjectKeys(req.query),
       bodyKeys: summarizeObjectKeys(req.body),
