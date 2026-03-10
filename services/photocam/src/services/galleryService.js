@@ -8,6 +8,19 @@ function hashPassword(value) {
   return crypto.createHash('sha256').update(String(value)).digest('hex');
 }
 
+function parseUnknownPrismaFieldName(error) {
+  const message = error?.message || '';
+  const unknownFieldMatch = message.match(/Unknown (?:field|argument) `([^`]+)`/i);
+  if (unknownFieldMatch?.[1]) return unknownFieldMatch[1];
+
+  const missingColumnMatch = message.match(/column [^\"]*\"([^\"]+)\" does not exist/i);
+  const missingColumn = missingColumnMatch?.[1];
+  if (!missingColumn) return null;
+  const normalized = String(missingColumn).trim().toLowerCase();
+  if (normalized.endsWith('is_portal_visible')) return 'isPortalVisible';
+  return null;
+}
+
 /**
  * Create a new gallery for a project
  */
@@ -48,7 +61,24 @@ export async function createGallery(projectId, data, userId) {
 export async function getGalleryById(galleryId) {
   const gallery = await prisma.photoGallery.findUnique({
     where: { id: galleryId },
-    include: {
+    select: {
+      id: true,
+      projectId: true,
+      name: true,
+      description: true,
+      status: true,
+      isTimeline: true,
+      isLive: true,
+      coverPhotoId: true,
+      shareToken: true,
+      shareExpiresAt: true,
+      isPublic: true,
+      passwordHash: true,
+      viewCount: true,
+      downloadEnabled: true,
+      createdById: true,
+      createdAt: true,
+      updatedAt: true,
       project: {
         select: { id: true, name: true },
       },
@@ -83,7 +113,24 @@ export async function getGalleryById(galleryId) {
 export async function getProjectGalleries(projectId) {
   const galleries = await prisma.photoGallery.findMany({
     where: { projectId },
-    include: {
+    select: {
+      id: true,
+      projectId: true,
+      name: true,
+      description: true,
+      status: true,
+      isTimeline: true,
+      isLive: true,
+      coverPhotoId: true,
+      shareToken: true,
+      shareExpiresAt: true,
+      isPublic: true,
+      passwordHash: true,
+      viewCount: true,
+      downloadEnabled: true,
+      createdById: true,
+      createdAt: true,
+      updatedAt: true,
       createdBy: {
         select: { id: true, firstName: true, lastName: true },
       },
@@ -241,17 +288,31 @@ export async function createShareLink(galleryId, options = {}) {
       ? new Date(Date.now() + options.expiresInDays * 24 * 60 * 60 * 1000)
       : null;
 
-  await prisma.photoGallery.update({
-    where: { id: galleryId },
-    data: {
-      shareToken,
-      shareExpiresAt: expiresAt,
-      isPublic: true,
-      passwordHash: options.password ? hashPassword(options.password) : null,
-      downloadEnabled: options.allowDownload ?? true,
-      isPortalVisible: options.isPortalVisible ?? true,
-    },
-  });
+  const updateData = {
+    shareToken,
+    shareExpiresAt: expiresAt,
+    isPublic: true,
+    passwordHash: options.password ? hashPassword(options.password) : null,
+    downloadEnabled: options.allowDownload ?? true,
+    isPortalVisible: options.isPortalVisible ?? true,
+  };
+  try {
+    await prisma.photoGallery.update({
+      where: { id: galleryId },
+      data: updateData,
+    });
+  } catch (error) {
+    const unknownField = parseUnknownPrismaFieldName(error);
+    if (unknownField !== 'isPortalVisible' || !Object.prototype.hasOwnProperty.call(updateData, 'isPortalVisible')) {
+      throw error;
+    }
+    logger.warn('Gallery share link update: runtime schema missing isPortalVisible, retrying without it');
+    delete updateData.isPortalVisible;
+    await prisma.photoGallery.update({
+      where: { id: galleryId },
+      data: updateData,
+    });
+  }
 
   const shareUrl = `${process.env.FRONTEND_URL || 'https://crm.pandaadmin.com'}/share/gallery/${shareToken}`;
 
@@ -495,10 +556,24 @@ export async function updateGalleryAccess(galleryId, payload, userId) {
     data.passwordHash = payload.password ? hashPassword(payload.password) : null;
   }
 
-  const updated = await prisma.photoGallery.update({
-    where: { id: galleryId },
-    data,
-  });
+  let updated;
+  try {
+    updated = await prisma.photoGallery.update({
+      where: { id: galleryId },
+      data,
+    });
+  } catch (error) {
+    const unknownField = parseUnknownPrismaFieldName(error);
+    if (unknownField !== 'isPortalVisible' || !Object.prototype.hasOwnProperty.call(data, 'isPortalVisible')) {
+      throw error;
+    }
+    logger.warn('Gallery access update: runtime schema missing isPortalVisible, retrying without it');
+    delete data.isPortalVisible;
+    updated = await prisma.photoGallery.update({
+      where: { id: galleryId },
+      data,
+    });
+  }
 
   logger.info(`Updated gallery access controls`, {
     galleryId,
@@ -510,20 +585,44 @@ export async function updateGalleryAccess(galleryId, payload, userId) {
 }
 
 export async function getGalleryAnalytics(galleryId) {
-  const gallery = await prisma.photoGallery.findUnique({
-    where: { id: galleryId },
-    select: {
-      id: true,
-      name: true,
-      status: true,
-      isPortalVisible: true,
-      downloadEnabled: true,
-      shareExpiresAt: true,
-      viewCount: true,
-      lastViewedAt: true,
-      updatedAt: true,
-    },
-  });
+  let gallery;
+  try {
+    gallery = await prisma.photoGallery.findUnique({
+      where: { id: galleryId },
+      select: {
+        id: true,
+        name: true,
+        status: true,
+        isPortalVisible: true,
+        downloadEnabled: true,
+        shareExpiresAt: true,
+        viewCount: true,
+        lastViewedAt: true,
+        updatedAt: true,
+      },
+    });
+  } catch (error) {
+    const unknownField = parseUnknownPrismaFieldName(error);
+    if (unknownField !== 'isPortalVisible') {
+      throw error;
+    }
+    gallery = await prisma.photoGallery.findUnique({
+      where: { id: galleryId },
+      select: {
+        id: true,
+        name: true,
+        status: true,
+        downloadEnabled: true,
+        shareExpiresAt: true,
+        viewCount: true,
+        lastViewedAt: true,
+        updatedAt: true,
+      },
+    });
+    if (gallery) {
+      gallery.isPortalVisible = false;
+    }
+  }
 
   if (!gallery) {
     const err = new Error('Gallery not found');

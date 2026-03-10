@@ -2755,7 +2755,6 @@ Be factual and professional. Highlight anything that needs attention.`;
     const previousStateSelect = {
       stage: true,
       status: true,
-      stageName: true,
       isApproved: true,
       claimNumber: true,
       claimFiledDate: true,

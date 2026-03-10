@@ -265,6 +265,21 @@ export async function listReports(params = {}) {
     [data, total] = await Promise.all([
       prisma.photoReport.findMany({
         where,
+        select: {
+          id: true,
+          templateId: true,
+          projectId: true,
+          opportunityId: true,
+          status: true,
+          reportConfig: true,
+          fileKey: true,
+          fileUrl: true,
+          generatedAt: true,
+          errorMessage: true,
+          createdById: true,
+          createdAt: true,
+          updatedAt: true,
+        },
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
@@ -278,8 +293,13 @@ export async function listReports(params = {}) {
     total = 0;
   }
 
+  const normalized = data.map((item) => ({
+    ...item,
+    name: item.name || `Report ${String(item.id || '').slice(0, 8)}`,
+  }));
+
   return {
-    data,
+    data: normalized,
     pagination: {
       page,
       limit,

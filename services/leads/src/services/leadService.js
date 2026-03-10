@@ -187,7 +187,7 @@ class LeadService {
       'CONVERTED': 'CONVERTED',
       'SCHEDULED': 'SCHEDULED',
       'CONFIRMED': 'SCHEDULED',
-      'LEAD_CREATED': 'LEAD_CREATED',
+      'LEAD_CREATED': 'NEW',
       'INSPECTION_ISSUED': 'INSPECTION_ISSUED',
       'INSPECTED': 'INSPECTED',
       'NO_INSPECTION': 'NO_INSPECTION',
@@ -561,7 +561,7 @@ class LeadService {
     };
 
     if (status && status !== 'all') {
-      where.status = status;
+      where.status = this.normalizeStatus(status);
     }
 
     // Handle owner filtering with support for multiple owners (team view)

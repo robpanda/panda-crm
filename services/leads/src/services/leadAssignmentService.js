@@ -316,7 +316,6 @@ export const leadAssignmentService = {
     const lead = await prisma.lead.findUnique({
       where: { id: leadId },
       include: {
-        account: true,
         owner: true,
       },
     });
