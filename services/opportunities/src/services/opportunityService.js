@@ -686,6 +686,64 @@ class OpportunityService {
   }
 
   /**
+   * Generate a customer portal link for an opportunity.
+   * Kept lightweight and non-destructive: no schema writes required.
+   */
+  async generatePortalLink(id, options = {}) {
+    const opportunityId = normalizeEntityId(id);
+    if (!opportunityId) {
+      const error = new Error('Opportunity ID is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const opportunity = await prisma.opportunity.findUnique({
+      where: { id: opportunityId },
+      select: {
+        id: true,
+        jobId: true,
+        accountId: true,
+        account: {
+          select: { id: true, name: true },
+        },
+      },
+    });
+
+    if (!opportunity) {
+      const error = new Error(`Opportunity not found: ${opportunityId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const expiresInDaysRaw = Number(options?.expiresInDays);
+    const expiresInDays = Number.isFinite(expiresInDaysRaw) && expiresInDaysRaw > 0
+      ? Math.min(Math.trunc(expiresInDaysRaw), 365)
+      : 30;
+
+    const expiresAt = new Date();
+    expiresAt.setUTCDate(expiresAt.getUTCDate() + expiresInDays);
+
+    // Use stable identifiers only; this avoids creating fragile state while keeping the
+    // portal-link endpoint available for invoice/send flows.
+    const portalToken = (opportunity.jobId || opportunity.id || '').trim();
+    const encodedToken = encodeURIComponent(portalToken);
+    const portalUrl = `${CRM_BASE_URL}/portal/${encodedToken}`;
+
+    return {
+      opportunityId: opportunity.id,
+      jobId: opportunity.jobId || null,
+      accountId: opportunity.accountId || null,
+      accountName: opportunity.account?.name || null,
+      token: portalToken,
+      expiresAt: expiresAt.toISOString(),
+      portalUrl,
+      portalLink: portalUrl,
+      url: portalUrl,
+      link: portalUrl,
+    };
+  }
+
+  /**
    * Get hub summary with counts of all related records
    * This powers the Opportunity Hub overview section
    */
