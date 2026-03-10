@@ -13,7 +13,7 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
     fileSize: 50 * 1024 * 1024, // 50MB limit
-    files: 20, // Max 20 files at once
+    files: 100, // Max 100 files at once
   },
   fileFilter: (req, file, cb) => {
     // Accept images only
@@ -132,7 +132,7 @@ router.post('/upload', upload.single('photo'), async (req, res, next) => {
  * POST /api/photocam/photos/upload-multiple
  * Upload multiple photos
  */
-router.post('/upload-multiple', upload.array('photos', 20), async (req, res, next) => {
+router.post('/upload-multiple', upload.array('photos', 100), async (req, res, next) => {
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({
