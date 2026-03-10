@@ -64,7 +64,6 @@ function parseUnknownPrismaFieldName(error) {
   const match = message.match(/Unknown (?:field|argument) `([^`]+)`/);
   return match?.[1] || null;
 }
-}
 
 function parseBooleanFlag(value) {
   if (value === true || value === false) return value;
