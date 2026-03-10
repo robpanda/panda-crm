@@ -464,6 +464,38 @@ class OpportunityService {
         });
         if (foundByEmail?.id) return foundByEmail.id;
       }
+
+      // Final fallback: match email local-part ignoring punctuation only when unique.
+      if (local && domain) {
+        const normalizedLocal = local.replace(/[._-]/g, '');
+        const domainCandidates = new Set([
+          domain,
+          domain.replace('panda-exteriors.com', 'pandaexteriors.com'),
+          domain.replace('pandaexteriors.com', 'panda-exteriors.com'),
+        ]);
+
+        for (const domainCandidate of domainCandidates) {
+          const possibleUsers = await prisma.user.findMany({
+            where: {
+              email: {
+                endsWith: `@${domainCandidate}`,
+                mode: 'insensitive',
+              },
+            },
+            select: { id: true, email: true },
+            take: 25,
+          });
+
+          const normalizedMatches = possibleUsers.filter((candidate) => {
+            const [candidateLocal = ''] = String(candidate.email || '').toLowerCase().split('@');
+            return candidateLocal.replace(/[._-]/g, '') === normalizedLocal;
+          });
+
+          if (normalizedMatches.length === 1) {
+            return normalizedMatches[0].id;
+          }
+        }
+      }
     }
 
     return null;

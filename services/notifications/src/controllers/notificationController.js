@@ -71,6 +71,87 @@ export async function listNotifications(req, res, next) {
   }
 }
 
+// List notifications triggered by a user (best-effort outbox without schema changes)
+export async function listOutboxNotifications(req, res, next) {
+  try {
+    const {
+      userId,
+      page = 1,
+      limit = 20,
+    } = req.query;
+
+    if (!userId) {
+      return res.status(400).json({ error: 'userId is required' });
+    }
+
+    const actor = await prisma.user.findUnique({
+      where: { id: String(userId) },
+      select: { firstName: true, lastName: true, email: true },
+    });
+
+    const actorName = `${actor?.firstName || ''} ${actor?.lastName || ''}`.trim();
+    const titlePrefixes = [actorName, actor?.email]
+      .filter(Boolean)
+      .map((value) => `${value} mentioned you`);
+
+    if (titlePrefixes.length === 0) {
+      return res.json({
+        data: [],
+        pagination: {
+          page: parseInt(page, 10),
+          limit: parseInt(limit, 10),
+          total: 0,
+          totalPages: 0,
+        },
+      });
+    }
+
+    const where = {
+      type: 'MENTION',
+      status: { not: 'DELETED' },
+      OR: titlePrefixes.map((prefix) => ({
+        title: {
+          startsWith: prefix,
+          mode: 'insensitive',
+        },
+      })),
+    };
+
+    const [notifications, total] = await Promise.all([
+      prisma.notification.findMany({
+        where,
+        include: {
+          opportunity: {
+            select: { id: true, name: true, stage: true },
+          },
+          lead: {
+            select: { id: true, firstName: true, lastName: true },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip: (parseInt(page, 10) - 1) * parseInt(limit, 10),
+        take: parseInt(limit, 10),
+      }),
+      prisma.notification.count({ where }),
+    ]);
+
+    res.json({
+      data: notifications,
+      pagination: {
+        page: parseInt(page, 10),
+        limit: parseInt(limit, 10),
+        total,
+        totalPages: Math.ceil(total / parseInt(limit, 10)),
+      },
+      metadata: {
+        derived: true,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 // Get a single notification
 export async function getNotification(req, res, next) {
   try {

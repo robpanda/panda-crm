@@ -12,6 +12,9 @@ const router = express.Router();
 const SALESRABBIT_WEBHOOK_SECRET = process.env.SALESRABBIT_WEBHOOK_SECRET;
 const SALESRABBIT_API_KEY = process.env.SALESRABBIT_API_KEY;
 const SALESRABBIT_WEBHOOK_TOKEN = process.env.SALESRABBIT_WEBHOOK_TOKEN;
+const SALESRABBIT_SECRET = process.env.SALESRABBIT_SECRET;
+const SALESRABBIT_TOKEN = process.env.SALESRABBIT_TOKEN;
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 
 const pickFirstValue = (...values) => {
   for (const value of values) {
@@ -63,6 +66,8 @@ const extractProvidedSecret = (req) => {
   return pickFirstValue(
     req.headers['x-webhook-secret'],
     req.headers['x-webhook-token'],
+    req.headers['x-salesrabbit-webhook-secret'],
+    req.headers['x-salesrabbit-webhook-token'],
     req.headers['x-salesrabbit-secret'],
     req.headers['x-salesrabbit-token'],
     req.headers['x-api-key'],
@@ -105,7 +110,15 @@ const secretsMatch = (providedSecret, expectedSecret) => {
 };
 
 const getExpectedSecrets = () => {
-  return [SALESRABBIT_WEBHOOK_SECRET, SALESRABBIT_API_KEY, SALESRABBIT_WEBHOOK_TOKEN]
+  return [
+    SALESRABBIT_WEBHOOK_SECRET,
+    SALESRABBIT_API_KEY,
+    SALESRABBIT_WEBHOOK_TOKEN,
+    SALESRABBIT_SECRET,
+    SALESRABBIT_TOKEN,
+    WEBHOOK_SECRET,
+    process.env.INTERNAL_API_KEY,
+  ]
     .map((value) => normalizeOptionalValue(value))
     .filter(Boolean);
 };
