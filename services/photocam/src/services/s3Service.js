@@ -296,6 +296,33 @@ export async function getFileMetadata(key) {
   }
 }
 
+/**
+ * Read an object as Buffer.
+ */
+export async function getObjectBuffer(key) {
+  const command = new GetObjectCommand({
+    Bucket: BUCKET_NAME,
+    Key: key,
+  });
+
+  const result = await s3Client.send(command);
+  const body = result.Body;
+  if (!body) {
+    throw new Error(`Object body is empty for key ${key}`);
+  }
+
+  if (typeof body.transformToByteArray === 'function') {
+    const bytes = await body.transformToByteArray();
+    return Buffer.from(bytes);
+  }
+
+  const chunks = [];
+  for await (const chunk of body) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
+}
+
 export const s3Service = {
   uploadFile,
   uploadPhotoWithVariants,
@@ -309,6 +336,7 @@ export const s3Service = {
   uploadComparisonImage,
   uploadExport,
   getFileMetadata,
+  getObjectBuffer,
   generatePhotoKey,
   BUCKET_NAME,
   CDN_URL,

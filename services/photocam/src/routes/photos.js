@@ -63,6 +63,20 @@ router.post('/bulk-download', async (req, res, next) => {
 });
 
 /**
+ * GET /api/photocam/photos/bulk-download/:exportJobId
+ * Get export job status and signed download URL if ready
+ */
+router.get('/bulk-download/:exportJobId', async (req, res, next) => {
+  try {
+    requireFeature(featureFlags.bulkActionsV2, 'Photo bulk download');
+    const result = await photoService.getBulkDownloadStatus(req.params.exportJobId);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * POST /api/photocam/photos/bulk-assign
  * Assign selected photos to checklist item, gallery, report section, or grouping
  */

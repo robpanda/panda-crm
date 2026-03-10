@@ -5869,6 +5869,11 @@ export const photocamApi = {
     return response.data.data;
   },
 
+  async getBulkDownloadStatus(exportJobId) {
+    const response = await api.get(`/api/photocam/photos/bulk-download/${exportJobId}`);
+    return response.data.data;
+  },
+
   async bulkAssignPhotos(payload) {
     const response = await api.post('/api/photocam/photos/bulk-assign', payload);
     return response.data.data;
