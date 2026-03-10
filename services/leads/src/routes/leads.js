@@ -66,6 +66,20 @@ router.get('/sources', (req, res) => {
   res.json({ success: true, data: leadService.getLeadSources() });
 });
 
+// Get internal comment departments for lead comments UI
+router.get('/comment-departments', (req, res) => {
+  res.json({
+    success: true,
+    data: [
+      { value: 'general', label: 'General' },
+      { value: 'sales', label: 'Sales' },
+      { value: 'call-center', label: 'Call Center' },
+      { value: 'production', label: 'Production' },
+      { value: 'finance', label: 'Finance' },
+    ],
+  });
+});
+
 // Get lead counts
 router.get('/counts', async (req, res, next) => {
   try {

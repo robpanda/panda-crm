@@ -1907,7 +1907,7 @@ class LeadService {
    * Used by: Call Center to document calls and status updates
    */
   async addLeadNote(leadId, data) {
-    const { note, title, createdBy, isPinned } = data;
+    const { note, title, createdBy } = data;
 
     // Verify lead exists
     const lead = await prisma.lead.findUnique({
@@ -1921,14 +1921,6 @@ class LeadService {
       throw error;
     }
 
-    // If this note will be pinned, unpin any existing pinned notes
-    if (isPinned) {
-      await prisma.note.updateMany({
-        where: { leadId: leadId, isPinned: true },
-        data: { isPinned: false, pinnedAt: null },
-      });
-    }
-
     // Create the note
     const newNote = await prisma.note.create({
       data: {
@@ -1936,8 +1928,6 @@ class LeadService {
         body: note,
         leadId: leadId,
         createdById: createdBy,
-        isPinned: isPinned || false,
-        pinnedAt: isPinned ? new Date() : null,
       },
       include: {
         createdBy: {
@@ -1952,7 +1942,8 @@ class LeadService {
       id: newNote.id,
       title: newNote.title,
       body: newNote.body,
-      isPinned: newNote.isPinned || false,
+      isPinned: false,
+      pinnedAt: null,
       createdAt: newNote.createdAt,
       updatedAt: newNote.updatedAt,
       createdBy: newNote.createdBy,
@@ -1963,7 +1954,7 @@ class LeadService {
    * Update an existing note
    * @param {string} leadId - Lead ID
    * @param {string} noteId - Note ID
-   * @param {object} data - { title?, body?, isPinned? }
+   * @param {object} data - { title?, body? }
    */
   async updateLeadNote(leadId, noteId, data) {
     // Verify lead exists
@@ -1992,11 +1983,6 @@ class LeadService {
     const updateData = {};
     if (data.title !== undefined) updateData.title = data.title;
     if (data.body !== undefined) updateData.body = data.body;
-    if (data.isPinned !== undefined) {
-      updateData.isPinned = data.isPinned;
-      updateData.pinnedAt = data.isPinned ? new Date() : null;
-    }
-
     const updatedNote = await prisma.note.update({
       where: { id: noteId },
       data: updateData,
@@ -2013,8 +1999,8 @@ class LeadService {
       id: updatedNote.id,
       title: updatedNote.title,
       body: updatedNote.body,
-      isPinned: updatedNote.isPinned || false,
-      pinnedAt: updatedNote.pinnedAt,
+      isPinned: false,
+      pinnedAt: null,
       createdAt: updatedNote.createdAt,
       updatedAt: updatedNote.updatedAt,
       createdBy: updatedNote.createdBy,
@@ -2088,23 +2074,11 @@ class LeadService {
       throw error;
     }
 
-    const newPinnedState = !existingNote.isPinned;
-
-    // If pinning, unpin any other pinned notes for this lead
-    if (newPinnedState) {
-      await prisma.note.updateMany({
-        where: { leadId: leadId, isPinned: true },
-        data: { isPinned: false, pinnedAt: null },
-      });
-    }
-
-    // Update the note
+    // Pinning is not persisted on current Note schema in this service.
+    // Keep endpoint backward-compatible without failing write operations.
     const updatedNote = await prisma.note.update({
       where: { id: noteId },
-      data: {
-        isPinned: newPinnedState,
-        pinnedAt: newPinnedState ? new Date() : null,
-      },
+      data: {},
       include: {
         createdBy: {
           select: { id: true, firstName: true, lastName: true, email: true },
@@ -2112,14 +2086,14 @@ class LeadService {
       },
     });
 
-    logger.info(`Note ${noteId} pin toggled to ${newPinnedState} for lead ${leadId}`);
+    logger.info(`Note pin toggle requested for lead ${leadId}; pin state not persisted by schema`);
 
     return {
       id: updatedNote.id,
       title: updatedNote.title,
       body: updatedNote.body,
-      isPinned: updatedNote.isPinned || false,
-      pinnedAt: updatedNote.pinnedAt,
+      isPinned: false,
+      pinnedAt: null,
       createdAt: updatedNote.createdAt,
       updatedAt: updatedNote.updatedAt,
       createdBy: updatedNote.createdBy,
