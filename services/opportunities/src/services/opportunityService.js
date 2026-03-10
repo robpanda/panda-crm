@@ -44,6 +44,24 @@ function parseDate(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+const OPTIONAL_OPPORTUNITY_CLAIM_FIELDS = new Set([
+  'claimNumber',
+  'claimFiledDate',
+  'insuranceCarrier',
+  'adjusterName',
+  'adjusterEmail',
+  'adjusterOfficePhone',
+  'fieldAdjusterMobile',
+  'damageLocation',
+  'dateOfLoss',
+]);
+
+function parseUnknownPrismaFieldName(error) {
+  const message = error?.message || '';
+  const match = message.match(/Unknown (?:field|argument) `([^`]+)`/);
+  return match?.[1] || null;
+}
+
 async function generateWorkOrderNumber() {
   const count = await prisma.workOrder.count();
   const next = count + 1;
@@ -2071,33 +2089,67 @@ Be factual and professional. Highlight anything that needs attention.`;
    * Update opportunity
    */
   async updateOpportunity(id, data, userId = null) {
-    // Get the current opportunity state for change detection
-    const previousState = await prisma.opportunity.findUnique({
-      where: { id },
-      select: {
-        stage: true,
-        status: true,
-        stageName: true,
-        isApproved: true,
-        claimNumber: true,
-        claimFiledDate: true,
-        insuranceCarrier: true,
-        adjusterName: true,
-        adjusterEmail: true,
-        adjusterOfficePhone: true,
-        fieldAdjusterMobile: true,
-        isPandaClaims: true,
-        type: true,
-        rcvAmount: true,
-        acvAmount: true,
-        deductible: true,
-        // Expediting fields for trigger detection
-        flatRoof: true,
-        lineDrop: true,
-        supplementRequired: true,
-        supplementHoldsJob: true,
-      },
-    });
+    // Get the current opportunity state for change detection.
+    // Fallback avoids 500s if runtime Prisma client is older than DB schema.
+    const previousStateSelect = {
+      stage: true,
+      status: true,
+      stageName: true,
+      isApproved: true,
+      claimNumber: true,
+      claimFiledDate: true,
+      insuranceCarrier: true,
+      adjusterName: true,
+      adjusterEmail: true,
+      adjusterOfficePhone: true,
+      fieldAdjusterMobile: true,
+      isPandaClaims: true,
+      type: true,
+      rcvAmount: true,
+      acvAmount: true,
+      deductible: true,
+      // Expediting fields for trigger detection
+      flatRoof: true,
+      lineDrop: true,
+      supplementRequired: true,
+      supplementHoldsJob: true,
+    };
+
+    let previousState;
+    try {
+      previousState = await prisma.opportunity.findUnique({
+        where: { id },
+        select: previousStateSelect,
+      });
+    } catch (error) {
+      const unknownField = parseUnknownPrismaFieldName(error);
+      if (!unknownField || !OPTIONAL_OPPORTUNITY_CLAIM_FIELDS.has(unknownField)) {
+        throw error;
+      }
+
+      logger.warn(
+        `Opportunity update: runtime schema missing optional field "${unknownField}", retrying previous-state select without optional claim fields`
+      );
+
+      previousState = await prisma.opportunity.findUnique({
+        where: { id },
+        select: {
+          stage: true,
+          status: true,
+          stageName: true,
+          isApproved: true,
+          isPandaClaims: true,
+          type: true,
+          rcvAmount: true,
+          acvAmount: true,
+          deductible: true,
+          flatRoof: true,
+          lineDrop: true,
+          supplementRequired: true,
+          supplementHoldsJob: true,
+        },
+      });
+    }
 
     const updateData = {
       name: data.name,
@@ -2117,13 +2169,6 @@ Be factual and professional. Highlight anything that needs attention.`;
       isSelfGen: data.isSelfGen,
       isPandaClaims: data.isPandaClaims,
       isApproved: data.isApproved,
-      claimNumber: data.claimNumber,
-      claimFiledDate: data.claimFiledDate ? new Date(data.claimFiledDate) : undefined,
-      insuranceCarrier: data.insuranceCarrier,
-      adjusterName: data.adjusterName,
-      adjusterEmail: data.adjusterEmail,
-      adjusterOfficePhone: data.adjusterOfficePhone,
-      fieldAdjusterMobile: data.fieldAdjusterMobile,
       rcvAmount: data.rcvAmount,
       acvAmount: data.acvAmount,
       deductible: data.deductible,
@@ -2143,6 +2188,34 @@ Be factual and professional. Highlight anything that needs attention.`;
       invoicedDate: data.invoicedDate ? new Date(data.invoicedDate) : undefined,
       followUpDate: data.followUpDate ? new Date(data.followUpDate) : undefined,
     };
+
+    if (hasOwnField(data, 'claimNumber')) {
+      updateData.claimNumber = data.claimNumber || null;
+    }
+
+    if (hasOwnField(data, 'claimFiledDate')) {
+      updateData.claimFiledDate = parseDate(data.claimFiledDate);
+    }
+
+    if (hasOwnField(data, 'insuranceCarrier')) {
+      updateData.insuranceCarrier = data.insuranceCarrier || null;
+    }
+
+    if (hasOwnField(data, 'adjusterName')) {
+      updateData.adjusterName = data.adjusterName || null;
+    }
+
+    if (hasOwnField(data, 'adjusterEmail')) {
+      updateData.adjusterEmail = data.adjusterEmail || null;
+    }
+
+    if (hasOwnField(data, 'adjusterOfficePhone')) {
+      updateData.adjusterOfficePhone = data.adjusterOfficePhone || null;
+    }
+
+    if (hasOwnField(data, 'fieldAdjusterMobile')) {
+      updateData.fieldAdjusterMobile = data.fieldAdjusterMobile || null;
+    }
 
     if (hasOwnField(data, 'damageLocation')) {
       updateData.damageLocation = data.damageLocation || null;
@@ -2188,17 +2261,43 @@ Be factual and professional. Highlight anything that needs attention.`;
       }
     }
 
-    const opportunity = await prisma.opportunity.update({
-      where: { id },
-      data: updateData,
-      include: {
-        account: { select: { id: true, name: true } },
-        contact: { select: { id: true, firstName: true, lastName: true } },
-        owner: { select: { id: true, firstName: true, lastName: true, email: true, phone: true, mobilePhone: true } },
-        projectManager: { select: { id: true, firstName: true, lastName: true, email: true, phone: true, mobilePhone: true } },
-        lineItems: { include: { product: true } },
-      },
-    });
+    const include = {
+      account: { select: { id: true, name: true } },
+      contact: { select: { id: true, firstName: true, lastName: true } },
+      owner: { select: { id: true, firstName: true, lastName: true, email: true, phone: true, mobilePhone: true } },
+      projectManager: { select: { id: true, firstName: true, lastName: true, email: true, phone: true, mobilePhone: true } },
+      lineItems: { include: { product: true } },
+    };
+
+    let opportunity;
+    let lastUpdateError;
+    let updatePayload = { ...updateData };
+
+    for (let attempt = 0; attempt < OPTIONAL_OPPORTUNITY_CLAIM_FIELDS.size + 1; attempt += 1) {
+      try {
+        opportunity = await prisma.opportunity.update({
+          where: { id },
+          data: updatePayload,
+          include,
+        });
+        break;
+      } catch (error) {
+        lastUpdateError = error;
+        const unknownField = parseUnknownPrismaFieldName(error);
+        if (!unknownField || !OPTIONAL_OPPORTUNITY_CLAIM_FIELDS.has(unknownField) || !hasOwnField(updatePayload, unknownField)) {
+          throw error;
+        }
+
+        logger.warn(
+          `Opportunity update: runtime schema missing optional field "${unknownField}", retrying update without it`
+        );
+        delete updatePayload[unknownField];
+      }
+    }
+
+    if (!opportunity && lastUpdateError) {
+      throw lastUpdateError;
+    }
 
     logger.info(`Opportunity updated: ${id}`);
 
