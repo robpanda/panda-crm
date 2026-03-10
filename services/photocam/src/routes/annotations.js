@@ -47,6 +47,22 @@ router.get('/photos/:photoId/annotations', async (req, res, next) => {
 });
 
 /**
+ * GET /api/photocam/annotations/photo/:photoId
+ * Backward-compatible alias for photo annotations list.
+ */
+router.get('/photo/:photoId', async (req, res, next) => {
+  try {
+    const annotations = await annotationService.getPhotoAnnotations(req.params.photoId);
+    res.json({
+      success: true,
+      data: annotations,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * GET /api/photocam/annotations/:id
  * Get a single annotation by ID
  */

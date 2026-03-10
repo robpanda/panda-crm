@@ -2,6 +2,7 @@
 import express from 'express';
 import { authMiddleware } from '../middleware/auth.js';
 import { galleryService } from '../services/galleryService.js';
+import { featureFlags, requireFeature } from '../config/featureFlags.js';
 
 const router = express.Router();
 
@@ -36,10 +37,61 @@ router.post('/projects/:projectId/galleries', async (req, res, next) => {
 });
 
 /**
+ * POST /api/photocam/galleries/from-selection
+ * Create a gallery directly from selected photo IDs
+ */
+router.post('/from-selection', async (req, res, next) => {
+  try {
+    requireFeature(featureFlags.bulkActionsV2, 'Gallery creation from selection');
+
+    const { projectId, name, description, photoIds = [] } = req.body || {};
+    if (!projectId || !name) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'projectId and name are required' },
+      });
+    }
+
+    if (!Array.isArray(photoIds) || photoIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'photoIds must be a non-empty array' },
+      });
+    }
+
+    const gallery = await galleryService.createGalleryFromSelection(
+      { projectId, name, description, photoIds },
+      req.user?.id || null
+    );
+
+    res.status(201).json({ success: true, data: gallery });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * GET /api/photocam/projects/:projectId/galleries
  * Get all galleries for a project
  */
 router.get('/projects/:projectId/galleries', async (req, res, next) => {
+  try {
+    const galleries = await galleryService.getProjectGalleries(req.params.projectId);
+
+    res.json({
+      success: true,
+      data: galleries,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/photocam/galleries/project/:projectId
+ * Backward-compatible alias for project galleries list.
+ */
+router.get('/project/:projectId', async (req, res, next) => {
   try {
     const galleries = await galleryService.getProjectGalleries(req.params.projectId);
 
@@ -88,6 +140,20 @@ router.put('/:id', async (req, res, next) => {
       success: true,
       data: gallery,
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * PATCH /api/photocam/galleries/:id/access
+ * Update portal sharing controls
+ */
+router.patch('/:id/access', async (req, res, next) => {
+  try {
+    requireFeature(featureFlags.portalGalleryHardened, 'Portal gallery controls');
+    const result = await galleryService.updateGalleryAccess(req.params.id, req.body || {}, req.user?.id || null);
+    res.json({ success: true, data: result });
   } catch (error) {
     next(error);
   }
@@ -277,6 +343,20 @@ router.get('/share/:token', async (req, res, next) => {
       success: true,
       data: result,
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/photocam/galleries/:id/analytics
+ * Return lightweight analytics for gallery sharing
+ */
+router.get('/:id/analytics', async (req, res, next) => {
+  try {
+    requireFeature(featureFlags.portalGalleryHardened, 'Portal gallery analytics');
+    const result = await galleryService.getGalleryAnalytics(req.params.id);
+    res.json({ success: true, data: result });
   } catch (error) {
     next(error);
   }

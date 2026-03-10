@@ -3,6 +3,10 @@ import prisma from '../prisma.js';
 import { logger } from '../middleware/logger.js';
 import crypto from 'crypto';
 
+function hashPassword(value) {
+  return crypto.createHash('sha256').update(String(value)).digest('hex');
+}
+
 /**
  * Create a new gallery for a project
  */
@@ -240,7 +244,9 @@ export async function createShareLink(galleryId, options = {}) {
       shareToken,
       shareExpiresAt: expiresAt,
       isPublic: true,
-      password: options.password || null,
+      passwordHash: options.password ? hashPassword(options.password) : null,
+      downloadEnabled: options.allowDownload ?? true,
+      isPortalVisible: options.isPortalVisible ?? true,
     },
   });
 
@@ -290,12 +296,21 @@ export async function getGalleryByShareToken(shareToken, password = null) {
   }
 
   // Check password if required
-  if (gallery.password && gallery.password !== password) {
+  if (gallery.passwordHash && hashPassword(password || '') !== gallery.passwordHash) {
     return { requiresPassword: true };
   }
 
-  // Remove password from response
-  const { password: _, ...galleryData } = gallery;
+  // Track lightweight analytics
+  await prisma.photoGallery.update({
+    where: { id: gallery.id },
+    data: {
+      viewCount: { increment: 1 },
+      lastViewedAt: new Date(),
+    },
+  });
+
+  // Remove hash from response
+  const { passwordHash: _, ...galleryData } = gallery;
   return galleryData;
 }
 
@@ -346,11 +361,93 @@ export async function revokeShareLink(galleryId) {
       shareToken: null,
       shareExpiresAt: null,
       isPublic: false,
-      password: null,
+      passwordHash: null,
     },
   });
 
   return { revoked: true };
+}
+
+export async function createGalleryFromSelection(payload, userId) {
+  const gallery = await createGallery(
+    payload.projectId,
+    {
+      name: payload.name,
+      description: payload.description,
+      isPublic: payload.isPublic ?? false,
+      isLive: payload.isLive ?? false,
+      photoIds: payload.photoIds || [],
+    },
+    userId
+  );
+
+  return gallery;
+}
+
+export async function updateGalleryAccess(galleryId, payload, userId) {
+  const existing = await prisma.photoGallery.findUnique({ where: { id: galleryId } });
+  if (!existing) {
+    const err = new Error('Gallery not found');
+    err.code = 'NOT_FOUND';
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const data = {};
+  if (Object.prototype.hasOwnProperty.call(payload, 'allowDownload')) {
+    data.downloadEnabled = Boolean(payload.allowDownload);
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'downloadEnabled')) {
+    data.downloadEnabled = Boolean(payload.downloadEnabled);
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'isPortalVisible')) {
+    data.isPortalVisible = Boolean(payload.isPortalVisible);
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'expiresAt')) {
+    data.shareExpiresAt = payload.expiresAt ? new Date(payload.expiresAt) : null;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'password')) {
+    data.passwordHash = payload.password ? hashPassword(payload.password) : null;
+  }
+
+  const updated = await prisma.photoGallery.update({
+    where: { id: galleryId },
+    data,
+  });
+
+  logger.info(`Updated gallery access controls`, {
+    galleryId,
+    userId,
+    keys: Object.keys(data),
+  });
+
+  return updated;
+}
+
+export async function getGalleryAnalytics(galleryId) {
+  const gallery = await prisma.photoGallery.findUnique({
+    where: { id: galleryId },
+    select: {
+      id: true,
+      name: true,
+      status: true,
+      isPortalVisible: true,
+      downloadEnabled: true,
+      shareExpiresAt: true,
+      viewCount: true,
+      lastViewedAt: true,
+      updatedAt: true,
+    },
+  });
+
+  if (!gallery) {
+    const err = new Error('Gallery not found');
+    err.code = 'NOT_FOUND';
+    err.statusCode = 404;
+    throw err;
+  }
+
+  return gallery;
 }
 
 export const galleryService = {
@@ -366,6 +463,9 @@ export const galleryService = {
   getGalleryByShareToken,
   getLiveGalleryPhotos,
   revokeShareLink,
+  createGalleryFromSelection,
+  updateGalleryAccess,
+  getGalleryAnalytics,
 };
 
 export default galleryService;

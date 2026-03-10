@@ -17,6 +17,7 @@ import pageRoutes from './routes/pages.js';
 import galleryRoutes from './routes/galleries.js';
 import aiRoutes from './routes/ai.js';
 import webhookRoutes from './routes/webhooks.js';
+import reportRoutes from './routes/reports.js';
 import { logger } from './middleware/logger.js';
 
 // Initialize Prisma client
@@ -102,6 +103,7 @@ app.get('/health', (req, res) => {
       'galleries',
       'ai-analysis',
       'ai-reports',
+      'photo-reports',
     ], buildSha: process.env.BUILD_SHA || process.env.GITHUB_SHA || 'unknown', buildTime: process.env.BUILD_TIME || process.env.GITHUB_RUN_ID || null });
 });
 
@@ -121,6 +123,7 @@ app.get('/api/photocam/health', (req, res) => {
       'galleries',
       'ai-analysis',
       'ai-reports',
+      'photo-reports',
     ], buildSha: process.env.BUILD_SHA || process.env.GITHUB_SHA || 'unknown', buildTime: process.env.BUILD_TIME || process.env.GITHUB_RUN_ID || null });
 });
 
@@ -166,6 +169,7 @@ app.use('/api/photocam/pages', pageRoutes);
 app.use('/api/photocam/galleries', galleryRoutes);
 app.use('/api/photocam/ai', aiRoutes);
 app.use('/api/photocam/webhooks', webhookRoutes);
+app.use('/api/photocam/reports', reportRoutes);
 
 // Error handling
 app.use(errorHandler);
