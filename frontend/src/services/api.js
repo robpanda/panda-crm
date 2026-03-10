@@ -5828,10 +5828,19 @@ export const photocamApi = {
     return response.data.data;
   },
 
-  async createChecklistFromTemplate(projectId, templateId) {
+  async createChecklistFromTemplate(projectId, templateId, options = {}) {
     const response = await api.post(`/api/photocam/templates/${templateId}/instantiate`, {
       projectId,
+      name: options?.name,
+      description: options?.description,
+      assignedToId: options?.assignedToId,
+      dueDate: options?.dueDate,
     });
+    return response.data.data;
+  },
+
+  async createPhotocamTemplate(payload) {
+    const response = await api.post('/api/photocam/templates', payload);
     return response.data.data;
   },
 

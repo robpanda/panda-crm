@@ -13,8 +13,9 @@ import {
   ChevronDown,
   Tag,
   Clock,
+  Sparkles,
 } from 'lucide-react';
-import api from '../../services/api';
+import { photocamApi } from '../../services/api';
 import AdminLayout from '../../components/AdminLayout';
 
 const templateTypes = {
@@ -43,9 +44,20 @@ export default function Templates() {
   const [categoryFilter, setCategoryFilter] = useState('All');
   const [selectedTemplate, setSelectedTemplate] = useState(null);
   const [showPreview, setShowPreview] = useState(false);
+  const [photocamSeeds, setPhotocamSeeds] = useState({ checklists: [], reports: [] });
+  const [seedLoading, setSeedLoading] = useState(false);
+  const [seedError, setSeedError] = useState(null);
+  const [seedResult, setSeedResult] = useState(null);
+  const [photocamCreateLoading, setPhotocamCreateLoading] = useState(false);
+  const [photocamCreateError, setPhotocamCreateError] = useState(null);
+  const [photocamCreateResult, setPhotocamCreateResult] = useState(null);
+  const [photocamTemplateName, setPhotocamTemplateName] = useState('');
+  const [photocamTemplateDescription, setPhotocamTemplateDescription] = useState('');
+  const [photocamTemplateType, setPhotocamTemplateType] = useState('CHECKLIST');
 
   useEffect(() => {
     loadTemplates();
+    loadPhotoCamSeedNames();
   }, [typeFilter, categoryFilter]);
 
   const loadTemplates = async () => {
@@ -133,6 +145,86 @@ export default function Templates() {
       console.error('Failed to load templates:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadPhotoCamSeedNames = async () => {
+    try {
+      const result = await photocamApi.getRecommendedTemplateSeeds();
+      setPhotocamSeeds({
+        checklists: Array.isArray(result?.checklists) ? result.checklists : [],
+        reports: Array.isArray(result?.reports) ? result.reports : [],
+      });
+    } catch (error) {
+      // Non-blocking for template library page.
+    }
+  };
+
+  const seedPhotoCamTemplates = async () => {
+    try {
+      setSeedLoading(true);
+      setSeedError(null);
+      const result = await photocamApi.seedPhotocamTemplates({});
+      setSeedResult(result);
+      await loadPhotoCamSeedNames();
+    } catch (error) {
+      setSeedError(error?.response?.data?.error?.message || 'Failed to seed PhotoCam templates');
+    } finally {
+      setSeedLoading(false);
+    }
+  };
+
+  const createPhotoCamTemplate = async () => {
+    if (!photocamTemplateName.trim()) {
+      setPhotocamCreateError('Template name is required');
+      return;
+    }
+
+    try {
+      setPhotocamCreateLoading(true);
+      setPhotocamCreateError(null);
+      setPhotocamCreateResult(null);
+
+      const payload = {
+        name: photocamTemplateName.trim(),
+        description: photocamTemplateDescription.trim() || undefined,
+        templateType: photocamTemplateType,
+        category: photocamTemplateType === 'REPORT' ? 'PhotoCam Reports' : 'PhotoCam',
+        isPublished: false,
+        pandaPhotoOnly: false,
+      };
+
+      if (photocamTemplateType === 'CHECKLIST') {
+        payload.structure = {
+          sections: [
+            {
+              name: 'Core Section',
+              isRequired: true,
+              items: [
+                { fieldType: 'REQUIRED_PHOTO', label: 'Required photo', isRequired: true },
+                { fieldType: 'NOTES', label: 'Notes', isRequired: false },
+              ],
+            },
+          ],
+        };
+      } else {
+        payload.structure = { sections: [] };
+        payload.configJson = {
+          title: photocamTemplateName.trim(),
+          sections: [{ key: 'overview', label: 'Overview' }, { key: 'photos', label: 'Photos' }],
+          defaults: { includeCaptions: true, includeTimestamp: true },
+        };
+      }
+
+      const result = await photocamApi.createPhotocamTemplate(payload);
+      setPhotocamCreateResult(result);
+      setPhotocamTemplateName('');
+      setPhotocamTemplateDescription('');
+      await loadPhotoCamSeedNames();
+    } catch (error) {
+      setPhotocamCreateError(error?.response?.data?.error?.message || 'Failed to create PhotoCam template');
+    } finally {
+      setPhotocamCreateLoading(false);
     }
   };
 
@@ -276,6 +368,108 @@ export default function Templates() {
             </button>
           );
         })}
+      </div>
+
+      {/* PhotoCam Template Admin Controls */}
+      <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-4 sm:p-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <div className="inline-flex items-center rounded-full bg-indigo-100 px-2.5 py-1 text-xs font-semibold text-indigo-700">
+              <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+              PhotoCam Admin Setup
+            </div>
+            <h2 className="mt-2 text-base font-semibold text-gray-900">Checklist & Report Template Seeds</h2>
+            <p className="mt-1 text-sm text-gray-600">
+              Creates missing recommended PhotoCam checklist/report templates for staff workflows.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={seedPhotoCamTemplates}
+            disabled={seedLoading}
+            className="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {seedLoading ? 'Seeding…' : 'Seed PhotoCam Templates'}
+          </button>
+        </div>
+
+        {seedError && (
+          <p className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{seedError}</p>
+        )}
+        {seedResult && (
+          <p className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+            Created {seedResult.createdCount || 0} templates, {seedResult.existingCount || 0} already existed.
+          </p>
+        )}
+
+        {(photocamSeeds.checklists.length > 0 || photocamSeeds.reports.length > 0) && (
+          <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div className="rounded-lg bg-white p-3 border border-indigo-100">
+              <h3 className="text-sm font-semibold text-gray-900">Recommended Checklists</h3>
+              <ul className="mt-2 space-y-1 text-sm text-gray-700">
+                {photocamSeeds.checklists.map((name) => (
+                  <li key={name}>• {name}</li>
+                ))}
+              </ul>
+            </div>
+            <div className="rounded-lg bg-white p-3 border border-indigo-100">
+              <h3 className="text-sm font-semibold text-gray-900">Recommended Reports</h3>
+              <ul className="mt-2 space-y-1 text-sm text-gray-700">
+                {photocamSeeds.reports.map((name) => (
+                  <li key={name}>• {name}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        )}
+
+        <div className="mt-4 rounded-lg border border-indigo-100 bg-white p-3">
+          <h3 className="text-sm font-semibold text-gray-900">Create PhotoCam Template</h3>
+          <p className="mt-1 text-sm text-gray-600">
+            Add checklist or report templates directly from Admin Settings.
+          </p>
+          <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-3">
+            <input
+              value={photocamTemplateName}
+              onChange={(e) => setPhotocamTemplateName(e.target.value)}
+              placeholder="Template name"
+              className="rounded-lg border border-gray-200 px-3 py-2 text-sm"
+            />
+            <select
+              value={photocamTemplateType}
+              onChange={(e) => setPhotocamTemplateType(e.target.value)}
+              className="rounded-lg border border-gray-200 px-3 py-2 text-sm"
+            >
+              <option value="CHECKLIST">Checklist</option>
+              <option value="REPORT">Report</option>
+            </select>
+            <button
+              type="button"
+              onClick={createPhotoCamTemplate}
+              disabled={photocamCreateLoading}
+              className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {photocamCreateLoading ? 'Creating…' : 'Create Template'}
+            </button>
+          </div>
+          <textarea
+            value={photocamTemplateDescription}
+            onChange={(e) => setPhotocamTemplateDescription(e.target.value)}
+            placeholder="Description (optional)"
+            className="mt-2 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+            rows={2}
+          />
+          {photocamCreateError && (
+            <p className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {photocamCreateError}
+            </p>
+          )}
+          {photocamCreateResult && (
+            <p className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+              Created {photocamCreateResult.name} ({photocamCreateResult.templateType}).
+            </p>
+          )}
+        </div>
       </div>
 
       {/* Filters */}
