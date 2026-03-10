@@ -37,6 +37,8 @@ const DISPOSITION_STAGE_MAP = {
   RETAIL_NOT_SOLD: 'CLOSED_LOST',
 };
 
+const INTERNAL_COMMENT_TITLE_PREFIX = 'INTERNAL_COMMENT|';
+
 function parseDate(value) {
   if (!value) return null;
   const parsed = new Date(value);
@@ -94,6 +96,38 @@ function normalizeEntityId(value) {
     }
   }
   return null;
+}
+
+function normalizeDepartmentTag(value) {
+  const normalized = String(value || 'general')
+    .trim()
+    .toLowerCase()
+    .replace(/\|/g, '')
+    .replace(/\s+/g, '_');
+  return normalized || 'general';
+}
+
+function toInternalCommentTitle(departmentTag = 'general', isResolved = false) {
+  return `${INTERNAL_COMMENT_TITLE_PREFIX}${normalizeDepartmentTag(departmentTag)}|${isResolved ? '1' : '0'}`;
+}
+
+function parseInternalCommentTitle(title) {
+  if (typeof title !== 'string' || !title.startsWith(INTERNAL_COMMENT_TITLE_PREFIX)) {
+    return null;
+  }
+
+  const remainder = title.slice(INTERNAL_COMMENT_TITLE_PREFIX.length);
+  const [departmentTagRaw = 'general', resolvedRaw = '0'] = remainder.split('|');
+  return {
+    departmentTag: normalizeDepartmentTag(departmentTagRaw),
+    isResolved: resolvedRaw === '1' || String(resolvedRaw).toLowerCase() === 'true',
+  };
+}
+
+function extractMentionUserId(mention) {
+  if (!mention) return null;
+  if (typeof mention === 'string') return mention;
+  return mention.userId || mention.id || null;
 }
 
 function formatTransferCounts(counts = {}) {
@@ -358,6 +392,35 @@ async function getNotificationService() {
 }
 
 class OpportunityService {
+  async resolveActorUserId(actor = null) {
+    if (!actor) return null;
+
+    const idCandidates = [
+      actor.id,
+      actor.userId,
+      actor.sub,
+      actor.username,
+    ].filter(Boolean);
+
+    for (const candidate of idCandidates) {
+      const found = await prisma.user.findUnique({
+        where: { id: String(candidate) },
+        select: { id: true },
+      });
+      if (found?.id) return found.id;
+    }
+
+    if (actor.email) {
+      const foundByEmail = await prisma.user.findFirst({
+        where: { email: { equals: String(actor.email), mode: 'insensitive' } },
+        select: { id: true },
+      });
+      if (foundByEmail?.id) return foundByEmail.id;
+    }
+
+    return null;
+  }
+
   /**
    * Get opportunities with filtering and pagination
    * Replicates: SalesLeaderOpportunityListController.getOpportunities()
@@ -1849,70 +1912,335 @@ Be factual and professional. Highlight anything that needs attention.`;
   }
 
   /**
+   * Resolve mentions for opportunity comments/replies and create in-app notifications.
+   */
+  async notifyOpportunityMentions({
+    opportunityId,
+    content,
+    mentions = [],
+    actor = null,
+    opportunityName = null,
+    opportunityJobId = null,
+  }) {
+    const mentionUserIds = [...new Set((mentions || [])
+      .map(extractMentionUserId)
+      .filter(Boolean))];
+
+    if (mentionUserIds.length === 0) {
+      return 0;
+    }
+
+    const users = await prisma.user.findMany({
+      where: { id: { in: mentionUserIds } },
+      select: { id: true, email: true, firstName: true },
+    });
+    const userById = new Map(users.map((u) => [u.id, u]));
+    const actorName = `${actor?.firstName || ''} ${actor?.lastName || ''}`.trim() || actor?.email || 'Someone';
+    const subjectName = opportunityName || opportunityJobId || 'an opportunity';
+    const preview = (content || '').substring(0, 100);
+
+    for (const userId of mentionUserIds) {
+      const mentionedUser = userById.get(userId);
+      if (!mentionedUser) continue;
+
+      await prisma.notification.create({
+        data: {
+          userId,
+          type: 'MENTION',
+          title: `${actorName} mentioned you`,
+          message: `You were mentioned on ${subjectName}: "${preview}${(content || '').length > 100 ? '...' : ''}"`,
+          opportunityId,
+          actionUrl: `/jobs/${opportunityId}`,
+          actionLabel: 'View Job',
+          sourceType: 'OPPORTUNITY',
+          sourceId: opportunityId,
+          status: 'UNREAD',
+        },
+      });
+
+      if (mentionedUser.email) {
+        this.sendMentionEmail({
+          toEmail: mentionedUser.email,
+          toName: mentionedUser.firstName || 'there',
+          mentionerName: actorName,
+          opportunityName: subjectName,
+          opportunityId,
+          messagePreview: (content || '').substring(0, 200),
+        }).catch((err) => logger.warn(`Failed to send mention email to ${mentionedUser.email}: ${err.message}`));
+      }
+    }
+
+    return mentionUserIds.length;
+  }
+
+  /**
    * Add a reply with @mentions - creates a note and sends notifications
    */
   async addReplyWithMentions(opportunityId, { content, parentId, mentions, channel }, user) {
-    // Create the note/reply
+    const actorUserId = await this.resolveActorUserId(user);
+    if (!actorUserId) {
+      const error = new Error('Unable to resolve the logged-in user for this reply');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const normalizedContent = String(content || '').trim();
+    if (!normalizedContent && (!mentions || mentions.length === 0)) {
+      const error = new Error('Reply content is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
     const note = await prisma.note.create({
       data: {
         opportunityId,
-        subject: `Reply to ${channel || 'message'}`,
-        body: content,
-        userId: user?.id,
-        parentId: parentId || null,
+        title: parentId ? `REPLY|${parentId}` : `REPLY|${channel || 'message'}`,
+        body: normalizedContent || '(mention)',
+        createdById: actorUserId,
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
       },
     });
 
-    // Send notifications to mentioned users
+    let mentionsNotified = 0;
     if (mentions && mentions.length > 0) {
       const opportunity = await prisma.opportunity.findUnique({
         where: { id: opportunityId },
         select: { name: true, jobId: true },
       });
-
-      const notificationPromises = mentions.map(async (mention) => {
-        // Create in-app notification
-        await prisma.notification.create({
-          data: {
-            userId: mention.userId,
-            type: 'MENTION',
-            title: `${user?.firstName || 'Someone'} mentioned you`,
-            message: `You were mentioned in a reply on ${opportunity?.name || opportunity?.jobId || 'an opportunity'}: "${content.substring(0, 100)}${content.length > 100 ? '...' : ''}"`,
-            opportunityId: opportunityId,
-            actionUrl: `/jobs/${opportunityId}`,
-            actionLabel: 'View Job',
-            sourceType: 'OPPORTUNITY',
-            sourceId: opportunityId,
-            status: 'UNREAD',
-          },
-        });
-
-        // Get user email for email notification
-        const mentionedUser = await prisma.user.findUnique({
-          where: { id: mention.userId },
-          select: { email: true, firstName: true },
-        });
-
-        if (mentionedUser?.email) {
-          // Send email notification (fire and forget)
-          this.sendMentionEmail({
-            toEmail: mentionedUser.email,
-            toName: mentionedUser.firstName,
-            mentionerName: `${user?.firstName} ${user?.lastName}`,
-            opportunityName: opportunity?.name || opportunity?.jobId,
-            opportunityId,
-            messagePreview: content.substring(0, 200),
-          }).catch(err => console.error('Failed to send mention email:', err));
-        }
+      mentionsNotified = await this.notifyOpportunityMentions({
+        opportunityId,
+        content: normalizedContent || note.body,
+        mentions,
+        actor: user,
+        opportunityName: opportunity?.name,
+        opportunityJobId: opportunity?.jobId,
       });
-
-      await Promise.all(notificationPromises);
     }
 
     return {
       ...note,
-      mentionsNotified: mentions?.length || 0,
+      mentionsNotified,
     };
+  }
+
+  async getOpportunityInternalComments(opportunityId) {
+    const comments = await prisma.note.findMany({
+      where: {
+        opportunityId,
+        title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return comments.map((comment) => {
+      const meta = parseInternalCommentTitle(comment.title) || {
+        departmentTag: 'general',
+        isResolved: false,
+      };
+      return {
+        id: comment.id,
+        content: comment.body,
+        body: comment.body,
+        departmentTag: meta.departmentTag,
+        isResolved: meta.isResolved,
+        createdAt: comment.createdAt,
+        updatedAt: comment.updatedAt,
+        author: comment.createdBy
+          ? {
+              id: comment.createdBy.id,
+              firstName: comment.createdBy.firstName,
+              lastName: comment.createdBy.lastName,
+              email: comment.createdBy.email,
+            }
+          : null,
+        replies: [],
+        attachmentUrls: [],
+      };
+    });
+  }
+
+  async createOpportunityInternalComment(opportunityId, payload = {}, user = null) {
+    const content = String(payload.content || payload.body || '').trim();
+    if (!content) {
+      const error = new Error('Comment content is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const actorUserId = await this.resolveActorUserId(user);
+    if (!actorUserId) {
+      const error = new Error('Unable to resolve the logged-in user for this internal comment');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const opportunity = await prisma.opportunity.findUnique({
+      where: { id: opportunityId },
+      select: { id: true, name: true, jobId: true },
+    });
+    if (!opportunity) {
+      const error = new Error(`Opportunity not found: ${opportunityId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const departmentTag = normalizeDepartmentTag(payload.departmentTag || payload.department || 'general');
+    const isResolved = Boolean(payload.isResolved);
+
+    const comment = await prisma.note.create({
+      data: {
+        opportunityId,
+        title: toInternalCommentTitle(departmentTag, isResolved),
+        body: content,
+        createdById: actorUserId,
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+    });
+
+    const mentionsNotified = await this.notifyOpportunityMentions({
+      opportunityId,
+      content,
+      mentions: payload.mentions || [],
+      actor: user,
+      opportunityName: opportunity.name,
+      opportunityJobId: opportunity.jobId,
+    });
+
+    return {
+      id: comment.id,
+      content: comment.body,
+      body: comment.body,
+      departmentTag,
+      isResolved,
+      createdAt: comment.createdAt,
+      updatedAt: comment.updatedAt,
+      author: comment.createdBy
+        ? {
+            id: comment.createdBy.id,
+            firstName: comment.createdBy.firstName,
+            lastName: comment.createdBy.lastName,
+            email: comment.createdBy.email,
+          }
+        : null,
+      replies: [],
+      attachmentUrls: [],
+      mentionsNotified,
+    };
+  }
+
+  async updateOpportunityInternalComment(opportunityId, commentId, payload = {}, user = null) {
+    const existing = await prisma.note.findFirst({
+      where: {
+        id: commentId,
+        opportunityId,
+        title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+    });
+
+    if (!existing) {
+      const error = new Error(`Internal comment not found: ${commentId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const meta = parseInternalCommentTitle(existing.title) || {
+      departmentTag: 'general',
+      isResolved: false,
+    };
+    const nextDepartment = hasOwnField(payload, 'departmentTag') || hasOwnField(payload, 'department')
+      ? normalizeDepartmentTag(payload.departmentTag || payload.department)
+      : meta.departmentTag;
+    const nextResolved = hasOwnField(payload, 'isResolved')
+      ? Boolean(payload.isResolved)
+      : meta.isResolved;
+    const nextContent = hasOwnField(payload, 'content') || hasOwnField(payload, 'body')
+      ? String(payload.content || payload.body || '').trim()
+      : existing.body;
+
+    if (!nextContent) {
+      const error = new Error('Comment content is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const updated = await prisma.note.update({
+      where: { id: commentId },
+      data: {
+        title: toInternalCommentTitle(nextDepartment, nextResolved),
+        body: nextContent,
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+    });
+
+    const mentionsNotified = await this.notifyOpportunityMentions({
+      opportunityId,
+      content: nextContent,
+      mentions: payload.mentions || [],
+      actor: user,
+    });
+
+    return {
+      id: updated.id,
+      content: updated.body,
+      body: updated.body,
+      departmentTag: nextDepartment,
+      isResolved: nextResolved,
+      createdAt: updated.createdAt,
+      updatedAt: updated.updatedAt,
+      author: updated.createdBy
+        ? {
+            id: updated.createdBy.id,
+            firstName: updated.createdBy.firstName,
+            lastName: updated.createdBy.lastName,
+            email: updated.createdBy.email,
+          }
+        : null,
+      replies: [],
+      attachmentUrls: [],
+      mentionsNotified,
+    };
+  }
+
+  async deleteOpportunityInternalComment(opportunityId, commentId) {
+    const existing = await prisma.note.findFirst({
+      where: {
+        id: commentId,
+        opportunityId,
+        title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+      },
+      select: { id: true },
+    });
+
+    if (!existing) {
+      const error = new Error(`Internal comment not found: ${commentId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    await prisma.note.delete({ where: { id: commentId } });
+    return { success: true, deletedId: commentId };
   }
 
   /**
@@ -1980,7 +2308,7 @@ Be factual and professional. Highlight anything that needs attention.`;
         where: { opportunityId },
         orderBy: { createdAt: 'desc' },
         include: {
-          user: { select: { firstName: true, lastName: true, email: true } },
+          createdBy: { select: { id: true, firstName: true, lastName: true, email: true } },
         },
       }),
     ]);
@@ -1989,13 +2317,17 @@ Be factual and professional. Highlight anything that needs attention.`;
     const threads = [];
     const notesByParent = new Map();
 
-    // Group notes by parentId
+    // Group notes using REPLY|<parentId> title convention for backward-compatible reply threading
     notes.forEach(note => {
-      const parentId = note.parentId || 'root';
+      const replyMatch = typeof note.title === 'string' ? note.title.match(/^REPLY\|(.+)$/) : null;
+      const parentId = replyMatch?.[1] || 'root';
       if (!notesByParent.has(parentId)) {
         notesByParent.set(parentId, []);
       }
-      notesByParent.get(parentId).push(note);
+      notesByParent.get(parentId).push({
+        ...note,
+        user: note.createdBy || null,
+      });
     });
 
     // Build threads from activities and root notes
@@ -2015,7 +2347,7 @@ Be factual and professional. Highlight anything that needs attention.`;
     // Add root-level notes (not replies)
     const rootNotes = notesByParent.get('root') || [];
     rootNotes.forEach(note => {
-      if (!note.parentId) {
+      if (!(typeof note.title === 'string' && note.title.startsWith('REPLY|'))) {
         threads.push({
           ...note,
           itemType: 'note',

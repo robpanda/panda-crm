@@ -16,6 +16,21 @@ const THUMBNAIL_SIZE = 400;
 const JPEG_QUALITY = 85;
 const MAX_INLINE_BULK_EXPORT_ITEMS = 80;
 
+function parseUnknownPrismaFieldName(error) {
+  const message = error?.message || '';
+  const match = message.match(/column [^\"]*\"([^\"]+)\" does not exist/i)
+    || message.match(/Unknown (?:field|argument) `([^`]+)`/i);
+  return match?.[1] || null;
+}
+
+function canonicalPhotoField(fieldName = '') {
+  const value = String(fieldName || '').trim();
+  if (!value) return null;
+  if (value === 'checklist_item_id') return 'checklistItemId';
+  if (value === 'customer_visible') return 'customerVisible';
+  return value;
+}
+
 function shouldQueueBulkExport(photoCount) {
   return Number(photoCount || 0) > MAX_INLINE_BULK_EXPORT_ITEMS;
 }
@@ -556,10 +571,33 @@ export async function updatePhotoMetadata(photoId, payload = {}, userId) {
     throw err;
   }
 
-  const updated = await prisma.photo.update({
-    where: { id: photoId },
-    data: allowed,
-  });
+  let updated;
+  let updateData = { ...allowed };
+  let lastError;
+  for (let attempt = 0; attempt <= Object.keys(allowed).length; attempt += 1) {
+    try {
+      updated = await prisma.photo.update({
+        where: { id: photoId },
+        data: updateData,
+      });
+      break;
+    } catch (error) {
+      lastError = error;
+      const unknownField = canonicalPhotoField(parseUnknownPrismaFieldName(error));
+      if (!unknownField || !Object.prototype.hasOwnProperty.call(updateData, unknownField)) {
+        throw error;
+      }
+      logger.warn(`Photo metadata update fallback: dropping unsupported field "${unknownField}"`);
+      delete updateData[unknownField];
+      if (!Object.keys(updateData).length) {
+        throw error;
+      }
+    }
+  }
+
+  if (!updated && lastError) {
+    throw lastError;
+  }
 
   if (updated?.projectId) {
     await projectService.createProjectActivity(updated.projectId, userId, 'PHOTO_METADATA_UPDATED', {
@@ -603,11 +641,20 @@ export async function bulkAssignPhotos(payload = {}, userId) {
   let assigned = 0;
 
   if (targetType === 'CHECKLIST_ITEM') {
-    const result = await prisma.photo.updateMany({
-      where: { id: { in: photoIds }, deletedAt: null },
-      data: { checklistItemId: targetId },
-    });
-    assigned = result.count;
+    try {
+      const result = await prisma.photo.updateMany({
+        where: { id: { in: photoIds }, deletedAt: null },
+        data: { checklistItemId: targetId },
+      });
+      assigned = result.count;
+    } catch (error) {
+      const unknownField = canonicalPhotoField(parseUnknownPrismaFieldName(error));
+      if (unknownField !== 'checklistItemId') {
+        throw error;
+      }
+      logger.warn('Photo bulk assign fallback: checklistItemId field unavailable, skipping assignment');
+      assigned = 0;
+    }
   }
 
   if (targetType === 'GALLERY') {

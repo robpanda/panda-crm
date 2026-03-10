@@ -595,24 +595,26 @@ function EmailModal({ isOpen, onClose, email, recipientName, onSent, mergeData =
 }
 
 // Invoice Detail Modal Component - Shows invoice details with payment history
-function InvoiceDetailModal({ invoice, onClose }) {
+function InvoiceDetailModal({
+  invoice,
+  onClose,
+  onInvoiceUpdated,
+  onOpenSendInvoice,
+  onOpenPayInvoice,
+}) {
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    loadPayments();
-  }, [invoice.id]);
-
-  const loadPayments = async () => {
-    try {
-      const response = await paymentsApi.getPaymentsByInvoice(invoice.id);
-      setPayments(response.data || []);
-    } catch (err) {
-      console.error('Error loading payments:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [isEditing, setIsEditing] = useState(false);
+  const [editError, setEditError] = useState(null);
+  const [editSuccess, setEditSuccess] = useState(null);
+  const [form, setForm] = useState({
+    invoiceDate: '',
+    dueDate: '',
+    tax: 0,
+    notes: '',
+    lineItems: [],
+    additionalCharges: [],
+  });
 
   const formatDate = (date) => {
     if (!date) return '-';
@@ -629,6 +631,13 @@ function InvoiceDetailModal({ invoice, onClose }) {
       style: 'currency',
       currency: 'USD',
     }).format(Number(amount) || 0);
+  };
+
+  const formatDateInput = (value) => {
+    if (!value) return '';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return '';
+    return parsed.toISOString().slice(0, 10);
   };
 
   const hydrateFormFromInvoice = useCallback((sourceInvoice) => ({
