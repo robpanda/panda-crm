@@ -1,31 +1,28 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { photocamApi } from '../../services/api';
 import {
   Camera,
   Upload,
-  Image,
   Grid,
   List,
   Search,
-  Filter,
   Plus,
   X,
   ChevronLeft,
   ChevronRight,
   ZoomIn,
-  Download,
-  Trash2,
-  Edit,
-  Tag,
   CheckCircle,
   ClipboardList,
   Loader2,
-  FolderOpen,
   AlertCircle,
   RefreshCw,
   ImageOff,
   Layers,
+  Link2,
+  FileCheck,
+  CheckSquare,
+  FileDown,
 } from 'lucide-react';
 
 // Photo type options
@@ -47,12 +44,31 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [selectedPhotos, setSelectedPhotos] = useState([]);
+  const [selectionMode, setSelectionMode] = useState(false);
   const [lightboxPhoto, setLightboxPhoto] = useState(null);
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploadType, setUploadType] = useState('PROGRESS');
+  const [actionMessage, setActionMessage] = useState(null);
+  const [showDownloadModal, setShowDownloadModal] = useState(false);
+  const [downloadFormat, setDownloadFormat] = useState('zip');
+  const [pendingExportJobId, setPendingExportJobId] = useState(null);
+  const [pendingExportAttempts, setPendingExportAttempts] = useState(0);
+  const [showGalleryModal, setShowGalleryModal] = useState(false);
+  const [galleryMode, setGalleryMode] = useState('existing');
+  const [selectedGalleryId, setSelectedGalleryId] = useState('');
+  const [newGalleryName, setNewGalleryName] = useState('');
+  const [showAssignModal, setShowAssignModal] = useState(false);
+  const [selectedChecklistId, setSelectedChecklistId] = useState('');
+  const [selectedChecklistItemId, setSelectedChecklistItemId] = useState('');
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [reportMode, setReportMode] = useState('existing');
+  const [selectedReportId, setSelectedReportId] = useState('');
+  const [newReportName, setNewReportName] = useState('');
+  const [generateOnCreate, setGenerateOnCreate] = useState(true);
+  const longPressTimerRef = useRef(null);
 
   // Fetch project for this opportunity (auto-creates if none exists)
   const { data: project, isLoading: projectLoading, error: projectError, refetch: refetchProject } = useQuery({
@@ -81,6 +97,38 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
     queryKey: ['photocam-comparisons', project?.id],
     queryFn: () => photocamApi.getComparisons(project.id),
     enabled: !!project?.id && activeSubTab === 'comparisons',
+  });
+
+  const { data: galleriesData } = useQuery({
+    queryKey: ['photocam-galleries', project?.id],
+    queryFn: () => photocamApi.getGalleries(project.id),
+    enabled: !!project?.id && activeSubTab === 'photos',
+    retry: 1,
+  });
+
+  const { data: checklistOptionsData } = useQuery({
+    queryKey: ['photocam-checklists-options', project?.id],
+    queryFn: () => photocamApi.getChecklists(project.id),
+    enabled: !!project?.id && activeSubTab === 'photos',
+    retry: 1,
+  });
+
+  const { data: reportsData } = useQuery({
+    queryKey: ['photocam-reports', project?.id],
+    queryFn: async () => {
+      try {
+        const response = await photocamApi.getReports({ projectId: project.id, limit: 100 });
+        return response?.data || [];
+      } catch (error) {
+        // Reports are flag-gated on the backend; keep UI non-blocking if disabled.
+        if (error?.response?.status === 503) {
+          return [];
+        }
+        throw error;
+      }
+    },
+    enabled: !!project?.id && activeSubTab === 'photos',
+    retry: 1,
   });
 
   // Upload mutation
@@ -113,10 +161,168 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
     onSuccess: () => {
       queryClient.invalidateQueries(['photocam-photos', project?.id]);
       setSelectedPhotos([]);
+      setSelectionMode(false);
+    },
+  });
+
+  const bulkDownloadMutation = useMutation({
+    mutationFn: (outputFormat) => photocamApi.bulkDownloadPhotos({
+      photoIds: selectedPhotos,
+      outputFormat,
+      projectId: project?.id,
+      opportunityId,
+    }),
+    onSuccess: (result) => {
+      setShowDownloadModal(false);
+
+      if (result?.downloadUrl) {
+        window.open(result.downloadUrl, '_blank', 'noopener,noreferrer');
+        setPendingExportJobId(null);
+        setPendingExportAttempts(0);
+      } else if (result?.queued && result?.exportJobId) {
+        setPendingExportJobId(result.exportJobId);
+        setPendingExportAttempts(0);
+      }
+
+      setActionMessage({
+        type: 'success',
+        text: result?.queued
+          ? `Export queued (${result.totalPhotos} photos). We will auto-open when ready.`
+          : `Export ready (${result.totalPhotos} photos).`,
+      });
+    },
+    onError: (error) => {
+      setActionMessage({
+        type: 'error',
+        text: error?.response?.data?.error?.message || 'Bulk download failed',
+      });
+    },
+  });
+
+  const bulkAssignMutation = useMutation({
+    mutationFn: (payload) => photocamApi.bulkAssignPhotos(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['photocam-photos', project?.id]);
+      queryClient.invalidateQueries(['photocam-galleries', project?.id]);
+      queryClient.invalidateQueries(['photocam-reports', project?.id]);
+      setActionMessage({ type: 'success', text: 'Photos updated successfully.' });
+      setShowGalleryModal(false);
+      setShowAssignModal(false);
+      setShowReportModal(false);
+    },
+    onError: (error) => {
+      setActionMessage({
+        type: 'error',
+        text: error?.response?.data?.error?.message || 'Bulk action failed',
+      });
+    },
+  });
+
+  const createGalleryMutation = useMutation({
+    mutationFn: (payload) => photocamApi.createGalleryFromSelection(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['photocam-galleries', project?.id]);
+      setActionMessage({ type: 'success', text: 'Gallery created from selected photos.' });
+      setShowGalleryModal(false);
+      setSelectedPhotos([]);
+      setSelectionMode(false);
+    },
+    onError: (error) => {
+      setActionMessage({
+        type: 'error',
+        text: error?.response?.data?.error?.message || 'Unable to create gallery',
+      });
+    },
+  });
+
+  const createReportMutation = useMutation({
+    mutationFn: async ({ name, reportId, createMode }) => {
+      if (createMode === 'existing') {
+        return photocamApi.bulkAssignPhotos({
+          photoIds: selectedPhotos,
+          targetType: 'REPORT',
+          targetId: reportId,
+        });
+      }
+
+      const createdReport = await photocamApi.createReport({
+        name,
+        projectId: project?.id,
+        opportunityId,
+        items: selectedPhotos.map((photoId, index) => ({ photoId, sortOrder: index })),
+      });
+
+      if (generateOnCreate) {
+        await photocamApi.generateReport(createdReport.id);
+      }
+
+      return createdReport;
+    },
+    onSuccess: async (result, variables) => {
+      queryClient.invalidateQueries(['photocam-reports', project?.id]);
+      setShowReportModal(false);
+      setSelectedPhotos([]);
+      setSelectionMode(false);
+
+      if (variables.createMode === 'new' && generateOnCreate && result?.id) {
+        try {
+          const download = await photocamApi.getReportDownload(result.id);
+          if (download?.url) {
+            window.open(download.url, '_blank', 'noopener,noreferrer');
+          }
+        } catch (error) {
+          // Non-blocking: report may still be generating
+        }
+      }
+
+      setActionMessage({ type: 'success', text: 'Report action completed.' });
+    },
+    onError: (error) => {
+      setActionMessage({
+        type: 'error',
+        text: error?.response?.data?.error?.message || 'Unable to process report action',
+      });
     },
   });
 
   const photos = photosData?.data || photosData || [];
+
+  const galleryItems = Array.isArray(galleriesData?.data)
+    ? galleriesData.data
+    : Array.isArray(galleriesData)
+      ? galleriesData
+      : [];
+
+  const checklistOptions = Array.isArray(checklistOptionsData?.data)
+    ? checklistOptionsData.data
+    : Array.isArray(checklistOptionsData)
+      ? checklistOptionsData
+      : [];
+
+  const reportItems = Array.isArray(reportsData)
+    ? reportsData
+    : Array.isArray(reportsData?.data)
+      ? reportsData.data
+      : [];
+
+  const selectedChecklist = useMemo(
+    () => checklistOptions.find((item) => item.id === selectedChecklistId) || null,
+    [checklistOptions, selectedChecklistId]
+  );
+
+  const checklistItemOptions = useMemo(() => {
+    const sections = selectedChecklist?.sections || [];
+    const items = [];
+    sections.forEach((section) => {
+      (section.items || []).forEach((item) => {
+        items.push({
+          id: item.id,
+          label: `${section.name}: ${item.name}`,
+        });
+      });
+    });
+    return items;
+  }, [selectedChecklist]);
 
   // Filter photos by search term
   const filteredPhotos = photos.filter(photo => {
@@ -128,6 +334,77 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
       photo.tags?.some(t => t.toLowerCase().includes(term))
     );
   });
+
+  useEffect(() => {
+    if (selectedPhotos.length === 0) {
+      setSelectionMode(false);
+    }
+  }, [selectedPhotos.length]);
+
+  useEffect(() => {
+    setSelectedPhotos([]);
+    setSelectionMode(false);
+    setActionMessage(null);
+    setPendingExportJobId(null);
+    setPendingExportAttempts(0);
+  }, [activeSubTab, project?.id]);
+
+  useEffect(() => () => clearLongPressTimer(), []);
+
+  useEffect(() => {
+    if (!pendingExportJobId) return undefined;
+
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const status = await photocamApi.getBulkDownloadStatus(pendingExportJobId);
+        if (cancelled) return;
+
+        if (status?.status === 'READY' && status?.downloadUrl) {
+          window.open(status.downloadUrl, '_blank', 'noopener,noreferrer');
+          setActionMessage({ type: 'success', text: 'Bulk export is ready and downloaded.' });
+          setPendingExportJobId(null);
+          setPendingExportAttempts(0);
+          return;
+        }
+
+        if (status?.status === 'FAILED') {
+          setActionMessage({
+            type: 'error',
+            text: status?.error || 'Bulk export failed before completion.',
+          });
+          setPendingExportJobId(null);
+          setPendingExportAttempts(0);
+          return;
+        }
+
+        if (pendingExportAttempts >= 30) {
+          setActionMessage({
+            type: 'error',
+            text: 'Bulk export is still processing. Please retry in a moment.',
+          });
+          setPendingExportJobId(null);
+          setPendingExportAttempts(0);
+          return;
+        }
+
+        setPendingExportAttempts((prev) => prev + 1);
+      } catch (error) {
+        if (cancelled) return;
+        setActionMessage({
+          type: 'error',
+          text: error?.response?.data?.error?.message || 'Unable to fetch bulk export status.',
+        });
+        setPendingExportJobId(null);
+        setPendingExportAttempts(0);
+      }
+    }, 3500);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [pendingExportJobId, pendingExportAttempts]);
 
   // Handle file selection
   const handleFileSelect = (e) => {
@@ -157,6 +434,117 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
         ? prev.filter(id => id !== photoId)
         : [...prev, photoId]
     );
+  };
+
+  const clearLongPressTimer = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
+  const handlePhotoTouchStart = (photoId) => {
+    if (selectionMode) return;
+    clearLongPressTimer();
+    longPressTimerRef.current = setTimeout(() => {
+      setSelectionMode(true);
+      setSelectedPhotos((prev) => (prev.includes(photoId) ? prev : [...prev, photoId]));
+    }, 450);
+  };
+
+  const handlePhotoTouchEnd = () => {
+    clearLongPressTimer();
+  };
+
+  const handlePhotoActivate = (photo, index) => {
+    if (selectionMode) {
+      togglePhotoSelection(photo.id);
+      return;
+    }
+    openLightbox(photo, index);
+  };
+
+  const selectAllVisible = () => {
+    setSelectionMode(true);
+    setSelectedPhotos(filteredPhotos.map((photo) => photo.id));
+  };
+
+  const clearSelection = () => {
+    setSelectedPhotos([]);
+    setSelectionMode(false);
+  };
+
+  const submitBulkDownload = () => {
+    if (!selectedPhotos.length) return;
+    bulkDownloadMutation.mutate(downloadFormat);
+  };
+
+  const submitBulkGallery = () => {
+    if (!selectedPhotos.length || !project?.id) return;
+
+    if (galleryMode === 'existing') {
+      if (!selectedGalleryId) {
+        setActionMessage({ type: 'error', text: 'Select a gallery first.' });
+        return;
+      }
+      bulkAssignMutation.mutate({
+        photoIds: selectedPhotos,
+        targetType: 'GALLERY',
+        targetId: selectedGalleryId,
+      });
+      return;
+    }
+
+    if (!newGalleryName.trim()) {
+      setActionMessage({ type: 'error', text: 'Gallery name is required.' });
+      return;
+    }
+
+    createGalleryMutation.mutate({
+      projectId: project.id,
+      name: newGalleryName.trim(),
+      description: `Created from ${selectedPhotos.length} selected photos`,
+      photoIds: selectedPhotos,
+    });
+  };
+
+  const submitBulkAssignChecklist = () => {
+    if (!selectedPhotos.length) return;
+    if (!selectedChecklistItemId) {
+      setActionMessage({ type: 'error', text: 'Select a checklist item first.' });
+      return;
+    }
+    bulkAssignMutation.mutate({
+      photoIds: selectedPhotos,
+      targetType: 'CHECKLIST_ITEM',
+      targetId: selectedChecklistItemId,
+    });
+  };
+
+  const submitBulkReport = () => {
+    if (!selectedPhotos.length) return;
+
+    if (reportMode === 'existing') {
+      if (!selectedReportId) {
+        setActionMessage({ type: 'error', text: 'Select a report first.' });
+        return;
+      }
+      createReportMutation.mutate({
+        createMode: 'existing',
+        reportId: selectedReportId,
+      });
+      return;
+    }
+
+    if (!newReportName.trim()) {
+      setActionMessage({ type: 'error', text: 'Report name is required.' });
+      return;
+    }
+
+    createReportMutation.mutate({
+      createMode: 'new',
+      name: newReportName.trim(),
+    });
   };
 
   // Lightbox navigation
@@ -266,34 +654,53 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
             </div>
           </div>
 
-          {/* Photo Count & Selection Actions */}
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-gray-500">
-              {filteredPhotos.length} photo{filteredPhotos.length !== 1 ? 's' : ''}
-              {selectedPhotos.length > 0 && (
-                <span className="ml-2 text-panda-primary font-medium">
-                  ({selectedPhotos.length} selected)
-                </span>
-              )}
-            </span>
-            {selectedPhotos.length > 0 && (
+          {/* Photo Count + selection state */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-gray-500">
+                {filteredPhotos.length} photo{filteredPhotos.length !== 1 ? 's' : ''}
+                {selectedPhotos.length > 0 && (
+                  <span className="ml-2 text-panda-primary font-medium">
+                    ({selectedPhotos.length} selected)
+                  </span>
+                )}
+              </span>
               <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setSelectedPhotos([])}
-                  className="text-gray-500 hover:text-gray-700"
-                >
-                  Clear Selection
-                </button>
-                <button
-                  onClick={() => {
-                    if (window.confirm(`Delete ${selectedPhotos.length} photo(s)?`)) {
-                      selectedPhotos.forEach(id => deleteMutation.mutate(id));
-                    }
-                  }}
-                  className="text-red-600 hover:text-red-700"
-                >
-                  Delete Selected
-                </button>
+                {!selectionMode && (
+                  <button
+                    onClick={() => setSelectionMode(true)}
+                    className="inline-flex items-center px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50"
+                  >
+                    <CheckSquare className="w-4 h-4 mr-1.5" />
+                    Select
+                  </button>
+                )}
+                {selectionMode && (
+                  <>
+                    <button
+                      onClick={selectAllVisible}
+                      className="px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50"
+                    >
+                      Select All
+                    </button>
+                    <button
+                      onClick={clearSelection}
+                      className="px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50"
+                    >
+                      Done
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {actionMessage && (
+              <div className={`rounded-lg border px-3 py-2 text-sm ${
+                actionMessage.type === 'error'
+                  ? 'border-red-200 bg-red-50 text-red-700'
+                  : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+              }`}>
+                {actionMessage.text}
               </div>
             )}
           </div>
@@ -327,7 +734,7 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
 
           {/* Photo Grid */}
           {!photosLoading && filteredPhotos.length > 0 && viewMode === 'grid' && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+            <div className={`grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 ${selectionMode ? 'pb-28' : ''}`}>
               {filteredPhotos.map((photo, index) => (
                 <div
                   key={photo.id}
@@ -336,7 +743,10 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
                       ? 'border-panda-primary ring-2 ring-panda-primary/20'
                       : 'border-transparent hover:border-gray-300'
                   }`}
-                  onClick={() => openLightbox(photo, index)}
+                  onClick={() => handlePhotoActivate(photo, index)}
+                  onTouchStart={() => handlePhotoTouchStart(photo.id)}
+                  onTouchEnd={handlePhotoTouchEnd}
+                  onTouchCancel={handlePhotoTouchEnd}
                 >
                   {/* Photo Image */}
                   <img
@@ -394,14 +804,17 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
 
           {/* Photo List View */}
           {!photosLoading && filteredPhotos.length > 0 && viewMode === 'list' && (
-            <div className="divide-y divide-gray-100">
+            <div className={`divide-y divide-gray-100 ${selectionMode ? 'pb-28' : ''}`}>
               {filteredPhotos.map((photo, index) => (
                 <div
                   key={photo.id}
                   className={`flex items-center gap-4 p-3 hover:bg-gray-50 rounded-lg cursor-pointer ${
                     selectedPhotos.includes(photo.id) ? 'bg-panda-primary/5' : ''
                   }`}
-                  onClick={() => openLightbox(photo, index)}
+                  onClick={() => handlePhotoActivate(photo, index)}
+                  onTouchStart={() => handlePhotoTouchStart(photo.id)}
+                  onTouchEnd={handlePhotoTouchEnd}
+                  onTouchCancel={handlePhotoTouchEnd}
                 >
                   {/* Checkbox */}
                   <div onClick={(e) => { e.stopPropagation(); togglePhotoSelection(photo.id); }}>
@@ -581,6 +994,274 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Sticky bulk action bar (mobile/tablet-first) */}
+      {activeSubTab === 'photos' && selectionMode && selectedPhotos.length > 0 && (
+        <div className="fixed inset-x-0 bottom-0 z-40 border-t border-gray-200 bg-white/95 backdrop-blur md:inset-x-6 md:bottom-4 md:rounded-xl md:border md:shadow-xl">
+          <div className="mx-auto max-w-7xl px-3 py-3">
+            <div className="flex items-center justify-between gap-2 text-sm mb-2">
+              <span className="font-medium text-gray-900">{selectedPhotos.length} selected</span>
+              <button onClick={clearSelection} className="text-gray-500 hover:text-gray-700">Clear</button>
+            </div>
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              <button
+                onClick={() => setShowDownloadModal(true)}
+                className="inline-flex items-center whitespace-nowrap rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                <FileDown className="w-4 h-4 mr-1.5" />
+                Bulk Download
+              </button>
+              <button
+                onClick={() => setShowGalleryModal(true)}
+                className="inline-flex items-center whitespace-nowrap rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                <Link2 className="w-4 h-4 mr-1.5" />
+                Add To Gallery
+              </button>
+              <button
+                onClick={() => setShowAssignModal(true)}
+                className="inline-flex items-center whitespace-nowrap rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                <ClipboardList className="w-4 h-4 mr-1.5" />
+                Assign Checklist
+              </button>
+              <button
+                onClick={() => setShowReportModal(true)}
+                className="inline-flex items-center whitespace-nowrap rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                <FileCheck className="w-4 h-4 mr-1.5" />
+                Add To Report
+              </button>
+              <button
+                onClick={() => {
+                  if (window.confirm(`Delete ${selectedPhotos.length} selected photo(s)?`)) {
+                    selectedPhotos.forEach((id) => deleteMutation.mutate(id));
+                  }
+                }}
+                className="inline-flex items-center whitespace-nowrap rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50"
+              >
+                <X className="w-4 h-4 mr-1.5" />
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Download Modal */}
+      {showDownloadModal && (
+        <div className="fixed inset-0 z-50 flex items-end bg-black/50 p-0 sm:items-center sm:p-4">
+          <div className="w-full rounded-t-2xl bg-white p-5 sm:max-w-md sm:rounded-2xl sm:mx-auto">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Bulk Download</h3>
+              <button onClick={() => setShowDownloadModal(false)} className="p-1 text-gray-500 hover:text-gray-700">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Format</label>
+            <select
+              value={downloadFormat}
+              onChange={(e) => setDownloadFormat(e.target.value)}
+              className="w-full rounded-lg border border-gray-200 px-3 py-2"
+            >
+              <option value="zip">ZIP (all originals)</option>
+              <option value="pdf">PDF (photo report)</option>
+            </select>
+            <div className="mt-5 flex gap-2">
+              <button onClick={() => setShowDownloadModal(false)} className="flex-1 rounded-lg border border-gray-200 px-4 py-2">Cancel</button>
+              <button
+                onClick={submitBulkDownload}
+                disabled={bulkDownloadMutation.isLoading}
+                className="flex-1 rounded-lg bg-panda-primary px-4 py-2 text-white disabled:opacity-60"
+              >
+                {bulkDownloadMutation.isLoading ? 'Preparing...' : 'Download'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Gallery Modal */}
+      {showGalleryModal && (
+        <div className="fixed inset-0 z-50 flex items-end bg-black/50 p-0 sm:items-center sm:p-4">
+          <div className="w-full rounded-t-2xl bg-white p-5 sm:max-w-lg sm:rounded-2xl sm:mx-auto">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Add Selected Photos To Gallery</h3>
+              <button onClick={() => setShowGalleryModal(false)} className="p-1 text-gray-500 hover:text-gray-700">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="space-y-3">
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setGalleryMode('existing')}
+                  className={`flex-1 rounded-lg border px-3 py-2 ${galleryMode === 'existing' ? 'border-panda-primary bg-panda-primary/5 text-panda-primary' : 'border-gray-200'}`}
+                >
+                  Existing Gallery
+                </button>
+                <button
+                  onClick={() => setGalleryMode('new')}
+                  className={`flex-1 rounded-lg border px-3 py-2 ${galleryMode === 'new' ? 'border-panda-primary bg-panda-primary/5 text-panda-primary' : 'border-gray-200'}`}
+                >
+                  Create New
+                </button>
+              </div>
+
+              {galleryMode === 'existing' ? (
+                <select
+                  value={selectedGalleryId}
+                  onChange={(e) => setSelectedGalleryId(e.target.value)}
+                  className="w-full rounded-lg border border-gray-200 px-3 py-2"
+                >
+                  <option value="">Select gallery...</option>
+                  {galleryItems.map((gallery) => (
+                    <option key={gallery.id} value={gallery.id}>{gallery.name}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  value={newGalleryName}
+                  onChange={(e) => setNewGalleryName(e.target.value)}
+                  placeholder="New gallery name"
+                  className="w-full rounded-lg border border-gray-200 px-3 py-2"
+                />
+              )}
+            </div>
+            <div className="mt-5 flex gap-2">
+              <button onClick={() => setShowGalleryModal(false)} className="flex-1 rounded-lg border border-gray-200 px-4 py-2">Cancel</button>
+              <button
+                onClick={submitBulkGallery}
+                disabled={bulkAssignMutation.isLoading || createGalleryMutation.isLoading}
+                className="flex-1 rounded-lg bg-panda-primary px-4 py-2 text-white disabled:opacity-60"
+              >
+                {bulkAssignMutation.isLoading || createGalleryMutation.isLoading ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Checklist Assign Modal */}
+      {showAssignModal && (
+        <div className="fixed inset-0 z-50 flex items-end bg-black/50 p-0 sm:items-center sm:p-4">
+          <div className="w-full rounded-t-2xl bg-white p-5 sm:max-w-lg sm:rounded-2xl sm:mx-auto">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Assign To Checklist Item</h3>
+              <button onClick={() => setShowAssignModal(false)} className="p-1 text-gray-500 hover:text-gray-700">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="space-y-3">
+              <select
+                value={selectedChecklistId}
+                onChange={(e) => {
+                  setSelectedChecklistId(e.target.value);
+                  setSelectedChecklistItemId('');
+                }}
+                className="w-full rounded-lg border border-gray-200 px-3 py-2"
+              >
+                <option value="">Select checklist...</option>
+                {checklistOptions.map((checklist) => (
+                  <option key={checklist.id} value={checklist.id}>{checklist.name}</option>
+                ))}
+              </select>
+              <select
+                value={selectedChecklistItemId}
+                onChange={(e) => setSelectedChecklistItemId(e.target.value)}
+                className="w-full rounded-lg border border-gray-200 px-3 py-2"
+                disabled={!selectedChecklistId}
+              >
+                <option value="">Select checklist item...</option>
+                {checklistItemOptions.map((item) => (
+                  <option key={item.id} value={item.id}>{item.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="mt-5 flex gap-2">
+              <button onClick={() => setShowAssignModal(false)} className="flex-1 rounded-lg border border-gray-200 px-4 py-2">Cancel</button>
+              <button
+                onClick={submitBulkAssignChecklist}
+                disabled={bulkAssignMutation.isLoading}
+                className="flex-1 rounded-lg bg-panda-primary px-4 py-2 text-white disabled:opacity-60"
+              >
+                {bulkAssignMutation.isLoading ? 'Assigning...' : 'Assign'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Report Modal */}
+      {showReportModal && (
+        <div className="fixed inset-0 z-50 flex items-end bg-black/50 p-0 sm:items-center sm:p-4">
+          <div className="w-full rounded-t-2xl bg-white p-5 sm:max-w-lg sm:rounded-2xl sm:mx-auto">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold">Add Selected Photos To Report</h3>
+              <button onClick={() => setShowReportModal(false)} className="p-1 text-gray-500 hover:text-gray-700">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="space-y-3">
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setReportMode('existing')}
+                  className={`flex-1 rounded-lg border px-3 py-2 ${reportMode === 'existing' ? 'border-panda-primary bg-panda-primary/5 text-panda-primary' : 'border-gray-200'}`}
+                >
+                  Existing Report
+                </button>
+                <button
+                  onClick={() => setReportMode('new')}
+                  className={`flex-1 rounded-lg border px-3 py-2 ${reportMode === 'new' ? 'border-panda-primary bg-panda-primary/5 text-panda-primary' : 'border-gray-200'}`}
+                >
+                  Create New
+                </button>
+              </div>
+
+              {reportMode === 'existing' ? (
+                <select
+                  value={selectedReportId}
+                  onChange={(e) => setSelectedReportId(e.target.value)}
+                  className="w-full rounded-lg border border-gray-200 px-3 py-2"
+                >
+                  <option value="">Select report...</option>
+                  {reportItems.map((report) => (
+                    <option key={report.id} value={report.id}>
+                      {report.name} ({report.status || 'PENDING'})
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <>
+                  <input
+                    value={newReportName}
+                    onChange={(e) => setNewReportName(e.target.value)}
+                    placeholder="New report name"
+                    className="w-full rounded-lg border border-gray-200 px-3 py-2"
+                  />
+                  <label className="flex items-center gap-2 text-sm text-gray-700">
+                    <input
+                      type="checkbox"
+                      checked={generateOnCreate}
+                      onChange={(e) => setGenerateOnCreate(e.target.checked)}
+                    />
+                    Generate PDF immediately
+                  </label>
+                </>
+              )}
+            </div>
+            <div className="mt-5 flex gap-2">
+              <button onClick={() => setShowReportModal(false)} className="flex-1 rounded-lg border border-gray-200 px-4 py-2">Cancel</button>
+              <button
+                onClick={submitBulkReport}
+                disabled={createReportMutation.isLoading}
+                className="flex-1 rounded-lg bg-panda-primary px-4 py-2 text-white disabled:opacity-60"
+              >
+                {createReportMutation.isLoading ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

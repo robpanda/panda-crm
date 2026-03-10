@@ -1,6 +1,7 @@
 // Checklist Service for Photocam
 import prisma from '../prisma.js';
 import { logger } from '../middleware/logger.js';
+import { evaluateChecklistCompletionRequirements } from './validationService.js';
 
 /**
  * Create a new checklist for a project
@@ -367,6 +368,72 @@ export async function deleteChecklist(checklistId, userId) {
   return { deleted: true };
 }
 
+/**
+ * Validate checklist against PandaPhoto completion rules.
+ */
+export async function validateChecklistForCompletion(checklistId, options = {}) {
+  const checklist = await prisma.photoChecklist.findUnique({
+    where: { id: checklistId },
+    include: {
+      template: {
+        select: {
+          id: true,
+          pandaPhotoOnly: true,
+          templateType: true,
+        },
+      },
+      sections: {
+        include: {
+          items: {
+            include: {
+              photos: {
+                include: {
+                  photo: {
+                    select: {
+                      id: true,
+                      latitude: true,
+                      longitude: true,
+                      capturedAt: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
+
+  if (!checklist) {
+    const err = new Error('Checklist not found');
+    err.statusCode = 404;
+    err.code = 'NOT_FOUND';
+    throw err;
+  }
+
+  const evaluation = evaluateChecklistCompletionRequirements(checklist);
+
+  const pandaMode = Boolean(options.forcePandaMode) || Boolean(checklist.template?.pandaPhotoOnly);
+  const isValid = evaluation.missingRequirements.length === 0;
+
+  return {
+    checklistId: checklist.id,
+    templateId: checklist.templateId || null,
+    pandaMode,
+    isValid,
+    canComplete: pandaMode ? isValid : true,
+    summary: {
+      requiredItems: evaluation.requiredItems,
+      completedItems: evaluation.completedItems,
+      failedItems: evaluation.missingRequirements.length,
+    },
+    missingRequirements: evaluation.missingRequirements,
+  };
+}
+
+export { evaluateChecklistCompletionRequirements };
+
 export const checklistService = {
   createChecklist,
   createSection,
@@ -378,6 +445,8 @@ export const checklistService = {
   attachPhotoToItem,
   removePhotoFromItem,
   deleteChecklist,
+  validateChecklistForCompletion,
+  evaluateChecklistCompletionRequirements,
 };
 
 export default checklistService;

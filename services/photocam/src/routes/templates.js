@@ -31,11 +31,12 @@ router.post('/', requireRole(['admin', 'super_admin', 'manager']), async (req, r
  */
 router.get('/', async (req, res, next) => {
   try {
-    const { category, search, isActive } = req.query;
+    const { category, search, isActive, templateType } = req.query;
 
     const templates = await templateService.getTemplates({
       category,
       search,
+      templateType,
       isActive: isActive === 'true' ? true : isActive === 'false' ? false : undefined,
     });
 
@@ -43,6 +44,32 @@ router.get('/', async (req, res, next) => {
       success: true,
       data: templates,
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/photocam/templates/:id/publish
+ * Publish a template once it passes validation checks
+ */
+router.post('/:id/publish', requireRole(['admin', 'super_admin', 'manager']), async (req, res, next) => {
+  try {
+    const result = await templateService.publishTemplate(req.params.id, req.user?.id || null);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/photocam/templates/:id/archive
+ * Archive an existing template
+ */
+router.post('/:id/archive', requireRole(['admin', 'super_admin', 'manager']), async (req, res, next) => {
+  try {
+    const result = await templateService.archiveTemplate(req.params.id, req.user?.id || null);
+    res.json({ success: true, data: result });
   } catch (error) {
     next(error);
   }
@@ -60,6 +87,32 @@ router.get('/categories', async (req, res, next) => {
       success: true,
       data: categories,
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/photocam/templates/recommended-seeds
+ * Return recommended checklist/report template names for admin setup workflows
+ */
+router.get('/recommended-seeds', requireRole(['admin', 'super_admin', 'manager']), async (req, res, next) => {
+  try {
+    const seeds = templateService.listRecommendedTemplateSeeds();
+    res.json({ success: true, data: seeds });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/photocam/templates/seed-defaults
+ * Create missing recommended template records (idempotent)
+ */
+router.post('/seed-defaults', requireRole(['admin', 'super_admin']), async (req, res, next) => {
+  try {
+    const result = await templateService.seedRecommendedTemplates(req.user?.id || null, req.body || {});
+    res.status(201).json({ success: true, data: result });
   } catch (error) {
     next(error);
   }
