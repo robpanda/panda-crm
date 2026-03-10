@@ -148,7 +148,7 @@ router.get('/pdf-url/:id', authMiddleware, async (req, res, next) => {
     }
 
     // Check if we have an S3 key stored
-    const s3Key = report.rawData?.pdfS3Key;
+    const s3Key = report.rawData?.pdfS3Key || report.rawData?.normalizedWebhook?.pdfS3Key;
     if (!s3Key) {
       return res.status(404).json({
         success: false,

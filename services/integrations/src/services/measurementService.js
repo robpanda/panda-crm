@@ -1638,6 +1638,9 @@ class MeasurementService {
         logger.warn(`GAF fallback PDF download warning for report ${reportId}: ${error.message}`);
       }
     }
+    if (!reportPdfUrl && pdfAsset) {
+      reportPdfUrl = `${GAF_API_BASE}/download/${encodeURIComponent(pdfAsset)}`;
+    }
     if (!reportXmlUrl && xmlAsset) {
       try {
         xmlStorage = await this.downloadAndStoreGAFAsset(xmlAsset, reportId, accessToken, 'application/xml');
@@ -1681,6 +1684,9 @@ class MeasurementService {
         ...measurements,
         rawData: {
           ...gafData,
+          pdfS3Key: pdfStorage?.s3Key || null,
+          xmlS3Key: xmlStorage?.s3Key || null,
+          pdfDocumentId: pdfDocumentId || null,
           normalizedWebhook: {
             orderId: normalized.orderId,
             subscriberOrderNumber: normalized.subscriberOrderNumber,

@@ -60,6 +60,7 @@ function hasOwnField(obj, key) {
 }
 
 const OPTIONAL_OPPORTUNITY_CLAIM_FIELDS = new Set([
+  'stageName',
   'claimNumber',
   'claimFiledDate',
   'insuranceCarrier',
@@ -84,6 +85,7 @@ function parseUnknownPrismaFieldName(error) {
 
   const normalized = String(missingColumn).trim().toLowerCase();
   const byColumnName = {
+    stage_name: 'stageName',
     claim_number: 'claimNumber',
     claim_filed_date: 'claimFiledDate',
     insurance_carrier: 'insuranceCarrier',
@@ -888,7 +890,13 @@ class OpportunityService {
     // portal-link endpoint available for invoice/send flows.
     const portalToken = (opportunity.jobId || opportunity.id || '').trim();
     const encodedToken = encodeURIComponent(portalToken);
-    const portalUrl = `${CRM_BASE_URL}/portal/${encodedToken}`;
+    const baseUrl = (
+      process.env.CRM_BASE_URL
+      || process.env.FRONTEND_URL
+      || CRM_BASE_URL
+      || 'https://crm.pandaadmin.com'
+    ).replace(/\/+$/, '');
+    const portalUrl = `${baseUrl}/portal/${encodedToken}`;
 
     return {
       opportunityId: opportunity.id,
@@ -2764,40 +2772,25 @@ Be factual and professional. Highlight anything that needs attention.`;
       supplementHoldsJob: true,
     };
 
-    let previousState;
-    try {
-      previousState = await prisma.opportunity.findUnique({
-        where: { id },
-        select: previousStateSelect,
-      });
-    } catch (error) {
-      const unknownField = parseUnknownPrismaFieldName(error);
-      if (!unknownField || !OPTIONAL_OPPORTUNITY_CLAIM_FIELDS.has(unknownField)) {
-        throw error;
+    let previousState = null;
+    const previousStateSelectMutable = { ...previousStateSelect };
+    for (let attempt = 0; attempt <= OPTIONAL_OPPORTUNITY_CLAIM_FIELDS.size; attempt += 1) {
+      try {
+        previousState = await prisma.opportunity.findUnique({
+          where: { id },
+          select: previousStateSelectMutable,
+        });
+        break;
+      } catch (error) {
+        const unknownField = parseUnknownPrismaFieldName(error);
+        if (!unknownField || !OPTIONAL_OPPORTUNITY_CLAIM_FIELDS.has(unknownField) || !hasOwnField(previousStateSelectMutable, unknownField)) {
+          throw error;
+        }
+        logger.warn(
+          `Opportunity update: runtime schema missing optional field "${unknownField}", retrying previous-state select without it`
+        );
+        delete previousStateSelectMutable[unknownField];
       }
-
-      logger.warn(
-        `Opportunity update: runtime schema missing optional field "${unknownField}", retrying previous-state select without optional claim fields`
-      );
-
-      previousState = await prisma.opportunity.findUnique({
-        where: { id },
-        select: {
-          stage: true,
-          status: true,
-          stageName: true,
-          isApproved: true,
-          isPandaClaims: true,
-          type: true,
-          rcvAmount: true,
-          acvAmount: true,
-          deductible: true,
-          flatRoof: true,
-          lineDrop: true,
-          supplementRequired: true,
-          supplementHoldsJob: true,
-        },
-      });
     }
 
     const updateData = {

@@ -75,8 +75,19 @@ const extractProvidedSecret = (req) => {
     req.headers['x-salesrabbit-signature'],
     req.headers['x-webhook-signature'],
     req.headers['x-auth-token'],
+    req.headers['x-api-token'],
+    req.headers['x-internal-api-key'],
+    req.headers['x-webhook-key'],
+    req.headers['x-salesrabbit-key'],
+    req.headers['x-forwarded-api-key'],
+    req.headers['x-forwarded-token'],
+    req.headers['x-forwarded-webhook-secret'],
+    req.headers['x-original-api-key'],
+    req.headers['x-original-webhook-secret'],
     req.headers['authorization-token'],
     req.query?.secret,
+    req.query?.webhookSecret,
+    req.query?.webhookToken,
     req.query?.apiKey,
     req.query?.apikey,
     req.query?.token,
@@ -86,10 +97,15 @@ const extractProvidedSecret = (req) => {
     body?.api_key,
     body?.webhookSecret,
     body?.webhookToken,
+    body?.authorization,
+    body?.authToken,
+    body?.auth_token,
+    body?.accessToken,
     nestedAuth?.secret,
     nestedAuth?.token,
     nestedAuth?.apiKey,
     nestedAuth?.api_key,
+    nestedAuth?.authorization,
     authType === 'ApiKey' ? authToken : null,
     forwardedAuthType === 'ApiKey' ? forwardedAuthToken : null,
     authType === 'Bearer' ? authToken : null,
@@ -274,6 +290,7 @@ router.post('/webhook', validateWebhookSecret, async (req, res) => {
       });
     }
 
+    let potentialDuplicateLeadId = null;
     if (email || (firstName && lastName)) {
       const andWhere = [];
       if (email) andWhere.push({ email });
@@ -292,13 +309,8 @@ router.post('/webhook', validateWebhookSecret, async (req, res) => {
         });
 
         if (recentDuplicate) {
-          logger.info(`SalesRabbit webhook: Potential duplicate found (${recentDuplicate.id})`);
-          return res.status(200).json({
-            success: true,
-            message: 'Potential duplicate lead found',
-            leadId: recentDuplicate.id,
-            duplicate: true,
-          });
+          logger.info(`SalesRabbit webhook: Potential duplicate found (${recentDuplicate.id}), continuing to ingest as requested`);
+          potentialDuplicateLeadId = recentDuplicate.id;
         }
       }
     }
@@ -346,6 +358,7 @@ router.post('/webhook', validateWebhookSecret, async (req, res) => {
     }
     if (sfLeadId) notes.push(`SF Lead ID: ${sfLeadId}`);
     if (sfOppId) notes.push(`SF Opportunity ID: ${sfOppId}`);
+    if (potentialDuplicateLeadId) notes.push(`Potential duplicate lead: ${potentialDuplicateLeadId}`);
 
     for (const noteValue of [data.note, data.notes, data.leadNotes, data.description]) {
       const normalized = normalizeOptionalValue(noteValue);

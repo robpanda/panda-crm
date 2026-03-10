@@ -49,6 +49,10 @@ function resolvePandaPhotoConfig(reportConfig = {}) {
   };
 }
 
+function isPrismaMissingColumnError(error) {
+  return error?.code === 'P2022' || /P2022/.test(String(error?.message || ''));
+}
+
 async function validatePandaPhotoForReport(report) {
   const cfg = resolvePandaPhotoConfig(report?.reportConfig || {});
 
@@ -241,15 +245,24 @@ export async function listReports(params = {}) {
   if (params.opportunityId) where.opportunityId = params.opportunityId;
   if (params.status) where.status = params.status;
 
-  const [data, total] = await Promise.all([
-    prisma.photoReport.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-      skip,
-      take: limit,
-    }),
-    prisma.photoReport.count({ where }),
-  ]);
+  let data = [];
+  let total = 0;
+  try {
+    [data, total] = await Promise.all([
+      prisma.photoReport.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      prisma.photoReport.count({ where }),
+    ]);
+  } catch (error) {
+    if (!isPrismaMissingColumnError(error)) throw error;
+    logger.warn(`Photo reports list fallback due to schema mismatch: ${error.message}`);
+    data = [];
+    total = 0;
+  }
 
   return {
     data,
@@ -263,28 +276,34 @@ export async function listReports(params = {}) {
 }
 
 export async function getReportById(id) {
-  return prisma.photoReport.findUnique({
-    where: { id },
-    include: {
-      items: {
-        orderBy: { sortOrder: 'asc' },
-        include: {
-          photo: {
-            select: {
-              id: true,
-              fileName: true,
-              fileKey: true,
-              originalUrl: true,
-              displayUrl: true,
-              thumbnailUrl: true,
-              photoType: true,
-              caption: true,
+  try {
+    return await prisma.photoReport.findUnique({
+      where: { id },
+      include: {
+        items: {
+          orderBy: { sortOrder: 'asc' },
+          include: {
+            photo: {
+              select: {
+                id: true,
+                fileName: true,
+                fileKey: true,
+                originalUrl: true,
+                displayUrl: true,
+                thumbnailUrl: true,
+                photoType: true,
+                caption: true,
+              },
             },
           },
         },
       },
-    },
-  });
+    });
+  } catch (error) {
+    if (!isPrismaMissingColumnError(error)) throw error;
+    logger.warn(`Photo report read fallback due to schema mismatch: ${error.message}`);
+    return null;
+  }
 }
 
 export async function generateReport(reportId, userId) {
@@ -410,7 +429,20 @@ export async function generateReport(reportId, userId) {
 }
 
 export async function getReportDownload(reportId) {
-  const report = await prisma.photoReport.findUnique({ where: { id: reportId } });
+  let report;
+  try {
+    report = await prisma.photoReport.findUnique({
+      where: { id: reportId },
+      select: { id: true, fileKey: true, status: true, generatedAt: true },
+    });
+  } catch (error) {
+    if (!isPrismaMissingColumnError(error)) throw error;
+    logger.warn(`Photo report download fallback due to schema mismatch: ${error.message}`);
+    const err = new Error('Report download is unavailable until report schema is synced');
+    err.statusCode = 409;
+    err.code = 'REPORT_NOT_READY';
+    throw err;
+  }
   if (!report) {
     const err = new Error('Report not found');
     err.statusCode = 404;

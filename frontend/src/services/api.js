@@ -446,8 +446,16 @@ export const leadsApi = {
 
   // Auto-assign a lead
   async autoAssignLead(leadId) {
-    const response = await api.post(`/api/leads/assignment/assign/${leadId}`);
-    return response.data.data;
+    try {
+      const response = await api.post(`/api/leads/assignment/assign/${leadId}`);
+      return response.data.data;
+    } catch (error) {
+      // Keep wizard flows resilient when assignment backend is temporarily unavailable.
+      if (error?.response?.status >= 500) {
+        return { assigned: false, lead: null, assignee: null };
+      }
+      throw error;
+    }
   },
 
   // Manual assign a lead
@@ -625,6 +633,72 @@ export const leadsApi = {
   async restoreLead(id) {
     const response = await api.post(`/api/leads/${id}/restore`);
     return response.data;
+  },
+
+  // Legacy conversion-gating compatibility shims.
+  async getGatingState(leadId) {
+    try {
+      const response = await api.get(`/api/leads/${leadId}/gating-state`);
+      return response.data?.data || response.data;
+    } catch (error) {
+      if (error?.response?.status !== 404) throw error;
+      const leadResponse = await api.get(`/api/leads/${leadId}`);
+      const lead = leadResponse?.data?.data || leadResponse?.data || {};
+      const workType = String(lead?.workType || '').toUpperCase();
+      const salesPath = workType.includes('RETAIL')
+        ? 'RETAIL'
+        : workType.includes('INSURANCE')
+          ? 'INSURANCE'
+          : null;
+      return {
+        leadId,
+        salesPath,
+        funnelStatus: lead?.disposition || lead?.status || null,
+        allowedStatuses: [],
+      };
+    }
+  },
+
+  async selectSalesPath(leadId, salesPath) {
+    try {
+      const response = await api.post(`/api/leads/${leadId}/gating/select-sales-path`, { salesPath });
+      return response.data?.data || response.data;
+    } catch (error) {
+      if (error?.response?.status !== 404) throw error;
+      const normalizedPath = String(salesPath || '').toUpperCase();
+      const workType = normalizedPath === 'RETAIL' ? 'Retail' : normalizedPath === 'INSURANCE' ? 'Insurance' : null;
+      if (workType) {
+        await api.put(`/api/leads/${leadId}`, { workType });
+      }
+      return { success: true, salesPath: normalizedPath };
+    }
+  },
+
+  async validatePreConversion(leadId) {
+    try {
+      const response = await api.post(`/api/leads/${leadId}/gating/validate-pre-conversion`);
+      return response.data?.data || response.data;
+    } catch (error) {
+      if (error?.response?.status !== 404) throw error;
+      return {
+        success: true,
+        allowed: true,
+        blockers: [],
+      };
+    }
+  },
+
+  async applyGatingTransition(leadId, transition) {
+    try {
+      const response = await api.post(`/api/leads/${leadId}/gating/transition`, { transition });
+      return response.data?.data || response.data;
+    } catch (error) {
+      if (error?.response?.status !== 404) throw error;
+      if (String(transition || '').toUpperCase() === 'NO_INSPECTION') {
+        await api.put(`/api/leads/${leadId}`, { disposition: 'NO_INSPECTION' });
+      }
+      return { success: true };
+    }
   },
 };
 
