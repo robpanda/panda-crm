@@ -4627,6 +4627,12 @@ export const documentsApi = {
     return response.data;
   },
 
+  // Archive a repository document (soft delete)
+  async deleteRepositoryDocument(id) {
+    const response = await api.delete(`/api/documents/repository/${id}`);
+    return response.data;
+  },
+
   // Get all documents for a specific job/opportunity
   async getDocumentsByJob(opportunityId, options = {}) {
     const params = {};

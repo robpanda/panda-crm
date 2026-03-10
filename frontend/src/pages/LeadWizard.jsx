@@ -262,8 +262,8 @@ export default function LeadWizard() {
 
   // Call center users only see Inspection, others see all work types
   const WORK_TYPES = isCallCenter ? CALL_CENTER_WORK_TYPES : ALL_WORK_TYPES;
-  const totalSteps = isCallCenter ? 3 : steps.length;
-  const visibleSteps = isCallCenter ? steps.slice(0, 3) : steps;
+  const totalSteps = 3;
+  const visibleSteps = steps.slice(0, 3);
   const useLeadPromptFlow = true;
   const isSelfGenLeadSource = (value) => {
     if (!value) return false;
@@ -1310,15 +1310,22 @@ export default function LeadWizard() {
     };
 
     const result = await leadsApi.convertLead(targetLeadId, conversionData);
+    const opportunityId = result?.opportunity?.id;
 
     setConversionResult({
       accountId: result.account?.id,
       accountName: result.account?.name,
       contactId: result.contact?.id,
       contactName: result.contact ? `${result.contact.firstName} ${result.contact.lastName}` : '',
-      opportunityId: result.opportunity?.id,
+      opportunityId,
       opportunityName: result.opportunity?.name,
     });
+
+    if (opportunityId) {
+      navigate(`/jobs/${opportunityId}?openResultAppointment=1`);
+    }
+
+    return result;
   };
 
   const openGuidedFlowModal = (leadIdOverride, options = {}) => {
@@ -1695,21 +1702,11 @@ export default function LeadWizard() {
       const currentGatingState = gatingStateResponse?.data || gatingStateResponse;
       setGatingState(currentGatingState);
 
-      // Decision gate is only required for INSPECTED leads that do not yet have a sales path.
-      if (currentGatingState?.funnelStatus === 'INSPECTED' && !currentGatingState?.salesPath) {
-        setWasInspected(null);
-        setSelectedOpportunityType(null);
-        setShowInspectionModal(true);
-        return;
-      }
-
-      // When sales path is already set (or lead is not at decision gate), convert directly.
+      // Convert directly; job type/workflow routing is handled in Result Appointment wizard.
       const resolvedOpportunityType = currentGatingState?.salesPath === 'RETAIL'
         ? 'RETAIL'
         : currentGatingState?.salesPath === 'INSURANCE'
           ? 'INSURANCE'
-        : formData.workType === 'Retail'
-          ? 'RETAIL'
           : 'INSURANCE';
       await convertLeadWithOpportunityType(resolvedOpportunityType, {
         leadId,
@@ -1777,7 +1774,7 @@ export default function LeadWizard() {
         console.error('[LeadWizard] Gating check failed:', err);
         alert('Unable to validate lead gating rules. Please try again.');
       }
-    } else if (currentStep < 4) {
+    } else if (currentStep < totalSteps) {
       setCurrentStep(currentStep + 1);
     }
   };
@@ -2804,7 +2801,7 @@ export default function LeadWizard() {
                 </div>
 
                 <button
-                  onClick={() => navigate(`/jobs/${conversionResult.opportunityId}`)}
+                  onClick={() => navigate(`/jobs/${conversionResult.opportunityId}?openResultAppointment=1`)}
                   className="mt-6 px-6 py-3 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg font-medium hover:opacity-90 inline-flex items-center"
                 >
                   Go to Job
@@ -3158,7 +3155,29 @@ export default function LeadWizard() {
                       </>
                     )}
                   </button>
-                ) : null}
+                ) : (
+                  <button
+                    onClick={handleConvert}
+                    disabled={!canConvert || isConverting}
+                    className={`inline-flex items-center rounded-lg px-4 py-1.5 text-sm transition-colors ${
+                      !canConvert || isConverting
+                        ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                        : 'bg-panda-primary text-white hover:bg-panda-primary/90'
+                    }`}
+                  >
+                    {isConverting ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Converting...
+                      </>
+                    ) : (
+                      <>
+                        Convert to Job
+                        <ArrowRight className="ml-1 h-4 w-4" />
+                      </>
+                    )}
+                  </button>
+                )}
               </div>
             </div>
           </div>

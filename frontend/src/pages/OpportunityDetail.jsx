@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { opportunitiesApi, companyCamApi, scheduleApi, casesApi, emailsApi, notificationsApi, bamboogliApi, approvalsApi, measurementsApi, contactsApi, ringCentralApi, usersApi, quotesApi, invoicesApi, tasksApi, documentsApi } from '../services/api';
 import { useRingCentral } from '../context/RingCentralContext';
@@ -1924,6 +1924,7 @@ export default function OpportunityDetail() {
 
   const { id } = useParams();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const { loadWidget, initiateCall, rcLoggedIn } = useRingCentral();
   const { user: currentUser } = useAuth();
@@ -1994,6 +1995,7 @@ export default function OpportunityDetail() {
   const [showRepositoryFileGallery, setShowRepositoryFileGallery] = useState(false);
   const [selectedRepositoryFileIndex, setSelectedRepositoryFileIndex] = useState(0);
   const [documentUploadCategory, setDocumentUploadCategory] = useState('');
+  const [showDocumentUploadTypeModal, setShowDocumentUploadTypeModal] = useState(false);
   const [isUploadingRepositoryFile, setIsUploadingRepositoryFile] = useState(false);
   const repositoryUploadInputRef = useRef(null);
 
@@ -2013,6 +2015,15 @@ export default function OpportunityDetail() {
 
   // Result appointment wizard state
   const [showResultAppointmentWizard, setShowResultAppointmentWizard] = useState(false);
+
+  useEffect(() => {
+    if (!resultAppointmentWizardEnabled) return;
+    if (searchParams.get('openResultAppointment') !== '1') return;
+    setShowResultAppointmentWizard(true);
+    const next = new URLSearchParams(searchParams);
+    next.delete('openResultAppointment');
+    setSearchParams(next, { replace: true });
+  }, [resultAppointmentWizardEnabled, searchParams, setSearchParams]);
 
   // Create insurance invoice modal state
   const [showCreateInsuranceInvoiceModal, setShowCreateInsuranceInvoiceModal] = useState(false);
@@ -2282,6 +2293,27 @@ export default function OpportunityDetail() {
     }
   }, [downloadRemoteFile, getRepositoryFileUrl]);
 
+  const handleDeleteRepositoryFile = useCallback(async (file) => {
+    if (!file?.id) {
+      setActionError('Unable to delete this file.');
+      return;
+    }
+
+    const confirmed = window.confirm(`Delete "${file.title || file.fileName || 'this file'}"?`);
+    if (!confirmed) return;
+
+    try {
+      await documentsApi.deleteRepositoryDocument(file.id);
+      await queryClient.invalidateQueries({ queryKey: ['opportunityRepositoryFiles', id] });
+      setShowRepositoryFileGallery(false);
+      setSelectedRepositoryFileIndex(0);
+      setActionSuccess('File deleted successfully');
+      setTimeout(() => setActionSuccess(null), 1500);
+    } catch (error) {
+      setActionError(error.message || 'Failed to delete file');
+    }
+  }, [id, queryClient]);
+
   const handleDownloadCurrentAgreement = useCallback(async () => {
     const currentDocument = documents?.documents?.[selectedDocumentIndex];
     const downloadUrl = currentDocument?.downloadUrl || currentDocument?.signedDocumentUrl || currentDocument?.documentUrl;
@@ -2301,9 +2333,19 @@ export default function OpportunityDetail() {
 
   const openRepositoryUploadPicker = useCallback(() => {
     if (!documentUploadCategory) {
+      setShowDocumentUploadTypeModal(true);
+      setActionError(null);
+      return;
+    }
+    repositoryUploadInputRef.current?.click();
+  }, [documentUploadCategory]);
+
+  const handleConfirmRepositoryUploadCategory = useCallback(() => {
+    if (!documentUploadCategory) {
       setActionError('Select a document type before uploading.');
       return;
     }
+    setShowDocumentUploadTypeModal(false);
     repositoryUploadInputRef.current?.click();
   }, [documentUploadCategory]);
 
@@ -7791,6 +7833,14 @@ export default function OpportunityDetail() {
                                                 <Download className="w-3 h-3 mr-1" />
                                                 Download
                                               </button>
+                                              <button
+                                                type="button"
+                                                className="inline-flex items-center justify-center px-2.5 py-1.5 bg-red-50 text-red-600 text-xs font-medium rounded-md hover:bg-red-100 transition-colors"
+                                                onClick={() => handleDeleteRepositoryFile(file)}
+                                                title="Delete file"
+                                              >
+                                                <Trash2 className="w-3 h-3" />
+                                              </button>
                                             </>
                                           ) : (
                                             <span className="flex-1 inline-flex items-center justify-center px-3 py-1.5 bg-gray-100 text-gray-400 text-xs font-medium rounded-md">
@@ -7841,6 +7891,14 @@ export default function OpportunityDetail() {
                           >
                             <Download className="w-4 h-4" />
                             <span>Download</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteRepositoryFile(selectedRepositoryFile)}
+                            className="flex items-center space-x-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                            <span>Delete</span>
                           </button>
                         </div>
 
@@ -7904,6 +7962,51 @@ export default function OpportunityDetail() {
                             </button>
                           </>
                         )}
+                      </div>
+                    )}
+
+                    {showDocumentUploadTypeModal && (
+                      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+                        <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+                          <h3 className="text-lg font-semibold text-gray-900">Select File Type</h3>
+                          <p className="mt-1 text-sm text-gray-600">
+                            Choose how this file should be tagged before uploading.
+                          </p>
+                          <div className="mt-4">
+                            <label className="mb-1 block text-sm font-medium text-gray-700">File Type</label>
+                            <select
+                              value={documentUploadCategory}
+                              onChange={(event) => {
+                                setDocumentUploadCategory(event.target.value);
+                                setActionError(null);
+                              }}
+                              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-panda-primary focus:outline-none focus:ring-2 focus:ring-panda-primary/20"
+                            >
+                              <option value="">Select type...</option>
+                              {DOCUMENT_UPLOAD_CATEGORY_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="mt-6 flex items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setShowDocumentUploadTypeModal(false)}
+                              className="rounded-lg px-4 py-2 text-sm text-gray-600 hover:text-gray-900"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleConfirmRepositoryUploadCategory}
+                              className="rounded-lg bg-panda-primary px-4 py-2 text-sm font-medium text-white hover:bg-panda-primary/90"
+                            >
+                              Continue
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     )}
                   </div>

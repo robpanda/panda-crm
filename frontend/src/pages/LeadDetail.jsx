@@ -729,7 +729,7 @@ export default function LeadDetail() {
         result?.job?.id ||
         result?.jobId;
       if (opportunityId) {
-        navigate(`/jobs/${opportunityId}`);
+        navigate(`/jobs/${opportunityId}?openResultAppointment=1`);
       }
     },
     onError: (error) => {
@@ -1510,6 +1510,18 @@ export default function LeadDetail() {
                 <span className="text-gray-500">Lead Source</span>
                 <span className="text-gray-900">{lead.source || lead.leadSource || '-'}</span>
               </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Lead Set By</span>
+                <span className="text-gray-900">
+                  {lead.leadSetBy
+                    ? `${lead.leadSetBy.firstName} ${lead.leadSetBy.lastName}`
+                    : lead.leadSetByName || '-'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Manager</span>
+                <span className="text-gray-900">{leadSetByManagerName || '-'}</span>
+              </div>
               {lead.isChampionReferral && (
                 <div className="mt-3 p-3 bg-amber-50 rounded-lg border border-amber-200">
                   <div className="flex items-center gap-2 text-amber-800 font-medium mb-2">
@@ -1617,18 +1629,6 @@ export default function LeadDetail() {
                     ? `${lead.owner.firstName} ${lead.owner.lastName}`
                     : lead.ownerName || 'Unassigned'}
                 </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Lead Set By</span>
-                <span className="text-gray-900">
-                  {lead.leadSetBy
-                    ? `${lead.leadSetBy.firstName} ${lead.leadSetBy.lastName}`
-                    : lead.leadSetByName || '-'}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Manager</span>
-                <span className="text-gray-900">{leadSetByManagerName || '-'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">Tentative Date</span>

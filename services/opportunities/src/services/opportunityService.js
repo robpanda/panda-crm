@@ -63,8 +63,29 @@ const OPTIONAL_OPPORTUNITY_CLAIM_FIELDS = new Set([
 
 function parseUnknownPrismaFieldName(error) {
   const message = error?.message || '';
-  const match = message.match(/Unknown (?:field|argument) `([^`]+)`/);
-  return match?.[1] || null;
+  const unknownFieldMatch = message.match(/Unknown (?:field|argument) `([^`]+)`/);
+  if (unknownFieldMatch?.[1]) {
+    return unknownFieldMatch[1];
+  }
+
+  const missingColumnMatch = message.match(/column [^\"]*\"([^\"]+)\" does not exist/i);
+  const missingColumn = missingColumnMatch?.[1];
+  if (!missingColumn) return null;
+
+  const normalized = String(missingColumn).trim().toLowerCase();
+  const byColumnName = {
+    claim_number: 'claimNumber',
+    claim_filed_date: 'claimFiledDate',
+    insurance_carrier: 'insuranceCarrier',
+    adjuster_name: 'adjusterName',
+    adjuster_email: 'adjusterEmail',
+    adjuster_office_phone: 'adjusterOfficePhone',
+    field_adjuster_mobile: 'fieldAdjusterMobile',
+    damage_location: 'damageLocation',
+    date_of_loss: 'dateOfLoss',
+  };
+
+  return byColumnName[normalized] || null;
 }
 
 function parseBooleanFlag(value) {

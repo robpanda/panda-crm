@@ -157,7 +157,7 @@ router.get('/', async (req, res, next) => {
     const skip = (parseInt(page) - 1) * take;
 
     // Build where clause
-    const where = {};
+    const where = { isArchived: false };
 
     if (search) {
       where.title = { contains: search, mode: 'insensitive' };
@@ -293,9 +293,10 @@ router.get('/stats', async (req, res, next) => {
       fileTypeStats,
       linkTypeStats,
     ] = await Promise.all([
-      prisma.document.count(),
+      prisma.document.count({ where: { isArchived: false } }),
       prisma.documentLink.count(),  // documentLink is the table name, keep as is
       prisma.document.groupBy({
+        where: { isArchived: false },
         by: ['fileType'],
         _count: { id: true },
         orderBy: { _count: { id: 'desc' } },
@@ -309,6 +310,7 @@ router.get('/stats', async (req, res, next) => {
 
     // Calculate storage used (approximate)
     const storageResult = await prisma.document.aggregate({
+      where: { isArchived: false },
       _sum: { contentSize: true },
     });
 
@@ -362,6 +364,7 @@ router.get('/by-job/:opportunityId', async (req, res, next) => {
     // For the main query, we need documents linked to this opportunity OR its account
     const whereCondition = includeAccountDocs === 'true' && opportunity.accountId
       ? {
+          isArchived: false,
           links: {
             some: {
               OR: [
@@ -372,6 +375,7 @@ router.get('/by-job/:opportunityId', async (req, res, next) => {
           },
         }
       : {
+          isArchived: false,
           links: {
             some: {
               opportunityId: opportunityId,
@@ -446,6 +450,58 @@ router.get('/by-job/:opportunityId', async (req, res, next) => {
     });
   } catch (error) {
     logger.error('Error fetching documents for job:', error);
+    next(error);
+  }
+});
+
+/**
+ * DELETE /api/documents/repository/:id
+ * Archive a repository document (soft delete)
+ */
+router.delete('/:id', async (req, res, next) => {
+  try {
+    const existing = await prisma.document.findUnique({
+      where: { id: req.params.id },
+      select: { id: true, isArchived: true },
+    });
+
+    if (!existing) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Document not found' },
+      });
+    }
+
+    if (existing.isArchived) {
+      return res.json({ success: true, data: { id: existing.id, archived: true } });
+    }
+
+    const archivedById =
+      req.headers['x-user-id']
+      || req.headers['x-userid']
+      || req.headers['x-user']
+      || null;
+
+    const archived = await prisma.document.update({
+      where: { id: req.params.id },
+      data: {
+        isArchived: true,
+        archivedDate: new Date(),
+        archivedById: archivedById ? String(archivedById) : null,
+      },
+      select: { id: true, isArchived: true, archivedDate: true },
+    });
+
+    res.json({
+      success: true,
+      data: {
+        id: archived.id,
+        archived: archived.isArchived,
+        archivedDate: archived.archivedDate,
+      },
+    });
+  } catch (error) {
+    logger.error('Error archiving repository document:', error);
     next(error);
   }
 });
