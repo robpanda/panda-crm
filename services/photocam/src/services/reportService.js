@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import prisma from '../prisma.js';
 import { s3Service } from './s3Service.js';
 import { logger } from '../middleware/logger.js';
@@ -10,6 +11,100 @@ function toInt(value, fallback) {
 
 function buildKeyScope(report) {
   return report.opportunityId || report.projectId || 'unscoped';
+}
+
+function detectImageFormat(buffer) {
+  if (!buffer || buffer.length < 4) return 'unknown';
+  const sig = buffer.subarray(0, 8);
+  if (sig[0] === 0x89 && sig[1] === 0x50 && sig[2] === 0x4e && sig[3] === 0x47) return 'png';
+  if (sig[0] === 0xff && sig[1] === 0xd8 && sig[2] === 0xff) return 'jpg';
+  return 'unknown';
+}
+
+async function buildReportPdfBuffer(report, items) {
+  const pdfDoc = await PDFDocument.create();
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+  const cover = pdfDoc.addPage([612, 792]);
+  cover.drawText(report.name, { x: 42, y: 740, size: 20, font: fontBold, color: rgb(0.11, 0.11, 0.11) });
+  cover.drawText(`Generated ${new Date().toLocaleString()}`, {
+    x: 42,
+    y: 712,
+    size: 11,
+    font,
+    color: rgb(0.35, 0.35, 0.35),
+  });
+  cover.drawText(`Photos included: ${items.length}`, {
+    x: 42,
+    y: 695,
+    size: 11,
+    font,
+    color: rgb(0.35, 0.35, 0.35),
+  });
+
+  if (!items.length) {
+    cover.drawText('No photos selected for this report.', { x: 42, y: 660, size: 12, font });
+    return Buffer.from(await pdfDoc.save());
+  }
+
+  for (const [index, item] of items.entries()) {
+    const page = pdfDoc.addPage([612, 792]);
+    page.drawText(`${report.name} — Photo ${index + 1}`, {
+      x: 40,
+      y: 760,
+      size: 14,
+      font: fontBold,
+      color: rgb(0.12, 0.12, 0.12),
+    });
+    page.drawText(item.photo?.fileName || item.photo?.caption || item.photo?.id || 'Photo', {
+      x: 40,
+      y: 740,
+      size: 10,
+      font,
+      color: rgb(0.32, 0.32, 0.32),
+    });
+
+    if (!item.photo?.fileKey) {
+      page.drawText('Image not available for embedding.', { x: 40, y: 700, size: 11, font });
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const bytes = await s3Service.getObjectBuffer(item.photo.fileKey);
+      const format = detectImageFormat(bytes);
+      let embeddedImage = null;
+      if (format === 'png') {
+        // eslint-disable-next-line no-await-in-loop
+        embeddedImage = await pdfDoc.embedPng(bytes);
+      } else if (format === 'jpg') {
+        // eslint-disable-next-line no-await-in-loop
+        embeddedImage = await pdfDoc.embedJpg(bytes);
+      }
+
+      if (!embeddedImage) {
+        page.drawText('Image format unsupported for PDF embedding.', { x: 40, y: 700, size: 11, font });
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+
+      const maxWidth = 532;
+      const maxHeight = 620;
+      const scale = Math.min(maxWidth / embeddedImage.width, maxHeight / embeddedImage.height, 1);
+      const width = embeddedImage.width * scale;
+      const height = embeddedImage.height * scale;
+      const x = 40 + (maxWidth - width) / 2;
+      const y = 80 + (maxHeight - height) / 2;
+
+      page.drawImage(embeddedImage, { x, y, width, height });
+    } catch (error) {
+      page.drawText(`Unable to load image: ${error.message}`, { x: 40, y: 700, size: 11, font });
+    }
+  }
+
+  return Buffer.from(await pdfDoc.save());
 }
 
 export async function createReport(payload, userId) {
@@ -83,6 +178,7 @@ export async function getReportById(id) {
             select: {
               id: true,
               fileName: true,
+              fileKey: true,
               originalUrl: true,
               displayUrl: true,
               thumbnailUrl: true,
@@ -97,7 +193,24 @@ export async function getReportById(id) {
 }
 
 export async function generateReport(reportId, userId) {
-  const report = await prisma.photoReport.findUnique({ where: { id: reportId } });
+  const report = await prisma.photoReport.findUnique({
+    where: { id: reportId },
+    include: {
+      items: {
+        orderBy: { sortOrder: 'asc' },
+        include: {
+          photo: {
+            select: {
+              id: true,
+              fileName: true,
+              fileKey: true,
+              caption: true,
+            },
+          },
+        },
+      },
+    },
+  });
   if (!report) {
     const err = new Error('Report not found');
     err.statusCode = 404;
@@ -130,25 +243,13 @@ export async function generateReport(reportId, userId) {
   });
 
   try {
-    // Sprint 1 scaffold payload; Sprint 2 replaces with branded PDF renderer.
-    const exportPayload = {
-      reportId: report.id,
-      name: report.name,
-      generatedAt: new Date().toISOString(),
-      scope: {
-        projectId: report.projectId,
-        opportunityId: report.opportunityId,
-      },
-      reportConfig: report.reportConfig || {},
-      message: 'Report scaffold generated. PDF renderer is delivered in Sprint 2.',
-    };
-
-    const key = `reports/${buildKeyScope(report)}/${report.id}.json`;
+    const pdfBuffer = await buildReportPdfBuffer(report, report.items || []);
+    const key = `reports/${buildKeyScope(report)}/${report.id}.pdf`;
     const upload = await s3Service.uploadFile(
-      Buffer.from(JSON.stringify(exportPayload, null, 2), 'utf8'),
+      pdfBuffer,
       key,
-      'application/json',
-      { reportId: report.id, type: 'photocam-report-scaffold' }
+      'application/pdf',
+      { reportId: report.id, type: 'photocam-report-pdf' }
     );
 
     const [updatedReport] = await prisma.$transaction([
@@ -174,7 +275,7 @@ export async function generateReport(reportId, userId) {
 
     return updatedReport;
   } catch (error) {
-    logger.error('Failed to generate report scaffold', { reportId, error: error.message });
+    logger.error('Failed to generate report pdf', { reportId, error: error.message });
 
     await prisma.$transaction([
       prisma.photoReport.update({

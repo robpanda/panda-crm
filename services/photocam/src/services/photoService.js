@@ -2,6 +2,8 @@
 // Handles photo upload, processing, and management
 import sharp from 'sharp';
 import exifr from 'exifr';
+import JSZip from 'jszip';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { v4 as uuidv4 } from 'uuid';
 import prisma from '../prisma.js';
 import { s3Service } from './s3Service.js';
@@ -12,6 +14,93 @@ import { logger } from '../middleware/logger.js';
 const DISPLAY_MAX_WIDTH = 2048;
 const THUMBNAIL_SIZE = 400;
 const JPEG_QUALITY = 85;
+const MAX_INLINE_BULK_EXPORT_ITEMS = 80;
+
+function sanitizeFilename(name, fallback = 'photo') {
+  const raw = (name || fallback).trim();
+  return raw.replace(/[^a-zA-Z0-9._-]/g, '_') || fallback;
+}
+
+function detectImageFormat(buffer) {
+  if (!buffer || buffer.length < 4) return 'unknown';
+  const sig = buffer.subarray(0, 8);
+  // PNG
+  if (sig[0] === 0x89 && sig[1] === 0x50 && sig[2] === 0x4e && sig[3] === 0x47) return 'png';
+  // JPEG
+  if (sig[0] === 0xff && sig[1] === 0xd8 && sig[2] === 0xff) return 'jpg';
+  return 'unknown';
+}
+
+async function buildBulkZipBuffer(photos) {
+  const zip = new JSZip();
+
+  for (const [index, photo] of photos.entries()) {
+    if (!photo.fileKey) continue;
+    // eslint-disable-next-line no-await-in-loop
+    const content = await s3Service.getObjectBuffer(photo.fileKey);
+    const safeName = sanitizeFilename(photo.fileName, `photo-${index + 1}`);
+    zip.file(`${String(index + 1).padStart(3, '0')}-${safeName}`, content);
+  }
+
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+}
+
+async function buildBulkPdfBuffer(photos, title = 'Photo Export') {
+  const pdfDoc = await PDFDocument.create();
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+  for (const [index, photo] of photos.entries()) {
+    const page = pdfDoc.addPage([612, 792]);
+    page.drawText(title, { x: 40, y: 760, size: 16, font: fontBold, color: rgb(0.11, 0.11, 0.11) });
+    page.drawText(`Photo ${index + 1} of ${photos.length}`, {
+      x: 40,
+      y: 740,
+      size: 11,
+      font,
+      color: rgb(0.25, 0.25, 0.25),
+    });
+    page.drawText(photo.fileName || photo.id, { x: 40, y: 722, size: 10, font, color: rgb(0.35, 0.35, 0.35) });
+
+    if (!photo.fileKey) {
+      page.drawText('Original file key unavailable for this photo.', { x: 40, y: 680, size: 11, font });
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const bytes = await s3Service.getObjectBuffer(photo.fileKey);
+      const format = detectImageFormat(bytes);
+      let embedded = null;
+      if (format === 'png') {
+        // eslint-disable-next-line no-await-in-loop
+        embedded = await pdfDoc.embedPng(bytes);
+      } else if (format === 'jpg') {
+        // eslint-disable-next-line no-await-in-loop
+        embedded = await pdfDoc.embedJpg(bytes);
+      }
+
+      if (!embedded) {
+        page.drawText('Image format is not supported for PDF embedding.', { x: 40, y: 680, size: 11, font });
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+
+      const bounds = { x: 40, y: 80, width: 532, height: 620 };
+      const scale = Math.min(bounds.width / embedded.width, bounds.height / embedded.height, 1);
+      const drawWidth = embedded.width * scale;
+      const drawHeight = embedded.height * scale;
+      const x = bounds.x + (bounds.width - drawWidth) / 2;
+      const y = bounds.y + (bounds.height - drawHeight) / 2;
+      page.drawImage(embedded, { x, y, width: drawWidth, height: drawHeight });
+    } catch (error) {
+      page.drawText(`Unable to embed image: ${error.message}`, { x: 40, y: 680, size: 11, font });
+    }
+  }
+
+  return Buffer.from(await pdfDoc.save());
+}
 
 /**
  * Process uploaded file and create photo variants
@@ -615,7 +704,7 @@ export async function createBulkDownload(payload = {}, userId) {
       projectId,
       opportunityId,
       outputFormat,
-      status: 'READY',
+      status: 'PROCESSING',
       requestJson: {
         photoIds,
         outputFormat,
@@ -624,23 +713,113 @@ export async function createBulkDownload(payload = {}, userId) {
     },
   });
 
-  // Small sets can receive immediate presigned links while async zip/pdf generation is introduced.
-  const immediateDownloadUrls = {};
-  if (photos.length <= 20) {
-    for (const photo of photos) {
-      if (!photo.fileKey) continue;
-      // eslint-disable-next-line no-await-in-loop
-      immediateDownloadUrls[photo.id] = await s3Service.getPresignedDownloadUrl(photo.fileKey, 60 * 10);
-    }
+  if (photos.length === 0) {
+    const updated = await prisma.photoExportJob.update({
+      where: { id: exportJob.id },
+      data: {
+        status: 'FAILED',
+        errorMessage: 'No valid photos were found for export',
+      },
+    });
+    return {
+      exportJobId: updated.id,
+      status: updated.status,
+      outputFormat,
+      totalPhotos: 0,
+      downloadUrl: null,
+    };
   }
 
-  return {
-    exportJobId: exportJob.id,
-    status: exportJob.status,
-    outputFormat,
-    totalPhotos: photos.length,
-    immediateDownloadUrls,
+  if (photos.length > MAX_INLINE_BULK_EXPORT_ITEMS) {
+    return {
+      exportJobId: exportJob.id,
+      status: 'PENDING',
+      outputFormat,
+      totalPhotos: photos.length,
+      queued: true,
+      message: 'Large export queued for async generation.',
+    };
+  }
+
+  try {
+    const nowTs = Date.now();
+    const extension = outputFormat === 'pdf' ? 'pdf' : 'zip';
+    const filename = `photocam-export-${nowTs}.${extension}`;
+    const exportBuffer = outputFormat === 'pdf'
+      ? await buildBulkPdfBuffer(photos, 'PhotoCam Bulk Export')
+      : await buildBulkZipBuffer(photos);
+
+    const upload = await s3Service.uploadExport(
+      projectId || opportunityId || 'unscoped',
+      `bulk-${outputFormat}`,
+      exportBuffer,
+      filename,
+      outputFormat === 'pdf' ? 'application/pdf' : 'application/zip'
+    );
+
+    const updated = await prisma.photoExportJob.update({
+      where: { id: exportJob.id },
+      data: {
+        status: 'READY',
+        fileKey: upload.key,
+        fileUrl: upload.url,
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      },
+    });
+
+    const downloadUrl = await s3Service.getPresignedDownloadUrl(updated.fileKey, 60 * 15);
+    return {
+      exportJobId: updated.id,
+      status: updated.status,
+      outputFormat,
+      totalPhotos: photos.length,
+      downloadUrl,
+    };
+  } catch (error) {
+    const failed = await prisma.photoExportJob.update({
+      where: { id: exportJob.id },
+      data: {
+        status: 'FAILED',
+        errorMessage: error.message,
+      },
+    });
+
+    return {
+      exportJobId: failed.id,
+      status: failed.status,
+      outputFormat,
+      totalPhotos: photos.length,
+      error: error.message,
+    };
+  }
+}
+
+export async function getBulkDownloadStatus(exportJobId) {
+  const job = await prisma.photoExportJob.findUnique({
+    where: { id: exportJobId },
+  });
+
+  if (!job) {
+    const err = new Error('Export job not found');
+    err.statusCode = 404;
+    err.code = 'NOT_FOUND';
+    throw err;
+  }
+
+  const result = {
+    exportJobId: job.id,
+    status: job.status,
+    outputFormat: job.outputFormat,
+    error: job.errorMessage || null,
+    expiresAt: job.expiresAt,
+    createdAt: job.createdAt,
   };
+
+  if (job.fileKey) {
+    result.downloadUrl = await s3Service.getPresignedDownloadUrl(job.fileKey, 60 * 15);
+  }
+
+  return result;
 }
 
 export const photoService = {
@@ -657,6 +836,7 @@ export const photoService = {
   updatePhotoMetadata,
   bulkAssignPhotos,
   createBulkDownload,
+  getBulkDownloadStatus,
   processImage,
 };
 
