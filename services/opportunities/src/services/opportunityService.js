@@ -762,6 +762,253 @@ class OpportunityService {
     };
   }
 
+  async resolveOpportunityByPortalToken(token) {
+    const rawToken = typeof token === 'string' ? decodeURIComponent(token).trim() : '';
+    if (!rawToken) {
+      const error = new Error('Portal token is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const include = {
+      account: {
+        select: {
+          id: true,
+          name: true,
+          phone: true,
+          email: true,
+          billingStreet: true,
+          billingCity: true,
+          billingState: true,
+          billingPostalCode: true,
+        },
+      },
+      contact: {
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          fullName: true,
+          phone: true,
+          mobilePhone: true,
+          email: true,
+        },
+      },
+      owner: {
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+          phone: true,
+          mobilePhone: true,
+        },
+      },
+      projectManager: {
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+          phone: true,
+          mobilePhone: true,
+        },
+      },
+    };
+
+    let opportunity = await prisma.opportunity.findFirst({
+      where: { jobId: rawToken, deletedAt: null },
+      include,
+    });
+
+    if (!opportunity) {
+      opportunity = await prisma.opportunity.findFirst({
+        where: { id: rawToken, deletedAt: null },
+        include,
+      });
+    }
+
+    if (!opportunity) {
+      const error = new Error('Invalid portal link');
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    return { token: rawToken, opportunity };
+  }
+
+  async getCustomerPortalProject(token) {
+    const { token: resolvedToken, opportunity } = await this.resolveOpportunityByPortalToken(token);
+
+    const contactName = opportunity.contact?.fullName
+      || `${opportunity.contact?.firstName || ''} ${opportunity.contact?.lastName || ''}`.trim()
+      || opportunity.account?.name
+      || opportunity.name;
+
+    const contactPhone = opportunity.contact?.phone || opportunity.contact?.mobilePhone || opportunity.account?.phone || null;
+    const contactEmail = opportunity.contact?.email || opportunity.account?.email || null;
+
+    const manager = opportunity.projectManager || opportunity.owner || null;
+
+    const stageOrder = [
+      'LEAD_UNASSIGNED',
+      'LEAD_ASSIGNED',
+      'SCHEDULED',
+      'INSPECTED',
+      'CLAIM_FILED',
+      'APPROVED',
+      'CONTRACT_SIGNED',
+      'IN_PRODUCTION',
+      'COMPLETED',
+    ];
+    const currentIndex = Math.max(stageOrder.indexOf(opportunity.stage), 0);
+    const progressPercent = Math.round(((currentIndex + 1) / stageOrder.length) * 100);
+
+    return {
+      token: resolvedToken,
+      project: {
+        id: opportunity.id,
+        jobId: opportunity.jobId,
+        name: opportunity.name,
+        stage: opportunity.stage,
+        status: opportunity.status,
+        installDate: opportunity.appointmentDate || null,
+        street: opportunity.street || opportunity.account?.billingStreet || null,
+        city: opportunity.city || opportunity.account?.billingCity || null,
+        state: opportunity.state || opportunity.account?.billingState || null,
+        postalCode: opportunity.postalCode || opportunity.account?.billingPostalCode || null,
+        address: {
+          street: opportunity.street || opportunity.account?.billingStreet || null,
+          city: opportunity.city || opportunity.account?.billingCity || null,
+          state: opportunity.state || opportunity.account?.billingState || null,
+          postalCode: opportunity.postalCode || opportunity.account?.billingPostalCode || null,
+        },
+        accountName: opportunity.account?.name || contactName,
+        accountPhone: contactPhone,
+        accountEmail: contactEmail,
+      },
+      contact: {
+        name: contactName,
+        phone: contactPhone,
+        email: contactEmail,
+      },
+      projectManager: manager
+        ? {
+            id: manager.id,
+            firstName: manager.firstName || null,
+            lastName: manager.lastName || null,
+            name: `${manager.firstName || ''} ${manager.lastName || ''}`.trim(),
+            phone: manager.mobilePhone || manager.phone || null,
+            email: manager.email || null,
+          }
+        : null,
+      progress: {
+        percent: Number.isFinite(progressPercent) ? progressPercent : 0,
+      },
+    };
+  }
+
+  async getCustomerPortalStages(token) {
+    const { opportunity } = await this.resolveOpportunityByPortalToken(token);
+
+    const orderedStages = [
+      { code: 'LEAD_ASSIGNED', name: 'Lead Assigned' },
+      { code: 'SCHEDULED', name: 'Scheduled' },
+      { code: 'INSPECTED', name: 'Inspected' },
+      { code: 'CLAIM_FILED', name: 'Claim Filed' },
+      { code: 'APPROVED', name: 'Approved' },
+      { code: 'CONTRACT_SIGNED', name: 'Contract Signed' },
+      { code: 'IN_PRODUCTION', name: 'In Production' },
+      { code: 'COMPLETED', name: 'Completed' },
+    ];
+
+    const activeIndex = Math.max(orderedStages.findIndex((stage) => stage.code === opportunity.stage), 0);
+
+    return orderedStages.map((stage, index) => ({
+      number: index + 1,
+      name: stage.name,
+      status: index < activeIndex ? 'completed' : (index === activeIndex ? 'in_progress' : 'pending'),
+      is_enabled: true,
+      completedAt: index < activeIndex ? opportunity.updatedAt : null,
+    }));
+  }
+
+  async getCustomerPortalGalleries(token) {
+    await this.resolveOpportunityByPortalToken(token);
+    return [];
+  }
+
+  async getCustomerPortalAppointments(token) {
+    const { opportunity } = await this.resolveOpportunityByPortalToken(token);
+    const result = await this.getOpportunityAppointments(opportunity.id);
+    return result?.appointments || [];
+  }
+
+  async getCustomerPortalPayments(token) {
+    const { opportunity } = await this.resolveOpportunityByPortalToken(token);
+    const billing = await this.getOpportunityInvoices(opportunity.id);
+    const invoices = billing?.invoices || [];
+    const payments = invoices.flatMap((invoice) => invoice.payments || []);
+
+    return {
+      invoices,
+      payments,
+      summary: billing?.summary || null,
+    };
+  }
+
+  async getCustomerPortalPaymentLink(token) {
+    const billing = await this.getCustomerPortalPayments(token);
+    const unpaidInvoice = (billing.invoices || []).find((invoice) => Number(invoice.balanceDue || 0) > 0);
+
+    return {
+      paymentLink: unpaidInvoice?.stripePaymentLinkUrl || unpaidInvoice?.stripeHostedInvoiceUrl || null,
+      invoiceId: unpaidInvoice?.id || null,
+      invoiceNumber: unpaidInvoice?.invoiceNumber || null,
+    };
+  }
+
+  async sendCustomerPortalMessage(token, payload = {}) {
+    const { opportunity } = await this.resolveOpportunityByPortalToken(token);
+    const body = String(payload?.message || '').trim();
+    if (!body) {
+      const error = new Error('Message is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const sender = String(payload?.senderName || '').trim() || 'Customer';
+    const senderPhone = String(payload?.senderPhone || '').trim();
+    const noteBody = senderPhone
+      ? `[Customer Portal] ${sender} (${senderPhone}): ${body}`
+      : `[Customer Portal] ${sender}: ${body}`;
+
+    // Notes require a non-null creator in this schema. If the job has no owner yet,
+    // acknowledge safely without a write to avoid surfacing a 500 to the customer portal.
+    if (!opportunity.ownerId) {
+      return {
+        id: null,
+        createdAt: new Date().toISOString(),
+        message: body,
+        persisted: false,
+      };
+    }
+
+    const note = await this.createOpportunityNote(opportunity.id, {
+      title: 'Customer Portal Message',
+      body: noteBody,
+      isPinned: false,
+      createdById: opportunity.ownerId,
+    });
+
+    return {
+      id: note.id,
+      createdAt: note.createdAt,
+      message: body,
+      persisted: true,
+    };
+  }
+
   /**
    * Get hub summary with counts of all related records
    * This powers the Opportunity Hub overview section
