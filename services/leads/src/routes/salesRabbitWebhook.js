@@ -10,6 +10,8 @@ const prisma = new PrismaClient();
 const router = express.Router();
 
 const SALESRABBIT_WEBHOOK_SECRET = process.env.SALESRABBIT_WEBHOOK_SECRET;
+const SALESRABBIT_API_KEY = process.env.SALESRABBIT_API_KEY;
+const SALESRABBIT_WEBHOOK_TOKEN = process.env.SALESRABBIT_WEBHOOK_TOKEN;
 
 const pickFirstValue = (...values) => {
   for (const value of values) {
@@ -49,15 +51,19 @@ const extractProvidedSecret = (req) => {
 
   return pickFirstValue(
     req.headers['x-webhook-secret'],
+    req.headers['x-webhook-token'],
     req.headers['x-salesrabbit-secret'],
+    req.headers['x-salesrabbit-token'],
     req.headers['x-api-key'],
     req.headers['x-salesrabbit-api-key'],
+    req.headers['x-auth-token'],
     req.query?.secret,
     req.query?.apiKey,
     req.query?.apikey,
     req.query?.token,
     authType === 'ApiKey' ? authToken : null,
     authType === 'Bearer' ? authToken : null,
+    authType === 'Token' ? authToken : null,
     authHeader && !authToken ? authHeader : null
   );
 };
@@ -70,17 +76,25 @@ const secretsMatch = (providedSecret, expectedSecret) => {
   return crypto.timingSafeEqual(provided, expected);
 };
 
+const getExpectedSecrets = () => {
+  return [SALESRABBIT_WEBHOOK_SECRET, SALESRABBIT_API_KEY, SALESRABBIT_WEBHOOK_TOKEN]
+    .map((value) => normalizeOptionalValue(value))
+    .filter(Boolean);
+};
+
 const validateWebhookSecret = (req, res, next) => {
   if (!isSalesRabbitPath(req)) {
     return next();
   }
 
-  if (!SALESRABBIT_WEBHOOK_SECRET) {
+  const expectedSecrets = getExpectedSecrets();
+  if (expectedSecrets.length === 0) {
     return next();
   }
 
   const providedSecret = extractProvidedSecret(req);
-  if (!secretsMatch(providedSecret, SALESRABBIT_WEBHOOK_SECRET)) {
+  const isMatch = expectedSecrets.some((expectedSecret) => secretsMatch(providedSecret, expectedSecret));
+  if (!isMatch) {
     logger.warn('SalesRabbit webhook: invalid or missing secret');
     return res.status(401).json({
       success: false,

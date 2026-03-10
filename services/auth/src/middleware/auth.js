@@ -74,10 +74,12 @@ async function verifyToken(token) {
     const payload = await cognitoVerifier.verify(token);
 
     return {
+      id: payload.sub,
       sub: payload.sub,
       userId: payload.sub,
       email: payload.email || payload.username,
       role: payload['custom:role'] || 'user',
+      roleType: payload['custom:role'] || 'user',
       cognitoId: payload.sub,
       groups: payload['cognito:groups'] || [],
     };
@@ -88,10 +90,12 @@ async function verifyToken(token) {
     try {
       const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
       return {
+        id: payload.sub || payload.userId,
         sub: payload.sub || payload.userId,
         userId: payload.sub || payload.userId,
         email: payload.email,
         role: payload.role || payload['custom:role'] || 'user',
+        roleType: payload.role || payload['custom:role'] || 'user',
         cognitoId: payload.sub,
       };
     } catch {

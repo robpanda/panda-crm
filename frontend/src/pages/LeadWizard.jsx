@@ -900,7 +900,7 @@ export default function LeadWizard() {
     state: '',
     postalCode: '',
     status: 'New',
-    leadSource: '',
+    leadSource: hasSalesInRoleOrTitle ? 'Self-Gen' : '',
     rating: '',
     description: '',
     // Lead Details fields

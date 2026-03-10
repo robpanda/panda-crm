@@ -16,6 +16,16 @@ const S3_BUCKET = process.env.S3_BUCKET || 'pandasign-documents';
 // SES client for email notifications
 const sesClient = new SESClient({ region: process.env.AWS_REGION || 'us-east-2' });
 const FROM_EMAIL = process.env.SES_FROM_EMAIL || 'notifications@pandaexteriors.com';
+const CRM_BASE_URL = (process.env.CRM_BASE_URL || process.env.FRONTEND_URL || 'https://crm.pandaadmin.com').replace(/\/+$/, '');
+const BAMBOOGLI_SERVICE_URL = process.env.BAMBOOGLI_SERVICE_URL || 'http://localhost:3012';
+
+function toAbsoluteCrmUrl(actionPath = '/') {
+  if (typeof actionPath === 'string' && /^https?:\/\//i.test(actionPath)) {
+    return actionPath;
+  }
+  const normalizedPath = String(actionPath || '/').startsWith('/') ? String(actionPath) : `/${String(actionPath)}`;
+  return `${CRM_BASE_URL}${normalizedPath}`;
+}
 
 const DISPOSITION_CATEGORIES = {
   INSPECTION_NOT_COMPLETED: 'INSPECTION_NOT_COMPLETED',
@@ -1940,8 +1950,10 @@ Be factual and professional. Highlight anything that needs attention.`;
     content,
     mentions = [],
     actor = null,
+    actorUserId = null,
     opportunityName = null,
     opportunityJobId = null,
+    actionPath = null,
   }) {
     const mentionUserIds = [...new Set((mentions || [])
       .map(extractMentionUserId)
@@ -1953,16 +1965,28 @@ Be factual and professional. Highlight anything that needs attention.`;
 
     const users = await prisma.user.findMany({
       where: { id: { in: mentionUserIds } },
-      select: { id: true, email: true, firstName: true },
+      select: { id: true, email: true, mobilePhone: true, firstName: true, lastName: true },
     });
     const userById = new Map(users.map((u) => [u.id, u]));
-    const actorName = `${actor?.firstName || ''} ${actor?.lastName || ''}`.trim() || actor?.email || 'Someone';
+    const actorRecord = actorUserId
+      ? await prisma.user.findUnique({
+          where: { id: actorUserId },
+          select: { firstName: true, lastName: true, email: true },
+        })
+      : null;
+    const actorName = `${actorRecord?.firstName || actor?.firstName || ''} ${actorRecord?.lastName || actor?.lastName || ''}`.trim()
+      || actorRecord?.email
+      || actor?.email
+      || 'Someone';
     const subjectName = opportunityName || opportunityJobId || 'an opportunity';
     const preview = (content || '').substring(0, 100);
+    const resolvedActionPath = actionPath || `/jobs/${opportunityId}`;
+    const absoluteActionUrl = toAbsoluteCrmUrl(resolvedActionPath);
 
     for (const userId of mentionUserIds) {
       const mentionedUser = userById.get(userId);
       if (!mentionedUser) continue;
+      if (actorUserId && mentionedUser.id === actorUserId) continue;
 
       await prisma.notification.create({
         data: {
@@ -1971,7 +1995,7 @@ Be factual and professional. Highlight anything that needs attention.`;
           title: `${actorName} mentioned you`,
           message: `You were mentioned on ${subjectName}: "${preview}${(content || '').length > 100 ? '...' : ''}"`,
           opportunityId,
-          actionUrl: `/jobs/${opportunityId}`,
+          actionUrl: resolvedActionPath,
           actionLabel: 'View Job',
           sourceType: 'OPPORTUNITY',
           sourceId: opportunityId,
@@ -1985,9 +2009,18 @@ Be factual and professional. Highlight anything that needs attention.`;
           toName: mentionedUser.firstName || 'there',
           mentionerName: actorName,
           opportunityName: subjectName,
-          opportunityId,
+          actionUrl: absoluteActionUrl,
           messagePreview: (content || '').substring(0, 200),
         }).catch((err) => logger.warn(`Failed to send mention email to ${mentionedUser.email}: ${err.message}`));
+      }
+
+      if (mentionedUser.mobilePhone) {
+        this.sendMentionSms({
+          toPhone: mentionedUser.mobilePhone,
+          mentionerName: actorName,
+          opportunityName: subjectName,
+          actionUrl: absoluteActionUrl,
+        }).catch((err) => logger.warn(`Failed to send mention SMS to ${mentionedUser.mobilePhone}: ${err.message}`));
       }
     }
 
@@ -2037,8 +2070,10 @@ Be factual and professional. Highlight anything that needs attention.`;
         content: normalizedContent || note.body,
         mentions,
         actor: user,
+        actorUserId,
         opportunityName: opportunity?.name,
         opportunityJobId: opportunity?.jobId,
+        actionPath: `/jobs/${opportunityId}?tab=messages&noteId=${note.id}`,
       });
     }
 
@@ -2136,8 +2171,10 @@ Be factual and professional. Highlight anything that needs attention.`;
       content,
       mentions: payload.mentions || [],
       actor: user,
+      actorUserId,
       opportunityName: opportunity.name,
       opportunityJobId: opportunity.jobId,
+      actionPath: `/jobs/${opportunityId}?tab=messages&internalCommentId=${comment.id}`,
     });
 
     return {
@@ -2267,9 +2304,9 @@ Be factual and professional. Highlight anything that needs attention.`;
   /**
    * Send email notification for @mention
    */
-  async sendMentionEmail({ toEmail, toName, mentionerName, opportunityName, opportunityId, messagePreview }) {
+  async sendMentionEmail({ toEmail, toName, mentionerName, opportunityName, actionUrl, messagePreview }) {
     try {
-      const opportunityUrl = `https://bamboo.pandaadmin.com/opportunities/${opportunityId}`;
+      const opportunityUrl = toAbsoluteCrmUrl(actionUrl || '/jobs');
 
       await sesClient.send(new SendEmailCommand({
         Source: FROM_EMAIL,
@@ -2310,6 +2347,24 @@ Be factual and professional. Highlight anything that needs attention.`;
     } catch (error) {
       console.error('Error sending mention email:', error);
       throw error;
+    }
+  }
+
+  async sendMentionSms({ toPhone, mentionerName, opportunityName, actionUrl }) {
+    const smsBody = `${mentionerName} mentioned you on ${opportunityName}. View: ${toAbsoluteCrmUrl(actionUrl || '/jobs')}`;
+    const response = await fetch(`${BAMBOOGLI_SERVICE_URL}/api/messages/send/sms`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        to: toPhone,
+        body: smsBody,
+        sentById: 'system',
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || `SMS delivery failed with status ${response.status}`);
     }
   }
 

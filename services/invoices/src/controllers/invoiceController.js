@@ -434,8 +434,8 @@ export async function sendInvoice(req, res, next) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
 
-    if (invoice.status !== 'DRAFT' && invoice.status !== 'PENDING') {
-      return res.status(400).json({ error: 'Invoice already sent or processed' });
+    if (invoice.status === 'VOID') {
+      return res.status(400).json({ error: 'Cannot send a void invoice' });
     }
 
     // Determine recipient email
@@ -664,10 +664,14 @@ ${Buffer.from(pdfResult.pdfBytes).toString('base64')}`;
     }
 
     // Step 4: Update invoice status
+    const nextInvoiceStatus = (invoice.status === 'DRAFT' || invoice.status === 'PENDING')
+      ? 'SENT'
+      : invoice.status;
+
     const updatedInvoice = await prisma.invoice.update({
       where: { id },
       data: {
-        status: 'SENT',
+        status: nextInvoiceStatus,
         // Store payment link for reference
         ...(paymentLink && { stripePaymentLinkUrl: paymentLink }),
         ...(pdfResult && {

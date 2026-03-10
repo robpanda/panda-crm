@@ -6,6 +6,8 @@ import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 
 const prisma = new PrismaClient();
 const lambdaClient = new LambdaClient({ region: 'us-east-2' });
+const CRM_BASE_URL = (process.env.CRM_BASE_URL || process.env.FRONTEND_URL || 'https://crm.pandaadmin.com').replace(/\/+$/, '');
+const BAMBOOGLI_SERVICE_URL = process.env.BAMBOOGLI_SERVICE_URL || 'http://localhost:3012';
 
 // Job ID starting number (first job ID will be YYYY-1000)
 const JOB_ID_STARTING_NUMBER = 999;
@@ -80,6 +82,14 @@ function extractMentionUserId(mention) {
   if (!mention) return null;
   if (typeof mention === 'string') return mention;
   return mention.userId || mention.id || null;
+}
+
+function toAbsoluteCrmUrl(actionPath = '/') {
+  if (typeof actionPath === 'string' && /^https?:\/\//i.test(actionPath)) {
+    return actionPath;
+  }
+  const normalizedPath = String(actionPath || '/').startsWith('/') ? String(actionPath) : `/${String(actionPath)}`;
+  return `${CRM_BASE_URL}${normalizedPath}`;
 }
 
 class LeadService {
@@ -2011,7 +2021,15 @@ class LeadService {
     };
   }
 
-  async notifyLeadMentions({ leadId, content, mentions = [], actor = null, leadName = null }) {
+  async notifyLeadMentions({
+    leadId,
+    content,
+    mentions = [],
+    actor = null,
+    actorUserId = null,
+    leadName = null,
+    actionPath = null,
+  }) {
     const mentionUserIds = [...new Set((mentions || [])
       .map(extractMentionUserId)
       .filter(Boolean))];
@@ -2022,15 +2040,29 @@ class LeadService {
 
     const users = await prisma.user.findMany({
       where: { id: { in: mentionUserIds } },
-      select: { id: true },
+      select: { id: true, mobilePhone: true, firstName: true, lastName: true, email: true },
     });
-    const existingUserIds = new Set(users.map((u) => u.id));
-    const actorName = `${actor?.firstName || ''} ${actor?.lastName || ''}`.trim() || actor?.email || 'Someone';
+    const userById = new Map(users.map((u) => [u.id, u]));
+    const actorRecord = actorUserId
+      ? await prisma.user.findUnique({
+          where: { id: actorUserId },
+          select: { firstName: true, lastName: true, email: true },
+        })
+      : null;
+    const actorName = `${actorRecord?.firstName || actor?.firstName || ''} ${actorRecord?.lastName || actor?.lastName || ''}`.trim()
+      || actorRecord?.email
+      || actor?.email
+      || 'Someone';
     const preview = (content || '').substring(0, 100);
     const targetName = leadName || 'a lead';
+    const resolvedActionPath = actionPath || `/leads/${leadId}`;
+    const absoluteActionUrl = toAbsoluteCrmUrl(resolvedActionPath);
 
     for (const userId of mentionUserIds) {
-      if (!existingUserIds.has(userId)) continue;
+      const mentionedUser = userById.get(userId);
+      if (!mentionedUser) continue;
+      if (actorUserId && mentionedUser.id === actorUserId) continue;
+
       await prisma.notification.create({
         data: {
           userId,
@@ -2038,16 +2070,43 @@ class LeadService {
           title: `${actorName} mentioned you`,
           message: `You were mentioned on ${targetName}: "${preview}${(content || '').length > 100 ? '...' : ''}"`,
           leadId,
-          actionUrl: `/leads/${leadId}`,
+          actionUrl: resolvedActionPath,
           actionLabel: 'View Lead',
           sourceType: 'LEAD',
           sourceId: leadId,
           status: 'UNREAD',
         },
       });
+
+      if (mentionedUser.mobilePhone) {
+        this.sendMentionSms({
+          toPhone: mentionedUser.mobilePhone,
+          mentionerName: actorName,
+          leadName: targetName,
+          actionUrl: absoluteActionUrl,
+        }).catch((err) => logger.warn(`Failed to send lead mention SMS to ${mentionedUser.mobilePhone}: ${err.message}`));
+      }
     }
 
     return mentionUserIds.length;
+  }
+
+  async sendMentionSms({ toPhone, mentionerName, leadName, actionUrl }) {
+    const smsBody = `${mentionerName} mentioned you on ${leadName}. View: ${toAbsoluteCrmUrl(actionUrl || '/leads')}`;
+    const response = await fetch(`${BAMBOOGLI_SERVICE_URL}/api/messages/send/sms`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        to: toPhone,
+        body: smsBody,
+        sentById: 'system',
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || `SMS delivery failed with status ${response.status}`);
+    }
   }
 
   async addLeadNoteReply(leadId, noteId, payload = {}, actor = null) {
@@ -2107,7 +2166,9 @@ class LeadService {
       content,
       mentions: payload.mentions || [],
       actor,
+      actorUserId,
       leadName: `${lead.firstName || ''} ${lead.lastName || ''}`.trim(),
+      actionPath: `/leads/${leadId}?tab=messages&noteId=${reply.id}`,
     });
 
     return {
@@ -2225,7 +2286,9 @@ class LeadService {
       content,
       mentions: payload.mentions || [],
       actor,
+      actorUserId,
       leadName: `${lead.firstName || ''} ${lead.lastName || ''}`.trim(),
+      actionPath: `/leads/${leadId}?tab=messages&internalCommentId=${comment.id}`,
     });
 
     return {
