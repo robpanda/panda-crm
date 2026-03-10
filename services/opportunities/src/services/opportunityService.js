@@ -47,6 +47,25 @@ function hasOwnField(obj, key) {
   return Object.prototype.hasOwnProperty.call(obj || {}, key);
 }
 
+const OPTIONAL_OPPORTUNITY_CLAIM_FIELDS = new Set([
+  'claimNumber',
+  'claimFiledDate',
+  'insuranceCarrier',
+  'adjusterName',
+  'adjusterEmail',
+  'adjusterOfficePhone',
+  'fieldAdjusterMobile',
+  'damageLocation',
+  'dateOfLoss',
+]);
+
+function parseUnknownPrismaFieldName(error) {
+  const message = error?.message || '';
+  const match = message.match(/Unknown (?:field|argument) `([^`]+)`/);
+  return match?.[1] || null;
+}
+}
+
 function parseBooleanFlag(value) {
   if (value === true || value === false) return value;
   if (value === 1 || value === '1') return true;
@@ -2016,30 +2035,155 @@ Be factual and professional. Highlight anything that needs attention.`;
    * Update opportunity
    */
   async updateOpportunity(id, data, userId = null) {
-    // Get the current opportunity state for change detection
-    const previousState = await prisma.opportunity.findUnique({
-      where: { id },
-      select: {
-        stage: true,
-        status: true,
-        stageName: true,
-        isApproved: true,
-        claimNumber: true,
-        claimFiledDate: true,
-        insuranceCarrier: true,
-        isPandaClaims: true,
-        type: true,
-        rcvAmount: true,
-        acvAmount: true,
-        deductible: true,
-        // Expediting fields for trigger detection
-        flatRoof: true,
-        lineDrop: true,
-        supplementRequired: true,
-        supplementHoldsJob: true,
-      },
-    });
+    // Get the current opportunity state for change detection.
+    // Fallback avoids 500s if runtime Prisma client is older than DB schema.
+    const previousStateSelect = {
+      stage: true,
+      status: true,
+      stageName: true,
+      isApproved: true,
+      claimNumber: true,
+      claimFiledDate: true,
+      insuranceCarrier: true,
+      adjusterName: true,
+      adjusterEmail: true,
+      adjusterOfficePhone: true,
+      fieldAdjusterMobile: true,
+      isPandaClaims: true,
+      type: true,
+      rcvAmount: true,
+      acvAmount: true,
+      deductible: true,
+      // Expediting fields for trigger detection
+      flatRoof: true,
+      lineDrop: true,
+      supplementRequired: true,
+      supplementHoldsJob: true,
+    };
 
+    let previousState;
+    try {
+      previousState = await prisma.opportunity.findUnique({
+        where: { id },
+        select: previousStateSelect,
+      });
+    } catch (error) {
+      const unknownField = parseUnknownPrismaFieldName(error);
+      if (!unknownField || !OPTIONAL_OPPORTUNITY_CLAIM_FIELDS.has(unknownField)) {
+        throw error;
+      }
+
+      logger.warn(
+        `Opportunity update: runtime schema missing optional field "${unknownField}", retrying previous-state select without optional claim fields`
+      );
+
+      previousState = await prisma.opportunity.findUnique({
+        where: { id },
+        select: {
+          stage: true,
+          status: true,
+          stageName: true,
+          isApproved: true,
+          isPandaClaims: true,
+          type: true,
+          rcvAmount: true,
+          acvAmount: true,
+          deductible: true,
+          flatRoof: true,
+          lineDrop: true,
+          supplementRequired: true,
+          supplementHoldsJob: true,
+        },
+      });
+    }
+
+    const updateData = {
+      name: data.name,
+      description: data.description,
+      stage: data.stage,
+      stageName: data.stageName,
+      status: data.status,
+      probability: data.probability,
+      closeDate: data.closeDate ? new Date(data.closeDate) : undefined,
+      appointmentDate: data.appointmentDate ? new Date(data.appointmentDate) : undefined,
+      soldDate: data.soldDate ? new Date(data.soldDate) : undefined,
+      amount: data.amount,
+      contractTotal: data.contractTotal,
+      type: data.type,
+      workType: data.workType,
+      leadSource: data.leadSource,
+      isSelfGen: data.isSelfGen,
+      isPandaClaims: data.isPandaClaims,
+      isApproved: data.isApproved,
+      rcvAmount: data.rcvAmount,
+      acvAmount: data.acvAmount,
+      deductible: data.deductible,
+      supplementsTotal: data.supplementsTotal,
+      // Address fields
+      street: data.street,
+      city: data.city,
+      state: data.state,
+      postalCode: data.postalCode,
+      accountId: data.accountId,
+      contactId: data.contactId,
+      ownerId: data.ownerId,
+      projectManagerId: data.projectManagerId,
+      // Invoice workflow fields
+      invoiceStatus: data.invoiceStatus,
+      invoiceReadyDate: data.invoiceReadyDate ? new Date(data.invoiceReadyDate) : undefined,
+      invoicedDate: data.invoicedDate ? new Date(data.invoicedDate) : undefined,
+      followUpDate: data.followUpDate ? new Date(data.followUpDate) : undefined,
+    };
+
+    if (hasOwnField(data, 'claimNumber')) {
+      updateData.claimNumber = data.claimNumber || null;
+    }
+
+    if (hasOwnField(data, 'claimFiledDate')) {
+      updateData.claimFiledDate = parseDate(data.claimFiledDate);
+    }
+
+    if (hasOwnField(data, 'insuranceCarrier')) {
+      updateData.insuranceCarrier = data.insuranceCarrier || null;
+    }
+
+    if (hasOwnField(data, 'adjusterName')) {
+      updateData.adjusterName = data.adjusterName || null;
+    }
+
+    if (hasOwnField(data, 'adjusterEmail')) {
+      updateData.adjusterEmail = data.adjusterEmail || null;
+    }
+
+    if (hasOwnField(data, 'adjusterOfficePhone')) {
+      updateData.adjusterOfficePhone = data.adjusterOfficePhone || null;
+    }
+
+    if (hasOwnField(data, 'fieldAdjusterMobile')) {
+      updateData.fieldAdjusterMobile = data.fieldAdjusterMobile || null;
+    }
+
+    if (hasOwnField(data, 'damageLocation')) {
+      updateData.damageLocation = data.damageLocation || null;
+    }
+
+    if (hasOwnField(data, 'dateOfLoss')) {
+      updateData.dateOfLoss = parseDate(data.dateOfLoss);
+    }
+
+    if (hasOwnField(data, 'ownerId')) {
+      updateData.owner = data.ownerId
+        ? { connect: { id: data.ownerId } }
+        : { disconnect: true };
+      delete updateData.ownerId;
+    }
+
+    if (hasOwnField(data, 'projectManagerId')) {
+      updateData.projectManager = data.projectManagerId
+        ? { connect: { id: data.projectManagerId } }
+        : { disconnect: true };
+      delete updateData.projectManagerId;
+    }
     // Handle line items separately if provided
     if (data.lineItems !== undefined) {
       // Delete existing line items and recreate
@@ -2063,54 +2207,43 @@ Be factual and professional. Highlight anything that needs attention.`;
       }
     }
 
-    const opportunity = await prisma.opportunity.update({
-      where: { id },
-      data: {
-        name: data.name,
-        description: data.description,
-        stage: data.stage,
-        status: data.status,
-        stageName: data.stageName,
-        probability: data.probability,
-        closeDate: data.closeDate ? new Date(data.closeDate) : undefined,
-        appointmentDate: data.appointmentDate ? new Date(data.appointmentDate) : undefined,
-        soldDate: data.soldDate ? new Date(data.soldDate) : undefined,
-        amount: data.amount,
-        contractTotal: data.contractTotal,
-        type: data.type,
-        workType: data.workType,
-        leadSource: data.leadSource,
-        isSelfGen: data.isSelfGen,
-        isPandaClaims: data.isPandaClaims,
-        isApproved: data.isApproved,
-        claimNumber: data.claimNumber,
-        claimFiledDate: data.claimFiledDate ? new Date(data.claimFiledDate) : undefined,
-        insuranceCarrier: data.insuranceCarrier,
-        rcvAmount: data.rcvAmount,
-        acvAmount: data.acvAmount,
-        deductible: data.deductible,
-        supplementsTotal: data.supplementsTotal,
-        // Address fields
-        street: data.street,
-        city: data.city,
-        state: data.state,
-        postalCode: data.postalCode,
-        accountId: data.accountId,
-        contactId: data.contactId,
-        ownerId: data.ownerId,
-        // Invoice workflow fields
-        invoiceStatus: data.invoiceStatus,
-        invoiceReadyDate: data.invoiceReadyDate ? new Date(data.invoiceReadyDate) : undefined,
-        invoicedDate: data.invoicedDate ? new Date(data.invoicedDate) : undefined,
-        followUpDate: data.followUpDate ? new Date(data.followUpDate) : undefined,
-      },
-      include: {
-        account: { select: { id: true, name: true } },
-        contact: { select: { id: true, firstName: true, lastName: true } },
-        owner: { select: { id: true, firstName: true, lastName: true } },
-        lineItems: { include: { product: true } },
-      },
-    });
+    const include = {
+      account: { select: { id: true, name: true } },
+      contact: { select: { id: true, firstName: true, lastName: true } },
+      owner: { select: { id: true, firstName: true, lastName: true, email: true, phone: true, mobilePhone: true } },
+      projectManager: { select: { id: true, firstName: true, lastName: true, email: true, phone: true, mobilePhone: true } },
+      lineItems: { include: { product: true } },
+    };
+
+    let opportunity;
+    let lastUpdateError;
+    let updatePayload = { ...updateData };
+
+    for (let attempt = 0; attempt < OPTIONAL_OPPORTUNITY_CLAIM_FIELDS.size + 1; attempt += 1) {
+      try {
+        opportunity = await prisma.opportunity.update({
+          where: { id },
+          data: updatePayload,
+          include,
+        });
+        break;
+      } catch (error) {
+        lastUpdateError = error;
+        const unknownField = parseUnknownPrismaFieldName(error);
+        if (!unknownField || !OPTIONAL_OPPORTUNITY_CLAIM_FIELDS.has(unknownField) || !hasOwnField(updatePayload, unknownField)) {
+          throw error;
+        }
+
+        logger.warn(
+          `Opportunity update: runtime schema missing optional field "${unknownField}", retrying update without it`
+        );
+        delete updatePayload[unknownField];
+      }
+    }
+
+    if (!opportunity && lastUpdateError) {
+      throw lastUpdateError;
+    }
 
     logger.info(`Opportunity updated: ${id}`);
 
