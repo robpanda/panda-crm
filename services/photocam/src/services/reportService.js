@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import prisma from '../prisma.js';
 import { s3Service } from './s3Service.js';
+import { checklistService } from './checklistService.js';
 import { logger } from '../middleware/logger.js';
 
 function toInt(value, fallback) {
@@ -19,6 +20,100 @@ function detectImageFormat(buffer) {
   if (sig[0] === 0x89 && sig[1] === 0x50 && sig[2] === 0x4e && sig[3] === 0x47) return 'png';
   if (sig[0] === 0xff && sig[1] === 0xd8 && sig[2] === 0xff) return 'jpg';
   return 'unknown';
+}
+
+function resolvePandaPhotoConfig(reportConfig = {}) {
+  const cfg = reportConfig?.pandaPhoto || reportConfig?.panda_mode || {};
+  const enforced = Boolean(
+    cfg.enabled
+    || cfg.enforceChecklistCompletion
+    || reportConfig?.enforceChecklistCompletion
+  );
+
+  const checklistIds = Array.from(
+    new Set(
+      [
+        ...(Array.isArray(cfg.checklistIds) ? cfg.checklistIds : []),
+        cfg.checklistId,
+        reportConfig?.checklistId,
+      ].filter(Boolean)
+    )
+  );
+
+  const blockReportGeneration = cfg.blockReportGeneration !== false;
+
+  return {
+    enforced,
+    blockReportGeneration,
+    checklistIds,
+  };
+}
+
+async function validatePandaPhotoForReport(report) {
+  const cfg = resolvePandaPhotoConfig(report?.reportConfig || {});
+
+  if (!cfg.enforced) {
+    return {
+      enforced: false,
+      blockReportGeneration: false,
+      canGenerate: true,
+      checklistIds: [],
+      failures: [],
+      warnings: [],
+    };
+  }
+
+  let checklistIds = [...cfg.checklistIds];
+  const warnings = [];
+
+  if (!checklistIds.length && report?.projectId) {
+    const scopedChecklists = await prisma.photoChecklist.findMany({
+      where: {
+        projectId: report.projectId,
+        template: {
+          pandaPhotoOnly: true,
+        },
+      },
+      select: { id: true },
+      take: 25,
+    });
+    checklistIds = scopedChecklists.map((item) => item.id);
+  }
+
+  if (!checklistIds.length) {
+    warnings.push('PandaPhoto enforcement is enabled but no checklist was found for validation.');
+    return {
+      enforced: true,
+      blockReportGeneration: cfg.blockReportGeneration,
+      canGenerate: true,
+      checklistIds,
+      failures: [],
+      warnings,
+    };
+  }
+
+  const results = [];
+  for (const checklistId of checklistIds) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const result = await checklistService.validateChecklistForCompletion(checklistId, { forcePandaMode: true });
+      results.push(result);
+    } catch (error) {
+      warnings.push(`Checklist ${checklistId} validation failed: ${error.message}`);
+    }
+  }
+
+  const failures = results.filter((result) => !result.canComplete);
+  const canGenerate = failures.length === 0 || !cfg.blockReportGeneration;
+
+  return {
+    enforced: true,
+    blockReportGeneration: cfg.blockReportGeneration,
+    canGenerate,
+    checklistIds,
+    failures,
+    warnings,
+  };
 }
 
 async function buildReportPdfBuffer(report, items) {
@@ -218,6 +313,19 @@ export async function generateReport(reportId, userId) {
     throw err;
   }
 
+  const pandaValidation = await validatePandaPhotoForReport(report);
+  if (pandaValidation.enforced && pandaValidation.blockReportGeneration && !pandaValidation.canGenerate) {
+    const err = new Error('PandaPhoto checklist requirements are not complete for this report');
+    err.statusCode = 409;
+    err.code = 'PANDAPHOTO_INCOMPLETE';
+    err.details = {
+      checklistIds: pandaValidation.checklistIds,
+      failures: pandaValidation.failures,
+      warnings: pandaValidation.warnings,
+    };
+    throw err;
+  }
+
   await prisma.photoReport.update({
     where: { id: reportId },
     data: {
@@ -273,7 +381,10 @@ export async function generateReport(reportId, userId) {
       }),
     ]);
 
-    return updatedReport;
+    return {
+      ...updatedReport,
+      pandaValidation,
+    };
   } catch (error) {
     logger.error('Failed to generate report pdf', { reportId, error: error.message });
 
@@ -350,6 +461,12 @@ export const reportService = {
   generateReport,
   getReportDownload,
   upsertReportItems,
+};
+
+export const reportServiceTestables = {
+  detectImageFormat,
+  buildReportPdfBuffer,
+  resolvePandaPhotoConfig,
 };
 
 export default reportService;

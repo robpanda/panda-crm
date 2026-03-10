@@ -290,6 +290,118 @@ export async function duplicateTemplate(templateId, newName, userId) {
   return template;
 }
 
+function buildChecklistTemplateStructure(name) {
+  return {
+    sections: [
+      {
+        name: `${name} - Core Section`,
+        isRequired: true,
+        items: [
+          { fieldType: 'REQUIRED_PHOTO', label: 'Primary angle', isRequired: true },
+          { fieldType: 'NOTES', label: 'Inspector notes', isRequired: false },
+        ],
+      },
+    ],
+  };
+}
+
+function buildReportTemplateConfig(name) {
+  return {
+    title: name,
+    sections: [
+      { key: 'overview', label: 'Overview' },
+      { key: 'photos', label: 'Photos' },
+    ],
+    defaults: {
+      includeCaptions: true,
+      includeTimestamp: true,
+    },
+  };
+}
+
+export function listRecommendedTemplateSeeds() {
+  return {
+    checklists: [...DEFAULT_CHECKLIST_TEMPLATE_NAMES],
+    reports: DEFAULT_REPORT_TEMPLATES.map((item) => item.name),
+  };
+}
+
+export async function seedRecommendedTemplates(userId, options = {}) {
+  const companyScope = options.companyScope || null;
+  const created = [];
+  const existing = [];
+
+  for (const name of DEFAULT_CHECKLIST_TEMPLATE_NAMES) {
+    // eslint-disable-next-line no-await-in-loop
+    const found = await prisma.checklistTemplate.findFirst({
+      where: { name, templateType: 'CHECKLIST' },
+      select: { id: true, name: true, templateType: true },
+    });
+    if (found) {
+      existing.push(found);
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+
+    // eslint-disable-next-line no-await-in-loop
+    const record = await prisma.checklistTemplate.create({
+      data: {
+        name,
+        templateType: 'CHECKLIST',
+        category: 'PhotoCam',
+        isActive: true,
+        isPublished: false,
+        pandaPhotoOnly: false,
+        companyScope,
+        structure: buildChecklistTemplateStructure(name),
+        createdById: userId || null,
+      },
+      select: { id: true, name: true, templateType: true },
+    });
+    created.push(record);
+  }
+
+  for (const item of DEFAULT_REPORT_TEMPLATES) {
+    const name = item.name;
+    // eslint-disable-next-line no-await-in-loop
+    const found = await prisma.checklistTemplate.findFirst({
+      where: { name, templateType: 'REPORT' },
+      select: { id: true, name: true, templateType: true },
+    });
+    if (found) {
+      existing.push(found);
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+
+    // eslint-disable-next-line no-await-in-loop
+    const record = await prisma.checklistTemplate.create({
+      data: {
+        name,
+        description: item.description || null,
+        templateType: 'REPORT',
+        category: 'PhotoCam Reports',
+        isActive: true,
+        isPublished: false,
+        pandaPhotoOnly: false,
+        companyScope,
+        structure: { sections: [] },
+        configJson: buildReportTemplateConfig(name),
+        createdById: userId || null,
+      },
+      select: { id: true, name: true, templateType: true },
+    });
+    created.push(record);
+  }
+
+  return {
+    createdCount: created.length,
+    existingCount: existing.length,
+    created,
+    existing,
+  };
+}
+
 // Default templates for seeding
 export const DEFAULT_TEMPLATES = [
   {
@@ -425,6 +537,8 @@ export const templateService = {
   duplicateTemplate,
   publishTemplate,
   archiveTemplate,
+  listRecommendedTemplateSeeds,
+  seedRecommendedTemplates,
   DEFAULT_TEMPLATES,
   DEFAULT_REPORT_TEMPLATES,
   DEFAULT_CHECKLIST_TEMPLATE_NAMES,

@@ -2,6 +2,7 @@
 import prisma from '../prisma.js';
 import { logger } from '../middleware/logger.js';
 import crypto from 'crypto';
+import { s3Service } from './s3Service.js';
 
 function hashPassword(value) {
   return crypto.createHash('sha256').update(String(value)).digest('hex');
@@ -234,9 +235,11 @@ export async function createShareLink(galleryId, options = {}) {
 
   // Generate unique share token
   const shareToken = crypto.randomBytes(16).toString('hex');
-  const expiresAt = options.expiresInDays
-    ? new Date(Date.now() + options.expiresInDays * 24 * 60 * 60 * 1000)
-    : null;
+  const expiresAt = options.expiresAt
+    ? new Date(options.expiresAt)
+    : options.expiresInDays
+      ? new Date(Date.now() + options.expiresInDays * 24 * 60 * 60 * 1000)
+      : null;
 
   await prisma.photoGallery.update({
     where: { id: galleryId },
@@ -312,6 +315,83 @@ export async function getGalleryByShareToken(shareToken, password = null) {
   // Remove hash from response
   const { passwordHash: _, ...galleryData } = gallery;
   return galleryData;
+}
+
+export async function getSharedPhotoDownloadByToken(shareToken, photoId, password = null) {
+  const gallery = await prisma.photoGallery.findFirst({
+    where: {
+      shareToken,
+      isPublic: true,
+    },
+    select: {
+      id: true,
+      name: true,
+      shareExpiresAt: true,
+      passwordHash: true,
+      downloadEnabled: true,
+    },
+  });
+
+  if (!gallery) {
+    const err = new Error('Gallery not found or link is invalid');
+    err.code = 'NOT_FOUND';
+    err.statusCode = 404;
+    throw err;
+  }
+
+  if (gallery.shareExpiresAt && new Date() > gallery.shareExpiresAt) {
+    const err = new Error('This share link has expired');
+    err.code = 'EXPIRED';
+    err.statusCode = 410;
+    throw err;
+  }
+
+  if (gallery.passwordHash && hashPassword(password || '') !== gallery.passwordHash) {
+    const err = new Error('This gallery requires a password');
+    err.code = 'PASSWORD_REQUIRED';
+    err.statusCode = 401;
+    throw err;
+  }
+
+  if (!gallery.downloadEnabled) {
+    const err = new Error('Downloads are disabled for this gallery');
+    err.code = 'DOWNLOAD_DISABLED';
+    err.statusCode = 403;
+    throw err;
+  }
+
+  const galleryPhoto = await prisma.galleryPhoto.findFirst({
+    where: {
+      galleryId: gallery.id,
+      photoId,
+    },
+    include: {
+      photo: {
+        select: {
+          id: true,
+          fileName: true,
+          fileKey: true,
+        },
+      },
+    },
+  });
+
+  if (!galleryPhoto?.photo?.fileKey) {
+    const err = new Error('Photo file is not available');
+    err.code = 'NOT_FOUND';
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const expiresInSeconds = 60 * 10;
+  const url = await s3Service.getPresignedDownloadUrl(galleryPhoto.photo.fileKey, expiresInSeconds);
+
+  return {
+    photoId: galleryPhoto.photo.id,
+    fileName: galleryPhoto.photo.fileName,
+    url,
+    expiresInSeconds,
+  };
 }
 
 /**
@@ -406,6 +486,11 @@ export async function updateGalleryAccess(galleryId, payload, userId) {
   if (Object.prototype.hasOwnProperty.call(payload, 'expiresAt')) {
     data.shareExpiresAt = payload.expiresAt ? new Date(payload.expiresAt) : null;
   }
+  if (Object.prototype.hasOwnProperty.call(payload, 'expiresInDays')) {
+    data.shareExpiresAt = payload.expiresInDays
+      ? new Date(Date.now() + Number(payload.expiresInDays) * 24 * 60 * 60 * 1000)
+      : null;
+  }
   if (Object.prototype.hasOwnProperty.call(payload, 'password')) {
     data.passwordHash = payload.password ? hashPassword(payload.password) : null;
   }
@@ -461,6 +546,7 @@ export const galleryService = {
   reorderGalleryPhotos,
   createShareLink,
   getGalleryByShareToken,
+  getSharedPhotoDownloadByToken,
   getLiveGalleryPhotos,
   revokeShareLink,
   createGalleryFromSelection,
