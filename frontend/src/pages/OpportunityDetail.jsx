@@ -629,7 +629,6 @@ function InvoiceDetailModal({ invoice, onClose }) {
       style: 'currency',
       currency: 'USD',
     }).format(Number(amount) || 0);
-    }).format(Number(amount) || 0);
   };
 
   const hydrateFormFromInvoice = useCallback((sourceInvoice) => ({
@@ -3566,7 +3565,6 @@ export default function OpportunityDetail() {
     .slice(0, 2)
     .map((part) => part.charAt(0).toUpperCase())
     .join('');
-  const hasOwnerTeamMember = Boolean(ownerDisplayName || ownerDisplayId);
   const availableTransferOwners = useMemo(
     () => (assignableOwners || []).filter((teamUser) => teamUser.id !== ownerDisplayId),
     [assignableOwners, ownerDisplayId]
