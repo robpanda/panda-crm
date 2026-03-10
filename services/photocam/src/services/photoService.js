@@ -35,6 +35,27 @@ function shouldQueueBulkExport(photoCount) {
   return Number(photoCount || 0) > MAX_INLINE_BULK_EXPORT_ITEMS;
 }
 
+function normalizePhotoRecord(photo) {
+  if (!photo) return photo;
+  return {
+    ...photo,
+    filename: photo.fileName ?? photo.filename,
+    fileName: photo.fileName ?? photo.filename,
+    s3Key: photo.fileKey ?? photo.s3Key,
+    fileKey: photo.fileKey ?? photo.s3Key,
+    contentType: photo.mimeType ?? photo.contentType,
+    mimeType: photo.mimeType ?? photo.contentType,
+    size: photo.fileSize ?? photo.size,
+    fileSize: photo.fileSize ?? photo.size,
+    type: photo.photoType ?? photo.type,
+    photoType: photo.photoType ?? photo.type,
+    gpsLatitude: photo.latitude ?? photo.gpsLatitude,
+    gpsLongitude: photo.longitude ?? photo.gpsLongitude,
+    latitude: photo.latitude ?? photo.gpsLatitude,
+    longitude: photo.longitude ?? photo.gpsLongitude,
+  };
+}
+
 function sanitizeFilename(name, fallback = 'photo') {
   const raw = (name || fallback).trim();
   return raw.replace(/[^a-zA-Z0-9._-]/g, '_') || fallback;
@@ -220,24 +241,21 @@ export async function uploadPhoto(projectId, file, options = {}, userId) {
       data: {
         id: photoId,
         projectId,
-        filename: file.originalname,
+        fileName: file.originalname,
         originalUrl: uploadResults.original?.url,
         displayUrl: uploadResults.display?.url,
         thumbnailUrl: uploadResults.thumbnail?.url,
-        s3Key: uploadResults.original?.key,
-        contentType: processed.original.contentType,
-        size: processed.metadata.size,
+        fileKey: uploadResults.original?.key,
+        mimeType: processed.original.contentType,
+        fileSize: processed.metadata.size,
         width: processed.metadata.width,
         height: processed.metadata.height,
-        type,
+        photoType: type,
         caption,
         tags,
-        exifData: processed.metadata.exif || {},
-        gpsLatitude: processed.metadata.gpsLatitude,
-        gpsLongitude: processed.metadata.gpsLongitude,
+        latitude: processed.metadata.gpsLatitude,
+        longitude: processed.metadata.gpsLongitude,
         capturedAt: processed.metadata.capturedAt,
-        cameraMake: processed.metadata.cameraMake,
-        cameraModel: processed.metadata.cameraModel,
         uploadedById: userId,
       },
       include: {
@@ -254,7 +272,7 @@ export async function uploadPhoto(projectId, file, options = {}, userId) {
       type,
     });
 
-    return photo;
+    return normalizePhotoRecord(photo);
   } catch (error) {
     logger.error('Upload photo error:', error);
     throw error;
@@ -305,7 +323,7 @@ export async function getPhotoById(photoId) {
       },
     });
 
-    return photo;
+    return normalizePhotoRecord(photo);
   } catch (error) {
     logger.error('Get photo error:', error);
     throw error;
@@ -326,14 +344,14 @@ export async function getProjectPhotos(projectId, filters = {}, pagination = {})
       deletedAt: null,
     };
 
-    if (type) where.type = type;
+    if (type) where.photoType = type;
     if (hasGps !== undefined) {
-      where.gpsLatitude = hasGps ? { not: null } : null;
+      where.latitude = hasGps ? { not: null } : null;
     }
     if (search) {
       where.OR = [
         { caption: { contains: search, mode: 'insensitive' } },
-        { filename: { contains: search, mode: 'insensitive' } },
+        { fileName: { contains: search, mode: 'insensitive' } },
         { tags: { has: search } },
       ];
     }
@@ -352,24 +370,21 @@ export async function getProjectPhotos(projectId, filters = {}, pagination = {})
         select: {
           id: true,
           projectId: true,
-          filename: true,
+          fileName: true,
           originalUrl: true,
           displayUrl: true,
           thumbnailUrl: true,
-          s3Key: true,
-          contentType: true,
-          size: true,
+          fileKey: true,
+          mimeType: true,
+          fileSize: true,
           width: true,
           height: true,
-          type: true,
+          photoType: true,
           caption: true,
           tags: true,
-          exifData: true,
-          gpsLatitude: true,
-          gpsLongitude: true,
+          latitude: true,
+          longitude: true,
           capturedAt: true,
-          cameraMake: true,
-          cameraModel: true,
           uploadedById: true,
           deletedAt: true,
           createdAt: true,
@@ -386,7 +401,7 @@ export async function getProjectPhotos(projectId, filters = {}, pagination = {})
     ]);
 
     return {
-      photos,
+      photos: photos.map(normalizePhotoRecord),
       pagination: {
         page,
         limit,
@@ -408,11 +423,12 @@ export async function updatePhoto(photoId, data, userId) {
     const photo = await prisma.photo.update({
       where: { id: photoId },
       data: {
-        type: data.type,
+        photoType: data.photoType || data.type,
         caption: data.caption,
         tags: data.tags,
         aiLabels: data.aiLabels,
-        aiDescription: data.aiDescription,
+        detectedText: data.detectedText,
+        aiAnalyzedAt: data.aiProcessedAt ? new Date(data.aiProcessedAt) : undefined,
       },
       include: {
         uploadedBy: {
@@ -426,7 +442,7 @@ export async function updatePhoto(photoId, data, userId) {
       changes: Object.keys(data),
     });
 
-    return photo;
+    return normalizePhotoRecord(photo);
   } catch (error) {
     logger.error('Update photo error:', error);
     throw error;
@@ -445,7 +461,7 @@ export async function deletePhoto(photoId, userId) {
 
     await projectService.createProjectActivity(photo.projectId, userId, 'PHOTO_DELETED', {
       photoId,
-      filename: photo.filename,
+      filename: photo.fileName,
     });
 
     return photo;
@@ -505,7 +521,7 @@ export async function getPhotoDownloadUrl(photoId, variant = 'original') {
         key = photo.thumbnailUrl?.replace(s3Service.CDN_URL + '/', '');
         break;
       default:
-        key = photo.s3Key;
+        key = photo.fileKey;
     }
 
     if (!key) {
@@ -528,13 +544,13 @@ export async function getPhotosByType(projectId, type) {
     const photos = await prisma.photo.findMany({
       where: {
         projectId,
-        type,
+        photoType: type,
         deletedAt: null,
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    return photos;
+    return photos.map(normalizePhotoRecord);
   } catch (error) {
     logger.error('Get photos by type error:', error);
     throw error;
@@ -550,13 +566,12 @@ export async function updatePhotoAiData(photoId, aiData) {
       where: { id: photoId },
       data: {
         aiLabels: aiData.labels,
-        aiDescription: aiData.description,
         detectedText: aiData.detectedText,
-        aiProcessedAt: new Date(),
+        aiAnalyzedAt: new Date(),
       },
     });
 
-    return photo;
+    return normalizePhotoRecord(photo);
   } catch (error) {
     logger.error('Update AI data error:', error);
     throw error;

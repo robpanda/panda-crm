@@ -2800,7 +2800,6 @@ Be factual and professional. Highlight anything that needs attention.`;
       name: data.name,
       description: data.description,
       stage: data.stage,
-      stageName: data.stageName,
       status: data.status,
       probability: data.probability,
       closeDate: data.closeDate ? new Date(data.closeDate) : undefined,
@@ -5403,15 +5402,31 @@ Be factual and professional. Highlight anything that needs attention.`;
               },
             },
           },
-          _count: {
-            select: {
-              cases: { where: { status: { not: 'CLOSED' } } },
-            },
-          },
         },
       }),
       prisma.opportunity.count({ where }),
     ]);
+
+    const openCasesByOpportunity = new Map();
+    if (jobs.length > 0) {
+      const accountIds = [...new Set(jobs.map((job) => job.accountId).filter(Boolean))];
+      if (accountIds.length > 0) {
+        const openCasesByAccount = await prisma.case.groupBy({
+          by: ['accountId'],
+          where: {
+            accountId: { in: accountIds },
+            status: { not: 'CLOSED' },
+          },
+          _count: { _all: true },
+        });
+        const accountCaseMap = new Map(
+          openCasesByAccount.map((row) => [row.accountId, row._count?._all || 0])
+        );
+        jobs.forEach((job) => {
+          openCasesByOpportunity.set(job.id, accountCaseMap.get(job.accountId) || 0);
+        });
+      }
+    }
 
     return {
       data: jobs.map(job => ({
@@ -5431,7 +5446,7 @@ Be factual and professional. Highlight anything that needs attention.`;
           name: `${job.owner.firstName || ''} ${job.owner.lastName || ''}`.trim() || job.owner.email,
         } : null,
         pendingApprovalRequest: job.approvalRequests[0] || null,
-        openCasesCount: job._count.cases,
+        openCasesCount: openCasesByOpportunity.get(job.id) || 0,
       })),
       pagination: {
         page,

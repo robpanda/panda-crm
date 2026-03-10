@@ -80,7 +80,7 @@ export async function getProjectById(projectId, includeStats = false) {
           select: { id: true, name: true },
         },
         opportunity: {
-          select: { id: true, name: true, jobId: true, stageName: true },
+          select: { id: true, name: true, jobId: true, stage: true },
         },
         workOrder: {
           select: { id: true, workOrderNumber: true, status: true },
