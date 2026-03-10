@@ -16,6 +16,14 @@ const THUMBNAIL_SIZE = 400;
 const JPEG_QUALITY = 85;
 const MAX_INLINE_BULK_EXPORT_ITEMS = 80;
 
+function isMissingColumnError(error, columnHint = null) {
+  if (!error || error.code !== 'P2022') return false;
+  if (!columnHint) return true;
+  const metaColumn = String(error?.meta?.column || '');
+  const message = String(error?.message || '');
+  return metaColumn.includes(columnHint) || message.includes(columnHint);
+}
+
 function shouldQueueBulkExport(photoCount) {
   return Number(photoCount || 0) > MAX_INLINE_BULK_EXPORT_ITEMS;
 }
@@ -556,10 +564,38 @@ export async function updatePhotoMetadata(photoId, payload = {}, userId) {
     throw err;
   }
 
-  const updated = await prisma.photo.update({
-    where: { id: photoId },
-    data: allowed,
-  });
+  let updated;
+  try {
+    updated = await prisma.photo.update({
+      where: { id: photoId },
+      data: allowed,
+    });
+  } catch (error) {
+    // Safety fallback for environments where additive PhotoCam migration has not been applied yet.
+    if (!isMissingColumnError(error)) throw error;
+
+    const fallback = { ...allowed };
+    delete fallback.notes;
+    delete fallback.checklistItemId;
+    delete fallback.customerVisible;
+
+    if (!Object.keys(fallback).length) {
+      throw error;
+    }
+
+    logger.warn('Photo metadata fallback applied due to missing DB column', {
+      photoId,
+      attemptedFields: Object.keys(allowed),
+      fallbackFields: Object.keys(fallback),
+      code: error.code,
+      column: error?.meta?.column || null,
+    });
+
+    updated = await prisma.photo.update({
+      where: { id: photoId },
+      data: fallback,
+    });
+  }
 
   if (updated?.projectId) {
     await projectService.createProjectActivity(updated.projectId, userId, 'PHOTO_METADATA_UPDATED', {
@@ -603,11 +639,38 @@ export async function bulkAssignPhotos(payload = {}, userId) {
   let assigned = 0;
 
   if (targetType === 'CHECKLIST_ITEM') {
-    const result = await prisma.photo.updateMany({
-      where: { id: { in: photoIds }, deletedAt: null },
-      data: { checklistItemId: targetId },
+    const existingLinks = await prisma.checklistItemPhoto.findMany({
+      where: { itemId: targetId, photoId: { in: photoIds } },
+      select: { photoId: true },
     });
-    assigned = result.count;
+    const existingIds = new Set(existingLinks.map((row) => row.photoId));
+    const toInsert = photoIds.filter((photoId) => !existingIds.has(photoId));
+
+    if (toInsert.length) {
+      await prisma.checklistItemPhoto.createMany({
+        data: toInsert.map((photoId) => ({
+          itemId: targetId,
+          photoId,
+        })),
+        skipDuplicates: true,
+      });
+    }
+
+    // Best-effort pointer for fast lookup; tolerate pre-migration DBs lacking checklist_item_id.
+    try {
+      await prisma.photo.updateMany({
+        where: { id: { in: photoIds }, deletedAt: null },
+        data: { checklistItemId: targetId },
+      });
+    } catch (error) {
+      if (!isMissingColumnError(error, 'checklist_item_id')) throw error;
+      logger.warn('Skipping checklistItemId pointer update due to missing checklist_item_id column', {
+        targetId,
+        photoCount: photoIds.length,
+      });
+    }
+
+    assigned = toInsert.length;
   }
 
   if (targetType === 'GALLERY') {
