@@ -4473,6 +4473,30 @@ export const ringCentralApi = {
 // ==========================================
 // DOCUMENTS & PDF API
 // ==========================================
+const postFirstAvailable = async (paths, payload) => {
+  let lastNotFoundError = null;
+
+  for (const path of paths) {
+    try {
+      const response = await api.post(path, payload);
+      return response.data;
+    } catch (error) {
+      const status = error?.response?.status;
+      if (status === 404 || status === 405) {
+        lastNotFoundError = error;
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  if (lastNotFoundError) {
+    throw lastNotFoundError;
+  }
+
+  throw new Error('No compatible PandaSign endpoint is currently available');
+};
+
 export const documentsApi = {
   // Generate Invoice PDF
   async generateInvoicePdf(invoiceId) {
@@ -4581,6 +4605,50 @@ export const documentsApi = {
     }
     const response = await api.get(`/api/documents/repository/by-job/${opportunityId}`, { params });
     return response.data;
+  },
+};
+
+// ==========================================
+// PANDASIGN V2 API (compatibility surface)
+// ==========================================
+export const documentsApiV2 = {
+  async getTemplates(params = {}) {
+    const response = await api.get('/api/documents/agreements/templates', { params });
+    return response.data;
+  },
+
+  async verifyRequiredFields(payload = {}) {
+    const paths = [];
+    if (payload.agreementId) {
+      paths.push(`/api/documents/agreements/${payload.agreementId}/verify-required-fields`);
+    }
+    paths.push('/api/documents/pandasign/agreements/verify-required-fields');
+    paths.push('/api/documents/pandasign/verify-required-fields');
+    paths.push('/api/documents/agreements/verify-required-fields');
+
+    return postFirstAvailable(paths, payload);
+  },
+
+  async preview(payload = {}) {
+    return postFirstAvailable(
+      [
+        '/api/documents/pandasign/preview',
+        '/api/documents/pandasign/v2/preview',
+        '/api/documents/agreements/preview',
+      ],
+      payload
+    );
+  },
+
+  async send(payload = {}) {
+    return postFirstAvailable(
+      [
+        '/api/documents/pandasign/send',
+        '/api/documents/pandasign/v2/send',
+        '/api/documents/agreements/send',
+      ],
+      payload
+    );
   },
 };
 
