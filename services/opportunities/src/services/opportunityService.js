@@ -452,7 +452,7 @@ class OpportunityService {
       const emailCandidates = new Set([rawEmail]);
       const [local = '', domain = ''] = rawEmail.split('@');
       if (local && domain) {
-        emailCandidates.add(`${local.replace(/\./g, '')}@${domain}`);
+        // Keep fallback conservative to avoid mis-attribution.
         emailCandidates.add(`${local}@${domain.replace('panda-exteriors.com', 'pandaexteriors.com')}`);
         emailCandidates.add(`${local}@${domain.replace('pandaexteriors.com', 'panda-exteriors.com')}`);
       }

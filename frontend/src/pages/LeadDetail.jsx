@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useContext } from 'react';
+import { useState, useEffect, useContext } from 'react';
 import { useParams, Link, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { leadsApi, bamboogliApi, usersApi } from '../services/api';
@@ -551,7 +551,6 @@ export default function LeadDetail() {
   const [leadActionStep, setLeadActionStep] = useState(null);
   const [noInspectionSuggestion, setNoInspectionSuggestion] = useState(null);
   const [isSuggestingInspectionSlot, setIsSuggestingInspectionSlot] = useState(false);
-  const hasShownLeadPromptRef = useRef(false);
 
   const { data: lead, isLoading } = useQuery({
     queryKey: ['lead', id],
@@ -594,6 +593,10 @@ export default function LeadDetail() {
       setActiveTab('internalComments');
       return;
     }
+    if (tabParam === 'messages' || tabParam === 'internal-comments') {
+      setActiveTab('internalComments');
+      return;
+    }
     if (tabParam === 'notes') {
       setActiveTab('internal');
       return;
@@ -616,26 +619,7 @@ export default function LeadDetail() {
     });
   }, [lead?.id, user?.id]);
 
-  const isSelfGenSource = (value) => {
-    if (!value) return false;
-    return value.toString().toLowerCase().replace(/[^a-z]/g, '') === 'selfgen';
-  };
-
   const isOwner = Boolean(user?.id && (lead?.ownerId === user.id || lead?.owner?.id === user.id));
-  const isLeadReadyForOwnerAction = Boolean(
-    lead &&
-    !lead.isConverted &&
-    (lead.source || lead.leadSource) &&
-    (lead.tentativeAppointmentDate || lead.tentativeAppointmentTime || isSelfGenSource(lead.source))
-  );
-
-  useEffect(() => {
-    if (!lead || !isLeadReadyForOwnerAction || !isOwner) return;
-    if (hasShownLeadPromptRef.current) return;
-    setLeadActionStep('action');
-    hasShownLeadPromptRef.current = true;
-  }, [lead, isLeadReadyForOwnerAction, isOwner]);
-
   useEffect(() => {
     if (!lead || leadActionStep !== 'noInspection') return;
     if (isSuggestingInspectionSlot) return;
@@ -1045,7 +1029,7 @@ export default function LeadDetail() {
               {/* Convert to Job Button */}
               {lead.status !== 'CONVERTED' && !lead.isConverted && (
                 <button
-                  onClick={() => setLeadActionStep('inspection')}
+                  onClick={() => handleConvert()}
                   disabled={convertMutation.isPending || !isOwner}
                   className={`flex items-center space-x-2 px-4 py-2 rounded-lg ${
                     convertMutation.isPending || !isOwner

@@ -52,6 +52,8 @@ const extractProvidedSecret = (req) => {
     || req.headers['x-original-authorization']
     || req.headers['x-amzn-remapped-authorization']
     || null;
+  const body = req.body || {};
+  const nestedAuth = body.auth || body.authentication || body.headers || {};
 
   const [authType, authToken] = authHeader ? authHeader.split(' ') : [null, null];
   const [forwardedAuthType, forwardedAuthToken] = forwardedAuthHeader
@@ -65,11 +67,24 @@ const extractProvidedSecret = (req) => {
     req.headers['x-salesrabbit-token'],
     req.headers['x-api-key'],
     req.headers['x-salesrabbit-api-key'],
+    req.headers['x-salesrabbit-signature'],
+    req.headers['x-webhook-signature'],
     req.headers['x-auth-token'],
+    req.headers['authorization-token'],
     req.query?.secret,
     req.query?.apiKey,
     req.query?.apikey,
     req.query?.token,
+    body?.secret,
+    body?.token,
+    body?.apiKey,
+    body?.api_key,
+    body?.webhookSecret,
+    body?.webhookToken,
+    nestedAuth?.secret,
+    nestedAuth?.token,
+    nestedAuth?.apiKey,
+    nestedAuth?.api_key,
     authType === 'ApiKey' ? authToken : null,
     forwardedAuthType === 'ApiKey' ? forwardedAuthToken : null,
     authType === 'Bearer' ? authToken : null,
@@ -159,14 +174,20 @@ router.post('/webhook', validateWebhookSecret, async (req, res) => {
       data.FirstName,
       data.First_Name,
       data.contactFirstName,
-      data.first_name
+      data.first_name,
+      data?.contact?.firstName,
+      data?.contact?.first_name,
+      data?.person?.firstName
     );
     let lastName = pickFirstValue(
       data.lastName,
       data.LastName,
       data.Last_Name,
       data.contactLastName,
-      data.last_name
+      data.last_name,
+      data?.contact?.lastName,
+      data?.contact?.last_name,
+      data?.person?.lastName
     );
 
     if (!firstName && !lastName) {
@@ -196,7 +217,14 @@ router.post('/webhook', validateWebhookSecret, async (req, res) => {
     }
 
     const email = normalizeEmail(
-      pickFirstValue(data.email, data.Email, data.emailAddress, data.EmailAddress)
+      pickFirstValue(
+        data.email,
+        data.Email,
+        data.emailAddress,
+        data.EmailAddress,
+        data?.contact?.email,
+        data?.person?.email
+      )
     );
 
     const phone = normalizeOptionalValue(
@@ -206,7 +234,9 @@ router.post('/webhook', validateWebhookSecret, async (req, res) => {
         data.Phone,
         data.phoneNumber,
         data.primaryPhone,
-        data.homePhone
+        data.homePhone,
+        data?.contact?.phone,
+        data?.contact?.phoneNumber
       )
     );
 
@@ -218,7 +248,9 @@ router.post('/webhook', validateWebhookSecret, async (req, res) => {
         data.Mobile_Phone,
         data.cell,
         data.cellPhone,
-        data.mobile
+        data.mobile,
+        data?.contact?.mobilePhone,
+        data?.contact?.mobile
       )
     );
 

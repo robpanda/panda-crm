@@ -923,6 +923,15 @@ export default function LeadWizard() {
     stage: isCallCenter ? '' : 'Prospect',
   });
 
+  useEffect(() => {
+    if (!isNewLead || !hasSalesInRoleOrTitle) return;
+    setFormData((prev) => (
+      prev.leadSource
+        ? prev
+        : { ...prev, leadSource: 'Self-Gen' }
+    ));
+  }, [isNewLead, hasSalesInRoleOrTitle]);
+
   const leadSetByIdForManager = formData.leadSetById || null;
   const { data: leadSetByUserData } = useQuery({
     queryKey: ['lead-set-by-user', leadSetByIdForManager],

@@ -14,7 +14,7 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 // Configure multer for file uploads
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB limit for screenshots/docs in replies
 });
 
 // S3 configuration
@@ -113,7 +113,9 @@ router.get('/tickets/:id', authMiddleware, async (req, res) => {
     const ticket = await prisma.support_tickets.findFirst({
       where: {
         id: req.params.id,
-        user_id: userId, // Users can only see their own tickets
+        ...(isSupportAdmin(req.user)
+          ? {}
+          : { user_id: userId }), // Users can only see their own tickets
       },
       include: {
         user: {
@@ -265,15 +267,24 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
     }
 
     const { message, attachments } = req.body;
+    const normalizedMessage = typeof message === 'string' ? message.trim() : '';
+    const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+    if (!normalizedMessage && !hasAttachments) {
+      return res.status(400).json({ error: 'Message or attachment is required' });
+    }
 
     // Verify ticket belongs to user or user is admin
     const ticket = await prisma.support_tickets.findFirst({
       where: {
         id: req.params.id,
-        OR: [
-          { user_id: userId },
-          { assigned_to_id: userId },
-        ],
+        ...(isSupportAdmin(req.user)
+          ? {}
+          : {
+              OR: [
+                { user_id: userId },
+                { assigned_to_id: userId },
+              ],
+            }),
       },
     });
 
@@ -286,7 +297,7 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
       data: {
         ticket_id: req.params.id,
         user_id: userId,
-        message,
+        message: normalizedMessage || 'Attachment(s) uploaded',
         is_internal: false,
       },
     });

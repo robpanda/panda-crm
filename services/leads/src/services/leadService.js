@@ -122,7 +122,7 @@ class LeadService {
       const emailCandidates = new Set([rawEmail]);
       const [local = '', domain = ''] = rawEmail.split('@');
       if (local && domain) {
-        emailCandidates.add(`${local.replace(/\./g, '')}@${domain}`);
+        // Keep fallback conservative to avoid mis-attributing comments to the wrong user.
         emailCandidates.add(`${local}@${domain.replace('panda-exteriors.com', 'pandaexteriors.com')}`);
         emailCandidates.add(`${local}@${domain.replace('pandaexteriors.com', 'panda-exteriors.com')}`);
       }
@@ -2103,6 +2103,16 @@ class LeadService {
           actionUrl: absoluteActionUrl,
         }).catch((err) => logger.warn(`Failed to send lead mention SMS to ${mentionedUser.mobilePhone}: ${err.message}`));
       }
+
+      if (mentionedUser.email) {
+        this.sendMentionEmail({
+          toEmail: mentionedUser.email,
+          mentionerName: actorName,
+          leadName: targetName,
+          actionUrl: absoluteActionUrl,
+          messagePreview: preview,
+        }).catch((err) => logger.warn(`Failed to send lead mention email to ${mentionedUser.email}: ${err.message}`));
+      }
     }
 
     return mentionUserIds.length;
@@ -2123,6 +2133,37 @@ class LeadService {
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
       throw new Error(errorData.error || `SMS delivery failed with status ${response.status}`);
+    }
+  }
+
+  async sendMentionEmail({ toEmail, mentionerName, leadName, actionUrl, messagePreview }) {
+    const subject = `${mentionerName} mentioned you on ${leadName}`;
+    const leadUrl = toAbsoluteCrmUrl(actionUrl || '/leads');
+    const body = `${mentionerName} mentioned you on ${leadName}: "${messagePreview || ''}"\n\nView: ${leadUrl}`;
+    const bodyHtml = `
+      <div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto;">
+        <h2 style="margin: 0 0 12px 0; color: #111827;">You were mentioned</h2>
+        <p style="margin: 0 0 10px 0; color: #1f2937;"><strong>${mentionerName}</strong> mentioned you on <strong>${leadName}</strong>.</p>
+        ${messagePreview ? `<blockquote style="margin: 0 0 14px 0; padding: 10px 12px; border-left: 4px solid #6366f1; background: #f8fafc; color: #334155;">${messagePreview}</blockquote>` : ''}
+        <p style="margin: 0;"><a href="${leadUrl}" style="display: inline-block; padding: 10px 14px; background: #4f46e5; color: #fff; text-decoration: none; border-radius: 6px;">Open in CRM</a></p>
+      </div>
+    `;
+
+    const response = await fetch(`${BAMBOOGLI_SERVICE_URL}/api/messages/send/email`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        to: toEmail,
+        subject,
+        body,
+        bodyHtml,
+        sentById: 'system',
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || `Email delivery failed with status ${response.status}`);
     }
   }
 
@@ -2185,7 +2226,7 @@ class LeadService {
       actor,
       actorUserId,
       leadName: `${lead.firstName || ''} ${lead.lastName || ''}`.trim(),
-      actionPath: `/leads/${leadId}?tab=messages&noteId=${reply.id}`,
+      actionPath: `/leads/${leadId}?tab=internal&noteId=${reply.id}`,
     });
 
     return {
@@ -2305,7 +2346,7 @@ class LeadService {
       actor,
       actorUserId,
       leadName: `${lead.firstName || ''} ${lead.lastName || ''}`.trim(),
-      actionPath: `/leads/${leadId}?tab=messages&internalCommentId=${comment.id}`,
+      actionPath: `/leads/${leadId}?tab=internalComments&internalCommentId=${comment.id}`,
     });
 
     return {

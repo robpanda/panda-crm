@@ -57,22 +57,36 @@ export default function Support() {
 
   useEffect(() => {
     loadTickets();
-  }, []);
+  }, [user?.id]);
 
   const loadTickets = async () => {
     try {
       setLoading(true);
       const response = await api.get('/api/support/tickets');
       const ticketData = response.data.tickets || [];
-      setTickets(ticketData);
+      const roleName = String(user?.role?.name || '').toLowerCase();
+      const roleType = String(user?.roleType || user?.role || '').toLowerCase();
+      const groups = Array.isArray(user?.groups)
+        ? user.groups.map((group) => String(group).toLowerCase())
+        : [];
+      const isSupportAdmin = roleType.includes('admin')
+        || roleName.includes('admin')
+        || groups.some((group) => group.includes('admin') || group.includes('support'));
+      const scopedTickets = isSupportAdmin
+        ? ticketData
+        : ticketData.filter((ticket) => {
+            if (!user?.id) return true;
+            return ticket.user_id === user.id || ticket.userId === user.id;
+          });
+      setTickets(scopedTickets);
 
       // Calculate stats
       setStats({
-        total: ticketData.length,
-        new: ticketData.filter(t => t.status === 'NEW').length,
-        inProgress: ticketData.filter(t => t.status === 'IN_PROGRESS').length,
-        waitingForUser: ticketData.filter(t => t.status === 'WAITING_FOR_USER').length,
-        resolved: ticketData.filter(t => ['RESOLVED', 'CLOSED'].includes(t.status)).length,
+        total: scopedTickets.length,
+        new: scopedTickets.filter(t => t.status === 'NEW').length,
+        inProgress: scopedTickets.filter(t => t.status === 'IN_PROGRESS').length,
+        waitingForUser: scopedTickets.filter(t => t.status === 'WAITING_FOR_USER').length,
+        resolved: scopedTickets.filter(t => ['RESOLVED', 'CLOSED'].includes(t.status)).length,
       });
     } catch (error) {
       console.error('Failed to load tickets:', error);

@@ -4,6 +4,15 @@ const prisma = new PrismaClient();
 
 // Bamboogli messaging service URL
 const BAMBOOGLI_SERVICE_URL = process.env.BAMBOOGLI_SERVICE_URL || 'http://localhost:3012';
+const CRM_BASE_URL = (process.env.CRM_BASE_URL || process.env.FRONTEND_URL || 'https://crm.pandaadmin.com').replace(/\/+$/, '');
+
+function toAbsoluteCrmUrl(actionPath = '/') {
+  if (typeof actionPath === 'string' && /^https?:\/\//i.test(actionPath)) {
+    return actionPath;
+  }
+  const normalizedPath = String(actionPath || '/').startsWith('/') ? String(actionPath) : `/${String(actionPath)}`;
+  return `${CRM_BASE_URL}${normalizedPath}`;
+}
 
 /**
  * NotificationService - Central service for creating and managing notifications
@@ -18,6 +27,11 @@ class NotificationService {
    * @param {object} relations - Related record IDs
    */
   async createFromTemplate(type, userId, data, relations = {}) {
+    const enrichedData = {
+      ...(data || {}),
+      actionUrl: toAbsoluteCrmUrl(data?.actionUrl || '/'),
+    };
+
     // Get template
     let template = await prisma.notificationTemplate.findUnique({
       where: { type },
@@ -33,8 +47,8 @@ class NotificationService {
     }
 
     // Interpolate templates
-    const title = this.interpolate(template.titleTemplate, data);
-    const message = this.interpolate(template.messageTemplate, data);
+    const title = this.interpolate(template.titleTemplate, enrichedData);
+    const message = this.interpolate(template.messageTemplate, enrichedData);
 
     // Check user preferences
     const preferences = await prisma.notificationPreference.findUnique({
@@ -76,7 +90,7 @@ class NotificationService {
     });
 
     // Handle delivery channels
-    await this.deliverNotification(notification, template, preferences, data);
+    await this.deliverNotification(notification, template, preferences, enrichedData);
 
     return notification;
   }

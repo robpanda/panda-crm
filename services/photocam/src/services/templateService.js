@@ -3,32 +3,79 @@ import prisma from '../prisma.js';
 import { logger } from '../middleware/logger.js';
 import { validateTemplateForPublishPayload } from './validationService.js';
 
+const OPTIONAL_TEMPLATE_FIELDS = new Set([
+  'templateType',
+  'isPublished',
+  'pandaPhotoOnly',
+  'companyScope',
+  'configJson',
+]);
+
+function parseUnknownPrismaFieldName(error) {
+  const message = error?.message || '';
+  const unknownFieldMatch = message.match(/Unknown (?:field|argument) `([^`]+)`/i);
+  if (unknownFieldMatch?.[1]) return unknownFieldMatch[1];
+
+  const missingColumnMatch = message.match(/column [^\"]*\"([^\"]+)\" does not exist/i);
+  const missingColumn = missingColumnMatch?.[1];
+  if (!missingColumn) return null;
+
+  const byColumnName = {
+    template_type: 'templateType',
+    is_published: 'isPublished',
+    panda_photo_only: 'pandaPhotoOnly',
+    company_scope: 'companyScope',
+    config_json: 'configJson',
+  };
+
+  return byColumnName[String(missingColumn).toLowerCase()] || null;
+}
+
 /**
  * Create a new checklist template
  */
 export async function createTemplate(data, userId) {
   logger.info(`Creating checklist template: ${data.name}`);
 
-  const template = await prisma.checklistTemplate.create({
-    data: {
-      name: data.name,
-      description: data.description,
-      category: data.category,
-      templateType: data.templateType || 'CHECKLIST',
-      isActive: true,
-      isPublished: data.isPublished ?? false,
-      pandaPhotoOnly: data.pandaPhotoOnly ?? false,
-      companyScope: data.companyScope || null,
-      createdById: userId,
-      structure: data.structure, // JSON containing sections and items structure
-      configJson: data.configJson || null,
-    },
-    include: {
-      createdBy: {
-        select: { id: true, firstName: true, lastName: true },
-      },
-    },
-  });
+  const createData = {
+    name: data.name,
+    description: data.description,
+    category: data.category,
+    templateType: data.templateType || 'CHECKLIST',
+    isActive: true,
+    isPublished: data.isPublished ?? false,
+    pandaPhotoOnly: data.pandaPhotoOnly ?? false,
+    companyScope: data.companyScope || null,
+    createdById: userId,
+    structure: data.structure, // JSON containing sections and items structure
+    configJson: data.configJson || null,
+  };
+
+  let template = null;
+  let payload = { ...createData };
+  let lastError = null;
+  for (let i = 0; i <= Object.keys(createData).length; i += 1) {
+    try {
+      template = await prisma.checklistTemplate.create({
+        data: payload,
+        include: {
+          createdBy: {
+            select: { id: true, firstName: true, lastName: true },
+          },
+        },
+      });
+      break;
+    } catch (error) {
+      lastError = error;
+      const unknownField = parseUnknownPrismaFieldName(error);
+      if (!unknownField || !OPTIONAL_TEMPLATE_FIELDS.has(unknownField) || !Object.prototype.hasOwnProperty.call(payload, unknownField)) {
+        throw error;
+      }
+      logger.warn(`Template create fallback: dropping unsupported field "${unknownField}"`);
+      delete payload[unknownField];
+    }
+  }
+  if (!template && lastError) throw lastError;
 
   logger.info(`Created template ${template.id}`);
   return template;
@@ -61,18 +108,43 @@ export async function getTemplates(filters = {}) {
     where.templateType = filters.templateType;
   }
 
-  const templates = await prisma.checklistTemplate.findMany({
-    where,
-    include: {
-      createdBy: {
-        select: { id: true, firstName: true, lastName: true },
+  let templates;
+  try {
+    templates = await prisma.checklistTemplate.findMany({
+      where,
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true },
+        },
+        _count: {
+          select: { checklists: true },
+        },
       },
-      _count: {
-        select: { checklists: true },
+      orderBy: [{ category: 'asc' }, { name: 'asc' }],
+    });
+  } catch (error) {
+    const unknownField = parseUnknownPrismaFieldName(error);
+    if (!unknownField || !OPTIONAL_TEMPLATE_FIELDS.has(unknownField)) {
+      throw error;
+    }
+
+    logger.warn(`Template list fallback: retrying without unsupported field "${unknownField}"`);
+    const fallbackWhere = { ...where };
+    delete fallbackWhere.templateType;
+
+    templates = await prisma.checklistTemplate.findMany({
+      where: fallbackWhere,
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true },
+        },
+        _count: {
+          select: { checklists: true },
+        },
       },
-    },
-    orderBy: [{ category: 'asc' }, { name: 'asc' }],
-  });
+      orderBy: [{ name: 'asc' }],
+    });
+  }
 
   return templates;
 }
@@ -102,26 +174,45 @@ export async function getTemplateById(templateId) {
 export async function updateTemplate(templateId, data, userId) {
   logger.info(`Updating template ${templateId}`);
 
-  const template = await prisma.checklistTemplate.update({
-    where: { id: templateId },
-    data: {
-      name: data.name,
-      description: data.description,
-      category: data.category,
-      templateType: data.templateType,
-      isActive: data.isActive,
-      isPublished: data.isPublished,
-      pandaPhotoOnly: data.pandaPhotoOnly,
-      companyScope: data.companyScope,
-      structure: data.structure,
-      configJson: data.configJson,
-    },
-    include: {
-      createdBy: {
-        select: { id: true, firstName: true, lastName: true },
-      },
-    },
-  });
+  const updateData = {
+    name: data.name,
+    description: data.description,
+    category: data.category,
+    templateType: data.templateType,
+    isActive: data.isActive,
+    isPublished: data.isPublished,
+    pandaPhotoOnly: data.pandaPhotoOnly,
+    companyScope: data.companyScope,
+    structure: data.structure,
+    configJson: data.configJson,
+  };
+
+  let template = null;
+  let payload = { ...updateData };
+  let lastError = null;
+  for (let i = 0; i <= Object.keys(updateData).length; i += 1) {
+    try {
+      template = await prisma.checklistTemplate.update({
+        where: { id: templateId },
+        data: payload,
+        include: {
+          createdBy: {
+            select: { id: true, firstName: true, lastName: true },
+          },
+        },
+      });
+      break;
+    } catch (error) {
+      lastError = error;
+      const unknownField = parseUnknownPrismaFieldName(error);
+      if (!unknownField || !OPTIONAL_TEMPLATE_FIELDS.has(unknownField) || !Object.prototype.hasOwnProperty.call(payload, unknownField)) {
+        throw error;
+      }
+      logger.warn(`Template update fallback: dropping unsupported field "${unknownField}"`);
+      delete payload[unknownField];
+    }
+  }
+  if (!template && lastError) throw lastError;
 
   return template;
 }
