@@ -5767,6 +5767,16 @@ export const photocamApi = {
     return response.data.data;
   },
 
+  async getRecommendedTemplateSeeds() {
+    const response = await api.get('/api/photocam/templates/recommended-seeds');
+    return response.data.data;
+  },
+
+  async seedPhotocamTemplates(payload = {}) {
+    const response = await api.post('/api/photocam/templates/seed-defaults', payload);
+    return response.data.data;
+  },
+
   // ==================== BEFORE/AFTER COMPARISONS ====================
   async getComparisons(projectId) {
     const response = await api.get(`/api/photocam/comparisons/project/${projectId}`);
@@ -5829,8 +5839,22 @@ export const photocamApi = {
     return response.data;
   },
 
-  async getGalleryShareLink(id) {
-    const response = await api.post(`/api/photocam/galleries/${id}/share`);
+  async getGalleryShareLink(id, payload = {}) {
+    const response = await api.post(`/api/photocam/galleries/${id}/share`, payload);
+    return response.data.data;
+  },
+
+  async getSharedGallery(token, password = null) {
+    const response = await api.get(`/api/photocam/galleries/share/${token}`, {
+      params: password ? { password } : {},
+    });
+    return response.data.data;
+  },
+
+  async getSharedGalleryPhotoDownload(token, photoId, password = null) {
+    const response = await api.get(`/api/photocam/galleries/share/${token}/photos/${photoId}/download`, {
+      params: password ? { password } : {},
+    });
     return response.data.data;
   },
 

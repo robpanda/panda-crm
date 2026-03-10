@@ -251,11 +251,20 @@ router.put('/:id/reorder', async (req, res, next) => {
  */
 router.post('/:id/share', async (req, res, next) => {
   try {
-    const { expiresInDays, password } = req.body;
+    const {
+      expiresInDays,
+      expiresAt,
+      password,
+      allowDownload,
+      isPortalVisible,
+    } = req.body || {};
 
     const result = await galleryService.createShareLink(req.params.id, {
       expiresInDays,
+      expiresAt,
       password,
+      allowDownload,
+      isPortalVisible,
     });
 
     res.json({
@@ -338,6 +347,28 @@ router.get('/share/:token', async (req, res, next) => {
         error: { code: 'PASSWORD_REQUIRED', message: 'This gallery requires a password' },
       });
     }
+
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/photocam/share/:token/photos/:photoId/download
+ * Public endpoint - resolve a signed photo download URL when gallery permissions allow it
+ */
+router.get('/share/:token/photos/:photoId/download', async (req, res, next) => {
+  try {
+    const { password } = req.query;
+    const result = await galleryService.getSharedPhotoDownloadByToken(
+      req.params.token,
+      req.params.photoId,
+      password
+    );
 
     res.json({
       success: true,

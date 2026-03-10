@@ -93,6 +93,32 @@ router.get('/categories', async (req, res, next) => {
 });
 
 /**
+ * GET /api/photocam/templates/recommended-seeds
+ * Return recommended checklist/report template names for admin setup workflows
+ */
+router.get('/recommended-seeds', requireRole(['admin', 'super_admin', 'manager']), async (req, res, next) => {
+  try {
+    const seeds = templateService.listRecommendedTemplateSeeds();
+    res.json({ success: true, data: seeds });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/photocam/templates/seed-defaults
+ * Create missing recommended template records (idempotent)
+ */
+router.post('/seed-defaults', requireRole(['admin', 'super_admin']), async (req, res, next) => {
+  try {
+    const result = await templateService.seedRecommendedTemplates(req.user?.id || null, req.body || {});
+    res.status(201).json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * GET /api/photocam/templates/:id
  * Get a single template
  */
