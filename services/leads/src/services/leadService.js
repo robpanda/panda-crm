@@ -1199,6 +1199,8 @@ class LeadService {
           logger.warn(`Failed to generate Job ID: ${err.message}`);
         }
 
+        // Work type is intentionally deferred until the Result Appointment wizard runs.
+        // Keep conversion compatible by assigning job id + core records now only.
         opportunity = await tx.opportunity.create({
           data: {
             name: options.opportunityName || `${lead.firstName} ${lead.lastName} - ${new Date().toLocaleDateString()}`,
@@ -1211,8 +1213,8 @@ class LeadService {
             isSelfGen: lead.isSelfGen,
             ownerId: lead.ownerId,
             closeDate: options.closeDate ? new Date(options.closeDate) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-            // Store work type and appointment date on opportunity
-            workType: options.workType,
+            // Store appointment date on opportunity; work type is selected later in Result Appointment flow.
+            workType: null,
             appointmentDate: options.tentativeAppointmentDate ? new Date(options.tentativeAppointmentDate) : null,
           },
         });
@@ -1222,11 +1224,13 @@ class LeadService {
       let serviceAppointment = null;
       let assignedResource = null;
       if (options.createServiceAppointment && options.tentativeAppointmentDate && opportunity) {
+        const appointmentLabel = options.workType || 'Appointment';
+
         // First, find the best available resource based on territory and skills
         const bestResource = await this.findBestResource({
           state: lead.state,
           postalCode: lead.postalCode,
-          workType: options.workType || 'Inspection',
+          workType: appointmentLabel,
           appointmentDate: new Date(options.tentativeAppointmentDate),
         }, tx);
 
@@ -1246,12 +1250,12 @@ class LeadService {
         // Create WorkOrder with territory
         const workOrder = await tx.workOrder.create({
           data: {
-            subject: `${options.workType || 'Inspection'} - ${account.name}`,
+            subject: `${appointmentLabel} - ${account.name}`,
             accountId: account.id,
             contactId: contact.id,
             opportunityId: opportunity.id,
             status: 'NEW',
-            workType: options.workType || 'Inspection',
+            workType: appointmentLabel,
             priority: 'NORMAL',
             territoryId: territory?.id,
           },
@@ -1264,14 +1268,14 @@ class LeadService {
 
         serviceAppointment = await tx.serviceAppointment.create({
           data: {
-            subject: `${options.workType || 'Inspection'} - ${lead.firstName} ${lead.lastName}`,
+            subject: `${appointmentLabel} - ${lead.firstName} ${lead.lastName}`,
             workOrderId: workOrder.id,
             accountId: account.id,
             contactId: contact.id,
             scheduledStart: appointmentDate,
             scheduledEnd: endDate,
             status: 'SCHEDULED',
-            appointmentType: options.workType || 'Inspection',
+            appointmentType: appointmentLabel,
             street: lead.street,
             city: lead.city,
             state: lead.state,

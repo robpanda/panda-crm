@@ -72,6 +72,10 @@ const OPTIONAL_OPPORTUNITY_CLAIM_FIELDS = new Set([
   'dateOfLoss',
 ]);
 
+const OPTIONAL_OPPORTUNITY_INCLUDE_FIELDS = new Set([
+  'projectManager',
+]);
+
 function parseUnknownPrismaFieldName(error) {
   const message = error?.message || '';
   const unknownFieldMatch = message.match(/Unknown (?:field|argument) `([^`]+)`/);
@@ -2914,26 +2918,41 @@ Be factual and professional. Highlight anything that needs attention.`;
     let opportunity;
     let lastUpdateError;
     let updatePayload = { ...updateData };
+    let includePayload = { ...include };
 
-    for (let attempt = 0; attempt < OPTIONAL_OPPORTUNITY_CLAIM_FIELDS.size + 1; attempt += 1) {
+    const maxUpdateAttempts = OPTIONAL_OPPORTUNITY_CLAIM_FIELDS.size + OPTIONAL_OPPORTUNITY_INCLUDE_FIELDS.size + 1;
+    for (let attempt = 0; attempt < maxUpdateAttempts; attempt += 1) {
       try {
         opportunity = await prisma.opportunity.update({
           where: { id },
           data: updatePayload,
-          include,
+          include: includePayload,
         });
         break;
       } catch (error) {
         lastUpdateError = error;
         const unknownField = parseUnknownPrismaFieldName(error);
-        if (!unknownField || !OPTIONAL_OPPORTUNITY_CLAIM_FIELDS.has(unknownField) || !hasOwnField(updatePayload, unknownField)) {
+        if (!unknownField) {
           throw error;
         }
 
-        logger.warn(
-          `Opportunity update: runtime schema missing optional field "${unknownField}", retrying update without it`
-        );
-        delete updatePayload[unknownField];
+        if (OPTIONAL_OPPORTUNITY_CLAIM_FIELDS.has(unknownField) && hasOwnField(updatePayload, unknownField)) {
+          logger.warn(
+            `Opportunity update: runtime schema missing optional field "${unknownField}", retrying update without it`
+          );
+          delete updatePayload[unknownField];
+          continue;
+        }
+
+        if (OPTIONAL_OPPORTUNITY_INCLUDE_FIELDS.has(unknownField) && hasOwnField(includePayload, unknownField)) {
+          logger.warn(
+            `Opportunity update: runtime schema missing optional include "${unknownField}", retrying update without it`
+          );
+          delete includePayload[unknownField];
+          continue;
+        }
+
+        throw error;
       }
     }
 
@@ -3092,6 +3111,26 @@ Be factual and professional. Highlight anything that needs attention.`;
       dateOfLoss: dateOfLoss || undefined,
       damageLocation: payload.damageLocation || undefined,
     };
+
+    const normalizedWorkType = String(payload.workType || '').trim();
+    const stormDamageAnswer = String(payload?.answers?.stormDamage || '').trim().toLowerCase();
+    const isInsurancePath = normalizedWorkType.toLowerCase() === 'insurance'
+      || [DISPOSITION_CATEGORIES.INSURANCE_CLAIM_FILED, DISPOSITION_CATEGORIES.INSURANCE_NO_CLAIM]
+        .includes(payload.dispositionCategory)
+      || stormDamageAnswer === 'yes';
+    const isRetailPath = normalizedWorkType.toLowerCase() === 'retail'
+      || [DISPOSITION_CATEGORIES.RETAIL_SOLD, DISPOSITION_CATEGORIES.RETAIL_NOT_SOLD]
+        .includes(payload.dispositionCategory)
+      || stormDamageAnswer === 'no';
+
+    // Work type is intentionally set only after Result Appointment completion.
+    if (isInsurancePath) {
+      updateData.workType = 'Insurance';
+      updateData.type = 'INSURANCE';
+    } else if (isRetailPath) {
+      updateData.workType = 'Retail';
+      updateData.type = 'RETAIL';
+    }
 
     if (payload.autoStageUpdate !== false) {
       const stage = DISPOSITION_STAGE_MAP[payload.dispositionCategory];

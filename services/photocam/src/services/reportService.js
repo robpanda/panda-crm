@@ -50,7 +50,12 @@ function resolvePandaPhotoConfig(reportConfig = {}) {
 }
 
 function isPrismaMissingColumnError(error) {
-  return error?.code === 'P2022' || /P2022/.test(String(error?.message || ''));
+  const code = String(error?.code || '');
+  const message = String(error?.message || '');
+  if (code === 'P2022' || code === 'P2021') return true;
+  if (/P2022|P2021/.test(message)) return true;
+  if (/does not exist|Unknown (?:field|argument)|column .* does not exist/i.test(message)) return true;
+  return false;
 }
 
 async function validatePandaPhotoForReport(report) {
@@ -221,18 +226,27 @@ export async function createReport(payload, userId) {
     throw err;
   }
 
-  const created = await prisma.photoReport.create({
-    data: {
-      name: payload.name,
-      templateId: payload.templateId || null,
-      projectId: payload.projectId || null,
-      opportunityId: payload.opportunityId || null,
-      reportConfig: payload.reportConfig || {},
-      createdById: userId || null,
-    },
-  });
+  try {
+    const created = await prisma.photoReport.create({
+      data: {
+        name: payload.name,
+        templateId: payload.templateId || null,
+        projectId: payload.projectId || null,
+        opportunityId: payload.opportunityId || null,
+        reportConfig: payload.reportConfig || {},
+        createdById: userId || null,
+      },
+    });
 
-  return created;
+    return created;
+  } catch (error) {
+    if (!isPrismaMissingColumnError(error)) throw error;
+    logger.warn(`Photo report create fallback due to schema mismatch: ${error.message}`);
+    const err = new Error('Photo reports are temporarily unavailable until schema sync completes');
+    err.statusCode = 409;
+    err.code = 'FEATURE_UNAVAILABLE';
+    throw err;
+  }
 }
 
 export async function listReports(params = {}) {
@@ -307,24 +321,34 @@ export async function getReportById(id) {
 }
 
 export async function generateReport(reportId, userId) {
-  const report = await prisma.photoReport.findUnique({
-    where: { id: reportId },
-    include: {
-      items: {
-        orderBy: { sortOrder: 'asc' },
-        include: {
-          photo: {
-            select: {
-              id: true,
-              fileName: true,
-              fileKey: true,
-              caption: true,
+  let report;
+  try {
+    report = await prisma.photoReport.findUnique({
+      where: { id: reportId },
+      include: {
+        items: {
+          orderBy: { sortOrder: 'asc' },
+          include: {
+            photo: {
+              select: {
+                id: true,
+                fileName: true,
+                fileKey: true,
+                caption: true,
+              },
             },
           },
         },
       },
-    },
-  });
+    });
+  } catch (error) {
+    if (!isPrismaMissingColumnError(error)) throw error;
+    logger.warn(`Photo report generate fallback due to schema mismatch: ${error.message}`);
+    const err = new Error('Photo reports are temporarily unavailable until schema sync completes');
+    err.statusCode = 409;
+    err.code = 'FEATURE_UNAVAILABLE';
+    throw err;
+  }
   if (!report) {
     const err = new Error('Report not found');
     err.statusCode = 404;
@@ -463,27 +487,36 @@ export async function getReportDownload(reportId) {
 
 export async function upsertReportItems(reportId, items = []) {
   const normalized = Array.isArray(items) ? items : [];
-  await prisma.photoReportItem.deleteMany({ where: { reportId } });
+  try {
+    await prisma.photoReportItem.deleteMany({ where: { reportId } });
 
-  if (!normalized.length) {
-    return [];
+    if (!normalized.length) {
+      return [];
+    }
+
+    await prisma.photoReportItem.createMany({
+      data: normalized.map((item, index) => ({
+        id: uuidv4(),
+        reportId,
+        photoId: item.photoId || null,
+        checklistItemId: item.checklistItemId || null,
+        sectionKey: item.sectionKey || null,
+        sortOrder: item.sortOrder ?? index,
+      })),
+    });
+
+    return prisma.photoReportItem.findMany({
+      where: { reportId },
+      orderBy: { sortOrder: 'asc' },
+    });
+  } catch (error) {
+    if (!isPrismaMissingColumnError(error)) throw error;
+    logger.warn(`Photo report items fallback due to schema mismatch: ${error.message}`);
+    const err = new Error('Photo reports are temporarily unavailable until schema sync completes');
+    err.statusCode = 409;
+    err.code = 'FEATURE_UNAVAILABLE';
+    throw err;
   }
-
-  await prisma.photoReportItem.createMany({
-    data: normalized.map((item, index) => ({
-      id: uuidv4(),
-      reportId,
-      photoId: item.photoId || null,
-      checklistItemId: item.checklistItemId || null,
-      sectionKey: item.sectionKey || null,
-      sortOrder: item.sortOrder ?? index,
-    })),
-  });
-
-  return prisma.photoReportItem.findMany({
-    where: { reportId },
-    orderBy: { sortOrder: 'asc' },
-  });
 }
 
 export const reportService = {
