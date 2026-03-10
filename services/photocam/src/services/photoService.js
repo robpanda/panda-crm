@@ -431,6 +431,218 @@ export async function updatePhotoAiData(photoId, aiData) {
   }
 }
 
+/**
+ * Update selected photo metadata fields without replacing broader update behavior.
+ */
+export async function updatePhotoMetadata(photoId, payload = {}, userId) {
+  const allowed = {};
+
+  if (Object.prototype.hasOwnProperty.call(payload, 'caption')) {
+    allowed.caption = payload.caption;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'tags')) {
+    allowed.tags = Array.isArray(payload.tags) ? payload.tags : [];
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'photoType')) {
+    allowed.photoType = payload.photoType;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'notes')) {
+    allowed.notes = payload.notes || null;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'checklistItemId')) {
+    allowed.checklistItemId = payload.checklistItemId || null;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'customerVisible')) {
+    allowed.customerVisible = Boolean(payload.customerVisible);
+  }
+
+  if (!Object.keys(allowed).length) {
+    const err = new Error('No supported metadata fields provided');
+    err.statusCode = 400;
+    err.code = 'VALIDATION_ERROR';
+    throw err;
+  }
+
+  const updated = await prisma.photo.update({
+    where: { id: photoId },
+    data: allowed,
+  });
+
+  if (updated?.projectId) {
+    await projectService.createProjectActivity(updated.projectId, userId, 'PHOTO_METADATA_UPDATED', {
+      photoId,
+      fields: Object.keys(allowed),
+    });
+  }
+
+  return updated;
+}
+
+/**
+ * Assign selected photos to checklist/gallery/report scopes.
+ */
+export async function bulkAssignPhotos(payload = {}, userId) {
+  const photoIds = Array.isArray(payload.photoIds) ? payload.photoIds.filter(Boolean) : [];
+  if (!photoIds.length) {
+    const err = new Error('photoIds must be a non-empty array');
+    err.statusCode = 400;
+    err.code = 'VALIDATION_ERROR';
+    throw err;
+  }
+
+  const targetType = payload.targetType;
+  const targetId = payload.targetId || null;
+
+  if (!['CHECKLIST_ITEM', 'GALLERY', 'REPORT', 'PROJECT_GROUP'].includes(targetType)) {
+    const err = new Error('targetType must be CHECKLIST_ITEM, GALLERY, REPORT, or PROJECT_GROUP');
+    err.statusCode = 400;
+    err.code = 'VALIDATION_ERROR';
+    throw err;
+  }
+
+  if (!targetId && targetType !== 'PROJECT_GROUP') {
+    const err = new Error('targetId is required for selected targetType');
+    err.statusCode = 400;
+    err.code = 'VALIDATION_ERROR';
+    throw err;
+  }
+
+  let assigned = 0;
+
+  if (targetType === 'CHECKLIST_ITEM') {
+    const result = await prisma.photo.updateMany({
+      where: { id: { in: photoIds }, deletedAt: null },
+      data: { checklistItemId: targetId },
+    });
+    assigned = result.count;
+  }
+
+  if (targetType === 'GALLERY') {
+    const existing = await prisma.galleryPhoto.findMany({
+      where: { galleryId: targetId, photoId: { in: photoIds } },
+      select: { photoId: true },
+    });
+    const existingIds = new Set(existing.map((row) => row.photoId));
+    const toInsert = photoIds.filter((id) => !existingIds.has(id));
+
+    if (toInsert.length) {
+      const maxSort = await prisma.galleryPhoto.aggregate({
+        where: { galleryId: targetId },
+        _max: { sortOrder: true },
+      });
+      let nextSort = (maxSort._max.sortOrder || 0) + 1;
+      await prisma.galleryPhoto.createMany({
+        data: toInsert.map((photoId) => ({
+          galleryId: targetId,
+          photoId,
+          sortOrder: nextSort++,
+        })),
+      });
+    }
+    assigned = toInsert.length;
+  }
+
+  if (targetType === 'REPORT') {
+    const existing = await prisma.photoReportItem.findMany({
+      where: { reportId: targetId, photoId: { in: photoIds } },
+      select: { photoId: true },
+    });
+    const existingIds = new Set(existing.map((row) => row.photoId));
+    const toInsert = photoIds.filter((id) => !existingIds.has(id));
+
+    if (toInsert.length) {
+      const maxSort = await prisma.photoReportItem.aggregate({
+        where: { reportId: targetId },
+        _max: { sortOrder: true },
+      });
+      let nextSort = (maxSort._max.sortOrder || 0) + 1;
+      await prisma.photoReportItem.createMany({
+        data: toInsert.map((photoId) => ({
+          reportId: targetId,
+          photoId,
+          sortOrder: nextSort++,
+        })),
+      });
+    }
+    assigned = toInsert.length;
+  }
+
+  if (targetType === 'PROJECT_GROUP') {
+    const updates = await Promise.all(photoIds.map((photoId) => updatePhotoMetadata(photoId, {
+      tags: Array.from(new Set([...(payload.existingTags || []), payload.groupKey].filter(Boolean))),
+    }, userId)));
+    assigned = updates.length;
+  }
+
+  return {
+    targetType,
+    targetId,
+    requestedCount: photoIds.length,
+    assignedCount: assigned,
+  };
+}
+
+/**
+ * Queue a bulk download/export request and return an export job reference.
+ */
+export async function createBulkDownload(payload = {}, userId) {
+  const photoIds = Array.isArray(payload.photoIds) ? payload.photoIds.filter(Boolean) : [];
+  if (!photoIds.length) {
+    const err = new Error('photoIds must be a non-empty array');
+    err.statusCode = 400;
+    err.code = 'VALIDATION_ERROR';
+    throw err;
+  }
+
+  const photos = await prisma.photo.findMany({
+    where: { id: { in: photoIds }, deletedAt: null },
+    select: {
+      id: true,
+      projectId: true,
+      fileKey: true,
+      originalUrl: true,
+      fileName: true,
+      photoType: true,
+    },
+  });
+
+  const projectId = payload.projectId || photos[0]?.projectId || null;
+  const opportunityId = payload.opportunityId || null;
+  const outputFormat = payload.outputFormat === 'pdf' ? 'pdf' : 'zip';
+
+  const exportJob = await prisma.photoExportJob.create({
+    data: {
+      projectId,
+      opportunityId,
+      outputFormat,
+      status: 'READY',
+      requestJson: {
+        photoIds,
+        outputFormat,
+      },
+      createdById: userId || null,
+    },
+  });
+
+  // Small sets can receive immediate presigned links while async zip/pdf generation is introduced.
+  const immediateDownloadUrls = {};
+  if (photos.length <= 20) {
+    for (const photo of photos) {
+      if (!photo.fileKey) continue;
+      // eslint-disable-next-line no-await-in-loop
+      immediateDownloadUrls[photo.id] = await s3Service.getPresignedDownloadUrl(photo.fileKey, 60 * 10);
+    }
+  }
+
+  return {
+    exportJobId: exportJob.id,
+    status: exportJob.status,
+    outputFormat,
+    totalPhotos: photos.length,
+    immediateDownloadUrls,
+  };
+}
+
 export const photoService = {
   uploadPhoto,
   uploadMultiplePhotos,
@@ -442,6 +654,9 @@ export const photoService = {
   getPhotoDownloadUrl,
   getPhotosByType,
   updatePhotoAiData,
+  updatePhotoMetadata,
+  bulkAssignPhotos,
+  createBulkDownload,
   processImage,
 };
 

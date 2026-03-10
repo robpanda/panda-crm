@@ -2,6 +2,7 @@
 import express from 'express';
 import { authMiddleware } from '../middleware/auth.js';
 import { checklistService } from '../services/checklistService.js';
+import { featureFlags, requireFeature } from '../config/featureFlags.js';
 
 const router = express.Router();
 
@@ -37,6 +38,27 @@ router.get('/projects/:projectId/checklists', async (req, res, next) => {
   try {
     const { status, assignedToId } = req.query;
 
+    const checklists = await checklistService.getProjectChecklists(req.params.projectId, {
+      status,
+      assignedToId,
+    });
+
+    res.json({
+      success: true,
+      data: checklists,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/photocam/checklists/project/:projectId
+ * Backward-compatible alias for project checklist list.
+ */
+router.get('/project/:projectId', async (req, res, next) => {
+  try {
+    const { status, assignedToId } = req.query;
     const checklists = await checklistService.getProjectChecklists(req.params.projectId, {
       status,
       assignedToId,
@@ -202,6 +224,20 @@ router.delete('/:checklistId/items/:itemId/photos/:photoId', async (req, res, ne
       success: true,
       message: 'Photo removed from checklist item',
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/photocam/checklists/:id/validate
+ * Validate checklist completion rules (PandaPhoto enforcement scaffold).
+ */
+router.post('/:id/validate', async (req, res, next) => {
+  try {
+    requireFeature(featureFlags.pandaPhotoEnforcement, 'PandaPhoto enforcement');
+    const result = await checklistService.validateChecklistForCompletion(req.params.id, req.body || {});
+    res.json({ success: true, data: result });
   } catch (error) {
     next(error);
   }

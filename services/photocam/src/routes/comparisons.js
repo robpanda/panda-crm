@@ -53,6 +53,22 @@ router.get('/projects/:projectId/comparisons', async (req, res, next) => {
 });
 
 /**
+ * GET /api/photocam/comparisons/project/:projectId
+ * Backward-compatible alias for project comparison list.
+ */
+router.get('/project/:projectId', async (req, res, next) => {
+  try {
+    const comparisons = await comparisonService.getProjectComparisons(req.params.projectId);
+    res.json({
+      success: true,
+      data: comparisons,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * GET /api/photocam/comparisons/:id
  * Get a single comparison
  */

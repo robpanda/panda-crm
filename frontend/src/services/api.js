@@ -5669,6 +5669,21 @@ export const photocamApi = {
     return response.data.data.url;
   },
 
+  async bulkDownloadPhotos(payload) {
+    const response = await api.post('/api/photocam/photos/bulk-download', payload);
+    return response.data.data;
+  },
+
+  async bulkAssignPhotos(payload) {
+    const response = await api.post('/api/photocam/photos/bulk-assign', payload);
+    return response.data.data;
+  },
+
+  async updatePhotoMetadata(id, payload) {
+    const response = await api.patch(`/api/photocam/photos/${id}/metadata`, payload);
+    return response.data.data;
+  },
+
   // ==================== ANNOTATIONS ====================
   async getAnnotations(photoId) {
     const response = await api.get(`/api/photocam/annotations/photo/${photoId}`);
@@ -5713,6 +5728,11 @@ export const photocamApi = {
 
   async updateChecklistItem(checklistId, itemId, data) {
     const response = await api.put(`/api/photocam/checklists/${checklistId}/items/${itemId}`, data);
+    return response.data.data;
+  },
+
+  async validateChecklist(checklistId, payload = {}) {
+    const response = await api.post(`/api/photocam/checklists/${checklistId}/validate`, payload);
     return response.data.data;
   },
 
@@ -5806,6 +5826,47 @@ export const photocamApi = {
 
   async getGalleryShareLink(id) {
     const response = await api.post(`/api/photocam/galleries/${id}/share`);
+    return response.data.data;
+  },
+
+  async createGalleryFromSelection(payload) {
+    const response = await api.post('/api/photocam/galleries/from-selection', payload);
+    return response.data.data;
+  },
+
+  async updateGalleryAccess(id, payload) {
+    const response = await api.patch(`/api/photocam/galleries/${id}/access`, payload);
+    return response.data.data;
+  },
+
+  async getGalleryAnalytics(id) {
+    const response = await api.get(`/api/photocam/galleries/${id}/analytics`);
+    return response.data.data;
+  },
+
+  // ==================== REPORTS ====================
+  async createReport(payload) {
+    const response = await api.post('/api/photocam/reports', payload);
+    return response.data.data;
+  },
+
+  async getReports(params = {}) {
+    const response = await api.get('/api/photocam/reports', { params });
+    return response.data;
+  },
+
+  async getReport(id) {
+    const response = await api.get(`/api/photocam/reports/${id}`);
+    return response.data.data;
+  },
+
+  async generateReport(id) {
+    const response = await api.post(`/api/photocam/reports/${id}/generate`);
+    return response.data.data;
+  },
+
+  async getReportDownload(id) {
+    const response = await api.get(`/api/photocam/reports/${id}/download`);
     return response.data.data;
   },
 

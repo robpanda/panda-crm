@@ -1,6 +1,7 @@
 // Template Service for Photocam
 import prisma from '../prisma.js';
 import { logger } from '../middleware/logger.js';
+import { validateTemplateForPublishPayload } from './validationService.js';
 
 /**
  * Create a new checklist template
@@ -13,9 +14,14 @@ export async function createTemplate(data, userId) {
       name: data.name,
       description: data.description,
       category: data.category,
+      templateType: data.templateType || 'CHECKLIST',
       isActive: true,
+      isPublished: data.isPublished ?? false,
+      pandaPhotoOnly: data.pandaPhotoOnly ?? false,
+      companyScope: data.companyScope || null,
       createdById: userId,
       structure: data.structure, // JSON containing sections and items structure
+      configJson: data.configJson || null,
     },
     include: {
       createdBy: {
@@ -49,6 +55,10 @@ export async function getTemplates(filters = {}) {
       { name: { contains: filters.search, mode: 'insensitive' } },
       { description: { contains: filters.search, mode: 'insensitive' } },
     ];
+  }
+
+  if (filters.templateType) {
+    where.templateType = filters.templateType;
   }
 
   const templates = await prisma.checklistTemplate.findMany({
@@ -98,8 +108,13 @@ export async function updateTemplate(templateId, data, userId) {
       name: data.name,
       description: data.description,
       category: data.category,
+      templateType: data.templateType,
       isActive: data.isActive,
+      isPublished: data.isPublished,
+      pandaPhotoOnly: data.pandaPhotoOnly,
+      companyScope: data.companyScope,
       structure: data.structure,
+      configJson: data.configJson,
     },
     include: {
       createdBy: {
@@ -109,6 +124,46 @@ export async function updateTemplate(templateId, data, userId) {
   });
 
   return template;
+}
+
+export const validateTemplateForPublish = validateTemplateForPublishPayload;
+
+export async function publishTemplate(templateId, userId) {
+  const template = await prisma.checklistTemplate.findUnique({ where: { id: templateId } });
+  if (!template) {
+    const error = new Error('Template not found');
+    error.code = 'NOT_FOUND';
+    error.statusCode = 404;
+    throw error;
+  }
+
+  validateTemplateForPublish(template);
+
+  return prisma.checklistTemplate.update({
+    where: { id: templateId },
+    data: {
+      isPublished: true,
+      isActive: true,
+    },
+  });
+}
+
+export async function archiveTemplate(templateId, userId) {
+  const template = await prisma.checklistTemplate.findUnique({ where: { id: templateId } });
+  if (!template) {
+    const error = new Error('Template not found');
+    error.code = 'NOT_FOUND';
+    error.statusCode = 404;
+    throw error;
+  }
+
+  return prisma.checklistTemplate.update({
+    where: { id: templateId },
+    data: {
+      isPublished: false,
+      isActive: false,
+    },
+  });
 }
 
 /**
@@ -341,6 +396,23 @@ export const DEFAULT_TEMPLATES = [
   },
 ];
 
+export const DEFAULT_REPORT_TEMPLATES = [
+  { name: 'Completion Photos', description: 'Final completion report for project closeout' },
+  { name: 'Roofing Tune Up Inspection Report', description: 'Inspection summary for tune-up jobs' },
+  { name: 'Panda Interiors: Bathroom Report', description: 'Bathroom remodel visual report template' },
+  { name: 'Remote PM Template Beta', description: 'Remote PM photo report with checklist sections' },
+];
+
+export const DEFAULT_CHECKLIST_TEMPLATE_NAMES = [
+  'Panda Interiors: Bath Redesign',
+  'Photos for Bath Redesign Agreement',
+  'Insurance Inspection Checklist',
+  'Panda Inspection Photos',
+  'Installation Photos',
+  'Material Pick Up',
+  'Retail Checklist',
+];
+
 export const templateService = {
   createTemplate,
   getTemplates,
@@ -351,7 +423,11 @@ export const templateService = {
   instantiateTemplate,
   getTemplateCategories,
   duplicateTemplate,
+  publishTemplate,
+  archiveTemplate,
   DEFAULT_TEMPLATES,
+  DEFAULT_REPORT_TEMPLATES,
+  DEFAULT_CHECKLIST_TEMPLATE_NAMES,
 };
 
 export default templateService;

@@ -1604,6 +1604,8 @@ model User {
   beforeAfterComparisonsCreated                    BeforeAfterComparison[] @relation("ComparisonCreatedBy")
   photoPagesCreated                                PhotoPage[]             @relation("PageCreatedBy")
   photoGalleriesCreated                            PhotoGallery[]          @relation("GalleryCreatedBy")
+  photoReportsCreated                              PhotoReport[]           @relation("PhotoReportCreatedBy")
+  photoExportJobsCreated                           PhotoExportJob[]        @relation("PhotoExportJobCreatedBy")
   projectCollaborations                            ProjectCollaborator[]   @relation("ProjectCollaboratorUser")
   projectCollaborationsInvited                     ProjectCollaborator[]   @relation("ProjectCollaboratorInvitedBy")
   photoProjectActivities                           PhotoProjectActivity[]  @relation("PhotoActivityUser")
@@ -5060,6 +5062,26 @@ enum GalleryStatus {
   ARCHIVED
 }
 
+enum PhotoTemplateType {
+  CHECKLIST
+  REPORT
+}
+
+enum PhotoReportStatus {
+  PENDING
+  PROCESSING
+  GENERATED
+  FAILED
+}
+
+enum PhotoExportStatus {
+  PENDING
+  PROCESSING
+  READY
+  FAILED
+  EXPIRED
+}
+
 // PandaCam Photo Project Model
 model PhotoProject {
   id                String              @id @default(cuid())
@@ -5113,6 +5135,8 @@ model PhotoProject {
   checklists        PhotoChecklist[]
   pages             PhotoPage[]
   galleries         PhotoGallery[]
+  photoReports      PhotoReport[]
+  photoExportJobs   PhotoExportJob[]
   comparisons       BeforeAfterComparison[]
   collaborators     ProjectCollaborator[]
   activities        PhotoProjectActivity[]
@@ -5164,6 +5188,8 @@ model Photo {
 
   // Tags and categorization
   tags                String[]             @default([])
+  notes               String?
+  customerVisible     Boolean              @default(false) @map("customer_visible")
 
   // AI Analysis
   aiLabels            String[]             @default([]) @map("ai_labels")
@@ -5196,6 +5222,7 @@ model Photo {
 
   annotations         PhotoAnnotation[]
   galleryPhotos       GalleryPhoto[]
+  reportItems         PhotoReportItem[]
 
   @@index([projectId])
   @@index([photoType])
@@ -5332,6 +5359,10 @@ model PhotoChecklistItem {
   sortOrder       Int                 @default(0) @map("sort_order")
   isRequired      Boolean             @default(false) @map("is_required")
   requiresPhoto   Boolean             @default(false) @map("requires_photo")
+  minPhotoCount   Int                 @default(1) @map("min_photo_count")
+  notesRequired   Boolean             @default(false) @map("notes_required")
+  gpsRequired     Boolean             @default(false) @map("gps_required")
+  timestampRequired Boolean           @default(false) @map("timestamp_required")
 
   // Field options (for MULTIPLE_CHOICE, RATING, etc.)
   options         Json?               // Array of options for choice fields
@@ -5398,6 +5429,11 @@ model ChecklistTemplate {
 
   // Permissions
   isPublic        Boolean         @default(false) @map("is_public") // Available to all users
+  templateType    PhotoTemplateType @default(CHECKLIST) @map("template_type")
+  isPublished     Boolean         @default(false) @map("is_published")
+  pandaPhotoOnly  Boolean         @default(false) @map("panda_photo_only")
+  companyScope    String?         @map("company_scope")
+  configJson      Json?           @map("config_json")
 
   createdById     String?         @map("created_by_id")
   createdAt       DateTime        @default(now()) @map("created_at")
@@ -5406,6 +5442,7 @@ model ChecklistTemplate {
   // Relations
   createdBy       User?           @relation("ChecklistTemplateCreatedBy", fields: [createdById], references: [id])
   checklists      PhotoChecklist[]
+  photoReports    PhotoReport[]
 
   @@index([category])
   @@index([isActive])
@@ -5514,6 +5551,8 @@ model PhotoGallery {
   passwordHash    String?         @map("password_hash")
   viewCount       Int             @default(0) @map("view_count")
   downloadEnabled Boolean         @default(true) @map("download_enabled")
+  isPortalVisible Boolean         @default(false) @map("is_portal_visible")
+  lastViewedAt    DateTime?       @map("last_viewed_at")
 
   createdById     String?         @map("created_by_id")
   createdAt       DateTime        @default(now()) @map("created_at")
@@ -5550,6 +5589,76 @@ model GalleryPhoto {
   @@index([galleryId])
   @@index([photoId])
   @@map("gallery_photos")
+}
+
+model PhotoReport {
+  id              String            @id @default(cuid())
+  name            String
+  templateId      String?           @map("template_id")
+  projectId       String?           @map("project_id")
+  opportunityId   String?           @map("opportunity_id")
+  status          PhotoReportStatus @default(PENDING)
+  reportConfig    Json?             @map("report_config")
+  fileKey         String?           @map("file_key")
+  fileUrl         String?           @map("file_url")
+  generatedAt     DateTime?         @map("generated_at")
+  errorMessage    String?           @map("error_message")
+  createdById     String?           @map("created_by_id")
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+
+  template        ChecklistTemplate? @relation(fields: [templateId], references: [id])
+  project         PhotoProject?      @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  createdBy       User?              @relation("PhotoReportCreatedBy", fields: [createdById], references: [id])
+  items           PhotoReportItem[]
+
+  @@index([templateId])
+  @@index([projectId])
+  @@index([opportunityId])
+  @@index([status])
+  @@map("photo_reports")
+}
+
+model PhotoReportItem {
+  id              String      @id @default(cuid())
+  reportId        String      @map("report_id")
+  photoId         String?     @map("photo_id")
+  checklistItemId String?     @map("checklist_item_id")
+  sectionKey      String?     @map("section_key")
+  sortOrder       Int         @default(0) @map("sort_order")
+  createdAt       DateTime    @default(now()) @map("created_at")
+
+  report          PhotoReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+  photo           Photo?      @relation(fields: [photoId], references: [id], onDelete: SetNull)
+
+  @@index([reportId])
+  @@index([photoId])
+  @@index([checklistItemId])
+  @@map("photo_report_items")
+}
+
+model PhotoExportJob {
+  id              String            @id @default(cuid())
+  projectId       String?           @map("project_id")
+  opportunityId   String?           @map("opportunity_id")
+  outputFormat    String            @map("output_format")
+  status          PhotoExportStatus @default(PENDING)
+  requestJson     Json              @map("request_json")
+  fileKey         String?           @map("file_key")
+  fileUrl         String?           @map("file_url")
+  expiresAt       DateTime?         @map("expires_at")
+  errorMessage    String?           @map("error_message")
+  createdById     String?           @map("created_by_id")
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+
+  project         PhotoProject?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  createdBy       User?             @relation("PhotoExportJobCreatedBy", fields: [createdById], references: [id])
+
+  @@index([projectId])
+  @@index([opportunityId])
+  @@index([status])
+  @@map("photo_export_jobs")
 }
 
 // PandaCam Project Collaborator Model
