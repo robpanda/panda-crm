@@ -16,6 +16,10 @@ const THUMBNAIL_SIZE = 400;
 const JPEG_QUALITY = 85;
 const MAX_INLINE_BULK_EXPORT_ITEMS = 80;
 
+function shouldQueueBulkExport(photoCount) {
+  return Number(photoCount || 0) > MAX_INLINE_BULK_EXPORT_ITEMS;
+}
+
 function sanitizeFilename(name, fallback = 'photo') {
   const raw = (name || fallback).trim();
   return raw.replace(/[^a-zA-Z0-9._-]/g, '_') || fallback;
@@ -730,7 +734,7 @@ export async function createBulkDownload(payload = {}, userId) {
     };
   }
 
-  if (photos.length > MAX_INLINE_BULK_EXPORT_ITEMS) {
+  if (shouldQueueBulkExport(photos.length)) {
     return {
       exportJobId: exportJob.id,
       status: 'PENDING',
@@ -838,6 +842,15 @@ export const photoService = {
   createBulkDownload,
   getBulkDownloadStatus,
   processImage,
+};
+
+export const photoServiceTestables = {
+  sanitizeFilename,
+  detectImageFormat,
+  buildBulkZipBuffer,
+  buildBulkPdfBuffer,
+  shouldQueueBulkExport,
+  MAX_INLINE_BULK_EXPORT_ITEMS,
 };
 
 export default photoService;
