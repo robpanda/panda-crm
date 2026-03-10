@@ -1203,12 +1203,12 @@ class LeadService {
         // Keep conversion compatible by assigning job id + core records now only.
         opportunity = await tx.opportunity.create({
           data: {
-            name: options.opportunityName || `${lead.firstName} ${lead.lastName} - ${new Date().toLocaleDateString()}`,
+            name: options.opportunityName || lead.company || `${lead.firstName} ${lead.lastName}`,
             job_id: jobId, // Auto-assigned Job ID (using underscore field name from schema)
             accountId: account.id,
             contactId: contact.id,
             stage: 'LEAD_ASSIGNED',
-            type: options.opportunityType || 'INSURANCE',
+            type: options.opportunityType || undefined,
             leadSource: lead.source,
             isSelfGen: lead.isSelfGen,
             ownerId: lead.ownerId,

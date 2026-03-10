@@ -94,8 +94,8 @@ export async function getGalleryById(galleryId) {
               thumbnailUrl: true,
               originalUrl: true,
               caption: true,
-              type: true,
-              takenAt: true,
+              photoType: true,
+              capturedAt: true,
             },
           },
         },
@@ -103,8 +103,21 @@ export async function getGalleryById(galleryId) {
       },
     },
   });
+  if (!gallery) return null;
 
-  return gallery;
+  return {
+    ...gallery,
+    photos: (gallery.photos || []).map((item) => ({
+      ...item,
+      photo: item.photo
+        ? {
+          ...item.photo,
+          type: item.photo.photoType || null,
+          takenAt: item.photo.capturedAt || null,
+        }
+        : null,
+    })),
+  };
 }
 
 /**
@@ -340,8 +353,8 @@ export async function getGalleryByShareToken(shareToken, password = null) {
               displayUrl: true,
               thumbnailUrl: true,
               caption: true,
-              type: true,
-              takenAt: true,
+              photoType: true,
+              capturedAt: true,
             },
           },
         },
@@ -375,7 +388,19 @@ export async function getGalleryByShareToken(shareToken, password = null) {
 
   // Remove hash from response
   const { passwordHash: _, ...galleryData } = gallery;
-  return galleryData;
+  return {
+    ...galleryData,
+    photos: (galleryData.photos || []).map((item) => ({
+      ...item,
+      photo: item.photo
+        ? {
+          ...item.photo,
+          type: item.photo.photoType || null,
+          takenAt: item.photo.capturedAt || null,
+        }
+        : null,
+    })),
+  };
 }
 
 export async function getSharedPhotoDownloadByToken(shareToken, photoId, password = null) {
@@ -480,14 +505,18 @@ export async function getLiveGalleryPhotos(galleryId) {
       displayUrl: true,
       thumbnailUrl: true,
       caption: true,
-      type: true,
-      takenAt: true,
+      photoType: true,
+      capturedAt: true,
       createdAt: true,
     },
     orderBy: { createdAt: 'desc' },
   });
 
-  return photos;
+  return photos.map((photo) => ({
+    ...photo,
+    type: photo.photoType || null,
+    takenAt: photo.capturedAt || null,
+  }));
 }
 
 /**

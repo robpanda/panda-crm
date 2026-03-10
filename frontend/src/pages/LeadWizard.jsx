@@ -1307,16 +1307,20 @@ export default function LeadWizard() {
     const conversionData = {
       accountName: formData.company || `${formData.firstName} ${formData.lastName}`,
       // Note: opportunityName not sent - backend auto-generates using job number
-      opportunityType,
       createOpportunity: true,
-      // Pass work type and appointment for Service Appointment creation
-      workType: effectiveWorkType,
       tentativeAppointmentDate: tentativeAppointmentDateTime,
       createServiceAppointment: !!tentativeAppointmentDateTime,
       leadSetById: formData.leadSetById,
       leadStatus: effectiveLeadStatus,
       leadDisposition: effectiveLeadDisposition,
     };
+    // Work type is intentionally not set during conversion; Result Appointment wizard determines it.
+    if (options.workType) {
+      conversionData.workType = options.workType;
+    }
+    if (opportunityType) {
+      conversionData.opportunityType = opportunityType;
+    }
 
     const result = await leadsApi.convertLead(targetLeadId, conversionData);
     const opportunityId = result?.opportunity?.id;
@@ -1711,13 +1715,8 @@ export default function LeadWizard() {
       const currentGatingState = gatingStateResponse?.data || gatingStateResponse;
       setGatingState(currentGatingState);
 
-      // Convert directly; job type/workflow routing is handled in Result Appointment wizard.
-      const resolvedOpportunityType = currentGatingState?.salesPath === 'RETAIL'
-        ? 'RETAIL'
-        : currentGatingState?.salesPath === 'INSURANCE'
-          ? 'INSURANCE'
-          : 'INSURANCE';
-      await convertLeadWithOpportunityType(resolvedOpportunityType, {
+      // Convert directly; work type/type is finalized in Result Appointment wizard.
+      await convertLeadWithOpportunityType(null, {
         leadId,
         tentativeAppointmentDate: appointmentResult?.suggestion?.appointmentDate,
         tentativeAppointmentTime: appointmentResult?.suggestion?.appointmentTime,

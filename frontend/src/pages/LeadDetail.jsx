@@ -735,11 +735,7 @@ export default function LeadDetail() {
     try {
       await leadsApi.selectSalesPath(id, path);
       queryClient.invalidateQueries(['lead', id]);
-      const workType = path === 'RETAIL' ? 'Retail' : 'Insurance';
-      await handleConvert({
-        opportunityType: path,
-        workType,
-      });
+      await handleConvert();
     } catch (error) {
       alert(error?.message || 'Unable to select sales path.');
     }

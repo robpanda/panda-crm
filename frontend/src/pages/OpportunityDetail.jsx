@@ -206,6 +206,36 @@ function formatAdjusterOfficePhone(phone, extension) {
   return `${normalizedPhone} ext ${normalizedExtension}`.trim();
 }
 
+function toDateInputValue(value) {
+  if (!value) return '';
+  const raw = String(value);
+  const isoMatch = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (isoMatch?.[1]) return isoMatch[1];
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return '';
+  const year = parsed.getUTCFullYear();
+  const month = String(parsed.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(parsed.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function toSafeIsoDateTime(dateInput) {
+  if (!dateInput) return null;
+  const value = String(dateInput).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  return `${value}T12:00:00.000Z`;
+}
+
+function formatDateFromStoredValue(value) {
+  if (!value) return null;
+  const datePart = toDateInputValue(value);
+  if (!datePart) return null;
+  const [year, month, day] = datePart.split('-').map((n) => Number(n));
+  if (!year || !month || !day) return null;
+  const utcDate = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  return utcDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+}
+
 // SMS Modal Component with Canned Responses (same as LeadDetail)
 function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {} }) {
   const [message, setMessage] = useState('');
@@ -2489,8 +2519,8 @@ export default function OpportunityDetail() {
       setClaimForm({
         insuranceCarrier: opportunity.insuranceCarrier || '',
         claimNumber: opportunity.claimNumber || '',
-        dateOfLoss: opportunity.dateOfLoss ? new Date(opportunity.dateOfLoss).toISOString().split('T')[0] : '',
-        claimFiledDate: opportunity.claimFiledDate ? new Date(opportunity.claimFiledDate).toISOString().split('T')[0] : '',
+        dateOfLoss: toDateInputValue(opportunity.dateOfLoss),
+        claimFiledDate: toDateInputValue(opportunity.claimFiledDate),
         damageLocation: opportunity.damageLocation || '',
         adjusterName: opportunity.adjusterName || '',
         adjusterEmail: opportunity.adjusterEmail || '',
@@ -2570,8 +2600,8 @@ export default function OpportunityDetail() {
     const updateData = {
       insuranceCarrier: claimForm.insuranceCarrier || null,
       claimNumber: claimForm.claimNumber || null,
-      dateOfLoss: claimForm.dateOfLoss ? new Date(claimForm.dateOfLoss).toISOString() : null,
-      claimFiledDate: claimForm.claimFiledDate ? new Date(claimForm.claimFiledDate).toISOString() : null,
+      dateOfLoss: toSafeIsoDateTime(claimForm.dateOfLoss),
+      claimFiledDate: toSafeIsoDateTime(claimForm.claimFiledDate),
       damageLocation: claimForm.damageLocation || null,
       adjusterName: claimForm.adjusterName || null,
       adjusterEmail: claimForm.adjusterEmail || null,
@@ -2722,7 +2752,7 @@ export default function OpportunityDetail() {
   const { data: crews = [] } = useQuery({
     queryKey: ['crews'],
     queryFn: () => scheduleApi.getResources({ resourceType: 'CREW' }),
-    enabled: showCrewModal,
+    enabled: showCrewModal || (activeTab === 'details' && detailsSubTab === 'jobTeam'),
   });
 
   // Assign crew mutation
@@ -3637,6 +3667,49 @@ export default function OpportunityDetail() {
       return haystack.includes(query);
     });
   }, [availableTransferOwners, transferOwnerSearchTerm]);
+  const teamAssignableUsers = usersForDropdown?.data || usersForDropdown || [];
+  const appointmentsForTeam = Array.isArray(appointments) ? appointments : [];
+  const primaryCrewMember = useMemo(() => {
+    for (const appointment of appointmentsForTeam) {
+      const crewList = Array.isArray(appointment?.crew) ? appointment.crew : [];
+      if (crewList.length > 0) {
+        const primary = crewList.find((resource) => resource?.isPrimary) || crewList[0];
+        if (primary?.id) return primary;
+      }
+    }
+    return null;
+  }, [appointmentsForTeam]);
+  const crewAssignmentAppointment = useMemo(() => {
+    const withIds = appointmentsForTeam.filter((appointment) => Boolean(appointment?.id));
+    if (withIds.length === 0) return null;
+    return withIds[0];
+  }, [appointmentsForTeam]);
+  const showInsuranceClaimSection = useMemo(() => {
+    const disposition = String(opportunity?.currentDispositionCategory || '').toUpperCase();
+    const selectedInsurancePath = disposition === 'INSURANCE_CLAIM_FILED' || disposition === 'INSURANCE_NO_CLAIM';
+    const hasInsuranceData = Boolean(
+      opportunity?.insuranceCarrier
+      || opportunity?.claimNumber
+      || opportunity?.dateOfLoss
+      || opportunity?.claimFiledDate
+      || opportunity?.adjusterName
+      || opportunity?.adjusterEmail
+      || opportunity?.adjusterOfficePhone
+      || opportunity?.fieldAdjusterMobile
+    );
+    return selectedInsurancePath || hasInsuranceData || String(opportunity?.workType || '').toLowerCase().includes('insurance');
+  }, [
+    opportunity?.currentDispositionCategory,
+    opportunity?.insuranceCarrier,
+    opportunity?.claimNumber,
+    opportunity?.dateOfLoss,
+    opportunity?.claimFiledDate,
+    opportunity?.adjusterName,
+    opportunity?.adjusterEmail,
+    opportunity?.adjusterOfficePhone,
+    opportunity?.fieldAdjusterMobile,
+    opportunity?.workType,
+  ]);
   // Calculate badge counts for the new category tabs (must be before early returns)
   const categoryBadgeCounts = useMemo(() => ({
     schedule: (appointments?.length || 0) + (tasks?.filter(t => t.status !== 'COMPLETED')?.length || 0),
@@ -3841,7 +3914,7 @@ export default function OpportunityDetail() {
                   </h1>
                   <div className="flex items-center gap-2 mt-1 flex-wrap">
                     <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-blue-100 text-blue-700">
-                      {opportunity.workType || 'Insurance'}
+                      {opportunity.workType || 'Not Set'}
                     </span>
                     <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-emerald-100 text-emerald-700">
                       {opportunity.stage?.replace(/_/g, ' ') || 'Lead'}
@@ -4087,7 +4160,7 @@ export default function OpportunityDetail() {
                         <span>Update Meeting Outcome</span>
                       </button>
                       {/* Prepare Specs - Only show for insurance opportunities after claim approved */}
-                      {(opportunity.type === 'INSURANCE' || opportunity.workType?.toLowerCase().includes('insurance')) && (
+                      {showInsuranceClaimSection && (
                         <button
                           onClick={() => {
                             setShowSpecsPreparation(true);
@@ -5515,46 +5588,94 @@ export default function OpportunityDetail() {
                       )}
 
                       {/* Project Manager */}
-                      {opportunity?.projectManager && (
-                        <div className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-panda-primary transition-colors">
+                      <div className="p-4 border border-gray-200 rounded-lg hover:border-panda-primary transition-colors space-y-3">
+                        <div className="flex items-center justify-between">
                           <div className="flex items-center space-x-3">
                             <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-violet-500 flex items-center justify-center">
                               <span className="text-white text-sm font-medium">
-                                {opportunity.projectManager.firstName?.charAt(0)}{opportunity.projectManager.lastName?.charAt(0)}
+                                {opportunity?.projectManager?.firstName?.charAt(0) || 'P'}
+                                {opportunity?.projectManager?.lastName?.charAt(0) || 'M'}
                               </span>
                             </div>
                             <div>
-                              <Link
-                                to={`/users/${opportunity.projectManager.id}`}
-                                className="font-medium text-gray-900 hover:text-panda-primary"
-                              >
-                                {opportunity.projectManager.firstName} {opportunity.projectManager.lastName}
-                              </Link>
+                              {opportunity?.projectManager?.id ? (
+                                <Link
+                                  to={`/users/${opportunity.projectManager.id}`}
+                                  className="font-medium text-gray-900 hover:text-panda-primary"
+                                >
+                                  {opportunity.projectManager.firstName} {opportunity.projectManager.lastName}
+                                </Link>
+                              ) : (
+                                <p className="font-medium text-gray-900">Not assigned</p>
+                              )}
                               <p className="text-sm text-gray-500">Project Manager</p>
                             </div>
                           </div>
-                          <div className="flex items-center space-x-2">
-                            {opportunity.projectManager.phone && (
-                              <a
-                                href={`tel:${opportunity.projectManager.phone}`}
-                                className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
-                                title="Call"
-                              >
-                                <Phone className="w-4 h-4" />
-                              </a>
-                            )}
-                            {opportunity.projectManager.email && (
-                              <a
-                                href={`mailto:${opportunity.projectManager.email}`}
-                                className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                                title="Email"
-                              >
-                                <Mail className="w-4 h-4" />
-                              </a>
-                            )}
+                        </div>
+                        <select
+                          value={opportunity?.projectManagerId || ''}
+                          onChange={async (e) => {
+                            await updateMutation.mutateAsync({ projectManagerId: e.target.value || null });
+                          }}
+                          disabled={updateMutation.isPending}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary disabled:opacity-50"
+                        >
+                          <option value="">Assign project manager…</option>
+                          {teamAssignableUsers.map((teamUser) => (
+                            <option key={teamUser.id} value={teamUser.id}>
+                              {teamUser.firstName} {teamUser.lastName}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Crew */}
+                      <div className="p-4 border border-gray-200 rounded-lg hover:border-panda-primary transition-colors space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-3">
+                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center">
+                              <Users className="w-5 h-5 text-white" />
+                            </div>
+                            <div>
+                              <p className="font-medium text-gray-900">{primaryCrewMember?.name || 'Not assigned'}</p>
+                              <p className="text-sm text-gray-500">Crew</p>
+                            </div>
                           </div>
                         </div>
-                      )}
+                        <div className="flex flex-col sm:flex-row gap-2">
+                          <select
+                            value={selectedCrewId}
+                            onChange={(e) => setSelectedCrewId(e.target.value)}
+                            className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary"
+                          >
+                            <option value="">Assign crew…</option>
+                            {(crews?.data || crews || []).map((crew) => (
+                              <option key={crew.id} value={crew.id}>
+                                {crew.name} {crew.territory?.name ? `(${crew.territory.name})` : ''}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!crewAssignmentAppointment?.id || !selectedCrewId) return;
+                              assignCrewMutation.mutate({
+                                appointmentId: crewAssignmentAppointment.id,
+                                resourceId: selectedCrewId,
+                              });
+                            }}
+                            disabled={!selectedCrewId || !crewAssignmentAppointment?.id || assignCrewMutation.isPending}
+                            className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium text-white bg-panda-primary rounded-lg hover:bg-panda-dark disabled:opacity-50"
+                          >
+                            {assignCrewMutation.isPending ? 'Assigning…' : 'Assign'}
+                          </button>
+                        </div>
+                        {!crewAssignmentAppointment?.id && (
+                          <p className="text-xs text-amber-600">
+                            Schedule at least one appointment before assigning a crew.
+                          </p>
+                        )}
+                      </div>
 
                       {/* Onboarded By */}
                       {opportunity?.onboardedBy && (
@@ -5641,7 +5762,7 @@ export default function OpportunityDetail() {
                       )}
 
                       {/* Empty State */}
-                      {!opportunity?.owner && !opportunity?.projectManager && !opportunity?.onboardedBy && !opportunity?.approvedBy && (
+                      {!hasOwnerTeamMember && !opportunity?.projectManager && !opportunity?.onboardedBy && !opportunity?.approvedBy && !primaryCrewMember && (
                         <div className="text-center py-8 text-gray-500">
                           <UserCircle className="w-12 h-12 mx-auto text-gray-300 mb-2" />
                           <p>No team members assigned</p>
@@ -8318,7 +8439,7 @@ export default function OpportunityDetail() {
             </div>
 
             {/* Claim Information Card - Only show for Insurance opportunities */}
-            {(opportunity.type === 'INSURANCE' || opportunity.workType?.toLowerCase().includes('insurance')) && (
+            {showInsuranceClaimSection && (
               <div className="bg-white rounded-xl shadow-sm border border-gray-200">
                 <div className="p-5 border-b border-gray-100 flex items-center justify-between">
                   <h2 className="text-lg font-semibold text-gray-900">Claim Information</h2>
@@ -8465,17 +8586,13 @@ export default function OpportunityDetail() {
                       <div>
                         <label className="text-sm text-gray-500">Date of Loss</label>
                         <p className={`font-medium ${opportunity.dateOfLoss ? 'text-gray-900' : 'text-gray-500 italic'}`}>
-                          {opportunity.dateOfLoss
-                            ? new Date(opportunity.dateOfLoss).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-                            : 'Not set'}
+                          {formatDateFromStoredValue(opportunity.dateOfLoss) || 'Not set'}
                         </p>
                       </div>
                       <div>
                         <label className="text-sm text-gray-500">Claim Filed Date</label>
                         <p className={`font-medium ${opportunity.claimFiledDate ? 'text-gray-900' : 'text-gray-500 italic'}`}>
-                          {opportunity.claimFiledDate
-                            ? new Date(opportunity.claimFiledDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-                            : 'Not set'}
+                          {formatDateFromStoredValue(opportunity.claimFiledDate) || 'Not set'}
                         </p>
                       </div>
                       <div>

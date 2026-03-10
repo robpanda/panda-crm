@@ -41,6 +41,13 @@ const lineItemSchema = z.object({
   unitPrice: z.number().nonnegative(),
 });
 
+const additionalChargeSchema = z.object({
+  name: z.string().min(1).default('Supplement'),
+  amount: z.number().nonnegative(),
+  notes: z.string().optional().nullable(),
+  chargeType: z.enum(['LATE_FEE', 'SERVICE_FEE', 'PROCESSING_FEE', 'ADJUSTMENT', 'OTHER']).optional(),
+});
+
 const createInvoiceSchema = z.object({
   accountId: z.string(),
   opportunityId: z.string().optional(),
@@ -60,6 +67,9 @@ const updateInvoiceSchema = z.object({
   dueDate: z.string().datetime().optional(),
   terms: z.number().int().positive().optional(),
   tax: z.number().nonnegative().optional(),
+  notes: z.string().optional().nullable(),
+  lineItems: z.array(lineItemSchema).optional(),
+  additionalCharges: z.array(additionalChargeSchema).optional(),
   status: z.enum(['DRAFT', 'PENDING', 'SENT', 'PARTIAL', 'PAID', 'OVERDUE', 'VOID']).optional(),
 });
 
@@ -246,6 +256,7 @@ export async function getInvoice(req, res, next) {
           orderBy: { paymentDate: 'desc' },
         },
         lineItems: true,
+        additionalCharges: true,
       },
     });
 
@@ -335,7 +346,13 @@ export async function updateInvoice(req, res, next) {
     const { id } = req.params;
     const data = updateInvoiceSchema.parse(req.body);
 
-    const existing = await prisma.invoice.findUnique({ where: { id } });
+    const existing = await prisma.invoice.findUnique({
+      where: { id },
+      include: {
+        lineItems: true,
+        additionalCharges: true,
+      },
+    });
     if (!existing) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
@@ -346,6 +363,8 @@ export async function updateInvoice(req, res, next) {
     }
 
     const updateData = { ...data };
+    const hasLineItems = Array.isArray(data.lineItems);
+    const hasAdditionalCharges = Array.isArray(data.additionalCharges);
 
     // Recalculate due date if terms or invoice date changed
     if (data.invoiceDate || data.terms) {
@@ -356,18 +375,83 @@ export async function updateInvoice(req, res, next) {
       updateData.dueDate = addDays(invoiceDate, terms);
     }
 
-    const invoice = await prisma.invoice.update({
-      where: { id },
-      data: {
-        ...updateData,
-        invoiceDate: data.invoiceDate ? new Date(data.invoiceDate) : undefined,
-        dueDate: updateData.dueDate,
-      },
-      include: {
-        account: { select: { id: true, name: true } },
-        lineItems: true,
-        payments: true,
-      },
+    if (hasLineItems || hasAdditionalCharges || data.tax !== undefined) {
+      const safeLineItems = hasLineItems ? data.lineItems : (existing.lineItems || []);
+      const lineTotals = calculateTotals(
+        safeLineItems.map((item) => ({
+          description: item.description,
+          quantity: Number(item.quantity || 1),
+          unitPrice: Number(item.unitPrice || 0),
+        })),
+        0
+      );
+      const sourceCharges = hasAdditionalCharges ? data.additionalCharges : (existing.additionalCharges || []);
+      const additionalChargesTotal = sourceCharges
+        .reduce((sum, charge) => sum + Number(charge.amount || 0), 0);
+      const taxAmount = Number(data.tax ?? existing.tax ?? 0);
+      const subtotal = lineTotals.subtotal;
+      const total = new Decimal(subtotal).plus(taxAmount).plus(additionalChargesTotal).toNumber();
+      const amountPaid = Number(existing.amountPaid || 0);
+
+      updateData.subtotal = subtotal;
+      updateData.tax = taxAmount;
+      updateData.total = total;
+      updateData.balanceDue = Math.max(total - amountPaid, 0);
+    }
+
+    delete updateData.lineItems;
+    delete updateData.additionalCharges;
+
+    const invoice = await prisma.$transaction(async (tx) => {
+      if (hasLineItems) {
+        await tx.invoiceLineItem.deleteMany({ where: { invoiceId: id } });
+        if (data.lineItems.length > 0) {
+          const normalizedLineItems = data.lineItems.map((item) => ({
+            description: item.description,
+            quantity: Number(item.quantity || 1),
+            unitPrice: Number(item.unitPrice || 0),
+            totalPrice: new Decimal(item.quantity || 1).times(Number(item.unitPrice || 0)).toNumber(),
+          }));
+          await tx.invoiceLineItem.createMany({
+            data: normalizedLineItems.map((item) => ({
+              invoiceId: id,
+              ...item,
+            })),
+          });
+        }
+      }
+
+      if (hasAdditionalCharges) {
+        await tx.invoiceAdditionalCharge.deleteMany({ where: { invoiceId: id } });
+        const normalizedCharges = data.additionalCharges
+          .filter((charge) => Number(charge.amount || 0) > 0)
+          .map((charge) => ({
+            invoiceId: id,
+            name: charge.name || 'Supplement',
+            amount: Number(charge.amount || 0),
+            fixedAmount: Number(charge.amount || 0),
+            chargeType: charge.chargeType || 'ADJUSTMENT',
+            notes: charge.notes || null,
+          }));
+        if (normalizedCharges.length > 0) {
+          await tx.invoiceAdditionalCharge.createMany({ data: normalizedCharges });
+        }
+      }
+
+      return tx.invoice.update({
+        where: { id },
+        data: {
+          ...updateData,
+          invoiceDate: data.invoiceDate ? new Date(data.invoiceDate) : undefined,
+          dueDate: updateData.dueDate,
+        },
+        include: {
+          account: { select: { id: true, name: true } },
+          lineItems: true,
+          additionalCharges: true,
+          payments: true,
+        },
+      });
     });
 
     res.json(invoice);
@@ -675,8 +759,8 @@ ${Buffer.from(pdfResult.pdfBytes).toString('base64')}`;
         // Store payment link for reference
         ...(paymentLink && { stripePaymentLinkUrl: paymentLink }),
         ...(pdfResult && {
-          pdfUrl: pdfResult.downloadUrl,
-          pdfKey: pdfResult.key,
+          pdf_url: pdfResult.downloadUrl,
+          pdf_key: pdfResult.key,
         }),
       },
       include: {
@@ -974,8 +1058,8 @@ export async function generateInvoicePdf(req, res, next) {
     await prisma.invoice.update({
       where: { id },
       data: {
-        pdfUrl: pdfResult.downloadUrl,
-        pdfKey: pdfResult.key,
+        pdf_url: pdfResult.downloadUrl,
+        pdf_key: pdfResult.key,
       },
     });
 
@@ -1048,8 +1132,8 @@ export async function getInvoicePdf(req, res, next) {
     await prisma.invoice.update({
       where: { id },
       data: {
-        pdfUrl: pdfResult.downloadUrl,
-        pdfKey: pdfResult.key,
+        pdf_url: pdfResult.downloadUrl,
+        pdf_key: pdfResult.key,
       },
     });
 

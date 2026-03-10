@@ -636,6 +636,9 @@ class OpportunityService {
           owner: {
             select: { id: true, firstName: true, lastName: true, email: true },
           },
+          projectManager: {
+            select: { id: true, firstName: true, lastName: true, email: true, phone: true, mobilePhone: true },
+          },
           lineItems: {
             orderBy: { sortOrder: 'asc' },
             include: { product: true },
@@ -3251,6 +3254,20 @@ Be factual and professional. Highlight anything that needs attention.`;
       // Owner
       ownerId: opp.ownerId,
       ownerName: opp.owner ? `${opp.owner.firstName} ${opp.owner.lastName}` : 'Unassigned',
+      projectManagerId: opp.projectManagerId || null,
+      projectManager: opp.projectManager || null,
+      // Insurance / claim
+      claimNumber: opp.claimNumber,
+      claimFiledDate: opp.claimFiledDate,
+      insuranceCarrier: opp.insuranceCarrier,
+      adjusterName: opp.adjusterName,
+      adjusterEmail: opp.adjusterEmail,
+      adjusterOfficePhone: opp.adjusterOfficePhone,
+      fieldAdjusterMobile: opp.fieldAdjusterMobile,
+      rcvAmount: opp.rcvAmount ? Number(opp.rcvAmount) : null,
+      acvAmount: opp.acvAmount ? Number(opp.acvAmount) : null,
+      deductible: opp.deductible ? Number(opp.deductible) : null,
+      supplementsTotal: opp.supplementsTotal ? Number(opp.supplementsTotal) : null,
       // Timestamps
       createdAt: opp.createdAt,
       updatedAt: opp.updatedAt,
@@ -3266,17 +3283,6 @@ Be factual and professional. Highlight anything that needs attention.`;
       stageClass: this.getStageClass(opp.stage),
       typeClass: this.getTypeClass(opp.type),
     };
-
-    // Insurance fields
-    if (opp.type === 'INSURANCE') {
-      wrapper.claimNumber = opp.claimNumber;
-      wrapper.claimFiledDate = opp.claimFiledDate;
-      wrapper.insuranceCarrier = opp.insuranceCarrier;
-      wrapper.rcvAmount = opp.rcvAmount ? Number(opp.rcvAmount) : null;
-      wrapper.acvAmount = opp.acvAmount ? Number(opp.acvAmount) : null;
-      wrapper.deductible = opp.deductible ? Number(opp.deductible) : null;
-      wrapper.supplementsTotal = opp.supplementsTotal ? Number(opp.supplementsTotal) : null;
-    }
 
     // Include related records for detail view
     if (includeDetails) {
