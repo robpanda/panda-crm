@@ -47,7 +47,16 @@ const isSalesRabbitPath = (req) => req?.path === '/webhook' && req?.method === '
 
 const extractProvidedSecret = (req) => {
   const authHeader = req.headers.authorization;
+  const forwardedAuthHeader =
+    req.headers['x-forwarded-authorization']
+    || req.headers['x-original-authorization']
+    || req.headers['x-amzn-remapped-authorization']
+    || null;
+
   const [authType, authToken] = authHeader ? authHeader.split(' ') : [null, null];
+  const [forwardedAuthType, forwardedAuthToken] = forwardedAuthHeader
+    ? String(forwardedAuthHeader).split(' ')
+    : [null, null];
 
   return pickFirstValue(
     req.headers['x-webhook-secret'],
@@ -62,8 +71,12 @@ const extractProvidedSecret = (req) => {
     req.query?.apikey,
     req.query?.token,
     authType === 'ApiKey' ? authToken : null,
+    forwardedAuthType === 'ApiKey' ? forwardedAuthToken : null,
     authType === 'Bearer' ? authToken : null,
+    forwardedAuthType === 'Bearer' ? forwardedAuthToken : null,
     authType === 'Token' ? authToken : null,
+    forwardedAuthType === 'Token' ? forwardedAuthToken : null,
+    forwardedAuthHeader && !forwardedAuthToken ? forwardedAuthHeader : null,
     authHeader && !authToken ? authHeader : null
   );
 };

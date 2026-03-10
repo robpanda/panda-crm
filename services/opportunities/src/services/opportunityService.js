@@ -439,14 +439,31 @@ class OpportunityService {
         select: { id: true },
       });
       if (found?.id) return found.id;
+
+      const foundByCognito = await prisma.user.findFirst({
+        where: { cognitoId: String(candidate) },
+        select: { id: true },
+      });
+      if (foundByCognito?.id) return foundByCognito.id;
     }
 
     if (actor.email) {
-      const foundByEmail = await prisma.user.findFirst({
-        where: { email: { equals: String(actor.email), mode: 'insensitive' } },
-        select: { id: true },
-      });
-      if (foundByEmail?.id) return foundByEmail.id;
+      const rawEmail = String(actor.email).trim().toLowerCase();
+      const emailCandidates = new Set([rawEmail]);
+      const [local = '', domain = ''] = rawEmail.split('@');
+      if (local && domain) {
+        emailCandidates.add(`${local.replace(/\./g, '')}@${domain}`);
+        emailCandidates.add(`${local}@${domain.replace('panda-exteriors.com', 'pandaexteriors.com')}`);
+        emailCandidates.add(`${local}@${domain.replace('pandaexteriors.com', 'panda-exteriors.com')}`);
+      }
+
+      for (const email of emailCandidates) {
+        const foundByEmail = await prisma.user.findFirst({
+          where: { email: { equals: email, mode: 'insensitive' } },
+          select: { id: true },
+        });
+        if (foundByEmail?.id) return foundByEmail.id;
+      }
     }
 
     return null;

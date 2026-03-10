@@ -701,12 +701,6 @@ export default function LeadDetail() {
 
   const convertMutation = useMutation({
     mutationFn: async (conversionOverrides = {}) => {
-      // Sales Path Gating: validate before conversion
-      const gatingResult = await leadsApi.validatePreConversion(id);
-      if (!gatingResult?.success || gatingResult?.data?.blocked) {
-        const messages = gatingResult?.data?.messages || ['Lead cannot be converted. Please check all gating requirements.'];
-        throw new Error(messages.join('\n'));
-      }
       const conversionData = { ...conversionOverrides };
       // Pass tentative date/time so backend creates a ServiceAppointment
       if (lead?.tentativeAppointmentDate) {
@@ -1760,7 +1754,7 @@ export default function LeadDetail() {
               </button>
               <button
                 type="button"
-                onClick={() => setLeadActionStep('inspection')}
+                onClick={() => handleConvert()}
                 disabled={!isOwner}
                 className={`w-full px-4 py-2 rounded-lg ${
                   isOwner
