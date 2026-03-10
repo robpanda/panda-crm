@@ -54,6 +54,8 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
   const [actionMessage, setActionMessage] = useState(null);
   const [showDownloadModal, setShowDownloadModal] = useState(false);
   const [downloadFormat, setDownloadFormat] = useState('zip');
+  const [pendingExportJobId, setPendingExportJobId] = useState(null);
+  const [pendingExportAttempts, setPendingExportAttempts] = useState(0);
   const [showGalleryModal, setShowGalleryModal] = useState(false);
   const [galleryMode, setGalleryMode] = useState('existing');
   const [selectedGalleryId, setSelectedGalleryId] = useState('');
@@ -171,16 +173,23 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
       opportunityId,
     }),
     onSuccess: (result) => {
+      setShowDownloadModal(false);
+
       if (result?.downloadUrl) {
         window.open(result.downloadUrl, '_blank', 'noopener,noreferrer');
+        setPendingExportJobId(null);
+        setPendingExportAttempts(0);
+      } else if (result?.queued && result?.exportJobId) {
+        setPendingExportJobId(result.exportJobId);
+        setPendingExportAttempts(0);
       }
+
       setActionMessage({
         type: 'success',
         text: result?.queued
-          ? `Export queued (${result.totalPhotos} photos).`
+          ? `Export queued (${result.totalPhotos} photos). We will auto-open when ready.`
           : `Export ready (${result.totalPhotos} photos).`,
       });
-      setShowDownloadModal(false);
     },
     onError: (error) => {
       setActionMessage({
@@ -336,9 +345,66 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
     setSelectedPhotos([]);
     setSelectionMode(false);
     setActionMessage(null);
+    setPendingExportJobId(null);
+    setPendingExportAttempts(0);
   }, [activeSubTab, project?.id]);
 
   useEffect(() => () => clearLongPressTimer(), []);
+
+  useEffect(() => {
+    if (!pendingExportJobId) return undefined;
+
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const status = await photocamApi.getBulkDownloadStatus(pendingExportJobId);
+        if (cancelled) return;
+
+        if (status?.status === 'READY' && status?.downloadUrl) {
+          window.open(status.downloadUrl, '_blank', 'noopener,noreferrer');
+          setActionMessage({ type: 'success', text: 'Bulk export is ready and downloaded.' });
+          setPendingExportJobId(null);
+          setPendingExportAttempts(0);
+          return;
+        }
+
+        if (status?.status === 'FAILED') {
+          setActionMessage({
+            type: 'error',
+            text: status?.error || 'Bulk export failed before completion.',
+          });
+          setPendingExportJobId(null);
+          setPendingExportAttempts(0);
+          return;
+        }
+
+        if (pendingExportAttempts >= 30) {
+          setActionMessage({
+            type: 'error',
+            text: 'Bulk export is still processing. Please retry in a moment.',
+          });
+          setPendingExportJobId(null);
+          setPendingExportAttempts(0);
+          return;
+        }
+
+        setPendingExportAttempts((prev) => prev + 1);
+      } catch (error) {
+        if (cancelled) return;
+        setActionMessage({
+          type: 'error',
+          text: error?.response?.data?.error?.message || 'Unable to fetch bulk export status.',
+        });
+        setPendingExportJobId(null);
+        setPendingExportAttempts(0);
+      }
+    }, 3500);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [pendingExportJobId, pendingExportAttempts]);
 
   // Handle file selection
   const handleFileSelect = (e) => {
