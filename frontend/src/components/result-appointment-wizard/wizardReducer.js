@@ -15,6 +15,12 @@ export const ACTIONS = {
   SET_RETAIL_NO_SALE_REASON: 'SET_RETAIL_NO_SALE_REASON',
   SET_RESCHEDULE_DATE: 'SET_RESCHEDULE_DATE',
   SET_FOLLOW_UP_DATE: 'SET_FOLLOW_UP_DATE',
+  SET_RESCHEDULE_MODE: 'SET_RESCHEDULE_MODE',
+  SET_FOLLOW_UP_MODE: 'SET_FOLLOW_UP_MODE',
+  SET_RESCHEDULE_TIME: 'SET_RESCHEDULE_TIME',
+  SET_FOLLOW_UP_TIME: 'SET_FOLLOW_UP_TIME',
+  SET_FOLLOW_UP_TASK_TYPE: 'SET_FOLLOW_UP_TASK_TYPE',
+  SET_FOLLOW_UP_NOTES: 'SET_FOLLOW_UP_NOTES',
 };
 
 export const initialState = {
@@ -28,7 +34,13 @@ export const initialState = {
   noPitchRetailReason: '',
   retailNoSaleReason: '',
   rescheduleDate: '',
+  rescheduleMode: 'IN_PERSON',
+  rescheduleTime: '',
   followUpDate: '',
+  followUpMode: 'IN_PERSON',
+  followUpTime: '',
+  followUpTaskType: 'CALL',
+  followUpNotes: '',
   notes: '',
   pitchRetail: null,
   insuranceCompany: '',
@@ -93,6 +105,18 @@ export function wizardReducer(state, action) {
       return { ...state, rescheduleDate: action.value, step: STEPS.CONFIRM };
     case ACTIONS.SET_FOLLOW_UP_DATE:
       return { ...state, followUpDate: action.value, step: STEPS.CONFIRM };
+    case ACTIONS.SET_RESCHEDULE_MODE:
+      return { ...state, rescheduleMode: action.value || 'IN_PERSON' };
+    case ACTIONS.SET_FOLLOW_UP_MODE:
+      return { ...state, followUpMode: action.value || 'IN_PERSON' };
+    case ACTIONS.SET_RESCHEDULE_TIME:
+      return { ...state, rescheduleTime: action.value };
+    case ACTIONS.SET_FOLLOW_UP_TIME:
+      return { ...state, followUpTime: action.value };
+    case ACTIONS.SET_FOLLOW_UP_TASK_TYPE:
+      return { ...state, followUpTaskType: action.value || 'CALL' };
+    case ACTIONS.SET_FOLLOW_UP_NOTES:
+      return { ...state, followUpNotes: action.value };
     default:
       return state;
   }

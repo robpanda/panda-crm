@@ -702,7 +702,10 @@ function InvoiceDetailModal({
       setLoading(true);
       try {
         const response = await paymentsApi.getPaymentsByInvoice(invoice.id);
-        setPayments(response?.data || []);
+        const paymentList = Array.isArray(response?.payments)
+          ? response.payments
+          : (Array.isArray(response?.data) ? response.data : []);
+        setPayments(paymentList);
       } catch (err) {
         console.error('Error loading payments:', err);
         setPayments([]);
@@ -935,8 +938,197 @@ function InvoiceDetailModal({
             </span>
           </div>
 
+          {isEditing && (
+            <div className="space-y-4 border border-blue-100 bg-blue-50/40 rounded-lg p-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Invoice Date</label>
+                  <input
+                    type="date"
+                    value={form.invoiceDate}
+                    onChange={(event) => setForm((prev) => ({ ...prev, invoiceDate: event.target.value }))}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Due Date</label>
+                  <input
+                    type="date"
+                    value={form.dueDate}
+                    onChange={(event) => setForm((prev) => ({ ...prev, dueDate: event.target.value }))}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Tax</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={form.tax}
+                    onChange={(event) => setForm((prev) => ({ ...prev, tax: Number(event.target.value || 0) }))}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-semibold text-gray-800">Line Items</h4>
+                  <button
+                    type="button"
+                    onClick={() => setForm((prev) => ({
+                      ...prev,
+                      lineItems: [...prev.lineItems, { description: '', quantity: 1, unitPrice: 0 }],
+                    }))}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-panda-primary bg-white border border-panda-primary/20 rounded-md hover:bg-panda-primary/5"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Add Item
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {form.lineItems.map((item, index) => (
+                    <div key={`line-item-${index}`} className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center bg-white border border-gray-200 rounded-lg p-2">
+                      <input
+                        type="text"
+                        value={item.description}
+                        onChange={(event) => handleLineItemChange(index, 'description', event.target.value)}
+                        placeholder="Description"
+                        className="sm:col-span-6 border border-gray-300 rounded px-2 py-1.5 text-sm"
+                      />
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={item.quantity}
+                        onChange={(event) => handleLineItemChange(index, 'quantity', event.target.value)}
+                        className="sm:col-span-2 border border-gray-300 rounded px-2 py-1.5 text-sm"
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={item.unitPrice}
+                        onChange={(event) => handleLineItemChange(index, 'unitPrice', event.target.value)}
+                        className="sm:col-span-3 border border-gray-300 rounded px-2 py-1.5 text-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setForm((prev) => ({
+                            ...prev,
+                            lineItems: prev.lineItems.filter((_, lineIndex) => lineIndex !== index),
+                          }))
+                        }
+                        className="sm:col-span-1 inline-flex items-center justify-center text-red-500 hover:text-red-700"
+                        title="Remove line item"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-semibold text-gray-800">Supplements / Additional Charges</h4>
+                  <button
+                    type="button"
+                    onClick={() => setForm((prev) => ({
+                      ...prev,
+                      additionalCharges: [
+                        ...prev.additionalCharges,
+                        { name: 'Supplement', amount: 0, notes: '', chargeType: 'ADJUSTMENT' },
+                      ],
+                    }))}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-panda-primary bg-white border border-panda-primary/20 rounded-md hover:bg-panda-primary/5"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Add Charge
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {form.additionalCharges.map((charge, index) => (
+                    <div key={`charge-${index}`} className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center bg-white border border-gray-200 rounded-lg p-2">
+                      <input
+                        type="text"
+                        value={charge.name}
+                        onChange={(event) => handleAdditionalChargeChange(index, 'name', event.target.value)}
+                        placeholder="Charge name"
+                        className="sm:col-span-4 border border-gray-300 rounded px-2 py-1.5 text-sm"
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={charge.amount}
+                        onChange={(event) => handleAdditionalChargeChange(index, 'amount', event.target.value)}
+                        className="sm:col-span-3 border border-gray-300 rounded px-2 py-1.5 text-sm"
+                      />
+                      <input
+                        type="text"
+                        value={charge.notes}
+                        onChange={(event) => handleAdditionalChargeChange(index, 'notes', event.target.value)}
+                        placeholder="Notes"
+                        className="sm:col-span-4 border border-gray-300 rounded px-2 py-1.5 text-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setForm((prev) => ({
+                            ...prev,
+                            additionalCharges: prev.additionalCharges.filter((_, chargeIndex) => chargeIndex !== index),
+                          }))
+                        }
+                        className="sm:col-span-1 inline-flex items-center justify-center text-red-500 hover:text-red-700"
+                        title="Remove charge"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Notes</label>
+                <textarea
+                  rows={3}
+                  value={form.notes}
+                  onChange={(event) => setForm((prev) => ({ ...prev, notes: event.target.value }))}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                />
+              </div>
+
+              <div className="bg-white border border-gray-200 rounded-lg p-3 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-600">Line Items Subtotal</span>
+                  <span className="font-medium">{formatCurrency(lineItemsSubtotal)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-600">Supplements / Charges</span>
+                  <span className="font-medium">{formatCurrency(supplementsTotal)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-600">Tax</span>
+                  <span className="font-medium">{formatCurrency(form.tax)}</span>
+                </div>
+                <div className="mt-2 pt-2 border-t border-gray-100 flex items-center justify-between">
+                  <span className="font-semibold text-gray-800">Total</span>
+                  <span className="font-semibold text-gray-900">{formatCurrency(computedTotal)}</span>
+                </div>
+                <div className="mt-1 flex items-center justify-between">
+                  <span className="text-gray-600">Balance Due</span>
+                  <span className="font-medium text-red-600">{formatCurrency(computedBalanceDue)}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Line Items */}
-          {invoice.lineItems && invoice.lineItems.length > 0 && (
+          {!isEditing && invoice.lineItems && invoice.lineItems.length > 0 && (
             <div>
               <h3 className="text-sm font-medium text-gray-900 mb-2">Line Items</h3>
               <div className="border rounded-lg overflow-hidden">
@@ -965,7 +1157,8 @@ function InvoiceDetailModal({
           )}
 
           {/* Payment History */}
-          <div>
+          {!isEditing && (
+            <div>
             <h3 className="text-sm font-medium text-gray-900 mb-2">Payment History</h3>
             {loading ? (
               <div className="flex items-center justify-center py-4">
@@ -991,17 +1184,41 @@ function InvoiceDetailModal({
             ) : (
               <p className="text-sm text-gray-500 py-2">No payments recorded for this invoice.</p>
             )}
-          </div>
+            </div>
+          )}
         </div>
 
         {/* Footer */}
-        <div className="border-t p-4">
-          <button
-            onClick={onClose}
-            className="w-full py-2 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition-colors"
-          >
-            Close
-          </button>
+        <div className="border-t p-4 flex items-center gap-2">
+          {isEditing ? (
+            <>
+              <button
+                onClick={() => {
+                  setForm(hydrateFormFromInvoice(invoice));
+                  setIsEditing(false);
+                  setEditError(null);
+                  setEditSuccess(null);
+                }}
+                className="flex-1 py-2 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={updateInvoiceMutation.isPending}
+                className="flex-1 py-2 px-4 bg-panda-primary hover:bg-panda-dark text-white rounded-lg font-medium transition-colors disabled:opacity-60"
+              >
+                {updateInvoiceMutation.isPending ? 'Saving...' : 'Save Changes'}
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={onClose}
+              className="w-full py-2 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition-colors"
+            >
+              Close
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -2199,7 +2416,9 @@ export default function OpportunityDetail() {
     queryFn: () => paymentsApi.getPayments({ opportunityId: id }),
     enabled: !!id,
   });
-  const payments = paymentsData?.data?.payments || paymentsData?.payments || [];
+  const payments = Array.isArray(paymentsData?.data)
+    ? paymentsData.data
+    : (paymentsData?.payments || []);
 
   const { data: commissionsData } = useQuery({
     queryKey: ['opportunityCommissions', id],
@@ -5642,8 +5861,7 @@ export default function OpportunityDetail() {
                     {/* Team Members */}
                     <div className="space-y-3">
                       {/* Sales Rep / Owner */}
-                      {hasOwnerTeamMember && (
-                        <div className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-panda-primary transition-colors">
+                      <div className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-panda-primary transition-colors">
                           <div className="flex items-center space-x-3">
                             <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-500 to-emerald-500 flex items-center justify-center">
                               <span className="text-white text-sm font-medium">
@@ -5711,7 +5929,6 @@ export default function OpportunityDetail() {
                             )}
                           </div>
                         </div>
-                      )}
 
                       {/* Project Manager */}
                       <div className="p-4 border border-gray-200 rounded-lg hover:border-panda-primary transition-colors space-y-3">
@@ -7569,7 +7786,7 @@ export default function OpportunityDetail() {
                               <div className="flex items-start gap-3">
                                 <Receipt className="w-5 h-5 text-gray-400 mt-1" />
                                 <div>
-                                  <h4 className="text-2xl font-bold text-gray-900 leading-none">{invoice.invoiceNumber || `INV-${invoice.id.slice(-6)}`}</h4>
+                                  <h4 className="text-xl font-bold text-gray-900 leading-none">{invoice.invoiceNumber || `INV-${invoice.id.slice(-6)}`}</h4>
                                   <p className="text-sm text-gray-600 mt-1">
                                     Date: {invoice.createdAt ? new Date(invoice.createdAt).toLocaleDateString() : 'N/A'}
                                   </p>
@@ -7638,19 +7855,19 @@ export default function OpportunityDetail() {
                           <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-3 border-t border-gray-100 pt-3">
                             <div>
                               <p className="text-sm text-gray-500">Owed</p>
-                              <p className="text-3xl font-bold text-gray-900">
+                              <p className="text-2xl font-bold text-gray-900">
                                 ${Number(invoice.total ?? invoice.totalAmount ?? 0).toLocaleString()}
                               </p>
                             </div>
                             <div>
                               <p className="text-sm text-gray-500">Paid</p>
-                              <p className="text-3xl font-bold text-blue-700">
+                              <p className="text-2xl font-bold text-blue-700">
                                 ${Number(invoice.amountPaid || 0).toLocaleString()}
                               </p>
                             </div>
                             <div>
                               <p className="text-sm text-gray-500">Balance Due</p>
-                              <p className="text-3xl font-bold text-red-600">
+                              <p className="text-2xl font-bold text-red-600">
                                 ${parseFloat(invoice.balanceDue || ((invoice.total ?? invoice.totalAmount) - (invoice.amountPaid || 0)) || 0).toLocaleString()}
                               </p>
                             </div>

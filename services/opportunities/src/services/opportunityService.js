@@ -166,26 +166,32 @@ async function hydrateClaimFallbackFromRaw(opportunityId, opportunity) {
   if (!opportunityId || !opportunity) return opportunity;
 
   const fields = Object.keys(CLAIM_FALLBACK_FIELD_TO_COLUMN);
-  const needsFallback = fields.some((field) => typeof opportunity[field] === 'undefined');
+  const needsFallback = fields.some((field) => opportunity[field] == null);
   if (!needsFallback) {
     return opportunity;
   }
 
-  const rows = await prisma.$queryRaw`
-    SELECT
-      claim_number,
-      claim_filed_date,
-      insurance_carrier,
-      adjuster_name,
-      adjuster_email,
-      adjuster_office_phone,
-      field_adjuster_mobile,
-      damage_location,
-      date_of_loss
-    FROM opportunities
-    WHERE id = ${opportunityId}
-    LIMIT 1
-  `;
+  let rows;
+  try {
+    rows = await prisma.$queryRaw`
+      SELECT
+        claim_number,
+        claim_filed_date,
+        insurance_carrier,
+        adjuster_name,
+        adjuster_email,
+        adjuster_office_phone,
+        field_adjuster_mobile,
+        damage_location,
+        date_of_loss
+      FROM opportunities
+      WHERE id = ${opportunityId}
+      LIMIT 1
+    `;
+  } catch (error) {
+    logger.warn(`Claim fallback hydration skipped for ${opportunityId}: ${error.message}`);
+    return opportunity;
+  }
 
   const row = rows?.[0];
   if (!row) return opportunity;
@@ -3291,9 +3297,96 @@ Be factual and professional. Highlight anything that needs attention.`;
       },
     });
 
+    let scheduling = null;
+    const followUpModeRaw = payload?.answers?.followUpMode || payload?.answers?.rescheduleMode;
+    const followUpMode = String(followUpModeRaw || '').trim().toUpperCase();
+    const followUpTaskType = String(payload?.answers?.followUpTaskType || 'CALL').trim().toUpperCase();
+    const followUpNotes = String(payload?.answers?.followUpNotes || payload?.notes || '').trim();
+    const shouldScheduleFollowUp = (
+      [DISPOSITION_CATEGORIES.RESCHEDULED, DISPOSITION_CATEGORIES.FOLLOW_UP_SCHEDULED]
+        .includes(payload.dispositionCategory)
+      && followUpAt
+    );
+
+    if (shouldScheduleFollowUp) {
+      try {
+        if (followUpMode === 'VIRTUAL') {
+          const taskSubjectPrefix = followUpTaskType === 'EMAIL' ? 'Email' : followUpTaskType === 'OTHER' ? 'Follow-up' : 'Call';
+          const createdTask = await prisma.task.create({
+            data: {
+              subject: `${taskSubjectPrefix}: ${opportunity.name || 'Job follow-up'}`,
+              description: followUpNotes || null,
+              dueDate: followUpAt,
+              assignedToId: opportunity.ownerId || null,
+              opportunityId: id,
+              status: 'NOT_STARTED',
+              priority: 'NORMAL',
+            },
+            select: {
+              id: true,
+              subject: true,
+              dueDate: true,
+              status: true,
+            },
+          });
+
+          scheduling = {
+            mode: 'VIRTUAL',
+            success: true,
+            task: createdTask,
+          };
+        } else {
+          const scheduledStart = new Date(followUpAt);
+          const scheduledEnd = new Date(scheduledStart.getTime() + (60 * 60 * 1000));
+          let appointmentResult = null;
+
+          if (payload.appointmentId && payload.dispositionCategory === DISPOSITION_CATEGORIES.RESCHEDULED) {
+            try {
+              appointmentResult = await this.rescheduleAppointment(id, payload.appointmentId, {
+                scheduledStart: scheduledStart.toISOString(),
+                scheduledEnd: scheduledEnd.toISOString(),
+                notes: followUpNotes || null,
+                rescheduledBy: userContext?.userId || null,
+              });
+            } catch (rescheduleError) {
+              logger.warn(
+                `Result appointment could not reschedule existing appointment ${payload.appointmentId} for ${id}: ${rescheduleError.message}`
+              );
+            }
+          }
+
+          if (!appointmentResult) {
+            appointmentResult = await this.bookAppointment(id, {
+              scheduledStart: scheduledStart.toISOString(),
+              scheduledEnd: scheduledEnd.toISOString(),
+              notes: followUpNotes || null,
+              bookedBy: userContext?.userId || null,
+            });
+          }
+
+          scheduling = {
+            mode: 'IN_PERSON',
+            success: true,
+            appointment: appointmentResult?.serviceAppointment || appointmentResult?.appointment || null,
+            workOrder: appointmentResult?.workOrder || null,
+          };
+        }
+      } catch (schedulingError) {
+        logger.warn(`Result appointment follow-up side effect failed for ${id}: ${schedulingError.message}`);
+        scheduling = {
+          mode: followUpMode === 'VIRTUAL' ? 'VIRTUAL' : 'IN_PERSON',
+          success: false,
+          error: schedulingError.message,
+        };
+      }
+    }
+
+    const wrappedOpportunity = await hydrateClaimFallbackFromRaw(id, updatedOpportunity);
+
     return {
-      opportunity: this.createOpportunityWrapper(updatedOpportunity, true),
+      opportunity: this.createOpportunityWrapper(wrappedOpportunity, true),
       appointmentResult,
+      scheduling,
     };
   }
 

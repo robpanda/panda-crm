@@ -31,6 +31,23 @@ const formatDate = (value) => {
   }
 };
 
+const combineDateAndTime = (dateValue, timeValue) => {
+  if (!dateValue) return null;
+  const dateText = String(dateValue || '').trim();
+  if (!dateText) return null;
+  const timeText = String(timeValue || '').trim() || '12:00';
+  const parsed = new Date(`${dateText}T${timeText}`);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString();
+};
+
+const formatTimeLabel = (timeValue) => {
+  if (!timeValue) return '';
+  const parsed = new Date(`1970-01-01T${timeValue}`);
+  if (Number.isNaN(parsed.getTime())) return timeValue;
+  return parsed.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+};
+
 export default function ResultAppointmentWizard({
   isOpen,
   onClose,
@@ -85,6 +102,13 @@ export default function ResultAppointmentWizard({
       return false;
     }
     if (
+      disposition.category === DISPOSITION_CATEGORIES.RESCHEDULED &&
+      state.rescheduleMode === 'VIRTUAL' &&
+      !state.followUpTaskType
+    ) {
+      return false;
+    }
+    if (
       disposition.category === DISPOSITION_CATEGORIES.FOLLOW_UP_SCHEDULED &&
       !state.followUpDate
     ) {
@@ -111,11 +135,15 @@ export default function ResultAppointmentWizard({
       setError('Missing job ID');
       return;
     }
+    const followUpAt = disposition.category === DISPOSITION_CATEGORIES.RESCHEDULED
+      ? combineDateAndTime(state.rescheduleDate, state.rescheduleTime)
+      : combineDateAndTime(state.followUpDate, state.followUpTime);
+
     const payload = {
       appointmentId,
       dispositionCategory: disposition.category,
       dispositionReason: disposition.reason,
-      followUpAt: disposition.followUpDate || null,
+      followUpAt: followUpAt || null,
       insuranceCompany: state.insuranceCompany || null,
       claimNumber: state.claimNumber || null,
       claimFiledDate: state.claimFiledDate || null,
@@ -134,7 +162,13 @@ export default function ResultAppointmentWizard({
         retailOutcome: state.retailOutcome,
         retailNoSaleReason: state.retailNoSaleReason,
         rescheduleDate: state.rescheduleDate,
+        rescheduleMode: state.rescheduleMode,
+        rescheduleTime: state.rescheduleTime,
         followUpDate: state.followUpDate,
+        followUpMode: state.followUpMode,
+        followUpTime: state.followUpTime,
+        followUpTaskType: state.followUpTaskType,
+        followUpNotes: state.followUpNotes,
         quote: {
           roofSqFt: state.quoteRoofSqFt,
           materials: state.quoteMaterials,
@@ -249,14 +283,63 @@ export default function ResultAppointmentWizard({
               </button>
 
               {showReschedulePicker && (
-                <input
-                  type="date"
-                  value={toDateInputValue(state.rescheduleDate)}
-                  onChange={(event) =>
-                    dispatch({ type: ACTIONS.SET_RESCHEDULE_DATE, value: event.target.value })
-                  }
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                />
+                <div className="space-y-3 border border-indigo-100 rounded-lg p-3 bg-indigo-50/40">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Follow-up type</label>
+                    <select
+                      value={state.rescheduleMode}
+                      onChange={(event) =>
+                        dispatch({ type: ACTIONS.SET_RESCHEDULE_MODE, value: event.target.value })
+                      }
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                    >
+                      <option value="IN_PERSON">In-Person appointment</option>
+                      <option value="VIRTUAL">Virtual follow-up task</option>
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <input
+                      type="date"
+                      value={toDateInputValue(state.rescheduleDate)}
+                      onChange={(event) =>
+                        dispatch({ type: ACTIONS.SET_RESCHEDULE_DATE, value: event.target.value })
+                      }
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                    />
+                    <input
+                      type="time"
+                      value={state.rescheduleTime || ''}
+                      onChange={(event) =>
+                        dispatch({ type: ACTIONS.SET_RESCHEDULE_TIME, value: event.target.value })
+                      }
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                    />
+                  </div>
+                  {state.rescheduleMode === 'VIRTUAL' && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <select
+                        value={state.followUpTaskType}
+                        onChange={(event) =>
+                          dispatch({ type: ACTIONS.SET_FOLLOW_UP_TASK_TYPE, value: event.target.value })
+                        }
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                      >
+                        <option value="CALL">Call</option>
+                        <option value="EMAIL">Email</option>
+                        <option value="OTHER">Other</option>
+                      </select>
+                      <input
+                        type="text"
+                        value={state.followUpNotes}
+                        onChange={(event) =>
+                          dispatch({ type: ACTIONS.SET_FOLLOW_UP_NOTES, value: event.target.value })
+                        }
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                        placeholder="Optional task notes"
+                      />
+                    </div>
+                  )}
+                </div>
               )}
 
               <div className="flex items-center justify-end">
@@ -356,14 +439,63 @@ export default function ResultAppointmentWizard({
               </button>
 
               {showFollowUpPicker && (
-                <input
-                  type="date"
-                  value={toDateInputValue(state.followUpDate)}
-                  onChange={(event) =>
-                    dispatch({ type: ACTIONS.SET_FOLLOW_UP_DATE, value: event.target.value })
-                  }
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                />
+                <div className="space-y-3 border border-indigo-100 rounded-lg p-3 bg-indigo-50/40">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Follow-up type</label>
+                    <select
+                      value={state.followUpMode}
+                      onChange={(event) =>
+                        dispatch({ type: ACTIONS.SET_FOLLOW_UP_MODE, value: event.target.value })
+                      }
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                    >
+                      <option value="IN_PERSON">In-Person appointment</option>
+                      <option value="VIRTUAL">Virtual follow-up task</option>
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <input
+                      type="date"
+                      value={toDateInputValue(state.followUpDate)}
+                      onChange={(event) =>
+                        dispatch({ type: ACTIONS.SET_FOLLOW_UP_DATE, value: event.target.value })
+                      }
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                    />
+                    <input
+                      type="time"
+                      value={state.followUpTime || ''}
+                      onChange={(event) =>
+                        dispatch({ type: ACTIONS.SET_FOLLOW_UP_TIME, value: event.target.value })
+                      }
+                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                    />
+                  </div>
+                  {state.followUpMode === 'VIRTUAL' && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <select
+                        value={state.followUpTaskType}
+                        onChange={(event) =>
+                          dispatch({ type: ACTIONS.SET_FOLLOW_UP_TASK_TYPE, value: event.target.value })
+                        }
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                      >
+                        <option value="CALL">Call</option>
+                        <option value="EMAIL">Email</option>
+                        <option value="OTHER">Other</option>
+                      </select>
+                      <input
+                        type="text"
+                        value={state.followUpNotes}
+                        onChange={(event) =>
+                          dispatch({ type: ACTIONS.SET_FOLLOW_UP_NOTES, value: event.target.value })
+                        }
+                        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                        placeholder="Optional task notes"
+                      />
+                    </div>
+                  )}
+                </div>
               )}
 
               {state.noClaimReason && state.noClaimReason !== 'FOLLOW_UP_SCHEDULED' && (
@@ -603,14 +735,63 @@ export default function ResultAppointmentWizard({
                   </button>
 
                   {showFollowUpPicker && (
-                    <input
-                      type="date"
-                      value={toDateInputValue(state.followUpDate)}
-                      onChange={(event) =>
-                        dispatch({ type: ACTIONS.SET_FOLLOW_UP_DATE, value: event.target.value })
-                      }
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-                    />
+                    <div className="space-y-3 border border-indigo-100 rounded-lg p-3 bg-indigo-50/40">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">Follow-up type</label>
+                        <select
+                          value={state.followUpMode}
+                          onChange={(event) =>
+                            dispatch({ type: ACTIONS.SET_FOLLOW_UP_MODE, value: event.target.value })
+                          }
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                        >
+                          <option value="IN_PERSON">In-Person appointment</option>
+                          <option value="VIRTUAL">Virtual follow-up task</option>
+                        </select>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <input
+                          type="date"
+                          value={toDateInputValue(state.followUpDate)}
+                          onChange={(event) =>
+                            dispatch({ type: ACTIONS.SET_FOLLOW_UP_DATE, value: event.target.value })
+                          }
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                        />
+                        <input
+                          type="time"
+                          value={state.followUpTime || ''}
+                          onChange={(event) =>
+                            dispatch({ type: ACTIONS.SET_FOLLOW_UP_TIME, value: event.target.value })
+                          }
+                          className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                        />
+                      </div>
+                      {state.followUpMode === 'VIRTUAL' && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <select
+                            value={state.followUpTaskType}
+                            onChange={(event) =>
+                              dispatch({ type: ACTIONS.SET_FOLLOW_UP_TASK_TYPE, value: event.target.value })
+                            }
+                            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                          >
+                            <option value="CALL">Call</option>
+                            <option value="EMAIL">Email</option>
+                            <option value="OTHER">Other</option>
+                          </select>
+                          <input
+                            type="text"
+                            value={state.followUpNotes}
+                            onChange={(event) =>
+                              dispatch({ type: ACTIONS.SET_FOLLOW_UP_NOTES, value: event.target.value })
+                            }
+                            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                            placeholder="Optional task notes"
+                          />
+                        </div>
+                      )}
+                    </div>
                   )}
 
                   <div>
@@ -668,6 +849,31 @@ export default function ResultAppointmentWizard({
                   <div className="flex items-center justify-between">
                     <span className="text-gray-600">Follow up</span>
                     <span className="font-medium">{formatDate(disposition.followUpDate)}</span>
+                  </div>
+                )}
+                {(disposition.category === DISPOSITION_CATEGORIES.RESCHEDULED
+                  || disposition.category === DISPOSITION_CATEGORIES.FOLLOW_UP_SCHEDULED) && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-600">Follow-up type</span>
+                    <span className="font-medium">
+                      {((disposition.category === DISPOSITION_CATEGORIES.RESCHEDULED
+                        ? state.rescheduleMode
+                        : state.followUpMode) || 'IN_PERSON') === 'VIRTUAL'
+                        ? 'Virtual task'
+                        : 'In-person appointment'}
+                    </span>
+                  </div>
+                )}
+                {(state.rescheduleTime || state.followUpTime) && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-600">Follow-up time</span>
+                    <span className="font-medium">
+                      {formatTimeLabel(
+                        disposition.category === DISPOSITION_CATEGORIES.RESCHEDULED
+                          ? state.rescheduleTime
+                          : state.followUpTime
+                      ) || '-'}
+                    </span>
                   </div>
                 )}
               </div>
