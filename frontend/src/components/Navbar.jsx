@@ -161,6 +161,7 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
   const [showViewAsMenu, setShowViewAsMenu] = useState(false);
   const [viewAsSearch, setViewAsSearch] = useState('');
   const [viewAsUsers, setViewAsUsers] = useState([]);
+  const [viewAsRemoteUsers, setViewAsRemoteUsers] = useState([]);
   const [viewAsLoading, setViewAsLoading] = useState(false);
   const [recentLeads, setRecentLeads] = useState([]);
   const [recentJobs, setRecentJobs] = useState([]);
@@ -295,6 +296,33 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
     }
   }, [showViewAsMenu, canImpersonate, viewAsUsers.length]);
 
+  // Live-search users for View As to avoid stale cached dropdown lists
+  useEffect(() => {
+    if (!showViewAsMenu || !canImpersonate) return;
+    const query = viewAsSearch.trim();
+    if (query.length < 2) {
+      setViewAsRemoteUsers([]);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setViewAsLoading(true);
+      usersApi.searchUsers({ query, limit: 25 })
+        .then((users) => {
+          setViewAsRemoteUsers(Array.isArray(users) ? users : []);
+        })
+        .catch((err) => {
+          console.error('Failed to live-search users for View As:', err);
+          setViewAsRemoteUsers([]);
+        })
+        .finally(() => {
+          setViewAsLoading(false);
+        });
+    }, 200);
+
+    return () => clearTimeout(timer);
+  }, [showViewAsMenu, canImpersonate, viewAsSearch]);
+
   // Filter users based on search
   const filteredViewAsUsers = viewAsUsers.filter(u => {
     if (!viewAsSearch) return true;
@@ -302,8 +330,24 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
     const name = `${u.firstName || ''} ${u.lastName || ''}`.toLowerCase();
     const fullName = (u.fullName || '').toLowerCase();
     const email = (u.email || '').toLowerCase();
-    return name.includes(search) || fullName.includes(search) || email.includes(search);
+    const normalizedSearch = search.replace(/\s+/g, '');
+    const normalizedName = `${name}${fullName}`.replace(/\s+/g, '');
+    const normalizedEmail = email.replace(/\./g, '');
+    return (
+      name.includes(search) ||
+      fullName.includes(search) ||
+      email.includes(search) ||
+      normalizedName.includes(normalizedSearch) ||
+      normalizedEmail.includes(normalizedSearch.replace(/\./g, ''))
+    );
   });
+
+  const displayedViewAsUsers = viewAsSearch.trim().length >= 2
+    ? [...viewAsRemoteUsers, ...filteredViewAsUsers].reduce((acc, user) => {
+        if (!acc.some((u) => u.id === user.id)) acc.push(user);
+        return acc;
+      }, [])
+    : filteredViewAsUsers;
 
   // Handle selecting a user to impersonate
   const handleViewAsUser = async (targetUser) => {
@@ -857,12 +901,12 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
                       <div className="px-4 py-3 text-sm text-gray-500 text-center">
                         Loading users...
                       </div>
-                    ) : filteredViewAsUsers.length === 0 ? (
+                    ) : displayedViewAsUsers.length === 0 ? (
                       <div className="px-4 py-3 text-sm text-gray-500 text-center">
                         {viewAsSearch ? 'No users found' : 'No users available'}
                       </div>
                     ) : (
-                      filteredViewAsUsers.slice(0, 20).map((u) => (
+                      displayedViewAsUsers.slice(0, 20).map((u) => (
                         <button
                           key={u.id}
                           onClick={() => handleViewAsUser(u)}
@@ -891,7 +935,7 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
                         </button>
                       ))
                     )}
-                    {filteredViewAsUsers.length > 20 && (
+                    {displayedViewAsUsers.length > 20 && (
                       <div className="px-4 py-2 text-xs text-gray-500 text-center border-t border-gray-100">
                         Showing first 20 results. Type to search more.
                       </div>
