@@ -25,17 +25,39 @@ function getRequestUserId(req) {
   return req?.user?.id || req?.user?.userId || req?.user?.sub || null;
 }
 
+function buildEmailVariants(email) {
+  const normalized = String(email || '').trim().toLowerCase();
+  if (!normalized || !normalized.includes('@')) return [];
+  const [localPart, domainPart] = normalized.split('@');
+  if (!localPart || !domainPart) return [normalized];
+
+  const domains = new Set([domainPart]);
+  if (domainPart === 'pandaexteriors.com') domains.add('panda-exteriors.com');
+  if (domainPart === 'panda-exteriors.com') domains.add('pandaexteriors.com');
+
+  const localVariants = new Set([localPart, localPart.replace(/\./g, '')]);
+
+  const variants = [];
+  for (const local of localVariants) {
+    for (const domain of domains) {
+      variants.push(`${local}@${domain}`);
+    }
+  }
+  return Array.from(new Set(variants));
+}
+
 async function resolveSupportUserContext(req) {
   const tokenUserId = getRequestUserId(req);
   const tokenEmail = String(req?.user?.email || '').trim().toLowerCase() || null;
+  const emailVariants = buildEmailVariants(tokenEmail);
 
   const orFilters = [];
   if (tokenUserId) {
     orFilters.push({ id: tokenUserId });
     orFilters.push({ cognitoId: tokenUserId });
   }
-  if (tokenEmail) {
-    orFilters.push({ email: tokenEmail });
+  if (emailVariants.length > 0) {
+    orFilters.push({ email: { in: emailVariants } });
   }
 
   if (orFilters.length === 0) {
@@ -60,7 +82,8 @@ async function resolveSupportUserContext(req) {
   return {
     tokenUserId,
     tokenEmail,
-    resolvedUserId: users[0]?.id || tokenUserId || null,
+    emailVariants,
+    resolvedUserId: users[0]?.id || null,
     candidateUserIds,
   };
 }
@@ -74,7 +97,41 @@ function isSupportAdmin(user = {}) {
 
   return roleType.includes('admin')
     || roleName.includes('admin')
+    || roleType.includes('system')
+    || roleName.includes('system')
     || groups.some((group) => group.includes('admin') || group.includes('support'));
+}
+
+async function isSupportAdminResolved(req) {
+  if (isSupportAdmin(req?.user)) return true;
+
+  const userContext = await resolveSupportUserContext(req);
+  if (!userContext.resolvedUserId) return false;
+
+  const dbUser = await prisma.user.findUnique({
+    where: { id: userContext.resolvedUserId },
+    select: {
+      title: true,
+      department: true,
+      role: {
+        select: {
+          name: true,
+          roleType: true,
+        },
+      },
+    },
+  });
+
+  const values = [
+    dbUser?.title,
+    dbUser?.department,
+    dbUser?.role?.name,
+    dbUser?.role?.roleType,
+  ]
+    .map((value) => String(value || '').toLowerCase())
+    .filter(Boolean);
+
+  return values.some((value) => value.includes('admin') || value.includes('support') || value.includes('system'));
 }
 
 // Helper to generate ticket number
@@ -129,7 +186,7 @@ router.get('/tickets', authMiddleware, async (req, res) => {
     if (userContext.tokenEmail) {
       whereClauses.push({
         user: {
-          email: userContext.tokenEmail,
+          email: { in: userContext.emailVariants.length > 0 ? userContext.emailVariants : [userContext.tokenEmail] },
         },
       });
     }
@@ -174,15 +231,20 @@ router.get('/tickets/:id', authMiddleware, async (req, res) => {
     if (userContext.tokenEmail) {
       ownershipFilters.push({
         user: {
-          email: userContext.tokenEmail,
+          email: { in: userContext.emailVariants.length > 0 ? userContext.emailVariants : [userContext.tokenEmail] },
         },
       });
     }
 
+    if (ownershipFilters.length === 0 && !isSupportAdmin(req.user)) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    const canViewAllTickets = await isSupportAdminResolved(req);
     const ticket = await prisma.support_tickets.findFirst({
       where: {
         id: req.params.id,
-        ...(isSupportAdmin(req.user)
+        ...(canViewAllTickets
           ? {}
           : { OR: ownershipFilters }), // Users can only see their own tickets
       },
@@ -351,15 +413,20 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
     if (userContext.tokenEmail) {
       ownershipFilters.push({
         user: {
-          email: userContext.tokenEmail,
+          email: { in: userContext.emailVariants.length > 0 ? userContext.emailVariants : [userContext.tokenEmail] },
         },
       });
     }
 
+    if (ownershipFilters.length === 0 && !isSupportAdmin(req.user)) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    const canViewAllTickets = await isSupportAdminResolved(req);
     const ticket = await prisma.support_tickets.findFirst({
       where: {
         id: req.params.id,
-        ...(isSupportAdmin(req.user)
+        ...(canViewAllTickets
           ? {}
           : {
               OR: ownershipFilters,
@@ -436,7 +503,7 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
 router.get('/admin/tickets', authMiddleware, async (req, res) => {
   try {
     // Check if user is admin
-    const isAdmin = isSupportAdmin(req.user);
+    const isAdmin = await isSupportAdminResolved(req);
     if (!isAdmin) {
       return res.status(403).json({ error: 'Unauthorized' });
     }
@@ -482,7 +549,7 @@ router.get('/admin/tickets', authMiddleware, async (req, res) => {
 // Admin: Get stats
 router.get('/admin/stats', authMiddleware, async (req, res) => {
   try {
-    const isAdmin = isSupportAdmin(req.user);
+    const isAdmin = await isSupportAdminResolved(req);
     if (!isAdmin) {
       return res.status(403).json({ error: 'Unauthorized' });
     }
@@ -526,7 +593,7 @@ router.get('/admin/stats', authMiddleware, async (req, res) => {
 // Admin: Export tickets
 router.get('/admin/export', authMiddleware, async (req, res) => {
   try {
-    const isAdmin = isSupportAdmin(req.user);
+    const isAdmin = await isSupportAdminResolved(req);
     if (!isAdmin) {
       return res.status(403).json({ error: 'Unauthorized' });
     }
@@ -802,7 +869,7 @@ router.get('/tickets/similar', authMiddleware, async (req, res) => {
 // Admin: Update ticket status/priority/assignment
 router.patch('/admin/tickets/:id', authMiddleware, async (req, res) => {
   try {
-    const isAdmin = isSupportAdmin(req.user);
+    const isAdmin = await isSupportAdminResolved(req);
     if (!isAdmin) {
       return res.status(403).json({ error: 'Unauthorized' });
     }

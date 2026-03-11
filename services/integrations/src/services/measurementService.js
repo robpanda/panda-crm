@@ -849,33 +849,67 @@ class MeasurementService {
     try {
       const accessToken = await this.getGAFAccessToken();
 
-      // GAF API endpoint for order status
-      const statusUrl = `${GAF_API_BASE}/OrderStatus/${gafOrderNumber}`;
+      // GAF status endpoint can be keyed differently by account; try all safe identifiers.
+      const statusLookupIds = Array.from(
+        new Set(
+          [measurementReport.externalId, measurementReport.orderNumber, measurementReport.id]
+            .filter(Boolean)
+            .map((value) => String(value))
+        )
+      );
 
-      const response = await fetch(statusUrl, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-        },
-      });
+      let statusData = null;
+      let statusIdentifier = null;
+      let lastStatusError = null;
+      for (const statusId of statusLookupIds) {
+        const statusUrl = `${GAF_API_BASE}/OrderStatus/${encodeURIComponent(statusId)}`;
+        const response = await fetch(statusUrl, {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+        });
 
-      if (response.status === 404 || response.status === 204) {
-        logger.info(`GAF report ${gafOrderNumber} status endpoint returned ${response.status}; waiting for webhook delivery`);
+        if (response.status === 404 || response.status === 204) {
+          logger.info(`GAF report ${gafOrderNumber} status endpoint returned ${response.status} for lookup ${statusId}`);
+          continue;
+        }
+
+        if (!response.ok) {
+          const error = await response.text();
+          lastStatusError = new Error(`GAF API error for ${statusId}: ${error}`);
+          continue;
+        }
+
+        statusData = await response.json();
+        statusIdentifier = statusId;
+        break;
+      }
+
+      if (!statusData) {
+        if (lastStatusError) {
+          throw lastStatusError;
+        }
+        logger.info(`GAF report ${gafOrderNumber} status not yet available; waiting for webhook delivery`);
         return { success: false, status: 'PENDING' };
       }
 
-      if (!response.ok) {
-        const error = await response.text();
-        throw new Error(`GAF API error: ${error}`);
-      }
-
-      const statusData = await response.json();
-
       // Check if report is complete
       if (statusData.orderStatus === 'Completed' || statusData.orderStatus === 'Complete') {
+        // Some responses already include full payload/assets; process directly.
+        if (statusData?.RoofMeasurement || statusData?.roofMeasurement) {
+          try {
+            await this.processGAFReport(measurementReportId, statusData);
+            logger.info(`GAF report ${gafOrderNumber} hydrated directly from status payload (${statusIdentifier}) for ${measurementReportId}`);
+            return { success: true, status: 'DELIVERED' };
+          } catch (statusProcessError) {
+            logger.warn(`GAF status payload process warning for ${measurementReportId}: ${statusProcessError.message}`);
+          }
+        }
+
         // Fetch the actual measurement data
-        const measurementsUrl = `${GAF_API_BASE}/Download/${gafOrderNumber}`;
+        const measurementsUrl = `${GAF_API_BASE}/Download/${encodeURIComponent(statusIdentifier || gafOrderNumber)}`;
 
         const measurementsResponse = await fetch(measurementsUrl, {
           method: 'GET',
@@ -886,6 +920,12 @@ class MeasurementService {
         });
 
         if (measurementsResponse.ok) {
+          const contentType = measurementsResponse.headers.get('content-type') || '';
+          if (!contentType.includes('application/json')) {
+            logger.info(`GAF report ${gafOrderNumber} download response is ${contentType}; waiting for webhook asset payload`);
+            return { success: false, status: 'PENDING' };
+          }
+
           const measurementData = await measurementsResponse.json();
           const normalizedPayload = {
             ...measurementData,

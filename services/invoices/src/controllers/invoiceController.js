@@ -74,10 +74,21 @@ const updateInvoiceSchema = z.object({
 });
 
 // Generate invoice number
-async function generateInvoiceNumber() {
-  const count = await prisma.invoice.count();
-  const num = count + 1;
-  return `INV-${String(num).padStart(7, '0')}`;
+async function generateInvoiceNumber(increment = 0) {
+  const latest = await prisma.invoice.findFirst({
+    where: {
+      invoiceNumber: {
+        startsWith: 'INV-',
+      },
+    },
+    select: { invoiceNumber: true },
+    orderBy: { invoiceNumber: 'desc' },
+  });
+
+  const latestNumeric = Number(String(latest?.invoiceNumber || '').replace(/^INV-/, ''));
+  const base = Number.isFinite(latestNumeric) && latestNumeric > 0 ? latestNumeric : 0;
+  const next = base + 1 + Math.max(0, Number(increment) || 0);
+  return `INV-${String(next).padStart(7, '0')}`;
 }
 
 // Calculate invoice totals
@@ -297,7 +308,6 @@ export async function getInvoice(req, res, next) {
 export async function createInvoice(req, res, next) {
   try {
     const data = createInvoiceSchema.parse(req.body);
-    const invoiceNumber = await generateInvoiceNumber();
 
     // Verify account exists
     const account = await prisma.account.findUnique({
@@ -314,39 +324,59 @@ export async function createInvoice(req, res, next) {
     const invoiceDate = data.invoiceDate ? new Date(data.invoiceDate) : new Date();
     const dueDate = addDays(invoiceDate, data.terms);
 
-    const invoice = await prisma.invoice.create({
-      data: {
-        invoiceNumber,
-        accountId: data.accountId,
-        opportunityId: data.opportunityId || null,
-        status: 'DRAFT',
-        invoiceDate,
-        dueDate,
-        terms: data.terms,
-        subtotal,
-        tax,
-        total,
-        amountPaid: 0,
-        balanceDue: total,
-        // Insurance-specific fields (Prisma model uses snake_case columns)
-        is_insurance_invoice: data.isInsuranceInvoice || false,
-        insurance_carrier: data.insuranceCarrier || null,
-        claim_number: data.claimNumber || null,
-        notes: data.notes || null,
-        lineItems: {
-          create: lineItems.map((item) => ({
-            description: item.description,
-            quantity: item.quantity,
-            unitPrice: item.unitPrice,
-            totalPrice: item.totalPrice,
-          })),
-        },
-      },
-      include: {
-        account: { select: { id: true, name: true } },
-        lineItems: true,
-      },
-    });
+    let invoice = null;
+    let lastCreateError = null;
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        const invoiceNumber = await generateInvoiceNumber(attempt);
+        invoice = await prisma.invoice.create({
+          data: {
+            invoiceNumber,
+            accountId: data.accountId,
+            opportunityId: data.opportunityId || null,
+            status: 'DRAFT',
+            invoiceDate,
+            dueDate,
+            terms: data.terms,
+            subtotal,
+            tax,
+            total,
+            amountPaid: 0,
+            balanceDue: total,
+            // Insurance-specific fields (Prisma model uses snake_case columns)
+            is_insurance_invoice: data.isInsuranceInvoice || false,
+            insurance_carrier: data.insuranceCarrier || null,
+            claim_number: data.claimNumber || null,
+            notes: data.notes || null,
+            lineItems: {
+              create: lineItems.map((item) => ({
+                description: item.description,
+                quantity: item.quantity,
+                unitPrice: item.unitPrice,
+                totalPrice: item.totalPrice,
+              })),
+            },
+          },
+          include: {
+            account: { select: { id: true, name: true } },
+            lineItems: true,
+          },
+        });
+        break;
+      } catch (createError) {
+        const isUniqueConstraintError = createError?.code === 'P2002'
+          && String(createError?.meta?.target || '').includes('invoice_number');
+        if (!isUniqueConstraintError) {
+          throw createError;
+        }
+        lastCreateError = createError;
+      }
+    }
+
+    if (!invoice) {
+      throw lastCreateError || new Error('Unable to create unique invoice number');
+    }
 
     res.status(201).json(invoice);
   } catch (error) {
