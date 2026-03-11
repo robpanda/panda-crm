@@ -10,6 +10,30 @@ const userDisplayName = (user = {}) => {
   return user.fullName || `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email || user.id;
 };
 
+const buildUserSearchFilter = (rawQuery) => {
+  const query = String(rawQuery || '').trim();
+  if (!query) return null;
+
+  const tokens = query
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+
+  if (tokens.length === 0) return null;
+
+  return {
+    AND: tokens.map((token) => ({
+      OR: [
+        { firstName: { contains: token, mode: 'insensitive' } },
+        { lastName: { contains: token, mode: 'insensitive' } },
+        { fullName: { contains: token, mode: 'insensitive' } },
+        { email: { contains: token, mode: 'insensitive' } },
+        { employeeNumber: { contains: token, mode: 'insensitive' } },
+      ],
+    })),
+  };
+};
+
 const transferAssignments = async (tx, sourceUserIds, targetUserId) => {
   const sourceIds = uniqueIds(sourceUserIds);
   if (!sourceIds.length) {
@@ -171,13 +195,8 @@ export const userService = {
     const where = {};
 
     if (search) {
-      where.OR = [
-        { firstName: { contains: search, mode: 'insensitive' } },
-        { lastName: { contains: search, mode: 'insensitive' } },
-        { fullName: { contains: search, mode: 'insensitive' } },
-        { email: { contains: search, mode: 'insensitive' } },
-        { employeeNumber: { contains: search, mode: 'insensitive' } },
-      ];
+      const searchFilter = buildUserSearchFilter(search);
+      if (searchFilter) Object.assign(where, searchFilter);
     }
 
     if (status) {
@@ -398,12 +417,8 @@ export const userService = {
     }
 
     if (search) {
-      where.OR = [
-        { firstName: { contains: search, mode: 'insensitive' } },
-        { lastName: { contains: search, mode: 'insensitive' } },
-        { fullName: { contains: search, mode: 'insensitive' } },
-        { email: { contains: search, mode: 'insensitive' } },
-      ];
+      const searchFilter = buildUserSearchFilter(search);
+      if (searchFilter) Object.assign(where, searchFilter);
     }
 
     const users = await prisma.user.findMany({
@@ -486,14 +501,12 @@ export const userService = {
    * Search users
    */
   async searchUsers(query, limit = 10) {
+    const searchFilter = buildUserSearchFilter(query);
+    if (!searchFilter) return [];
+
     const users = await prisma.user.findMany({
       where: {
-        OR: [
-          { firstName: { contains: query, mode: 'insensitive' } },
-          { lastName: { contains: query, mode: 'insensitive' } },
-          { fullName: { contains: query, mode: 'insensitive' } },
-          { email: { contains: query, mode: 'insensitive' } },
-        ],
+        ...searchFilter,
         isActive: true,
       },
       select: {

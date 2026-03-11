@@ -497,16 +497,39 @@ export const attentionService = {
     const staleDate = new Date();
     staleDate.setDate(staleDate.getDate() - staleDays);
 
-    const stalledOpps = await prisma.opportunity.findMany({
-      where: {
-        stage: { notIn: ['Closed Won', 'Closed Lost'] },
+    // Some environments still have enum drift in stage values.
+    // Try strict enum-safe filters first, then gracefully fall back to updatedAt-only.
+    const whereCandidates = [
+      {
+        stage: { notIn: ['CLOSED_WON', 'CLOSED_LOST', 'COMPLETED'] },
         updatedAt: { lt: staleDate },
       },
-      include: {
-        account: { select: { id: true, name: true } },
-        contact: { select: { id: true, firstName: true, lastName: true } },
+      {
+        updatedAt: { lt: staleDate },
       },
-    });
+    ];
+
+    let stalledOpps = [];
+    let lastError = null;
+    for (const where of whereCandidates) {
+      try {
+        stalledOpps = await prisma.opportunity.findMany({
+          where,
+          include: {
+            account: { select: { id: true, name: true } },
+            contact: { select: { id: true, firstName: true, lastName: true } },
+          },
+        });
+        lastError = null;
+        break;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    if (lastError) {
+      throw lastError;
+    }
 
     const created = [];
     for (const opp of stalledOpps) {
