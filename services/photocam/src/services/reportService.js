@@ -314,6 +314,7 @@ export async function createReport(payload, userId) {
         templateId: payload.templateId || null,
         projectId: payload.projectId || null,
         opportunityId: payload.opportunityId || null,
+        status: 'QUEUED',
         reportConfig: payload.reportConfig || {},
         createdById: userId || null,
       },

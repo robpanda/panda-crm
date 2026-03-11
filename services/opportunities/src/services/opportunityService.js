@@ -51,7 +51,16 @@ const INTERNAL_COMMENT_TITLE_PREFIX = 'INTERNAL_COMMENT|';
 
 function parseDate(value) {
   if (!value) return null;
-  const parsed = new Date(value);
+  const rawValue = String(value).trim();
+
+  // Date-only values should persist as calendar dates without timezone drift.
+  // Store at midday UTC so US timezones render the same day consistently.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(rawValue)) {
+    const parsed = new Date(`${rawValue}T12:00:00.000Z`);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  const parsed = new Date(rawValue);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
