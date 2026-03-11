@@ -2859,6 +2859,7 @@ export default function OpportunityDetail() {
     };
     try {
       await updateMutation.mutateAsync(updateData);
+      await queryClient.refetchQueries({ queryKey: ['opportunity', id] });
       setIsEditingClaim(false);
     } catch (error) {
       // Mutation onError already sets a user-visible message; keep form open for correction.
