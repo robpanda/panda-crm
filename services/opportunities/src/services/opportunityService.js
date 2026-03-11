@@ -18,6 +18,8 @@ const sesClient = new SESClient({ region: process.env.AWS_REGION || 'us-east-2' 
 const FROM_EMAIL = process.env.SES_FROM_EMAIL || 'notifications@pandaexteriors.com';
 const CRM_BASE_URL = (process.env.CRM_BASE_URL || process.env.FRONTEND_URL || 'https://crm.pandaadmin.com').replace(/\/+$/, '');
 const BAMBOOGLI_SERVICE_URL = process.env.BAMBOOGLI_SERVICE_URL || 'http://localhost:3012';
+const BAMBOOGLI_PUBLIC_URL = process.env.BAMBOOGLI_PUBLIC_URL || 'https://bamboo.pandaadmin.com';
+const BAMBOOGLI_INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || null;
 
 function toAbsoluteCrmUrl(actionPath = '/') {
   if (typeof actionPath === 'string' && /^https?:\/\//i.test(actionPath)) {
@@ -25,6 +27,47 @@ function toAbsoluteCrmUrl(actionPath = '/') {
   }
   const normalizedPath = String(actionPath || '/').startsWith('/') ? String(actionPath) : `/${String(actionPath)}`;
   return `${CRM_BASE_URL}${normalizedPath}`;
+}
+
+function getBamboogliBaseUrls() {
+  const candidates = [
+    process.env.BAMBOOGLI_SERVICE_URL,
+    process.env.BAMBOOGLI_INTERNAL_URL,
+    process.env.NODE_ENV === 'production' ? 'http://bamboogli-service:3012' : null,
+    BAMBOOGLI_SERVICE_URL,
+    BAMBOOGLI_PUBLIC_URL,
+  ].filter(Boolean);
+
+  return [...new Set(candidates.map((url) => String(url).replace(/\/+$/, '')))];
+}
+
+async function postToBamboogli(path, payload) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (BAMBOOGLI_INTERNAL_API_KEY) {
+    headers.Authorization = `ApiKey ${BAMBOOGLI_INTERNAL_API_KEY}`;
+    headers['x-api-key'] = BAMBOOGLI_INTERNAL_API_KEY;
+  }
+
+  const attempts = [];
+  for (const baseUrl of getBamboogliBaseUrls()) {
+    const requestUrl = `${baseUrl}${path}`;
+    try {
+      const response = await fetch(requestUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+      });
+
+      if (response.ok) return response;
+
+      const errorBody = await response.text().catch(() => '');
+      attempts.push(`${response.status} ${requestUrl} ${errorBody}`.trim());
+    } catch (error) {
+      attempts.push(`NETWORK ${requestUrl} ${error.message}`.trim());
+    }
+  }
+
+  throw new Error(`Bamboogli request failed: ${attempts.join(' | ')}`);
 }
 
 const DISPOSITION_CATEGORIES = {
@@ -2499,9 +2542,27 @@ Be factual and professional. Highlight anything that needs attention.`;
    * Send email notification for @mention
    */
   async sendMentionEmail({ toEmail, toName, mentionerName, opportunityName, actionUrl, messagePreview }) {
-    try {
-      const opportunityUrl = toAbsoluteCrmUrl(actionUrl || '/jobs');
+    const opportunityUrl = toAbsoluteCrmUrl(actionUrl || '/jobs');
+    const subject = `${mentionerName} mentioned you on ${opportunityName}`;
+    const bodyText = `You were mentioned by ${mentionerName} on ${opportunityName}: "${messagePreview}"\n\nView at: ${opportunityUrl}`;
+    const bodyHtml = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #333;">You were mentioned in a conversation</h2>
+        <p>Hi ${toName},</p>
+        <p><strong>${mentionerName}</strong> mentioned you in a reply on <strong>${opportunityName}</strong>:</p>
+        <div style="background: #f5f5f5; padding: 15px; border-radius: 8px; margin: 15px 0;">
+          <p style="margin: 0; color: #666;">"${messagePreview}"</p>
+        </div>
+        <a href="${opportunityUrl}" style="display: inline-block; background: #667eea; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin-top: 10px;">
+          View Conversation
+        </a>
+        <p style="color: #999; font-size: 12px; margin-top: 30px;">
+          This is an automated notification from Panda CRM.
+        </p>
+      </div>
+    `;
 
+    try {
       await sesClient.send(new SendEmailCommand({
         Source: FROM_EMAIL,
         Destination: {
@@ -2509,29 +2570,14 @@ Be factual and professional. Highlight anything that needs attention.`;
         },
         Message: {
           Subject: {
-            Data: `${mentionerName} mentioned you on ${opportunityName}`,
+            Data: subject,
           },
           Body: {
             Html: {
-              Data: `
-                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-                  <h2 style="color: #333;">You were mentioned in a conversation</h2>
-                  <p>Hi ${toName},</p>
-                  <p><strong>${mentionerName}</strong> mentioned you in a reply on <strong>${opportunityName}</strong>:</p>
-                  <div style="background: #f5f5f5; padding: 15px; border-radius: 8px; margin: 15px 0;">
-                    <p style="margin: 0; color: #666;">"${messagePreview}"</p>
-                  </div>
-                  <a href="${opportunityUrl}" style="display: inline-block; background: #667eea; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin-top: 10px;">
-                    View Conversation
-                  </a>
-                  <p style="color: #999; font-size: 12px; margin-top: 30px;">
-                    This is an automated notification from Panda CRM.
-                  </p>
-                </div>
-              `,
+              Data: bodyHtml,
             },
             Text: {
-              Data: `You were mentioned by ${mentionerName} on ${opportunityName}: "${messagePreview}"\n\nView at: ${opportunityUrl}`,
+              Data: bodyText,
             },
           },
         },
@@ -2539,27 +2585,29 @@ Be factual and professional. Highlight anything that needs attention.`;
 
       console.log(`Mention email sent to ${toEmail}`);
     } catch (error) {
-      console.error('Error sending mention email:', error);
-      throw error;
+      logger.warn(`SES mention email failed for ${toEmail}, falling back to Bamboogli: ${error.message}`);
+      const fallbackResponse = await postToBamboogli('/api/messages/send/email', {
+        to: toEmail,
+        subject,
+        body: bodyText,
+        bodyHtml,
+        sentById: 'system',
+      });
+      if (!fallbackResponse.ok) {
+        throw new Error(`Mention email fallback failed with status ${fallbackResponse.status}`);
+      }
     }
   }
 
   async sendMentionSms({ toPhone, mentionerName, opportunityName, actionUrl }) {
     const smsBody = `${mentionerName} mentioned you on ${opportunityName}. View: ${toAbsoluteCrmUrl(actionUrl || '/jobs')}`;
-    const response = await fetch(`${BAMBOOGLI_SERVICE_URL}/api/messages/send/sms`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        to: toPhone,
-        body: smsBody,
-        sentById: 'system',
-      }),
+    const response = await postToBamboogli('/api/messages/send/sms', {
+      to: toPhone,
+      body: smsBody,
+      sentById: 'system',
     });
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || `SMS delivery failed with status ${response.status}`);
-    }
+    if (!response.ok) throw new Error(`SMS delivery failed with status ${response.status}`);
   }
 
   /**

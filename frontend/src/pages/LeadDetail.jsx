@@ -619,7 +619,25 @@ export default function LeadDetail() {
     });
   }, [lead?.id, user?.id]);
 
-  const isOwner = Boolean(user?.id && (lead?.ownerId === user.id || lead?.owner?.id === user.id));
+  const userIdentityCandidates = [
+    user?.id,
+    user?.userId,
+    user?.cognitoId,
+    user?.sub,
+    user?.email ? String(user.email).toLowerCase() : null,
+  ].filter(Boolean).map((value) => String(value));
+  const leadOwnerIdentityCandidates = [
+    lead?.ownerId,
+    lead?.owner?.id,
+    lead?.owner?.cognitoId,
+    lead?.owner?.email ? String(lead.owner.email).toLowerCase() : null,
+  ].filter(Boolean).map((value) => String(value));
+  const isOwner = userIdentityCandidates.some((value) => leadOwnerIdentityCandidates.includes(value));
+  const normalizedRoleType = String(user?.roleType || user?.role?.roleType || '').toLowerCase();
+  const normalizedRoleName = String(typeof user?.role === 'string' ? user.role : user?.role?.name || '').toLowerCase();
+  const canConvertLead = isOwner
+    || ['admin', 'executive', 'office_manager', 'sales_manager', 'call_center_manager'].includes(normalizedRoleType)
+    || /(admin|manager|executive)/.test(normalizedRoleName);
   useEffect(() => {
     if (!lead || leadActionStep !== 'noInspection') return;
     if (isSuggestingInspectionSlot) return;
@@ -1026,9 +1044,9 @@ export default function LeadDetail() {
               {lead.status !== 'CONVERTED' && !lead.isConverted && (
                 <button
                   onClick={() => handleConvert()}
-                  disabled={convertMutation.isPending || !isOwner}
+                  disabled={convertMutation.isPending || !canConvertLead}
                   className={`flex items-center space-x-2 px-4 py-2 rounded-lg ${
-                    convertMutation.isPending || !isOwner
+                    convertMutation.isPending || !canConvertLead
                       ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                       : 'bg-gradient-to-r from-green-500 to-emerald-500 text-white hover:opacity-90'
                   }`}
@@ -1735,9 +1753,9 @@ export default function LeadDetail() {
               <button
                 type="button"
                 onClick={() => handleConvert()}
-                disabled={!isOwner}
+                disabled={!canConvertLead}
                 className={`w-full px-4 py-2 rounded-lg ${
-                  isOwner
+                  canConvertLead
                     ? 'bg-green-600 text-white hover:bg-green-700'
                     : 'bg-gray-200 text-gray-400 cursor-not-allowed'
                 }`}

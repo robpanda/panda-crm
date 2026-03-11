@@ -8,6 +8,8 @@ const prisma = new PrismaClient();
 const lambdaClient = new LambdaClient({ region: 'us-east-2' });
 const CRM_BASE_URL = (process.env.CRM_BASE_URL || process.env.FRONTEND_URL || 'https://crm.pandaadmin.com').replace(/\/+$/, '');
 const BAMBOOGLI_SERVICE_URL = process.env.BAMBOOGLI_SERVICE_URL || 'http://localhost:3012';
+const BAMBOOGLI_PUBLIC_URL = process.env.BAMBOOGLI_PUBLIC_URL || 'https://bamboo.pandaadmin.com';
+const BAMBOOGLI_INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || null;
 
 // Job ID starting number (first job ID will be YYYY-1000)
 const JOB_ID_STARTING_NUMBER = 999;
@@ -90,6 +92,47 @@ function toAbsoluteCrmUrl(actionPath = '/') {
   }
   const normalizedPath = String(actionPath || '/').startsWith('/') ? String(actionPath) : `/${String(actionPath)}`;
   return `${CRM_BASE_URL}${normalizedPath}`;
+}
+
+function getBamboogliBaseUrls() {
+  const candidates = [
+    process.env.BAMBOOGLI_SERVICE_URL,
+    process.env.BAMBOOGLI_INTERNAL_URL,
+    process.env.NODE_ENV === 'production' ? 'http://bamboogli-service:3012' : null,
+    BAMBOOGLI_SERVICE_URL,
+    BAMBOOGLI_PUBLIC_URL,
+  ].filter(Boolean);
+
+  return [...new Set(candidates.map((url) => String(url).replace(/\/+$/, '')))];
+}
+
+async function postToBamboogli(path, payload) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (BAMBOOGLI_INTERNAL_API_KEY) {
+    headers.Authorization = `ApiKey ${BAMBOOGLI_INTERNAL_API_KEY}`;
+    headers['x-api-key'] = BAMBOOGLI_INTERNAL_API_KEY;
+  }
+
+  const attempts = [];
+  for (const baseUrl of getBamboogliBaseUrls()) {
+    const requestUrl = `${baseUrl}${path}`;
+    try {
+      const response = await fetch(requestUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+      });
+
+      if (response.ok) return response;
+
+      const errorBody = await response.text().catch(() => '');
+      attempts.push(`${response.status} ${requestUrl} ${errorBody}`.trim());
+    } catch (error) {
+      attempts.push(`NETWORK ${requestUrl} ${error.message}`.trim());
+    }
+  }
+
+  throw new Error(`Bamboogli request failed: ${attempts.join(' | ')}`);
 }
 
 function normalizeConvertedName(rawName, fallbackName) {
@@ -2172,20 +2215,13 @@ class LeadService {
 
   async sendMentionSms({ toPhone, mentionerName, leadName, actionUrl }) {
     const smsBody = `${mentionerName} mentioned you on ${leadName}. View: ${toAbsoluteCrmUrl(actionUrl || '/leads')}`;
-    const response = await fetch(`${BAMBOOGLI_SERVICE_URL}/api/messages/send/sms`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        to: toPhone,
-        body: smsBody,
-        sentById: 'system',
-      }),
+    const response = await postToBamboogli('/api/messages/send/sms', {
+      to: toPhone,
+      body: smsBody,
+      sentById: 'system',
     });
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || `SMS delivery failed with status ${response.status}`);
-    }
+    if (!response.ok) throw new Error(`SMS delivery failed with status ${response.status}`);
   }
 
   async sendMentionEmail({ toEmail, mentionerName, leadName, actionUrl, messagePreview }) {
@@ -2201,22 +2237,15 @@ class LeadService {
       </div>
     `;
 
-    const response = await fetch(`${BAMBOOGLI_SERVICE_URL}/api/messages/send/email`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        to: toEmail,
-        subject,
-        body,
-        bodyHtml,
-        sentById: 'system',
-      }),
+    const response = await postToBamboogli('/api/messages/send/email', {
+      to: toEmail,
+      subject,
+      body,
+      bodyHtml,
+      sentById: 'system',
     });
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || `Email delivery failed with status ${response.status}`);
-    }
+    if (!response.ok) throw new Error(`Email delivery failed with status ${response.status}`);
   }
 
   async addLeadNoteReply(leadId, noteId, payload = {}, actor = null) {
