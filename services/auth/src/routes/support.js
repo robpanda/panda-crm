@@ -25,6 +25,46 @@ function getRequestUserId(req) {
   return req?.user?.id || req?.user?.userId || req?.user?.sub || null;
 }
 
+async function resolveSupportUserContext(req) {
+  const tokenUserId = getRequestUserId(req);
+  const tokenEmail = String(req?.user?.email || '').trim().toLowerCase() || null;
+
+  const orFilters = [];
+  if (tokenUserId) {
+    orFilters.push({ id: tokenUserId });
+    orFilters.push({ cognitoId: tokenUserId });
+  }
+  if (tokenEmail) {
+    orFilters.push({ email: tokenEmail });
+  }
+
+  if (orFilters.length === 0) {
+    return {
+      tokenUserId: null,
+      tokenEmail: null,
+      resolvedUserId: null,
+      candidateUserIds: [],
+    };
+  }
+
+  const users = await prisma.user.findMany({
+    where: { OR: orFilters },
+    select: { id: true },
+    take: 5,
+  });
+
+  const candidateUserIds = Array.from(
+    new Set([tokenUserId, ...users.map((user) => user.id)].filter(Boolean))
+  );
+
+  return {
+    tokenUserId,
+    tokenEmail,
+    resolvedUserId: users[0]?.id || tokenUserId || null,
+    candidateUserIds,
+  };
+}
+
 function isSupportAdmin(user = {}) {
   const roleType = String(user?.roleType || user?.role || '').toLowerCase();
   const roleName = String(user?.role?.name || '').toLowerCase();
@@ -77,13 +117,29 @@ router.post('/upload', authMiddleware, upload.single('file'), async (req, res) =
 // Get user's tickets
 router.get('/tickets', authMiddleware, async (req, res) => {
   try {
-    const userId = getRequestUserId(req);
-    if (!userId) {
+    const userContext = await resolveSupportUserContext(req);
+    if (!userContext.resolvedUserId) {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
+    const whereClauses = [];
+    if (userContext.candidateUserIds.length > 0) {
+      whereClauses.push({ user_id: { in: userContext.candidateUserIds } });
+    }
+    if (userContext.tokenEmail) {
+      whereClauses.push({
+        user: {
+          email: userContext.tokenEmail,
+        },
+      });
+    }
+
+    if (whereClauses.length === 0) {
+      return res.json({ tickets: [] });
+    }
+
     const tickets = await prisma.support_tickets.findMany({
-      where: { user_id: userId },
+      where: { OR: whereClauses },
       include: {
         _count: {
           select: {
@@ -105,9 +161,22 @@ router.get('/tickets', authMiddleware, async (req, res) => {
 // Get single ticket
 router.get('/tickets/:id', authMiddleware, async (req, res) => {
   try {
-    const userId = getRequestUserId(req);
-    if (!userId) {
+    const userContext = await resolveSupportUserContext(req);
+    if (!userContext.resolvedUserId) {
       return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    const ownershipFilters = [];
+    if (userContext.candidateUserIds.length > 0) {
+      ownershipFilters.push({ user_id: { in: userContext.candidateUserIds } });
+      ownershipFilters.push({ assigned_to_id: { in: userContext.candidateUserIds } });
+    }
+    if (userContext.tokenEmail) {
+      ownershipFilters.push({
+        user: {
+          email: userContext.tokenEmail,
+        },
+      });
     }
 
     const ticket = await prisma.support_tickets.findFirst({
@@ -115,7 +184,7 @@ router.get('/tickets/:id', authMiddleware, async (req, res) => {
         id: req.params.id,
         ...(isSupportAdmin(req.user)
           ? {}
-          : { user_id: userId }), // Users can only see their own tickets
+          : { OR: ownershipFilters }), // Users can only see their own tickets
       },
       include: {
         user: {
@@ -204,8 +273,8 @@ router.post('/tickets', authMiddleware, upload.fields([
   { name: 'attachments', maxCount: 5 }
 ]), async (req, res) => {
   try {
-    const userId = getRequestUserId(req);
-    if (!userId) {
+    const userContext = await resolveSupportUserContext(req);
+    if (!userContext.resolvedUserId) {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
@@ -229,7 +298,7 @@ router.post('/tickets', authMiddleware, upload.fields([
         page_url: pageUrl || null,
         browser_info: browserInfo || null,
         screenshot_url: screenshotUrl,
-        user_id: userId,
+        user_id: userContext.resolvedUserId,
       },
     });
 
@@ -245,7 +314,7 @@ router.post('/tickets', authMiddleware, upload.fields([
             file_url: fileUrl,
             file_size: file.size,
             file_type: file.mimetype,
-            uploaded_by_id: userId,
+            uploaded_by_id: userContext.resolvedUserId,
           },
         });
       }
@@ -261,8 +330,8 @@ router.post('/tickets', authMiddleware, upload.fields([
 // Add message to ticket
 router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
   try {
-    const userId = getRequestUserId(req);
-    if (!userId) {
+    const userContext = await resolveSupportUserContext(req);
+    if (!userContext.resolvedUserId) {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
@@ -274,16 +343,26 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
     }
 
     // Verify ticket belongs to user or user is admin
+    const ownershipFilters = [];
+    if (userContext.candidateUserIds.length > 0) {
+      ownershipFilters.push({ user_id: { in: userContext.candidateUserIds } });
+      ownershipFilters.push({ assigned_to_id: { in: userContext.candidateUserIds } });
+    }
+    if (userContext.tokenEmail) {
+      ownershipFilters.push({
+        user: {
+          email: userContext.tokenEmail,
+        },
+      });
+    }
+
     const ticket = await prisma.support_tickets.findFirst({
       where: {
         id: req.params.id,
         ...(isSupportAdmin(req.user)
           ? {}
           : {
-              OR: [
-                { user_id: userId },
-                { assigned_to_id: userId },
-              ],
+              OR: ownershipFilters,
             }),
       },
     });
@@ -296,7 +375,7 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
     const newMessage = await prisma.support_ticket_messages.create({
       data: {
         ticket_id: req.params.id,
-        user_id: userId,
+        user_id: userContext.resolvedUserId,
         message: normalizedMessage || 'Attachment(s) uploaded',
         is_internal: false,
       },
@@ -317,14 +396,14 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
             file_url: fileUrl,
             file_size: Number(attachment.file_size || attachment.size || 0) || null,
             file_type: attachment.file_type || attachment.type || null,
-            uploaded_by_id: userId,
+            uploaded_by_id: userContext.resolvedUserId,
           },
         });
       }
     }
 
     // Update ticket timestamps
-    const isUserMessage = userId === ticket.user_id;
+    const isUserMessage = userContext.candidateUserIds.includes(ticket.user_id);
     const updateData = {
       last_response_at: new Date(),
     };

@@ -911,7 +911,7 @@ router.delete('/google/users/:userId', authMiddleware, async (req, res, next) =>
       data: {
         google_calendar_email: null,
         google_calendar_sync_enabled: false,
-        googleCalendarLastSyncAt: null
+        google_calendar_last_sync_at: null
       },
       select: { id: true, firstName: true, lastName: true }
     });
