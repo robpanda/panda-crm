@@ -2071,6 +2071,9 @@ export default function OpportunityDetail() {
   const [transferOwnerSearchTerm, setTransferOwnerSearchTerm] = useState('');
   const [transferRelatedItems, setTransferRelatedItems] = useState(true);
   const [transferOwnerError, setTransferOwnerError] = useState('');
+  const [projectManagerSearchTerm, setProjectManagerSearchTerm] = useState('');
+  const [selectedProjectManagerId, setSelectedProjectManagerId] = useState('');
+  const [crewSearchTerm, setCrewSearchTerm] = useState('');
 
   // Close actions menu when clicking outside
   useEffect(() => {
@@ -2512,6 +2515,10 @@ export default function OpportunityDetail() {
       setTransferOwnerError(error.message || 'Failed to transfer job owner');
     },
   });
+
+  useEffect(() => {
+    setSelectedProjectManagerId(opportunity?.projectManagerId || '');
+  }, [opportunity?.projectManagerId]);
   // Initialize claim form when opportunity data loads
   useEffect(() => {
     if (opportunity) {
@@ -3647,7 +3654,12 @@ export default function OpportunityDetail() {
     .map((part) => part.charAt(0).toUpperCase())
     .join('');
   const availableTransferOwners = useMemo(
-    () => (assignableOwners || []).filter((teamUser) => teamUser.id !== ownerDisplayId),
+    () => (assignableOwners || []).filter((teamUser) => {
+      if (!teamUser || teamUser.id === ownerDisplayId) return false;
+      if (teamUser.isActive === false) return false;
+      if (String(teamUser.status || '').toUpperCase() === 'INACTIVE') return false;
+      return true;
+    }),
     [assignableOwners, ownerDisplayId]
   );
   const filteredTransferOwners = useMemo(() => {
@@ -3668,6 +3680,32 @@ export default function OpportunityDetail() {
     });
   }, [availableTransferOwners, transferOwnerSearchTerm]);
   const teamAssignableUsers = usersForDropdown?.data || usersForDropdown || [];
+  const activeTeamAssignableUsers = useMemo(
+    () => (teamAssignableUsers || []).filter((teamUser) => {
+      if (!teamUser) return false;
+      if (teamUser.isActive === false) return false;
+      if (String(teamUser.status || '').toUpperCase() === 'INACTIVE') return false;
+      return true;
+    }),
+    [teamAssignableUsers]
+  );
+  const filteredProjectManagerUsers = useMemo(() => {
+    const query = projectManagerSearchTerm.trim().toLowerCase();
+    if (!query) return activeTeamAssignableUsers;
+    return activeTeamAssignableUsers.filter((teamUser) => {
+      const haystack = [
+        teamUser.name,
+        teamUser.email,
+        teamUser.role,
+        teamUser.firstName,
+        teamUser.lastName,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [activeTeamAssignableUsers, projectManagerSearchTerm]);
   const appointmentsForTeam = Array.isArray(appointments) ? appointments : [];
   const primaryCrewMember = useMemo(() => {
     for (const appointment of appointmentsForTeam) {
@@ -3684,6 +3722,30 @@ export default function OpportunityDetail() {
     if (withIds.length === 0) return null;
     return withIds[0];
   }, [appointmentsForTeam]);
+  const availableCrews = useMemo(
+    () => (crews?.data || crews || []).filter((crewOption) => {
+      if (!crewOption) return false;
+      if (crewOption.isActive === false) return false;
+      if (String(crewOption.status || '').toUpperCase() === 'INACTIVE') return false;
+      return true;
+    }),
+    [crews]
+  );
+  const filteredCrews = useMemo(() => {
+    const query = crewSearchTerm.trim().toLowerCase();
+    if (!query) return availableCrews;
+    return availableCrews.filter((crewOption) => {
+      const haystack = [
+        crewOption.name,
+        crewOption.territory?.name,
+        crewOption.resourceCode,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [availableCrews, crewSearchTerm]);
   const showInsuranceClaimSection = useMemo(() => {
     const disposition = String(opportunity?.currentDispositionCategory || '').toUpperCase();
     const selectedInsurancePath = disposition === 'INSURANCE_CLAIM_FILED' || disposition === 'INSURANCE_NO_CLAIM';
@@ -3867,6 +3929,60 @@ export default function OpportunityDetail() {
   // Available trades options
   const trades = ['Roofing', 'Gutters', 'Siding', 'GAF Solar', 'Skylight', 'Trim & Capping', 'Interior Work', 'GAF TimberSteel'];
 
+  const primaryContact = contacts?.[0] || opportunity?.contact || null;
+  const headerDisplayName = useMemo(() => {
+    const first = primaryContact?.firstName || '';
+    const last = primaryContact?.lastName || '';
+    if (first || last) return `${first} ${last}`.trim();
+    return opportunity?.account?.name || opportunity?.name || 'Job';
+  }, [opportunity?.account?.name, opportunity?.name, primaryContact?.firstName, primaryContact?.lastName]);
+  const headerInitials = useMemo(() => {
+    const source = headerDisplayName || '';
+    const initials = source
+      .split(' ')
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part.charAt(0).toUpperCase())
+      .join('');
+    return initials || 'J';
+  }, [headerDisplayName]);
+  const headerEmail = primaryContact?.email || opportunity?.account?.email || '';
+  const headerPhone = primaryContact?.mobilePhone || primaryContact?.phone || opportunity?.phone || '';
+  const headerAddress = [opportunity?.street, opportunity?.city, opportunity?.state, opportunity?.postalCode]
+    .filter(Boolean)
+    .join(', ');
+  const headerPriorityLabel = String(opportunity?.priority || 'Normal').replace(/_/g, ' ');
+  const financialWorksheetTotals = useMemo(() => {
+    const buckets = {
+      insurance: { total: 0, paid: 0, due: 0 },
+      homeowner: { total: 0, paid: 0, due: 0 },
+      retail: { total: 0, paid: 0, due: 0 },
+    };
+
+    (invoices || []).forEach((invoice) => {
+      const categoryToken = String(
+        invoice?.invoiceType
+        || invoice?.type
+        || invoice?.category
+        || invoice?.paymentCategory
+        || ''
+      ).toUpperCase();
+      const isInsuranceInvoice = Boolean(invoice?.isInsuranceInvoice || invoice?.insuranceCarrier || categoryToken.includes('INSURANCE'));
+      const isRetailInvoice = categoryToken.includes('RETAIL');
+      const bucketKey = isInsuranceInvoice ? 'insurance' : isRetailInvoice ? 'retail' : 'homeowner';
+
+      const total = Number(invoice?.total ?? invoice?.totalAmount ?? 0) || 0;
+      const paid = Number(invoice?.amountPaid ?? 0) || 0;
+      const due = Number(invoice?.balanceDue ?? Math.max(total - paid, 0)) || 0;
+
+      buckets[bucketKey].total += total;
+      buckets[bucketKey].paid += paid;
+      buckets[bucketKey].due += due;
+    });
+
+    return buckets;
+  }, [invoices]);
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Success/Error Toast */}
@@ -3897,51 +4013,44 @@ export default function OpportunityDetail() {
         </button>
       </div>
 
-      {/* Compact Header with Gradient */}
+      {/* Job Header */}
       <div className="px-4 sm:px-6 pb-4">
-        <div className="bg-gradient-to-r from-slate-50 via-white to-blue-50 rounded-xl shadow-sm border border-gray-200">
-          {/* Top Bar - Name and Key Info */}
-          <div className="p-4 sm:p-5">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              {/* Left: Icon + Name + Badges */}
-              <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-gradient-to-br from-panda-primary to-panda-secondary flex items-center justify-center flex-shrink-0 shadow-sm">
-                  <Target className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
+        <div className="rounded-xl border border-gray-200 bg-gradient-to-r from-slate-50 via-white to-blue-50 shadow-sm">
+          <div className="p-5">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div className="flex items-start gap-3 min-w-0">
+                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-panda-primary to-panda-secondary flex items-center justify-center flex-shrink-0">
+                  <span className="text-white font-semibold">{headerInitials}</span>
                 </div>
                 <div className="min-w-0">
-                  <h1 className="text-lg sm:text-xl font-bold text-gray-900 truncate">
-                    {opportunity.contact?.firstName && opportunity.contact?.lastName
-                      ? `${opportunity.contact.firstName} ${opportunity.contact.lastName}`
-                      : opportunity.name}
-                  </h1>
-                  <div className="flex items-center gap-2 mt-1 flex-wrap">
-                    <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-blue-100 text-blue-700">
-                      {opportunity.workType || 'Not Set'}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h1 className="text-2xl font-bold text-gray-900 truncate">{headerDisplayName}</h1>
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-700">
+                      PRIMARY
                     </span>
-                    <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-emerald-100 text-emerald-700">
-                      {opportunity.stage?.replace(/_/g, ' ') || 'Lead'}
-                    </span>
-                    {opportunity.isApproved ? (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-green-100 text-green-700">
-                        <CheckCircle className="w-3 h-3 mr-1" />
-                        Approved
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-amber-100 text-amber-700">
-                        <AlertTriangle className="w-3 h-3 mr-1" />
-                        Pending Approval
-                      </span>
-                    )}
                   </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-gray-600">
+                    {headerEmail && <span className="truncate">{headerEmail}</span>}
+                    {headerPhone && <span className="truncate">• {headerPhone}</span>}
+                  </div>
+                  {headerAddress && (
+                    <p className="mt-1 text-sm text-gray-500 truncate">{headerAddress}</p>
+                  )}
                 </div>
               </div>
 
-              {/* Right: Job # and Priority */}
-              <div className="flex items-center gap-4 sm:gap-5">
-                {/* Job Number */}
-                <div className="bg-white/80 backdrop-blur-sm rounded-lg px-3 py-2 border border-gray-100 shadow-sm">
-                  <div className="text-xs text-gray-500 font-medium">Job #</div>
-                  <div className="text-sm sm:text-base font-bold text-panda-primary">
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="inline-flex items-center px-3 py-1 rounded-md text-sm font-semibold bg-emerald-100 text-emerald-700">
+                  {opportunity.workType || 'Unassigned Work Type'}
+                </span>
+                <span className={`inline-flex items-center px-3 py-1 rounded-md text-sm font-semibold ${
+                  opportunity.isApproved ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+                }`}>
+                  {opportunity.isApproved ? 'Completed' : 'Pending'}
+                </span>
+                <div className="rounded-lg border border-gray-200 bg-white px-4 py-2">
+                  <p className="text-xs text-gray-500">Job #</p>
+                  <p className="text-2xl font-bold text-panda-primary leading-none">
                     {opportunity.jobId || (
                       <button
                         onClick={async () => {
@@ -3955,50 +4064,48 @@ export default function OpportunityDetail() {
                             setActionError('Failed to assign Job #');
                           }
                         }}
-                        className="text-xs text-gray-400 hover:text-panda-primary underline"
+                        className="text-sm text-gray-500 hover:text-panda-primary underline"
                       >
                         Assign
                       </button>
                     )}
-                  </div>
+                  </p>
                 </div>
-                {/* Priority */}
-                <div className="hidden sm:block">
+                <div className="min-w-[180px]">
                   <JobPriority opportunity={opportunity} />
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Metrics Bar - Compact single row (financials + key counts only) */}
-          <div className="px-4 sm:px-5 pb-4">
-            <div className="grid grid-cols-4 sm:grid-cols-6 gap-2 sm:gap-3">
-              {/* Financials with colors */}
-              <div className="col-span-2 sm:col-span-1 bg-emerald-50 rounded-lg p-2 sm:p-3 text-center border border-emerald-100">
-                <div className="text-[10px] sm:text-xs text-emerald-600 font-medium uppercase tracking-wide">Contract</div>
-                <div className="text-sm sm:text-base font-bold text-emerald-700">${(summary?.financials?.contractValue || opportunity.amount || 0).toLocaleString()}</div>
+          <div className="px-5 pb-5">
+            <div className="rounded-lg border border-gray-200 bg-white p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-sm font-semibold text-gray-700">Financial Worksheet</h2>
+                <span className="text-sm text-panda-primary font-medium">Edit Worksheet</span>
               </div>
-              <div className="bg-blue-50 rounded-lg p-2 sm:p-3 text-center border border-blue-100">
-                <div className="text-[10px] sm:text-xs text-blue-600 font-medium uppercase tracking-wide">Paid</div>
-                <div className="text-sm sm:text-base font-bold text-blue-700">${(summary?.financials?.totalPaid || 0).toLocaleString()}</div>
-              </div>
-              <div className="bg-amber-50 rounded-lg p-2 sm:p-3 text-center border border-amber-100">
-                <div className="text-[10px] sm:text-xs text-amber-600 font-medium uppercase tracking-wide">Due</div>
-                <div className="text-sm sm:text-base font-bold text-amber-700">${(summary?.financials?.balanceDue || 0).toLocaleString()}</div>
-              </div>
-
-              {/* Counts */}
-              <div className="hidden sm:block bg-white rounded-lg p-2 sm:p-3 text-center border border-gray-100">
-                <div className="text-[10px] sm:text-xs text-gray-500 font-medium uppercase tracking-wide">Quotes</div>
-                <div className="text-sm sm:text-base font-bold text-gray-700">{summary?.counts?.quotes || quotes?.length || 0}</div>
-              </div>
-              <div className="hidden sm:block bg-white rounded-lg p-2 sm:p-3 text-center border border-gray-100">
-                <div className="text-[10px] sm:text-xs text-gray-500 font-medium uppercase tracking-wide">Work Orders</div>
-                <div className="text-sm sm:text-base font-bold text-gray-700">{summary?.counts?.workOrders || workOrders?.length || 0}</div>
-              </div>
-              <div className="hidden sm:block bg-white rounded-lg p-2 sm:p-3 text-center border border-gray-100">
-                <div className="text-[10px] sm:text-xs text-gray-500 font-medium uppercase tracking-wide">Appts</div>
-                <div className="text-sm sm:text-base font-bold text-gray-700">{summary?.counts?.appointments || 0}</div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-center">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Insurance Claim</p>
+                  <p className="mt-1 text-3xl font-bold text-emerald-800">${financialWorksheetTotals.insurance.total.toLocaleString()}</p>
+                  <p className="mt-1 text-sm text-emerald-700">
+                    Paid ${financialWorksheetTotals.insurance.paid.toLocaleString()} • Due ${financialWorksheetTotals.insurance.due.toLocaleString()}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-center">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">Homeowner</p>
+                  <p className="mt-1 text-3xl font-bold text-blue-800">${financialWorksheetTotals.homeowner.total.toLocaleString()}</p>
+                  <p className="mt-1 text-sm text-blue-700">
+                    Paid ${financialWorksheetTotals.homeowner.paid.toLocaleString()} • Due ${financialWorksheetTotals.homeowner.due.toLocaleString()}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-center">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Retail</p>
+                  <p className="mt-1 text-3xl font-bold text-amber-800">${financialWorksheetTotals.retail.total.toLocaleString()}</p>
+                  <p className="mt-1 text-sm text-amber-700">
+                    Paid ${financialWorksheetTotals.retail.paid.toLocaleString()} • Due ${financialWorksheetTotals.retail.due.toLocaleString()}
+                  </p>
+                </div>
               </div>
             </div>
           </div>
@@ -5614,21 +5721,54 @@ export default function OpportunityDetail() {
                             </div>
                           </div>
                         </div>
-                        <select
-                          value={opportunity?.projectManagerId || ''}
-                          onChange={async (e) => {
-                            await updateMutation.mutateAsync({ projectManagerId: e.target.value || null });
-                          }}
-                          disabled={updateMutation.isPending}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary disabled:opacity-50"
-                        >
-                          <option value="">Assign project manager…</option>
-                          {teamAssignableUsers.map((teamUser) => (
-                            <option key={teamUser.id} value={teamUser.id}>
-                              {teamUser.firstName} {teamUser.lastName}
-                            </option>
-                          ))}
-                        </select>
+                        <div className="space-y-2">
+                          <input
+                            type="text"
+                            value={projectManagerSearchTerm}
+                            onChange={(event) => setProjectManagerSearchTerm(event.target.value)}
+                            placeholder="Search active users for PM assignment"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary"
+                          />
+                          <div className="max-h-36 overflow-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+                            {filteredProjectManagerUsers.slice(0, 12).map((teamUser) => {
+                              const isSelected = selectedProjectManagerId === teamUser.id;
+                              const displayName = (teamUser.name || `${teamUser.firstName || ''} ${teamUser.lastName || ''}`.trim() || teamUser.email);
+                              return (
+                                <button
+                                  key={teamUser.id}
+                                  type="button"
+                                  onClick={() => setSelectedProjectManagerId(teamUser.id)}
+                                  className={`w-full px-3 py-2 text-left text-sm hover:bg-panda-primary/5 ${isSelected ? 'bg-panda-primary/10 text-panda-primary font-medium' : 'text-gray-700'}`}
+                                >
+                                  <div className="truncate">{displayName}</div>
+                                  {teamUser.role && <div className="text-xs text-gray-500 truncate">{teamUser.role}</div>}
+                                </button>
+                              );
+                            })}
+                            {filteredProjectManagerUsers.length === 0 && (
+                              <p className="px-3 py-2 text-xs text-gray-500">No active users match your search.</p>
+                            )}
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedProjectManagerId('')}
+                              className="text-xs text-gray-500 hover:text-gray-700"
+                            >
+                              Clear selection
+                            </button>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                await updateMutation.mutateAsync({ projectManagerId: selectedProjectManagerId || null });
+                              }}
+                              disabled={updateMutation.isPending}
+                              className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium text-white bg-panda-primary rounded-lg hover:bg-panda-dark disabled:opacity-50"
+                            >
+                              {updateMutation.isPending ? 'Saving…' : 'Assign PM'}
+                            </button>
+                          </div>
+                        </div>
                       </div>
 
                       {/* Crew */}
@@ -5644,19 +5784,35 @@ export default function OpportunityDetail() {
                             </div>
                           </div>
                         </div>
-                        <div className="flex flex-col sm:flex-row gap-2">
-                          <select
-                            value={selectedCrewId}
-                            onChange={(e) => setSelectedCrewId(e.target.value)}
-                            className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary"
-                          >
-                            <option value="">Assign crew…</option>
-                            {(crews?.data || crews || []).map((crew) => (
-                              <option key={crew.id} value={crew.id}>
-                                {crew.name} {crew.territory?.name ? `(${crew.territory.name})` : ''}
-                              </option>
-                            ))}
-                          </select>
+                        <div className="flex flex-col gap-2">
+                          <input
+                            type="text"
+                            value={crewSearchTerm}
+                            onChange={(event) => setCrewSearchTerm(event.target.value)}
+                            placeholder="Search active crews"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary"
+                          />
+                          <div className="max-h-36 overflow-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+                            {filteredCrews.slice(0, 12).map((crewOption) => {
+                              const isSelected = selectedCrewId === crewOption.id;
+                              return (
+                                <button
+                                  key={crewOption.id}
+                                  type="button"
+                                  onClick={() => setSelectedCrewId(crewOption.id)}
+                                  className={`w-full px-3 py-2 text-left text-sm hover:bg-panda-primary/5 ${isSelected ? 'bg-panda-primary/10 text-panda-primary font-medium' : 'text-gray-700'}`}
+                                >
+                                  <div className="truncate">{crewOption.name}</div>
+                                  {crewOption.territory?.name && (
+                                    <div className="text-xs text-gray-500 truncate">{crewOption.territory.name}</div>
+                                  )}
+                                </button>
+                              );
+                            })}
+                            {filteredCrews.length === 0 && (
+                              <p className="px-3 py-2 text-xs text-gray-500">No active crews match your search.</p>
+                            )}
+                          </div>
                           <button
                             type="button"
                             onClick={() => {
@@ -7361,47 +7517,49 @@ export default function OpportunityDetail() {
                         <div
                           key={invoice.id}
                           onClick={() => { setSelectedInvoice(normalizeInvoiceTotals(invoice)); setShowInvoiceDetailModal(true); }}
-                          className="border border-gray-200 rounded-lg p-4 hover:border-panda-primary hover:shadow-md transition-all cursor-pointer"
+                          className="border border-indigo-200 rounded-xl p-4 hover:border-panda-primary hover:shadow-md transition-all cursor-pointer bg-white"
                         >
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center space-x-3">
-                              <Receipt className="w-5 h-5 text-gray-400" />
-                              <div>
-                                <h4 className="font-medium text-gray-900">{invoice.invoiceNumber || `INV-${invoice.id.slice(-6)}`}</h4>
-                                <p className="text-sm text-gray-500">
-                                  {invoice.createdAt ? new Date(invoice.createdAt).toLocaleDateString() : '-'}
-                                </p>
+                          <div className="flex flex-col gap-3">
+                            <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
+                              <div className="flex items-start gap-3">
+                                <Receipt className="w-5 h-5 text-gray-400 mt-1" />
+                                <div>
+                                  <h4 className="text-2xl font-bold text-gray-900 leading-none">{invoice.invoiceNumber || `INV-${invoice.id.slice(-6)}`}</h4>
+                                  <p className="text-sm text-gray-600 mt-1">
+                                    Date: {invoice.createdAt ? new Date(invoice.createdAt).toLocaleDateString() : 'N/A'}
+                                  </p>
+                                  <div className="flex flex-wrap items-center gap-2 mt-2">
+                                    {(invoice?.isInsuranceInvoice || invoice?.insuranceCarrier) && (
+                                      <span className="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-700">INSURANCE</span>
+                                    )}
+                                    <span className="px-2 py-0.5 rounded text-xs font-semibold bg-blue-100 text-blue-700">HOMEOWNER</span>
+                                    {String(invoice?.invoiceType || invoice?.type || '').toUpperCase().includes('RETAIL') && (
+                                      <span className="px-2 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-700">RETAIL</span>
+                                    )}
+                                    <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
+                                      invoice.status === 'PAID' ? 'bg-green-100 text-green-800' :
+                                      invoice.status === 'OVERDUE' ? 'bg-red-100 text-red-800' :
+                                      invoice.status === 'SENT' ? 'bg-yellow-100 text-yellow-800' :
+                                      'bg-gray-100 text-gray-600'
+                                    }`}>
+                                      {invoice.status || 'Draft'}
+                                    </span>
+                                  </div>
+                                </div>
                               </div>
-                            </div>
-                            <div className="flex items-center gap-4">
-                            <div className="text-right">
-                                <p className="font-semibold text-gray-900">${Number(invoice.total ?? invoice.totalAmount ?? 0).toLocaleString()}</p>
-                                <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                                  invoice.status === 'PAID' ? 'bg-green-100 text-green-800' :
-                                  invoice.status === 'OVERDUE' ? 'bg-red-100 text-red-800' :
-                                  invoice.status === 'SENT' ? 'bg-yellow-100 text-yellow-800' :
-                                  'bg-gray-100 text-gray-600'
-                                }`}>
-                                  {invoice.status || 'Draft'}
-                                </span>
-                              </div>
-                              {/* Invoice Action Buttons */}
-                              <div className="flex items-center gap-2">
-                                {/* Send Invoice Button - show if not already sent or paid */}
-                                {invoice.status !== 'PAID' && invoice.status !== 'SENT' && (
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setInvoiceToSend(invoice);
-                                      setShowSendInvoiceModal(true);
-                                    }}
-                                    className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
-                                  >
-                                    <Mail className="w-4 h-4" />
-                                    Send
-                                  </button>
-                                )}
-                                {/* Pay Invoice Button - only show if not fully paid */}
+
+                              <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setInvoiceToSend(invoice);
+                                    setShowSendInvoiceModal(true);
+                                  }}
+                                  className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors"
+                                >
+                                  <Mail className="w-4 h-4" />
+                                  {invoice.status === 'SENT' || invoice.status === 'PAID' ? 'Resend' : 'Send'}
+                                </button>
                                 {invoice.status !== 'PAID' && (
                                   (parseFloat(invoice.balanceDue) > 0) ||
                                   (parseFloat(invoice.total ?? invoice.totalAmount) > parseFloat(invoice.amountPaid || 0))
@@ -7418,20 +7576,40 @@ export default function OpportunityDetail() {
                                     Pay
                                   </button>
                                 )}
-                                {/* View indicator */}
-                                <ExternalLink className="w-4 h-4 text-gray-400" />
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedInvoice(normalizeInvoiceTotals(invoice));
+                                    setShowInvoiceDetailModal(true);
+                                  }}
+                                  className="inline-flex items-center justify-center px-2.5 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50"
+                                  title="Open invoice"
+                                >
+                                  <ExternalLink className="w-4 h-4" />
+                                </button>
                               </div>
                             </div>
                           </div>
-                          {/* Balance info */}
-                          {invoice.status !== 'PAID' && (
-                            <div className="mt-3 pt-3 border-t border-gray-100 flex justify-between text-sm">
-                              <span className="text-gray-500">Balance Due:</span>
-                              <span className="font-medium text-red-600">
-                                ${parseFloat(invoice.balanceDue || ((invoice.total ?? invoice.totalAmount) - (invoice.amountPaid || 0)) || 0).toLocaleString()}
-                              </span>
+                          <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-3 border-t border-gray-100 pt-3">
+                            <div>
+                              <p className="text-sm text-gray-500">Owed</p>
+                              <p className="text-3xl font-bold text-gray-900">
+                                ${Number(invoice.total ?? invoice.totalAmount ?? 0).toLocaleString()}
+                              </p>
                             </div>
-                          )}
+                            <div>
+                              <p className="text-sm text-gray-500">Paid</p>
+                              <p className="text-3xl font-bold text-blue-700">
+                                ${Number(invoice.amountPaid || 0).toLocaleString()}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-sm text-gray-500">Balance Due</p>
+                              <p className="text-3xl font-bold text-red-600">
+                                ${parseFloat(invoice.balanceDue || ((invoice.total ?? invoice.totalAmount) - (invoice.amountPaid || 0)) || 0).toLocaleString()}
+                              </p>
+                            </div>
+                          </div>
                         </div>
                       )) : (
                         <div className="text-center py-8 text-gray-500">
@@ -8934,22 +9112,28 @@ export default function OpportunityDetail() {
                 />
 
                 <label className="block text-sm font-medium text-gray-700 mb-1">New Owner</label>
-                <select
-                  value={selectedTransferOwnerId}
-                  onChange={(e) => {
-                    setSelectedTransferOwnerId(e.target.value);
-                    setTransferOwnerError('');
-                  }}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
-                >
-                  <option value="">Select an owner...</option>
-                  {filteredTransferOwners.map((teamUser) => (
-                    <option key={teamUser.id} value={teamUser.id}>
-                      {teamUser.name || `${teamUser.firstName || ''} ${teamUser.lastName || ''}`.trim() || teamUser.email}
-                      {teamUser.role ? ` • ${teamUser.role}` : ''}
-                    </option>
-                  ))}
-                </select>
+                <div className="max-h-52 overflow-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+                  {filteredTransferOwners.map((teamUser) => {
+                    const displayName = teamUser.name || `${teamUser.firstName || ''} ${teamUser.lastName || ''}`.trim() || teamUser.email;
+                    const isSelected = selectedTransferOwnerId === teamUser.id;
+                    return (
+                      <button
+                        key={teamUser.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedTransferOwnerId(teamUser.id);
+                          setTransferOwnerError('');
+                        }}
+                        className={`w-full px-3 py-2 text-left text-sm hover:bg-panda-primary/5 ${isSelected ? 'bg-panda-primary/10 text-panda-primary font-medium' : 'text-gray-700'}`}
+                      >
+                        <div className="truncate">{displayName}</div>
+                        <div className="text-xs text-gray-500 truncate">
+                          {[teamUser.email, teamUser.role].filter(Boolean).join(' • ')}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
                 {availableTransferOwners.length === 0 && (
                   <p className="mt-2 text-xs text-gray-500">No alternate owners available.</p>
                 )}

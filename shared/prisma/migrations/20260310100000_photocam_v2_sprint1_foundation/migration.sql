@@ -11,7 +11,7 @@ END $$;
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'PhotoReportStatus') THEN
-    CREATE TYPE "PhotoReportStatus" AS ENUM ('PENDING', 'PROCESSING', 'GENERATED', 'FAILED');
+    CREATE TYPE "PhotoReportStatus" AS ENUM ('QUEUED', 'PROCESSING', 'READY', 'FAILED');
   END IF;
 END $$;
 
@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS "photo_reports" (
   "template_id" TEXT,
   "project_id" TEXT,
   "opportunity_id" TEXT,
-  "status" "PhotoReportStatus" NOT NULL DEFAULT 'PENDING',
+  "status" "PhotoReportStatus" NOT NULL DEFAULT 'QUEUED',
   "report_config" JSONB,
   "file_key" TEXT,
   "file_url" TEXT,

@@ -6039,6 +6039,21 @@ export const photocamApi = {
     return response.data.data;
   },
 
+  async updatePhotocamTemplate(id, payload) {
+    const response = await api.put(`/api/photocam/templates/${id}`, payload);
+    return response.data.data;
+  },
+
+  async publishPhotocamTemplate(id) {
+    const response = await api.post(`/api/photocam/templates/${id}/publish`);
+    return response.data.data;
+  },
+
+  async archivePhotocamTemplate(id) {
+    const response = await api.post(`/api/photocam/templates/${id}/archive`);
+    return response.data.data;
+  },
+
   async getRecommendedTemplateSeeds() {
     const response = await api.get('/api/photocam/templates/recommended-seeds');
     return response.data.data;

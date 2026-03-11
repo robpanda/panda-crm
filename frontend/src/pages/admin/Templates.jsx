@@ -14,6 +14,7 @@ import {
   Tag,
   Clock,
   Sparkles,
+  X,
 } from 'lucide-react';
 import { photocamApi } from '../../services/api';
 import AdminLayout from '../../components/AdminLayout';
@@ -54,10 +55,23 @@ export default function Templates() {
   const [photocamTemplateName, setPhotocamTemplateName] = useState('');
   const [photocamTemplateDescription, setPhotocamTemplateDescription] = useState('');
   const [photocamTemplateType, setPhotocamTemplateType] = useState('CHECKLIST');
+  const [photocamTemplates, setPhotocamTemplates] = useState([]);
+  const [photocamTemplatesLoading, setPhotocamTemplatesLoading] = useState(false);
+  const [photocamTemplatesError, setPhotocamTemplatesError] = useState(null);
+  const [editingPhotocamTemplate, setEditingPhotocamTemplate] = useState(null);
+  const [photocamEditName, setPhotocamEditName] = useState('');
+  const [photocamEditDescription, setPhotocamEditDescription] = useState('');
+  const [photocamEditType, setPhotocamEditType] = useState('CHECKLIST');
+  const [photocamEditPandaOnly, setPhotocamEditPandaOnly] = useState(false);
+  const [photocamEditStructureJson, setPhotocamEditStructureJson] = useState('{}');
+  const [photocamEditConfigJson, setPhotocamEditConfigJson] = useState('{}');
+  const [photocamEditSaving, setPhotocamEditSaving] = useState(false);
+  const [photocamEditError, setPhotocamEditError] = useState(null);
 
   useEffect(() => {
     loadTemplates();
     loadPhotoCamSeedNames();
+    loadPhotoCamTemplates();
   }, [typeFilter, categoryFilter]);
 
   const loadTemplates = async () => {
@@ -160,6 +174,19 @@ export default function Templates() {
     }
   };
 
+  const loadPhotoCamTemplates = async () => {
+    try {
+      setPhotocamTemplatesLoading(true);
+      setPhotocamTemplatesError(null);
+      const result = await photocamApi.getTemplates({});
+      setPhotocamTemplates(Array.isArray(result) ? result : []);
+    } catch (error) {
+      setPhotocamTemplatesError(error?.response?.data?.error?.message || 'Failed to load PhotoCam templates');
+    } finally {
+      setPhotocamTemplatesLoading(false);
+    }
+  };
+
   const seedPhotoCamTemplates = async () => {
     try {
       setSeedLoading(true);
@@ -221,10 +248,84 @@ export default function Templates() {
       setPhotocamTemplateName('');
       setPhotocamTemplateDescription('');
       await loadPhotoCamSeedNames();
+      await loadPhotoCamTemplates();
     } catch (error) {
       setPhotocamCreateError(error?.response?.data?.error?.message || 'Failed to create PhotoCam template');
     } finally {
       setPhotocamCreateLoading(false);
+    }
+  };
+
+  const openPhotocamEditModal = (template) => {
+    setEditingPhotocamTemplate(template);
+    setPhotocamEditName(template?.name || '');
+    setPhotocamEditDescription(template?.description || '');
+    setPhotocamEditType(template?.templateType || 'CHECKLIST');
+    setPhotocamEditPandaOnly(Boolean(template?.pandaPhotoOnly));
+    setPhotocamEditStructureJson(JSON.stringify(template?.structure || {}, null, 2));
+    setPhotocamEditConfigJson(JSON.stringify(template?.configJson || {}, null, 2));
+    setPhotocamEditError(null);
+  };
+
+  const closePhotocamEditModal = () => {
+    setEditingPhotocamTemplate(null);
+    setPhotocamEditError(null);
+  };
+
+  const savePhotocamTemplate = async () => {
+    if (!editingPhotocamTemplate?.id) return;
+    try {
+      setPhotocamEditSaving(true);
+      setPhotocamEditError(null);
+      let parsedStructure = {};
+      let parsedConfig = {};
+
+      try {
+        parsedStructure = JSON.parse(photocamEditStructureJson || '{}');
+      } catch (error) {
+        setPhotocamEditError('Structure JSON is invalid.');
+        return;
+      }
+
+      try {
+        parsedConfig = JSON.parse(photocamEditConfigJson || '{}');
+      } catch (error) {
+        setPhotocamEditError('Config JSON is invalid.');
+        return;
+      }
+
+      await photocamApi.updatePhotocamTemplate(editingPhotocamTemplate.id, {
+        name: photocamEditName.trim(),
+        description: photocamEditDescription.trim() || null,
+        templateType: photocamEditType,
+        pandaPhotoOnly: photocamEditPandaOnly,
+        structure: parsedStructure,
+        configJson: parsedConfig,
+      });
+      await loadPhotoCamTemplates();
+      closePhotocamEditModal();
+    } catch (error) {
+      setPhotocamEditError(error?.response?.data?.error?.message || 'Failed to update template');
+    } finally {
+      setPhotocamEditSaving(false);
+    }
+  };
+
+  const publishPhotocamTemplate = async (templateId) => {
+    try {
+      await photocamApi.publishPhotocamTemplate(templateId);
+      await loadPhotoCamTemplates();
+    } catch (error) {
+      setPhotocamTemplatesError(error?.response?.data?.error?.message || 'Failed to publish template');
+    }
+  };
+
+  const archivePhotocamTemplate = async (templateId) => {
+    try {
+      await photocamApi.archivePhotocamTemplate(templateId);
+      await loadPhotoCamTemplates();
+    } catch (error) {
+      setPhotocamTemplatesError(error?.response?.data?.error?.message || 'Failed to archive template');
     }
   };
 
@@ -470,6 +571,79 @@ export default function Templates() {
             </p>
           )}
         </div>
+
+        <div className="mt-4 rounded-lg border border-indigo-100 bg-white p-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-gray-900">Photo Checklist/Report Templates</h3>
+            <button
+              type="button"
+              onClick={loadPhotoCamTemplates}
+              className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+            >
+              Refresh
+            </button>
+          </div>
+
+          {photocamTemplatesError && (
+            <p className="mt-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {photocamTemplatesError}
+            </p>
+          )}
+
+          {photocamTemplatesLoading ? (
+            <div className="mt-3 flex items-center gap-2 text-sm text-gray-500">
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
+              Loading templates…
+            </div>
+          ) : (
+            <div className="mt-3 space-y-2">
+              {photocamTemplates.length === 0 && (
+                <p className="text-sm text-gray-500">No PhotoCam templates found.</p>
+              )}
+              {photocamTemplates.map((template) => (
+                <div key={template.id} className="rounded-lg border border-gray-200 px-3 py-2">
+                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">{template.name}</p>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                        <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-indigo-700">{template.templateType || 'CHECKLIST'}</span>
+                        {template.isPublished && <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-700">Published</span>}
+                        {template.pandaPhotoOnly && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-amber-700">PandaPhoto</span>}
+                        {template.isActive === false && <span className="rounded bg-gray-100 px-1.5 py-0.5 text-gray-600">Archived</span>}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => openPhotocamEditModal(template)}
+                        className="rounded-lg border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                      >
+                        Edit
+                      </button>
+                      {!template.isPublished ? (
+                        <button
+                          type="button"
+                          onClick={() => publishPhotocamTemplate(template.id)}
+                          className="rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-700"
+                        >
+                          Publish
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => archivePhotocamTemplate(template.id)}
+                          className="rounded-lg bg-amber-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-amber-700"
+                        >
+                          Archive
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Filters */}
@@ -617,6 +791,84 @@ export default function Templates() {
             setSelectedTemplate(null);
           }}
         />
+      )}
+
+      {editingPhotocamTemplate && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-xl bg-white p-5 shadow-xl">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-gray-900">Edit PhotoCam Template</h3>
+              <button type="button" onClick={closePhotocamEditModal} className="rounded p-1 text-gray-500 hover:bg-gray-100">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+              <input
+                value={photocamEditName}
+                onChange={(e) => setPhotocamEditName(e.target.value)}
+                placeholder="Template name"
+                className="rounded-lg border border-gray-200 px-3 py-2 text-sm"
+              />
+              <select
+                value={photocamEditType}
+                onChange={(e) => setPhotocamEditType(e.target.value)}
+                className="rounded-lg border border-gray-200 px-3 py-2 text-sm"
+              >
+                <option value="CHECKLIST">Checklist</option>
+                <option value="REPORT">Report</option>
+              </select>
+            </div>
+            <textarea
+              value={photocamEditDescription}
+              onChange={(e) => setPhotocamEditDescription(e.target.value)}
+              placeholder="Description"
+              className="mt-3 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+              rows={2}
+            />
+            <label className="mt-3 inline-flex items-center gap-2 text-sm text-gray-700">
+              <input
+                type="checkbox"
+                checked={photocamEditPandaOnly}
+                onChange={(e) => setPhotocamEditPandaOnly(e.target.checked)}
+              />
+              PandaPhoto enforcement template
+            </label>
+            <div className="mt-3">
+              <p className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-500">Structure JSON</p>
+              <textarea
+                value={photocamEditStructureJson}
+                onChange={(e) => setPhotocamEditStructureJson(e.target.value)}
+                className="h-36 w-full rounded-lg border border-gray-200 px-3 py-2 text-xs font-mono"
+              />
+            </div>
+            <div className="mt-3">
+              <p className="mb-1 text-xs font-medium uppercase tracking-wide text-gray-500">Config JSON</p>
+              <textarea
+                value={photocamEditConfigJson}
+                onChange={(e) => setPhotocamEditConfigJson(e.target.value)}
+                className="h-32 w-full rounded-lg border border-gray-200 px-3 py-2 text-xs font-mono"
+              />
+            </div>
+            {photocamEditError && (
+              <p className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                {photocamEditError}
+              </p>
+            )}
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" onClick={closePhotocamEditModal} className="rounded-lg border border-gray-200 px-4 py-2 text-sm text-gray-700">
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={savePhotocamTemplate}
+                disabled={photocamEditSaving}
+                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
+              >
+                {photocamEditSaving ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
       </div>
     </AdminLayout>

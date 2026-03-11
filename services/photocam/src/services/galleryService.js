@@ -18,7 +18,28 @@ function parseUnknownPrismaFieldName(error) {
   if (!missingColumn) return null;
   const normalized = String(missingColumn).trim().toLowerCase();
   if (normalized.endsWith('is_portal_visible')) return 'isPortalVisible';
+  if (normalized.endsWith('download_enabled')) return 'downloadEnabled';
+  if (normalized.endsWith('password_hash')) return 'passwordHash';
+  if (normalized.endsWith('view_count')) return 'viewCount';
+  if (normalized.endsWith('last_viewed_at')) return 'lastViewedAt';
   return null;
+}
+
+const OPTIONAL_GALLERY_FIELDS = new Set([
+  'isPortalVisible',
+  'downloadEnabled',
+  'passwordHash',
+  'viewCount',
+  'lastViewedAt',
+]);
+
+function removeSelectField(selectObject = {}, fieldName) {
+  if (!selectObject || typeof selectObject !== 'object') return selectObject;
+  if (!Object.prototype.hasOwnProperty.call(selectObject, fieldName)) return selectObject;
+
+  const next = { ...selectObject };
+  delete next[fieldName];
+  return next;
 }
 
 /**
@@ -59,50 +80,67 @@ export async function createGallery(projectId, data, userId) {
  * Get a gallery by ID
  */
 export async function getGalleryById(galleryId) {
-  const gallery = await prisma.photoGallery.findUnique({
-    where: { id: galleryId },
-    select: {
-      id: true,
-      projectId: true,
-      name: true,
-      description: true,
-      status: true,
-      isTimeline: true,
-      isLive: true,
-      coverPhotoId: true,
-      shareToken: true,
-      shareExpiresAt: true,
-      isPublic: true,
-      passwordHash: true,
-      viewCount: true,
-      downloadEnabled: true,
-      createdById: true,
-      createdAt: true,
-      updatedAt: true,
-      project: {
-        select: { id: true, name: true },
-      },
-      createdBy: {
-        select: { id: true, firstName: true, lastName: true },
-      },
-      photos: {
-        include: {
-          photo: {
-            select: {
-              id: true,
-              displayUrl: true,
-              thumbnailUrl: true,
-              originalUrl: true,
-              caption: true,
-              photoType: true,
-              capturedAt: true,
-            },
+  let select = {
+    id: true,
+    projectId: true,
+    name: true,
+    description: true,
+    status: true,
+    isTimeline: true,
+    isLive: true,
+    coverPhotoId: true,
+    shareToken: true,
+    shareExpiresAt: true,
+    isPublic: true,
+    passwordHash: true,
+    viewCount: true,
+    downloadEnabled: true,
+    createdById: true,
+    createdAt: true,
+    updatedAt: true,
+    project: {
+      select: { id: true, name: true },
+    },
+    createdBy: {
+      select: { id: true, firstName: true, lastName: true },
+    },
+    photos: {
+      include: {
+        photo: {
+          select: {
+            id: true,
+            displayUrl: true,
+            thumbnailUrl: true,
+            originalUrl: true,
+            caption: true,
+            photoType: true,
+            capturedAt: true,
           },
         },
-        orderBy: { sortOrder: 'asc' },
       },
+      orderBy: { sortOrder: 'asc' },
     },
-  });
+  };
+
+  let gallery = null;
+  // Runtime DB may lag migrations; drop unsupported optional fields one-by-one.
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      gallery = await prisma.photoGallery.findUnique({
+        where: { id: galleryId },
+        select,
+      });
+      break;
+    } catch (error) {
+      const unknownField = parseUnknownPrismaFieldName(error);
+      if (!unknownField || !OPTIONAL_GALLERY_FIELDS.has(unknownField) || !Object.prototype.hasOwnProperty.call(select, unknownField)) {
+        throw error;
+      }
+      logger.warn(`Gallery getById fallback: runtime schema missing ${unknownField}, retrying without it`);
+      select = removeSelectField(select, unknownField);
+    }
+  }
+
   if (!gallery) return null;
 
   return {
@@ -124,35 +162,50 @@ export async function getGalleryById(galleryId) {
  * Get all galleries for a project
  */
 export async function getProjectGalleries(projectId) {
-  const galleries = await prisma.photoGallery.findMany({
-    where: { projectId },
-    select: {
-      id: true,
-      projectId: true,
-      name: true,
-      description: true,
-      status: true,
-      isTimeline: true,
-      isLive: true,
-      coverPhotoId: true,
-      shareToken: true,
-      shareExpiresAt: true,
-      isPublic: true,
-      passwordHash: true,
-      viewCount: true,
-      downloadEnabled: true,
-      createdById: true,
-      createdAt: true,
-      updatedAt: true,
-      createdBy: {
-        select: { id: true, firstName: true, lastName: true },
-      },
-      _count: {
-        select: { photos: true },
-      },
+  let select = {
+    id: true,
+    projectId: true,
+    name: true,
+    description: true,
+    status: true,
+    isTimeline: true,
+    isLive: true,
+    coverPhotoId: true,
+    shareToken: true,
+    shareExpiresAt: true,
+    isPublic: true,
+    passwordHash: true,
+    viewCount: true,
+    downloadEnabled: true,
+    createdById: true,
+    createdAt: true,
+    updatedAt: true,
+    createdBy: {
+      select: { id: true, firstName: true, lastName: true },
     },
-    orderBy: { createdAt: 'desc' },
-  });
+    _count: {
+      select: { photos: true },
+    },
+  };
+
+  let galleries = [];
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      galleries = await prisma.photoGallery.findMany({
+        where: { projectId },
+        select,
+        orderBy: { createdAt: 'desc' },
+      });
+      break;
+    } catch (error) {
+      const unknownField = parseUnknownPrismaFieldName(error);
+      if (!unknownField || !OPTIONAL_GALLERY_FIELDS.has(unknownField) || !Object.prototype.hasOwnProperty.call(select, unknownField)) {
+        throw error;
+      }
+      logger.warn(`Gallery list fallback: runtime schema missing ${unknownField}, retrying without it`);
+      select = removeSelectField(select, unknownField);
+    }
+  }
 
   return galleries;
 }
@@ -309,22 +362,22 @@ export async function createShareLink(galleryId, options = {}) {
     downloadEnabled: options.allowDownload ?? true,
     isPortalVisible: options.isPortalVisible ?? true,
   };
-  try {
-    await prisma.photoGallery.update({
-      where: { id: galleryId },
-      data: updateData,
-    });
-  } catch (error) {
-    const unknownField = parseUnknownPrismaFieldName(error);
-    if (unknownField !== 'isPortalVisible' || !Object.prototype.hasOwnProperty.call(updateData, 'isPortalVisible')) {
-      throw error;
+  let updatePayload = { ...updateData };
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      await prisma.photoGallery.update({
+        where: { id: galleryId },
+        data: updatePayload,
+      });
+      break;
+    } catch (error) {
+      const unknownField = parseUnknownPrismaFieldName(error);
+      if (!unknownField || !OPTIONAL_GALLERY_FIELDS.has(unknownField) || !Object.prototype.hasOwnProperty.call(updatePayload, unknownField)) {
+        throw error;
+      }
+      logger.warn(`Gallery share link update fallback: runtime schema missing ${unknownField}, retrying without it`);
+      delete updatePayload[unknownField];
     }
-    logger.warn('Gallery share link update: runtime schema missing isPortalVisible, retrying without it');
-    delete updateData.isPortalVisible;
-    await prisma.photoGallery.update({
-      where: { id: galleryId },
-      data: updateData,
-    });
   }
 
   const shareUrl = `${process.env.FRONTEND_URL || 'https://crm.pandaadmin.com'}/share/gallery/${shareToken}`;
@@ -336,32 +389,63 @@ export async function createShareLink(galleryId, options = {}) {
  * Get a gallery by share token (public access)
  */
 export async function getGalleryByShareToken(shareToken, password = null) {
-  const gallery = await prisma.photoGallery.findFirst({
-    where: {
-      shareToken,
-      isPublic: true,
+  let select = {
+    id: true,
+    projectId: true,
+    name: true,
+    description: true,
+    status: true,
+    isTimeline: true,
+    isLive: true,
+    coverPhotoId: true,
+    shareToken: true,
+    shareExpiresAt: true,
+    isPublic: true,
+    passwordHash: true,
+    viewCount: true,
+    downloadEnabled: true,
+    lastViewedAt: true,
+    createdAt: true,
+    updatedAt: true,
+    project: {
+      select: { id: true, name: true },
     },
-    include: {
-      project: {
-        select: { id: true, name: true },
-      },
-      photos: {
-        include: {
-          photo: {
-            select: {
-              id: true,
-              displayUrl: true,
-              thumbnailUrl: true,
-              caption: true,
-              photoType: true,
-              capturedAt: true,
-            },
+    photos: {
+      include: {
+        photo: {
+          select: {
+            id: true,
+            displayUrl: true,
+            thumbnailUrl: true,
+            caption: true,
+            photoType: true,
+            capturedAt: true,
           },
         },
-        orderBy: { sortOrder: 'asc' },
       },
+      orderBy: { sortOrder: 'asc' },
     },
-  });
+  };
+  let gallery = null;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      gallery = await prisma.photoGallery.findFirst({
+        where: {
+          shareToken,
+          isPublic: true,
+        },
+        select,
+      });
+      break;
+    } catch (error) {
+      const unknownField = parseUnknownPrismaFieldName(error);
+      if (!unknownField || !OPTIONAL_GALLERY_FIELDS.has(unknownField) || !Object.prototype.hasOwnProperty.call(select, unknownField)) {
+        throw error;
+      }
+      logger.warn(`Shared gallery lookup fallback: runtime schema missing ${unknownField}, retrying without it`);
+      select = removeSelectField(select, unknownField);
+    }
+  }
 
   if (!gallery) {
     return null;
@@ -378,13 +462,26 @@ export async function getGalleryByShareToken(shareToken, password = null) {
   }
 
   // Track lightweight analytics
-  await prisma.photoGallery.update({
-    where: { id: gallery.id },
-    data: {
-      viewCount: { increment: 1 },
-      lastViewedAt: new Date(),
-    },
-  });
+  const analyticsUpdate = {
+    viewCount: { increment: 1 },
+    lastViewedAt: new Date(),
+  };
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      await prisma.photoGallery.update({
+        where: { id: gallery.id },
+        data: analyticsUpdate,
+      });
+      break;
+    } catch (error) {
+      const unknownField = parseUnknownPrismaFieldName(error);
+      if (!unknownField || !OPTIONAL_GALLERY_FIELDS.has(unknownField) || !Object.prototype.hasOwnProperty.call(analyticsUpdate, unknownField)) {
+        throw error;
+      }
+      delete analyticsUpdate[unknownField];
+      if (Object.keys(analyticsUpdate).length === 0) break;
+    }
+  }
 
   // Remove hash from response
   const { passwordHash: _, ...galleryData } = gallery;
@@ -404,19 +501,33 @@ export async function getGalleryByShareToken(shareToken, password = null) {
 }
 
 export async function getSharedPhotoDownloadByToken(shareToken, photoId, password = null) {
-  const gallery = await prisma.photoGallery.findFirst({
-    where: {
-      shareToken,
-      isPublic: true,
-    },
-    select: {
-      id: true,
-      name: true,
-      shareExpiresAt: true,
-      passwordHash: true,
-      downloadEnabled: true,
-    },
-  });
+  let select = {
+    id: true,
+    name: true,
+    shareExpiresAt: true,
+    passwordHash: true,
+    downloadEnabled: true,
+  };
+  let gallery = null;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      gallery = await prisma.photoGallery.findFirst({
+        where: {
+          shareToken,
+          isPublic: true,
+        },
+        select,
+      });
+      break;
+    } catch (error) {
+      const unknownField = parseUnknownPrismaFieldName(error);
+      if (!unknownField || !OPTIONAL_GALLERY_FIELDS.has(unknownField) || !Object.prototype.hasOwnProperty.call(select, unknownField)) {
+        throw error;
+      }
+      logger.warn(`Shared photo download lookup fallback: runtime schema missing ${unknownField}, retrying without it`);
+      select = removeSelectField(select, unknownField);
+    }
+  }
 
   if (!gallery) {
     const err = new Error('Gallery not found or link is invalid');
@@ -439,7 +550,7 @@ export async function getSharedPhotoDownloadByToken(shareToken, photoId, passwor
     throw err;
   }
 
-  if (!gallery.downloadEnabled) {
+  if (Object.prototype.hasOwnProperty.call(gallery, 'downloadEnabled') && !gallery.downloadEnabled) {
     const err = new Error('Downloads are disabled for this gallery');
     err.code = 'DOWNLOAD_DISABLED';
     err.statusCode = 403;
@@ -586,70 +697,60 @@ export async function updateGalleryAccess(galleryId, payload, userId) {
   }
 
   let updated;
-  try {
-    updated = await prisma.photoGallery.update({
-      where: { id: galleryId },
-      data,
-    });
-  } catch (error) {
-    const unknownField = parseUnknownPrismaFieldName(error);
-    if (unknownField !== 'isPortalVisible' || !Object.prototype.hasOwnProperty.call(data, 'isPortalVisible')) {
-      throw error;
+  let payloadData = { ...data };
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      updated = await prisma.photoGallery.update({
+        where: { id: galleryId },
+        data: payloadData,
+      });
+      break;
+    } catch (error) {
+      const unknownField = parseUnknownPrismaFieldName(error);
+      if (!unknownField || !OPTIONAL_GALLERY_FIELDS.has(unknownField) || !Object.prototype.hasOwnProperty.call(payloadData, unknownField)) {
+        throw error;
+      }
+      logger.warn(`Gallery access update fallback: runtime schema missing ${unknownField}, retrying without it`);
+      delete payloadData[unknownField];
     }
-    logger.warn('Gallery access update: runtime schema missing isPortalVisible, retrying without it');
-    delete data.isPortalVisible;
-    updated = await prisma.photoGallery.update({
-      where: { id: galleryId },
-      data,
-    });
   }
 
   logger.info(`Updated gallery access controls`, {
     galleryId,
     userId,
-    keys: Object.keys(data),
+    keys: Object.keys(payloadData),
   });
 
   return updated;
 }
 
 export async function getGalleryAnalytics(galleryId) {
+  let select = {
+    id: true,
+    name: true,
+    status: true,
+    isPortalVisible: true,
+    downloadEnabled: true,
+    shareExpiresAt: true,
+    viewCount: true,
+    lastViewedAt: true,
+    updatedAt: true,
+  };
   let gallery;
-  try {
-    gallery = await prisma.photoGallery.findUnique({
-      where: { id: galleryId },
-      select: {
-        id: true,
-        name: true,
-        status: true,
-        isPortalVisible: true,
-        downloadEnabled: true,
-        shareExpiresAt: true,
-        viewCount: true,
-        lastViewedAt: true,
-        updatedAt: true,
-      },
-    });
-  } catch (error) {
-    const unknownField = parseUnknownPrismaFieldName(error);
-    if (unknownField !== 'isPortalVisible') {
-      throw error;
-    }
-    gallery = await prisma.photoGallery.findUnique({
-      where: { id: galleryId },
-      select: {
-        id: true,
-        name: true,
-        status: true,
-        downloadEnabled: true,
-        shareExpiresAt: true,
-        viewCount: true,
-        lastViewedAt: true,
-        updatedAt: true,
-      },
-    });
-    if (gallery) {
-      gallery.isPortalVisible = false;
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      gallery = await prisma.photoGallery.findUnique({
+        where: { id: galleryId },
+        select,
+      });
+      break;
+    } catch (error) {
+      const unknownField = parseUnknownPrismaFieldName(error);
+      if (!unknownField || !OPTIONAL_GALLERY_FIELDS.has(unknownField) || !Object.prototype.hasOwnProperty.call(select, unknownField)) {
+        throw error;
+      }
+      logger.warn(`Gallery analytics fallback: runtime schema missing ${unknownField}, retrying without it`);
+      select = removeSelectField(select, unknownField);
     }
   }
 

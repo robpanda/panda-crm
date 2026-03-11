@@ -84,9 +84,9 @@ async function buildBulkZipBuffer(photos) {
   const zip = new JSZip();
 
   for (const [index, photo] of photos.entries()) {
-    if (!photo.fileKey) continue;
     // eslint-disable-next-line no-await-in-loop
-    const content = await s3Service.getObjectBuffer(photo.fileKey);
+    const content = await fetchPhotoContentBuffer(photo);
+    if (!content) continue;
     const safeName = sanitizeFilename(photo.fileName, `photo-${index + 1}`);
     zip.file(`${String(index + 1).padStart(3, '0')}-${safeName}`, content);
   }
@@ -111,15 +111,14 @@ async function buildBulkPdfBuffer(photos, title = 'Photo Export') {
     });
     page.drawText(photo.fileName || photo.id, { x: 40, y: 722, size: 10, font, color: rgb(0.35, 0.35, 0.35) });
 
-    if (!photo.fileKey) {
-      page.drawText('Original file key unavailable for this photo.', { x: 40, y: 680, size: 11, font });
-      // eslint-disable-next-line no-continue
-      continue;
-    }
-
     try {
       // eslint-disable-next-line no-await-in-loop
-      const bytes = await s3Service.getObjectBuffer(photo.fileKey);
+      const bytes = await fetchPhotoContentBuffer(photo);
+      if (!bytes) {
+        page.drawText('Image source unavailable for this photo.', { x: 40, y: 680, size: 11, font });
+        // eslint-disable-next-line no-continue
+        continue;
+      }
       const format = detectImageFormat(bytes);
       let embedded = null;
       if (format === 'png') {
@@ -149,6 +148,71 @@ async function buildBulkPdfBuffer(photos, title = 'Photo Export') {
   }
 
   return Buffer.from(await pdfDoc.save());
+}
+
+async function fetchPhotoContentBuffer(photo) {
+  if (photo?.fileKey) {
+    try {
+      return await s3Service.getObjectBuffer(photo.fileKey);
+    } catch (error) {
+      logger.warn(`Bulk export could not read S3 key ${photo.fileKey}: ${error.message}`);
+    }
+  }
+
+  const sourceUrl = photo?.originalUrl || photo?.displayUrl || photo?.thumbnailUrl || null;
+  if (!sourceUrl) return null;
+
+  try {
+    const response = await fetch(sourceUrl);
+    if (!response.ok) {
+      logger.warn(`Bulk export URL fetch failed (${response.status}) for ${sourceUrl}`);
+      return null;
+    }
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  } catch (error) {
+    logger.warn(`Bulk export URL fetch error for ${sourceUrl}: ${error.message}`);
+    return null;
+  }
+}
+
+async function fetchPhotosForExport(photoIds) {
+  try {
+    const photos = await prisma.photo.findMany({
+      where: { id: { in: photoIds }, deletedAt: null },
+      select: {
+        id: true,
+        projectId: true,
+        fileKey: true,
+        originalUrl: true,
+        displayUrl: true,
+        thumbnailUrl: true,
+        fileName: true,
+        photoType: true,
+      },
+    });
+    return photos.map(normalizePhotoRecord);
+  } catch (error) {
+    if (!isMissingPrismaObjectError(error)) throw error;
+    logger.warn(`Photo export query fallback due to schema mismatch: ${error.message}`);
+
+    const fallback = await prisma.photo.findMany({
+      where: { id: { in: photoIds }, deletedAt: null },
+      select: {
+        id: true,
+        projectId: true,
+        originalUrl: true,
+        displayUrl: true,
+        thumbnailUrl: true,
+      },
+    });
+
+    return fallback.map((photo, index) => ({
+      ...normalizePhotoRecord(photo),
+      fileName: photo.fileName || `photo-${index + 1}.jpg`,
+      fileKey: photo.fileKey || null,
+    }));
+  }
 }
 
 /**
@@ -761,10 +825,19 @@ export async function bulkAssignPhotos(payload = {}, userId) {
         reportId: targetId,
       });
 
-      const report = await prisma.photoReport.findUnique({
-        where: { id: targetId },
-        select: { id: true, reportConfig: true },
-      });
+      let report = null;
+      try {
+        report = await prisma.photoReport.findUnique({
+          where: { id: targetId },
+          select: { id: true, reportConfig: true },
+        });
+      } catch (readError) {
+        if (!isMissingPrismaObjectError(readError)) throw readError;
+        const unavailable = new Error('Photo reports are not available until PhotoCam schema sync completes');
+        unavailable.statusCode = 409;
+        unavailable.code = 'FEATURE_UNAVAILABLE';
+        throw unavailable;
+      }
       if (!report) {
         const err = new Error('Target report not found');
         err.statusCode = 404;
@@ -820,17 +893,7 @@ export async function createBulkDownload(payload = {}, userId) {
     throw err;
   }
 
-  const photos = await prisma.photo.findMany({
-    where: { id: { in: photoIds }, deletedAt: null },
-    select: {
-      id: true,
-      projectId: true,
-      fileKey: true,
-      originalUrl: true,
-      fileName: true,
-      photoType: true,
-    },
-  });
+  const photos = await fetchPhotosForExport(photoIds);
 
   const projectId = payload.projectId || photos[0]?.projectId || null;
   const opportunityId = payload.opportunityId || null;

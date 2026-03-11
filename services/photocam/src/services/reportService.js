@@ -66,19 +66,35 @@ async function hydrateReportItemsFromConfig(report) {
   const selectedPhotoIds = extractSelectedPhotoIds(report?.reportConfig);
   if (!selectedPhotoIds.length) return [];
 
-  const photos = await prisma.photo.findMany({
-    where: { id: { in: selectedPhotoIds }, deletedAt: null },
-    select: {
-      id: true,
-      fileName: true,
-      fileKey: true,
-      originalUrl: true,
-      displayUrl: true,
-      thumbnailUrl: true,
-      photoType: true,
-      caption: true,
-    },
-  });
+  let photos = [];
+  try {
+    photos = await prisma.photo.findMany({
+      where: { id: { in: selectedPhotoIds }, deletedAt: null },
+      select: {
+        id: true,
+        fileName: true,
+        fileKey: true,
+        originalUrl: true,
+        displayUrl: true,
+        thumbnailUrl: true,
+        photoType: true,
+        caption: true,
+      },
+    });
+  } catch (error) {
+    if (!isPrismaMissingColumnError(error)) throw error;
+    logger.warn(`Photo report hydration fallback due to schema mismatch: ${error.message}`);
+    photos = await prisma.photo.findMany({
+      where: { id: { in: selectedPhotoIds }, deletedAt: null },
+      select: {
+        id: true,
+        originalUrl: true,
+        displayUrl: true,
+        thumbnailUrl: true,
+        caption: true,
+      },
+    });
+  }
   const byId = new Map(photos.map((photo) => [photo.id, photo]));
 
   return selectedPhotoIds
@@ -90,6 +106,29 @@ async function hydrateReportItemsFromConfig(report) {
       photo: byId.get(photoId) || null,
     }))
     .filter((item) => item.photo);
+}
+
+async function fetchReportPhotoBuffer(photo) {
+  if (photo?.fileKey) {
+    try {
+      return await s3Service.getObjectBuffer(photo.fileKey);
+    } catch (error) {
+      logger.warn(`Report generation could not read S3 key ${photo.fileKey}: ${error.message}`);
+    }
+  }
+
+  const sourceUrl = photo?.originalUrl || photo?.displayUrl || photo?.thumbnailUrl || null;
+  if (!sourceUrl) return null;
+
+  try {
+    const response = await fetch(sourceUrl);
+    if (!response.ok) return null;
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  } catch (error) {
+    logger.warn(`Report generation URL fetch error for ${sourceUrl}: ${error.message}`);
+    return null;
+  }
 }
 
 function isPrismaMissingColumnError(error) {
@@ -212,15 +251,14 @@ async function buildReportPdfBuffer(report, items) {
       color: rgb(0.32, 0.32, 0.32),
     });
 
-    if (!item.photo?.fileKey) {
-      page.drawText('Image not available for embedding.', { x: 40, y: 700, size: 11, font });
-      // eslint-disable-next-line no-continue
-      continue;
-    }
-
     try {
       // eslint-disable-next-line no-await-in-loop
-      const bytes = await s3Service.getObjectBuffer(item.photo.fileKey);
+      const bytes = await fetchReportPhotoBuffer(item.photo);
+      if (!bytes) {
+        page.drawText('Image not available for embedding.', { x: 40, y: 700, size: 11, font });
+        // eslint-disable-next-line no-continue
+        continue;
+      }
       const format = detectImageFormat(bytes);
       let embeddedImage = null;
       if (format === 'png') {
@@ -310,6 +348,7 @@ export async function listReports(params = {}) {
         where,
         select: {
           id: true,
+          name: true,
           templateId: true,
           projectId: true,
           opportunityId: true,
@@ -490,7 +529,7 @@ export async function generateReport(reportId, userId) {
       prisma.photoReport.update({
         where: { id: reportId },
         data: {
-          status: 'GENERATED',
+          status: 'READY',
           fileKey: key,
           fileUrl: upload.url,
           generatedAt: new Date(),

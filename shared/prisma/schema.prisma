@@ -5068,9 +5068,9 @@ enum PhotoTemplateType {
 }
 
 enum PhotoReportStatus {
-  PENDING
+  QUEUED
   PROCESSING
-  GENERATED
+  READY
   FAILED
 }
 
@@ -5597,7 +5597,7 @@ model PhotoReport {
   templateId      String?           @map("template_id")
   projectId       String?           @map("project_id")
   opportunityId   String?           @map("opportunity_id")
-  status          PhotoReportStatus @default(PENDING)
+  status          PhotoReportStatus @default(QUEUED)
   reportConfig    Json?             @map("report_config")
   fileKey         String?           @map("file_key")
   fileUrl         String?           @map("file_url")
