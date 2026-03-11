@@ -430,6 +430,19 @@ class NotificationService {
           <p style="font-size: 12px; color: #666;">Please arrive on time and contact the office if you have any issues.</p>
         `,
       },
+      MENTION: {
+        titleTemplate: '{{mentionedBy}} mentioned you',
+        messageTemplate: '{{mentionedBy}} mentioned you in {{context}}',
+        defaultPriority: 'NORMAL',
+        smsTemplate: '{{mentionedBy}} mentioned you in {{context}}. View: {{actionUrl}}',
+        emailSubjectTemplate: '{{mentionedBy}} mentioned you',
+        emailBodyTemplate: `
+          <h2>You were mentioned</h2>
+          <p><strong>{{mentionedBy}}</strong> mentioned you in <strong>{{context}}</strong>.</p>
+          <p>"{{excerpt}}"</p>
+          <p><a href="{{actionUrl}}">Open in CRM</a></p>
+        `,
+      },
     };
 
     return DEFAULT_TEMPLATES[type] || null;

@@ -16,6 +16,15 @@ import { notificationService } from '../services/notificationService.js';
 
 const router = Router();
 
+function extractMentionUserId(value) {
+  if (!value) return null;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object') {
+    return value.userId || value.id || null;
+  }
+  return null;
+}
+
 // ============================================================================
 // APPOINTMENT NOTIFICATION ENDPOINTS
 // Called by opportunities service when appointments are booked/rescheduled/cancelled
@@ -122,6 +131,110 @@ router.post('/dispatch-appointment', async (req, res, next) => {
     });
   } catch (error) {
     console.error('Failed to send dispatch notifications:', error);
+    next(error);
+  }
+});
+
+/**
+ * POST /mentions/dispatch
+ * Backward-compatible mention dispatch endpoint used by leads/opportunities comment flows.
+ * Accepts flexible payloads and emits in-app + channel deliveries via NotificationService.
+ */
+router.post('/mentions/dispatch', async (req, res, next) => {
+  try {
+    const payload = req.body || {};
+    const candidateRecipients = [
+      ...(Array.isArray(payload.recipients) ? payload.recipients : []),
+      ...(Array.isArray(payload.mentions) ? payload.mentions : []),
+      ...(Array.isArray(payload.userIds) ? payload.userIds : []),
+      ...(Array.isArray(payload.recipientIds) ? payload.recipientIds : []),
+    ];
+
+    const recipientIds = [...new Set(candidateRecipients.map(extractMentionUserId).filter(Boolean))];
+    if (recipientIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'No recipients provided' },
+      });
+    }
+
+    const mentionedBy = payload.mentionedBy
+      || payload.actorName
+      || payload.senderName
+      || payload.authorName
+      || 'Someone';
+
+    const context = payload.context
+      || payload.entityName
+      || payload.leadName
+      || payload.opportunityName
+      || payload.recordName
+      || 'a record';
+
+    const excerpt = String(
+      payload.excerpt
+      || payload.snippet
+      || payload.bodyPreview
+      || payload.messagePreview
+      || payload.content
+      || ''
+    ).slice(0, 240);
+
+    const inferredActionUrl = payload.actionUrl
+      || payload.actionPath
+      || (payload.leadId ? `/leads/${payload.leadId}` : null)
+      || (payload.opportunityId ? `/jobs/${payload.opportunityId}` : null)
+      || '/';
+
+    const inferredSourceId = payload.sourceId
+      || payload.noteId
+      || payload.commentId
+      || payload.entityId
+      || payload.leadId
+      || payload.opportunityId
+      || null;
+
+    const relations = {
+      opportunityId: payload.opportunityId || (payload.entityType === 'OPPORTUNITY' ? payload.entityId : undefined),
+      accountId: payload.accountId,
+      contactId: payload.contactId,
+      leadId: payload.leadId || (payload.entityType === 'LEAD' ? payload.entityId : undefined),
+      workOrderId: payload.workOrderId,
+      caseId: payload.caseId,
+    };
+
+    const results = await Promise.allSettled(
+      recipientIds.map((userId) => notificationService.createFromTemplate(
+        'MENTION',
+        userId,
+        {
+          mentionedBy,
+          context,
+          excerpt,
+          actionUrl: inferredActionUrl,
+          actionLabel: 'View Mention',
+          sourceType: payload.sourceType || 'mention',
+          sourceId: inferredSourceId,
+        },
+        relations
+      ))
+    );
+
+    const dispatched = results.filter((result) => result.status === 'fulfilled' && result.value).length;
+    const failed = results
+      .map((result, index) => ({ result, userId: recipientIds[index] }))
+      .filter(({ result }) => result.status === 'rejected')
+      .map(({ result, userId }) => ({ userId, error: result.reason?.message || 'Dispatch failed' }));
+
+    res.json({
+      success: true,
+      data: {
+        attempted: recipientIds.length,
+        dispatched,
+        failed,
+      },
+    });
+  } catch (error) {
     next(error);
   }
 });

@@ -246,7 +246,6 @@ router.get('/tickets/:id', authMiddleware, async (req, res) => {
     const ownershipFilters = [];
     if (userContext.candidateUserIds.length > 0) {
       ownershipFilters.push({ user_id: { in: userContext.candidateUserIds } });
-      ownershipFilters.push({ assigned_to_id: { in: userContext.candidateUserIds } });
     }
     if (userContext.tokenEmail) {
       ownershipFilters.push({
@@ -428,7 +427,6 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
     const ownershipFilters = [];
     if (userContext.candidateUserIds.length > 0) {
       ownershipFilters.push({ user_id: { in: userContext.candidateUserIds } });
-      ownershipFilters.push({ assigned_to_id: { in: userContext.candidateUserIds } });
     }
     if (userContext.tokenEmail) {
       ownershipFilters.push({

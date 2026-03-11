@@ -329,7 +329,10 @@ export async function createInvoice(req, res, next) {
 
     for (let attempt = 0; attempt < 20; attempt++) {
       try {
-        const invoiceNumber = await generateInvoiceNumber(attempt);
+        const retryBump = attempt < 5
+          ? attempt
+          : attempt + Math.floor(Math.random() * 500);
+        const invoiceNumber = await generateInvoiceNumber(retryBump);
         invoice = await prisma.invoice.create({
           data: {
             invoiceNumber,
@@ -367,11 +370,14 @@ export async function createInvoice(req, res, next) {
       } catch (createError) {
         const target = createError?.meta?.target;
         const targetValue = Array.isArray(target) ? target.join(',') : String(target || '');
+        const errorMessage = String(createError?.message || '');
         const isUniqueConstraintError = createError?.code === 'P2002'
-          && (!targetValue
-            || /invoice_?number/i.test(targetValue)
-            || /invoice_?number/i.test(String(createError?.message || '')));
-        if (!isUniqueConstraintError) {
+          || /unique constraint failed/i.test(errorMessage);
+        const isInvoiceNumberConstraint = !targetValue
+          || /invoice_?number/i.test(targetValue)
+          || /invoice_?number/i.test(errorMessage);
+        const shouldRetry = isUniqueConstraintError && isInvoiceNumberConstraint;
+        if (!shouldRetry) {
           throw createError;
         }
         lastCreateError = createError;
