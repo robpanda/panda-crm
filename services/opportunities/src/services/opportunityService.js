@@ -5247,16 +5247,44 @@ Be factual and professional. Highlight anything that needs attention.`;
           results.canceledAppointments += canceledForOpportunity;
         }
 
-        const baseUpdateData = {
-          stage: 'CLOSED_LOST',
-          closeDate: new Date(),
-          deletedAt: new Date(),
-        };
+        const closedAt = new Date();
+        const updateCandidates = [
+          {
+            stage: 'CLOSED_LOST',
+            closeDate: closedAt,
+            deletedAt: closedAt,
+          },
+          {
+            stage: 'CLOSED_LOST',
+            closeDate: closedAt,
+          },
+        ];
 
-        await prisma.opportunity.update({
-          where: { id: oppId },
-          data: baseUpdateData,
-        });
+        let deletedWithMarker = false;
+        let updated = false;
+        let lastUpdateError = null;
+        for (const candidate of updateCandidates) {
+          try {
+            await prisma.opportunity.update({
+              where: { id: oppId },
+              data: candidate,
+            });
+            deletedWithMarker = Boolean(candidate.deletedAt);
+            updated = true;
+            break;
+          } catch (updateError) {
+            const message = String(updateError?.message || '');
+            const isSchemaMismatch = /Unknown argument|Unknown field|P2022|P2021/i.test(message);
+            if (!isSchemaMismatch) {
+              throw updateError;
+            }
+            lastUpdateError = updateError;
+          }
+        }
+
+        if (!updated) {
+          throw lastUpdateError || new Error('Failed to soft delete opportunity');
+        }
 
         // Log audit
         await prisma.auditLog.create({
@@ -5267,13 +5295,13 @@ Be factual and professional. Highlight anything that needs attention.`;
             oldValues: { stage: oldOpp.stage },
             newValues: {
               stage: 'CLOSED_LOST',
-              deletedAt: new Date(),
+              deletedAt: deletedWithMarker ? closedAt : null,
               canceledAppointments: canceledForOpportunity,
             },
             changedFields: [
               'stage',
               'closeDate',
-              'deletedAt',
+              ...(deletedWithMarker ? ['deletedAt'] : []),
               'serviceAppointments',
             ],
             userId: auditContext.userId,

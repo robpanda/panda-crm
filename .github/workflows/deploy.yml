@@ -142,7 +142,19 @@ jobs:
         if: steps.check.outputs.should_deploy == 'true'
         env:
           SERVICE_NAME: ${{ matrix.service.name }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
+          IMAGE_REPO=""
+          if aws ecr describe-repositories --repository-names "panda-crm/$SERVICE_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+            IMAGE_REPO="panda-crm/$SERVICE_NAME"
+          elif aws ecr describe-repositories --repository-names "panda-crm-$SERVICE_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+            IMAGE_REPO="panda-crm-$SERVICE_NAME"
+          else
+            echo "::error::No ECR repository found for $SERVICE_NAME while updating ECS"
+            exit 1
+          fi
+          IMAGE_URI="$ECR_REGISTRY/$IMAGE_REPO:$IMAGE_TAG"
+
           ECS_SERVICE=""
           for candidate in "$SERVICE_NAME-service" "panda-crm-$SERVICE_NAME" "$SERVICE_NAME"; do
             if aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$candidate" --region "$AWS_REGION" --query 'services[0].status' --output text 2>/dev/null | grep -qE 'ACTIVE|DRAINING'; then
@@ -157,11 +169,65 @@ jobs:
           fi
 
           echo "Updating ECS service: $ECS_SERVICE"
+          TASK_DEF_ARN=$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --region "$AWS_REGION" \
+            --query 'services[0].taskDefinition' \
+            --output text)
+
+          if [ -z "$TASK_DEF_ARN" ] || [ "$TASK_DEF_ARN" = "None" ]; then
+            echo "::error::Unable to resolve task definition for ECS service $ECS_SERVICE"
+            exit 1
+          fi
+
+          aws ecs describe-task-definition --task-definition "$TASK_DEF_ARN" --region "$AWS_REGION" --query 'taskDefinition' > taskdef.json
+
+          CONTAINER_NAME=$(jq -r \
+            --arg s "$SERVICE_NAME" \
+            '
+              .containerDefinitions[].name as $n
+              | select($n == $s or $n == ("panda-crm-" + $s) or $n == ($s + "-service"))
+            ' taskdef.json | head -n 1)
+
+          if [ -z "$CONTAINER_NAME" ]; then
+            CONTAINER_NAME=$(jq -r '.containerDefinitions[0].name' taskdef.json)
+          fi
+
+          if [ -z "$CONTAINER_NAME" ] || [ "$CONTAINER_NAME" = "null" ]; then
+            echo "::error::Unable to resolve container definition for $SERVICE_NAME"
+            exit 1
+          fi
+
+          jq \
+            --arg image "$IMAGE_URI" \
+            --arg container "$CONTAINER_NAME" \
+            '
+              .containerDefinitions |= map(if .name == $container then .image = $image else . end)
+              | del(
+                  .taskDefinitionArn,
+                  .revision,
+                  .status,
+                  .requiresAttributes,
+                  .compatibilities,
+                  .registeredAt,
+                  .registeredBy
+                )
+            ' taskdef.json > taskdef-updated.json
+
+          NEW_TASK_DEF_ARN=$(aws ecs register-task-definition --region "$AWS_REGION" --cli-input-json file://taskdef-updated.json --query 'taskDefinition.taskDefinitionArn' --output text)
+
+          if [ -z "$NEW_TASK_DEF_ARN" ] || [ "$NEW_TASK_DEF_ARN" = "None" ]; then
+            echo "::error::Failed to register new task definition for $SERVICE_NAME"
+            exit 1
+          fi
+
           aws ecs update-service \
-            --cluster $ECS_CLUSTER \
-            --service $ECS_SERVICE \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --task-definition "$NEW_TASK_DEF_ARN" \
             --force-new-deployment \
-            --region $AWS_REGION
+            --region "$AWS_REGION"
 
   notify:
     name: Deployment Notification

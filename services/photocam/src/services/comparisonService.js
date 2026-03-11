@@ -5,6 +5,74 @@ import { s3Service } from './s3Service.js';
 import sharp from 'sharp';
 import crypto from 'crypto';
 
+const comparisonInclude = {
+  project: {
+    select: { id: true, name: true },
+  },
+  photos: {
+    where: { deletedAt: null },
+    select: {
+      id: true,
+      displayUrl: true,
+      originalUrl: true,
+      thumbnailUrl: true,
+      caption: true,
+      beforeAfterRole: true,
+      createdAt: true,
+    },
+    orderBy: { createdAt: 'asc' },
+  },
+  createdBy: {
+    select: { id: true, firstName: true, lastName: true },
+  },
+};
+
+function normalizeComparison(comparison) {
+  if (!comparison) return comparison;
+  const photos = Array.isArray(comparison.photos) ? comparison.photos : [];
+  const beforePhoto = photos.find((photo) => String(photo?.beforeAfterRole || '').toLowerCase() === 'before')
+    || photos[0]
+    || null;
+  const afterPhoto = photos.find((photo) => String(photo?.beforeAfterRole || '').toLowerCase() === 'after')
+    || photos.find((photo) => photo?.id && photo.id !== beforePhoto?.id)
+    || photos[0]
+    || null;
+
+  return {
+    ...comparison,
+    title: comparison.name || null,
+    beforePhoto,
+    afterPhoto,
+  };
+}
+
+async function attachComparisonPhotos(comparisonId, beforePhotoId, afterPhotoId) {
+  await prisma.photo.updateMany({
+    where: { beforeAfterId: comparisonId },
+    data: { beforeAfterId: null, beforeAfterRole: null },
+  });
+
+  if (beforePhotoId) {
+    await prisma.photo.update({
+      where: { id: beforePhotoId },
+      data: {
+        beforeAfterId: comparisonId,
+        beforeAfterRole: 'before',
+      },
+    });
+  }
+
+  if (afterPhotoId) {
+    await prisma.photo.update({
+      where: { id: afterPhotoId },
+      data: {
+        beforeAfterId: comparisonId,
+        beforeAfterRole: 'after',
+      },
+    });
+  }
+}
+
 /**
  * Create a new before/after comparison
  */
@@ -32,28 +100,22 @@ export async function createComparison(projectId, data, userId) {
   const comparison = await prisma.beforeAfterComparison.create({
     data: {
       projectId,
-      beforePhotoId: data.beforePhotoId,
-      afterPhotoId: data.afterPhotoId,
       layout: data.layout || 'SIDE_BY_SIDE',
-      title: data.title,
+      name: data.title || data.name || 'Before/After Comparison',
       description: data.description,
       createdById: userId,
     },
-    include: {
-      beforePhoto: {
-        select: { id: true, displayUrl: true, thumbnailUrl: true, caption: true },
-      },
-      afterPhoto: {
-        select: { id: true, displayUrl: true, thumbnailUrl: true, caption: true },
-      },
-      createdBy: {
-        select: { id: true, firstName: true, lastName: true },
-      },
-    },
+    include: comparisonInclude,
+  });
+
+  await attachComparisonPhotos(comparison.id, data.beforePhotoId, data.afterPhotoId);
+  const refreshed = await prisma.beforeAfterComparison.findUnique({
+    where: { id: comparison.id },
+    include: comparisonInclude,
   });
 
   logger.info(`Created comparison ${comparison.id}`);
-  return comparison;
+  return normalizeComparison(refreshed);
 }
 
 /**
@@ -62,23 +124,10 @@ export async function createComparison(projectId, data, userId) {
 export async function getComparisonById(comparisonId) {
   const comparison = await prisma.beforeAfterComparison.findUnique({
     where: { id: comparisonId },
-    include: {
-      project: {
-        select: { id: true, name: true },
-      },
-      beforePhoto: {
-        select: { id: true, displayUrl: true, thumbnailUrl: true, caption: true, originalUrl: true },
-      },
-      afterPhoto: {
-        select: { id: true, displayUrl: true, thumbnailUrl: true, caption: true, originalUrl: true },
-      },
-      createdBy: {
-        select: { id: true, firstName: true, lastName: true },
-      },
-    },
+    include: comparisonInclude,
   });
 
-  return comparison;
+  return normalizeComparison(comparison);
 }
 
 /**
@@ -87,21 +136,11 @@ export async function getComparisonById(comparisonId) {
 export async function getProjectComparisons(projectId) {
   const comparisons = await prisma.beforeAfterComparison.findMany({
     where: { projectId },
-    include: {
-      beforePhoto: {
-        select: { id: true, thumbnailUrl: true, caption: true },
-      },
-      afterPhoto: {
-        select: { id: true, thumbnailUrl: true, caption: true },
-      },
-      createdBy: {
-        select: { id: true, firstName: true, lastName: true },
-      },
-    },
+    include: comparisonInclude,
     orderBy: { createdAt: 'desc' },
   });
 
-  return comparisons;
+  return comparisons.map(normalizeComparison);
 }
 
 /**
@@ -110,34 +149,32 @@ export async function getProjectComparisons(projectId) {
 export async function updateComparison(comparisonId, data, userId) {
   logger.info(`Updating comparison ${comparisonId}`);
 
-  const comparison = await prisma.beforeAfterComparison.update({
+  await prisma.beforeAfterComparison.update({
     where: { id: comparisonId },
     data: {
       layout: data.layout,
-      title: data.title,
+      name: data.title || data.name,
       description: data.description,
-      beforePhotoId: data.beforePhotoId,
-      afterPhotoId: data.afterPhotoId,
-    },
-    include: {
-      beforePhoto: {
-        select: { id: true, displayUrl: true, thumbnailUrl: true, caption: true },
-      },
-      afterPhoto: {
-        select: { id: true, displayUrl: true, thumbnailUrl: true, caption: true },
-      },
     },
   });
 
-  // Clear generated image if photos or layout changed
-  if (data.beforePhotoId || data.afterPhotoId || data.layout) {
+  if (data.beforePhotoId || data.afterPhotoId) {
+    await attachComparisonPhotos(comparisonId, data.beforePhotoId, data.afterPhotoId);
+  }
+
+  // Clear generated image if photos or layout changed.
+  if (data.beforePhotoId || data.afterPhotoId || data.layout || data.title || data.name || data.description) {
     await prisma.beforeAfterComparison.update({
       where: { id: comparisonId },
-      data: { generatedImageUrl: null },
+      data: { compositeUrl: null, thumbnailUrl: null },
     });
   }
 
-  return comparison;
+  const updated = await prisma.beforeAfterComparison.findUnique({
+    where: { id: comparisonId },
+    include: comparisonInclude,
+  });
+  return normalizeComparison(updated);
 }
 
 /**
@@ -148,6 +185,11 @@ export async function deleteComparison(comparisonId, userId) {
 
   const comparison = await prisma.beforeAfterComparison.findUnique({
     where: { id: comparisonId },
+    include: {
+      photos: {
+        select: { id: true },
+      },
+    },
   });
 
   if (!comparison) {
@@ -157,9 +199,9 @@ export async function deleteComparison(comparisonId, userId) {
   }
 
   // Delete generated image from S3 if exists
-  if (comparison.generatedImageUrl) {
+  if (comparison.compositeUrl) {
     try {
-      const key = comparison.generatedImageUrl.split('.com/')[1];
+      const key = comparison.compositeUrl.split('.com/')[1];
       if (key) {
         await s3Service.deleteFile(key);
       }
@@ -167,6 +209,11 @@ export async function deleteComparison(comparisonId, userId) {
       logger.warn(`Failed to delete generated image: ${err.message}`);
     }
   }
+
+  await prisma.photo.updateMany({
+    where: { beforeAfterId: comparisonId },
+    data: { beforeAfterId: null, beforeAfterRole: null },
+  });
 
   await prisma.beforeAfterComparison.delete({
     where: { id: comparisonId },
@@ -235,7 +282,7 @@ export async function generateComparisonImage(comparisonId, options = {}) {
   // Update comparison record
   await prisma.beforeAfterComparison.update({
     where: { id: comparisonId },
-    data: { generatedImageUrl: result.url },
+    data: { compositeUrl: result.url },
   });
 
   logger.info(`Generated comparison image: ${result.url}`);
@@ -287,17 +334,7 @@ export async function getComparisonByShareToken(shareToken) {
       shareToken,
       isPublic: true,
     },
-    include: {
-      project: {
-        select: { id: true, name: true },
-      },
-      beforePhoto: {
-        select: { id: true, displayUrl: true, caption: true },
-      },
-      afterPhoto: {
-        select: { id: true, displayUrl: true, caption: true },
-      },
-    },
+    include: comparisonInclude,
   });
 
   if (!comparison) {
@@ -309,7 +346,7 @@ export async function getComparisonByShareToken(shareToken) {
     return null;
   }
 
-  return comparison;
+  return normalizeComparison(comparison);
 }
 
 // Helper functions for image composition
