@@ -92,6 +92,15 @@ function toAbsoluteCrmUrl(actionPath = '/') {
   return `${CRM_BASE_URL}${normalizedPath}`;
 }
 
+function normalizeConvertedName(rawName, fallbackName) {
+  const candidate = String(rawName || '').trim();
+  if (!candidate) return String(fallbackName || '').trim();
+
+  // Remove trailing " - M/D/YYYY" or " - MM/DD/YYYY" suffixes that leak from legacy lead naming.
+  const withoutDateSuffix = candidate.replace(/\s*-\s*\d{1,2}\/\d{1,2}\/\d{4}\s*$/i, '').trim();
+  return withoutDateSuffix || String(fallbackName || '').trim();
+}
+
 class LeadService {
   async resolveActorUserId(actor = null) {
     if (!actor) return null;
@@ -1129,9 +1138,12 @@ class LeadService {
     // Use transaction for conversion
     const result = await prisma.$transaction(async (tx) => {
       // Create Account
+      const fallbackDisplayName = `${lead.firstName || ''} ${lead.lastName || ''}`.trim();
+      const normalizedLeadName = normalizeConvertedName(lead.company, fallbackDisplayName);
+
       const account = await tx.account.create({
         data: {
-          name: options.accountName || lead.company || `${lead.firstName} ${lead.lastName}`,
+          name: normalizeConvertedName(options.accountName || normalizedLeadName, fallbackDisplayName),
           billingStreet: lead.street,
           billingCity: lead.city,
           billingState: lead.state,
@@ -1207,7 +1219,7 @@ class LeadService {
         // Keep conversion compatible by assigning job id + core records now only.
         opportunity = await tx.opportunity.create({
           data: {
-            name: options.opportunityName || lead.company || `${lead.firstName} ${lead.lastName}`,
+            name: normalizeConvertedName(options.opportunityName || normalizedLeadName, fallbackDisplayName),
             job_id: jobId, // Auto-assigned Job ID (using underscore field name from schema)
             accountId: account.id,
             contactId: contact.id,

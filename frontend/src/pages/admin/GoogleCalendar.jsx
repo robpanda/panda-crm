@@ -26,6 +26,26 @@ import {
 import api from '../../services/api';
 import AdminLayout from '../../components/AdminLayout';
 
+const normalizeCompanyEmail = (value) => {
+  const email = String(value || '').trim().toLowerCase();
+  if (!email.includes('@')) return email;
+  const [localPart, domainPart] = email.split('@');
+  if (!localPart || !domainPart) return email;
+  if (domainPart === 'pandaexteriors.com' || domainPart === 'panda-exteriors.com') {
+    return `${localPart.replace(/\./g, '')}@${domainPart}`;
+  }
+  return email;
+};
+
+const mapCalendarUser = (user = {}) => ({
+  ...user,
+  email: normalizeCompanyEmail(user.email),
+  googleCalendarEmail: normalizeCompanyEmail(user.googleCalendarEmail || user.google_calendar_email || ''),
+  googleCalendarSyncEnabled: Boolean(
+    user.googleCalendarSyncEnabled ?? user.google_calendar_sync_enabled ?? false
+  ),
+});
+
 export default function GoogleCalendar() {
   const navigate = useNavigate();
   const fileInputRef = useRef(null);
@@ -54,7 +74,8 @@ export default function GoogleCalendar() {
     try {
       setLoading(true);
       const response = await api.get('/api/integrations/google/users');
-      setUsers(response.data.data || []);
+      const rawUsers = Array.isArray(response?.data?.data) ? response.data.data : [];
+      setUsers(rawUsers.map(mapCalendarUser));
     } catch (error) {
       console.error('Failed to load users:', error);
     } finally {
@@ -89,7 +110,7 @@ export default function GoogleCalendar() {
     try {
       setSavingUser(userId);
       await api.post(`/api/integrations/google/users/${userId}/link`, {
-        googleCalendarEmail: editEmail,
+        google_calendar_email: normalizeCompanyEmail(editEmail),
         enableSync: true,
       });
       setEditingUserId(null);
@@ -157,7 +178,7 @@ export default function GoogleCalendar() {
     for (const user of unlinkedUsers) {
       try {
         await api.post(`/api/integrations/google/users/${user.id}/link`, {
-          googleCalendarEmail: user.email,
+          google_calendar_email: normalizeCompanyEmail(user.email),
           enableSync: true,
         });
         results.success++;

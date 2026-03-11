@@ -64,20 +64,18 @@ export default function Support() {
       setLoading(true);
       const response = await api.get('/api/support/tickets');
       const ticketData = response.data.tickets || [];
-      const roleName = String(user?.role?.name || '').toLowerCase();
-      const roleType = String(user?.roleType || user?.role || '').toLowerCase();
-      const groups = Array.isArray(user?.groups)
-        ? user.groups.map((group) => String(group).toLowerCase())
-        : [];
-      const isSupportAdmin = roleType.includes('admin')
-        || roleName.includes('admin')
-        || groups.some((group) => group.includes('admin') || group.includes('support'));
-      const scopedTickets = isSupportAdmin
-        ? ticketData
-        : ticketData.filter((ticket) => {
-            if (!user?.id) return true;
-            return ticket.user_id === user.id || ticket.userId === user.id;
-          });
+      const currentUserId = user?.id || user?.userId || user?.sub || null;
+      const currentUserEmail = String(user?.email || '').trim().toLowerCase();
+      const scopedTickets = ticketData.filter((ticket) => {
+        if (currentUserId) {
+          return ticket.user_id === currentUserId || ticket.userId === currentUserId || ticket.createdById === currentUserId;
+        }
+        if (currentUserEmail) {
+          const ticketEmail = String(ticket.user?.email || ticket.email || '').trim().toLowerCase();
+          return Boolean(ticketEmail) && ticketEmail === currentUserEmail;
+        }
+        return false;
+      });
       setTickets(scopedTickets);
 
       // Calculate stats

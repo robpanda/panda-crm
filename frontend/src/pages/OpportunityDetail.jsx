@@ -2232,6 +2232,26 @@ export default function OpportunityDetail() {
   const [showActionsMenu, setShowActionsMenu] = useState(false);
   const actionsMenuRef = useRef(null);
 
+  const openCustomerPortalLink = useCallback(async () => {
+    try {
+      const portalResponse = await opportunitiesApi.generatePortalLink(id);
+      const portalUrl = portalResponse?.portalUrl
+        || portalResponse?.url
+        || portalResponse?.link
+        || portalResponse?.customerPortalUrl
+        || null;
+
+      if (!portalUrl) {
+        throw new Error('Customer portal link is unavailable');
+      }
+
+      window.open(portalUrl, '_blank', 'noopener,noreferrer');
+      setActionSuccess('Customer portal opened in a new tab');
+    } catch (error) {
+      setActionError(error?.message || 'Failed to open customer portal');
+    }
+  }, [id]);
+
   // SMS and Email modal states
   const [showSmsModal, setShowSmsModal] = useState(false);
   const [showEmailModal, setShowEmailModal] = useState(false);
@@ -4176,10 +4196,10 @@ export default function OpportunityDetail() {
     .join(', ');
   const normalizedWorkType = (() => {
     const rawWorkType = String(opportunity?.workType || '').trim();
-    if (!rawWorkType) return 'Insurance Roofing';
+    if (!rawWorkType) return 'Unassigned';
     const lowered = rawWorkType.toLowerCase();
     if (lowered === 'unassigned work type' || lowered === 'unassigned' || lowered === 'not set') {
-      return 'Insurance Roofing';
+      return 'Unassigned';
     }
     return rawWorkType;
   })();
@@ -4442,17 +4462,6 @@ export default function OpportunityDetail() {
                       </button>
                       <button
                         onClick={() => {
-                          setActiveQuickAction('eagleviewMeasure');
-                          setShowQuickActionModal(true);
-                          setShowActionsMenu(false);
-                        }}
-                        className="w-full flex items-center space-x-3 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
-                      >
-                        <Eye className="w-4 h-4 text-orange-600" />
-                        <span>EagleView Measurements</span>
-                      </button>
-                      <button
-                        onClick={() => {
                           setActiveQuickAction('hoverCapture');
                           setShowQuickActionModal(true);
                           setShowActionsMenu(false);
@@ -4488,6 +4497,16 @@ export default function OpportunityDetail() {
                       >
                         <FileText className="w-4 h-4 text-teal-600" />
                         <span>Request Estimate</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          setShowActionsMenu(false);
+                          openCustomerPortalLink();
+                        }}
+                        className="w-full flex items-center space-x-3 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+                      >
+                        <ExternalLink className="w-4 h-4 text-blue-600" />
+                        <span>Customer Portal</span>
                       </button>
                       <button
                         onClick={() => {

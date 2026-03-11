@@ -60,6 +60,17 @@ const roleTypeLabels = {
 
 const uniqueArray = (values = []) => [...new Set(values.filter(Boolean))];
 
+const normalizeCompanyEmail = (value) => {
+  const email = String(value || '').trim().toLowerCase();
+  if (!email.includes('@')) return email;
+  const [localPart, domainPart] = email.split('@');
+  if (!localPart || !domainPart) return email;
+  if (domainPart === 'pandaexteriors.com' || domainPart === 'panda-exteriors.com') {
+    return `${localPart.replace(/\./g, '')}@${domainPart}`;
+  }
+  return email;
+};
+
 export default function Users() {
   const [search, setSearch] = useState('');
   const [departmentFilter, setDepartmentFilter] = useState('');
@@ -254,7 +265,7 @@ export default function Users() {
       const q = terminateForm.search.trim().toLowerCase();
       if (!q) return true;
       const name = (u.fullName || `${u.firstName || ''} ${u.lastName || ''}`).toLowerCase();
-      return name.includes(q) || (u.email || '').toLowerCase().includes(q);
+      return name.includes(q) || normalizeCompanyEmail(u.email).includes(q);
     });
 
   useEffect(() => {
@@ -271,7 +282,7 @@ export default function Users() {
     const q = mergeForm.search.trim().toLowerCase();
     if (!q) return true;
     const name = (u.fullName || `${u.firstName || ''} ${u.lastName || ''}`).toLowerCase();
-    return name.includes(q) || (u.email || '').toLowerCase().includes(q);
+    return name.includes(q) || normalizeCompanyEmail(u.email).includes(q);
   });
 
   const allVisibleSelected = users.length > 0 && users.every((u) => selectedMergeUserIds.includes(u.id));
@@ -415,7 +426,7 @@ export default function Users() {
                   <label className="block text-sm text-gray-500 mb-1">Email</label>
                   <div className="flex items-center">
                     <Mail className="w-4 h-4 text-gray-400 mr-2" />
-                    <span className="text-gray-900">{user.email}</span>
+                    <span className="text-gray-900">{normalizeCompanyEmail(user.email)}</span>
                   </div>
                 </div>
                 <div>
@@ -1066,7 +1077,7 @@ export default function Users() {
                         </div>
                         <div className="ml-3">
                           <p className="font-medium text-gray-900">{user.fullName || `${user.firstName} ${user.lastName}`}</p>
-                          <p className="text-sm text-gray-500">{user.email}</p>
+                          <p className="text-sm text-gray-500">{normalizeCompanyEmail(user.email)}</p>
                         </div>
                       </div>
                     </td>
@@ -1315,7 +1326,7 @@ export default function Users() {
                 </div>
               )}
               <p className="text-gray-600 mb-6">
-                Are you sure you want to delete <span className="font-semibold">{selectedUser.firstName} {selectedUser.lastName}</span> ({selectedUser.email})?
+                Are you sure you want to delete <span className="font-semibold">{selectedUser.firstName} {selectedUser.lastName}</span> ({normalizeCompanyEmail(selectedUser.email)})?
               </p>
               <div className="flex justify-end gap-3">
                 <button
@@ -1415,7 +1426,7 @@ export default function Users() {
                     setActionError('Passwords do not match');
                     return;
                   }
-                  resetPasswordMutation.mutate({ email: selectedUser.email, newPassword: passwordForm.newPassword });
+                  resetPasswordMutation.mutate({ email: normalizeCompanyEmail(selectedUser.email), newPassword: passwordForm.newPassword });
                 }}
                 disabled={resetPasswordMutation.isPending}
                 className="px-4 py-2 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg font-medium hover:opacity-90 disabled:opacity-50"
@@ -1436,7 +1447,7 @@ export default function Users() {
                 <div>
                   <h2 className="text-xl font-bold text-gray-900">Terminate Employee</h2>
                   <p className="text-sm text-gray-500 mt-1">
-                    {selectedUser.firstName} {selectedUser.lastName} ({selectedUser.email})
+                    {selectedUser.firstName} {selectedUser.lastName} ({normalizeCompanyEmail(selectedUser.email)})
                   </p>
                 </div>
                 <button
@@ -1480,7 +1491,7 @@ export default function Users() {
                   <option value="">Select active user...</option>
                   {transferCandidates.map((u) => (
                     <option key={u.id} value={u.id}>
-                      {u.fullName || `${u.firstName || ''} ${u.lastName || ''}`.trim()} ({u.email})
+                      {u.fullName || `${u.firstName || ''} ${u.lastName || ''}`.trim()} ({normalizeCompanyEmail(u.email)})
                     </option>
                   ))}
                 </select>
@@ -1599,14 +1610,14 @@ export default function Users() {
                           />
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
-                              <span className="text-sm font-medium text-gray-900">{userName || user.email}</span>
+                              <span className="text-sm font-medium text-gray-900">{userName || normalizeCompanyEmail(user.email)}</span>
                               <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
                                 user.isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'
                               }`}>
                                 {user.isActive ? 'Active' : 'Inactive'}
                               </span>
                             </div>
-                            <div className="text-xs text-gray-500">{user.email}</div>
+                            <div className="text-xs text-gray-500">{normalizeCompanyEmail(user.email)}</div>
                           </div>
                         </label>
                       );
