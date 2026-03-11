@@ -279,9 +279,9 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
 
   // Load users for View As dropdown when opened
   useEffect(() => {
-    if (showViewAsMenu && canImpersonate && viewAsUsers.length === 0) {
+    if (showViewAsMenu && canImpersonate) {
       setViewAsLoading(true);
-      usersApi.getUsersForDropdown({ limit: 1000 })
+      usersApi.getUsersForDropdown({ limit: 1000, isActive: true })
         .then(response => {
           // Response is { success: true, data: [...users...] }
           const users = response?.data || response || [];
@@ -294,7 +294,7 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
           setViewAsLoading(false);
         });
     }
-  }, [showViewAsMenu, canImpersonate, viewAsUsers.length]);
+  }, [showViewAsMenu, canImpersonate]);
 
   // Live-search users for View As to avoid stale cached dropdown lists
   useEffect(() => {

@@ -563,6 +563,8 @@ router.get('/admin/tickets', authMiddleware, async (req, res) => {
         .filter(Boolean)
     ));
 
+    const ticketIds = tickets.map((ticket) => ticket.id);
+
     const [users, messageCounts, attachmentCounts] = await Promise.all([
       userIds.length > 0
         ? prisma.user.findMany({
@@ -570,16 +572,20 @@ router.get('/admin/tickets', authMiddleware, async (req, res) => {
             select: { id: true, firstName: true, lastName: true, fullName: true, email: true },
           })
         : Promise.resolve([]),
-      prisma.support_ticket_messages.groupBy({
-        by: ['ticket_id'],
-        where: { ticket_id: { in: tickets.map((t) => t.id) } },
-        _count: { ticket_id: true },
-      }),
-      prisma.support_ticket_attachments.groupBy({
-        by: ['ticket_id'],
-        where: { ticket_id: { in: tickets.map((t) => t.id) } },
-        _count: { ticket_id: true },
-      }),
+      ticketIds.length > 0
+        ? prisma.support_ticket_messages.groupBy({
+            by: ['ticket_id'],
+            where: { ticket_id: { in: ticketIds } },
+            _count: { ticket_id: true },
+          })
+        : Promise.resolve([]),
+      ticketIds.length > 0
+        ? prisma.support_ticket_attachments.groupBy({
+            by: ['ticket_id'],
+            where: { ticket_id: { in: ticketIds } },
+            _count: { ticket_id: true },
+          })
+        : Promise.resolve([]),
     ]);
 
     const usersById = new Map(users.map((user) => [user.id, user]));

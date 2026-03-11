@@ -13,6 +13,41 @@ const userSelect = {
   email: true,
 };
 
+const LEGACY_ATTENTION_TYPE_REMAP = {
+  APPOINTMENT_TODAY: 'APPOINTMENT_REMINDER',
+};
+
+let legacyTypeNormalizationAttempted = false;
+
+function normalizeAttentionType(type) {
+  if (!type) return type;
+  return LEGACY_ATTENTION_TYPE_REMAP[type] || type;
+}
+
+async function normalizeLegacyAttentionTypes() {
+  if (legacyTypeNormalizationAttempted) return;
+  legacyTypeNormalizationAttempted = true;
+
+  try {
+    await prisma.$executeRawUnsafe(`
+      UPDATE attention_items
+      SET type = 'APPOINTMENT_REMINDER'
+      WHERE type::text = 'APPOINTMENT_TODAY'
+    `);
+  } catch (error) {
+    // Fallback to GENERAL in environments where APPOINTMENT_REMINDER is unavailable.
+    try {
+      await prisma.$executeRawUnsafe(`
+        UPDATE attention_items
+        SET type = 'GENERAL'
+        WHERE type::text = 'APPOINTMENT_TODAY'
+      `);
+    } catch (fallbackError) {
+      console.error('[AttentionService] Failed to normalize legacy attention types:', fallbackError);
+    }
+  }
+}
+
 function withUserDisplayName(user) {
   if (!user || typeof user !== 'object') return user;
   const computedName = user.fullName || [user.firstName, user.lastName].filter(Boolean).join(' ').trim() || user.email || null;
@@ -47,6 +82,8 @@ export const attentionService = {
     sortBy = 'urgency', // urgency, createdAt, dueDate
     sortOrder = 'desc',
   }) {
+    await normalizeLegacyAttentionTypes();
+
     const where = {};
 
     // Filter by user assignment
@@ -71,7 +108,7 @@ export const attentionService = {
 
     // Type filter
     if (type) {
-      where.type = type;
+      where.type = normalizeAttentionType(type);
     }
 
     // Category filter
@@ -186,6 +223,8 @@ export const attentionService = {
    * Get attention item by ID
    */
   async getAttentionItemById(id) {
+    await normalizeLegacyAttentionTypes();
+
     const item = await prisma.attentionItem.findUnique({
       where: { id },
       include: {
@@ -214,6 +253,8 @@ export const attentionService = {
    * Create a new attention item
    */
   async createAttentionItem(data) {
+    await normalizeLegacyAttentionTypes();
+
     // Calculate days overdue if due date is in the past
     let daysOverdue = null;
     if (data.dueDate && new Date(data.dueDate) < new Date()) {
@@ -224,6 +265,7 @@ export const attentionService = {
     const item = await prisma.attentionItem.create({
       data: {
         ...data,
+        type: normalizeAttentionType(data?.type),
         daysOverdue,
       },
       include: {
@@ -836,6 +878,8 @@ export const attentionService = {
    * Run all generators to refresh attention queue
    */
   async refreshQueue() {
+    await normalizeLegacyAttentionTypes();
+
     const results = {
       overdueInvoices: await this.generateOverdueInvoiceItems(),
       stalledOpportunities: await this.generateStalledOpportunityItems(),

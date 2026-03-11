@@ -3,6 +3,31 @@ import { Prisma, PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
+let legacyTypeNormalizationAttempted = false;
+
+async function normalizeLegacyAttentionTypes() {
+  if (legacyTypeNormalizationAttempted) return;
+  legacyTypeNormalizationAttempted = true;
+
+  try {
+    await prisma.$executeRawUnsafe(`
+      UPDATE attention_items
+      SET type = 'APPOINTMENT_REMINDER'
+      WHERE type::text = 'APPOINTMENT_TODAY'
+    `);
+  } catch (error) {
+    try {
+      await prisma.$executeRawUnsafe(`
+        UPDATE attention_items
+        SET type = 'GENERAL'
+        WHERE type::text = 'APPOINTMENT_TODAY'
+      `);
+    } catch (fallbackError) {
+      console.error('[Accounts Attention] Failed to normalize legacy attention types:', fallbackError);
+    }
+  }
+}
+
 /**
  * Get attention items with filters and pagination
  */
@@ -23,6 +48,8 @@ export async function getAttentionItems({
   sortBy = 'urgency',
   sortOrder = 'desc',
 }) {
+  await normalizeLegacyAttentionTypes();
+
   const where = {};
 
   // User filter
@@ -178,6 +205,7 @@ export async function getStats(userId = null) {
  * Get a single attention item by ID
  */
 export async function getAttentionItemById(id) {
+  await normalizeLegacyAttentionTypes();
   return prisma.attentionItem.findUnique({
     where: { id },
     include: {
@@ -197,6 +225,7 @@ export async function getAttentionItemById(id) {
  * Create a new attention item
  */
 export async function createAttentionItem(data) {
+  await normalizeLegacyAttentionTypes();
   return prisma.attentionItem.create({
     data: {
       title: data.title,

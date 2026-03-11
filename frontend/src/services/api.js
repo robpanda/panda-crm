@@ -1663,7 +1663,22 @@ export const usersApi = {
       ? { q: queryOrParams }
       : { q: queryOrParams.query, limit: queryOrParams.limit };
     const response = await api.get('/api/users/search', { params });
-    return response.data.data;
+    const directResults = response?.data?.data;
+    if (Array.isArray(directResults) && directResults.length > 0) {
+      return directResults;
+    }
+
+    // Fallback for environments where /users/search can lag behind list search indexing.
+    const fallback = await api.get('/api/users', {
+      params: {
+        search: params.q,
+        limit: params.limit || 25,
+        isActive: true,
+      },
+    });
+
+    const fallbackResults = fallback?.data?.data;
+    return Array.isArray(fallbackResults) ? fallbackResults : [];
   },
 
   async getUsersForDropdown(params = {}) {
