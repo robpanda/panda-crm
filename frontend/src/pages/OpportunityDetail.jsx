@@ -3930,13 +3930,13 @@ export default function OpportunityDetail() {
   const trades = ['Roofing', 'Gutters', 'Siding', 'GAF Solar', 'Skylight', 'Trim & Capping', 'Interior Work', 'GAF TimberSteel'];
 
   const primaryContact = contacts?.[0] || opportunity?.contact || null;
-  const headerDisplayName = useMemo(() => {
+  const headerDisplayName = (() => {
     const first = primaryContact?.firstName || '';
     const last = primaryContact?.lastName || '';
     if (first || last) return `${first} ${last}`.trim();
     return opportunity?.account?.name || opportunity?.name || 'Job';
-  }, [opportunity?.account?.name, opportunity?.name, primaryContact?.firstName, primaryContact?.lastName]);
-  const headerInitials = useMemo(() => {
+  })();
+  const headerInitials = (() => {
     const source = headerDisplayName || '';
     const initials = source
       .split(' ')
@@ -3945,14 +3945,14 @@ export default function OpportunityDetail() {
       .map((part) => part.charAt(0).toUpperCase())
       .join('');
     return initials || 'J';
-  }, [headerDisplayName]);
+  })();
   const headerEmail = primaryContact?.email || opportunity?.account?.email || '';
   const headerPhone = primaryContact?.mobilePhone || primaryContact?.phone || opportunity?.phone || '';
   const headerAddress = [opportunity?.street, opportunity?.city, opportunity?.state, opportunity?.postalCode]
     .filter(Boolean)
     .join(', ');
   const headerPriorityLabel = String(opportunity?.priority || 'Normal').replace(/_/g, ' ');
-  const financialWorksheetTotals = useMemo(() => {
+  const financialWorksheetTotals = (() => {
     const buckets = {
       insurance: { total: 0, paid: 0, due: 0 },
       homeowner: { total: 0, paid: 0, due: 0 },
@@ -3981,7 +3981,7 @@ export default function OpportunityDetail() {
     });
 
     return buckets;
-  }, [invoices]);
+  })();
 
   return (
     <div className="min-h-screen bg-gray-50">
