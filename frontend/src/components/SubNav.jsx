@@ -54,9 +54,9 @@ export default function SubNav({
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-100 mb-6">
       {/* Top Row: Tabs and Actions */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between px-4 py-3 border-b border-gray-100">
         {/* Tabs */}
-        <div className="flex items-center space-x-1">
+        <div className="flex flex-wrap items-center gap-1">
           {displayTabs.map((tab) => (
             <button
               key={tab.id}
@@ -82,7 +82,7 @@ export default function SubNav({
         </div>
 
         {/* Right Side Actions */}
-        <div className="flex items-center space-x-3">
+        <div className="flex items-center gap-2 sm:gap-3 w-full sm:w-auto justify-end">
           {/* View Toggle */}
           {showViewToggle && (
             <div className="flex items-center bg-gray-100 rounded-lg p-1">
@@ -123,7 +123,7 @@ export default function SubNav({
           {showNewButton && (
             <Link
               to={newPath}
-              className="inline-flex items-center px-4 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90 transition-colors shadow-sm"
+              className="inline-flex items-center justify-center px-4 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90 transition-colors shadow-sm w-full sm:w-auto"
             >
               <Plus className="w-4 h-4 mr-2" />
               New {entity}

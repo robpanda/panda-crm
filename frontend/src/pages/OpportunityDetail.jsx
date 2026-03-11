@@ -4045,7 +4045,7 @@ export default function OpportunityDetail() {
 
               <div className="flex flex-wrap items-center gap-3">
                 <span className="inline-flex items-center px-3 py-1 rounded-md text-sm font-semibold bg-emerald-100 text-emerald-700">
-                  {opportunity.workType || 'Unassigned Work Type'}
+                  {opportunity.workType || 'Insurance Roofing'}
                 </span>
                 <span className={`inline-flex items-center px-3 py-1 rounded-md text-sm font-semibold ${
                   opportunity.isApproved ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
@@ -4126,7 +4126,7 @@ export default function OpportunityDetail() {
         <div className="flex flex-col lg:flex-row gap-6">
           {/* Left Sidebar - Compact actions and info */}
           <div className="w-full lg:w-80 xl:w-96 flex-shrink-0 order-2 lg:order-1">
-            <div className="lg:sticky lg:top-24 space-y-3 max-h-[calc(100vh-120px)] overflow-y-auto pb-4">
+            <div className="lg:sticky lg:top-24 space-y-3 pb-4">
               {/* Primary Actions Row */}
               <div className="flex gap-2">
                 {isEditMode ? (
@@ -5637,19 +5637,6 @@ export default function OpportunityDetail() {
                     {/* Header */}
                     <div className="flex items-center justify-between">
                       <h3 className="text-sm font-semibold text-gray-900">Job Team</h3>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedTransferOwnerId('');
-                          setTransferOwnerSearchTerm('');
-                          setTransferRelatedItems(true);
-                          setTransferOwnerError('');
-                          setShowTransferOwnerModal(true);
-                        }}
-                        className="inline-flex items-center px-3 py-1.5 text-sm font-medium text-panda-primary bg-panda-primary/10 rounded-lg hover:bg-panda-primary/20"
-                      >
-                        Transfer Owner
-                      </button>
                     </div>
 
                     {/* Team Members */}
@@ -5678,6 +5665,32 @@ export default function OpportunityDetail() {
                             </div>
                           </div>
                           <div className="flex items-center space-x-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedTransferOwnerId('');
+                                setTransferOwnerSearchTerm('');
+                                setTransferRelatedItems(false);
+                                setTransferOwnerError('');
+                                setShowTransferOwnerModal(true);
+                              }}
+                              className="inline-flex items-center px-2.5 py-1 text-xs font-medium text-panda-primary bg-panda-primary/10 rounded hover:bg-panda-primary/20"
+                            >
+                              Assign
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedTransferOwnerId('');
+                                setTransferOwnerSearchTerm('');
+                                setTransferRelatedItems(true);
+                                setTransferOwnerError('');
+                                setShowTransferOwnerModal(true);
+                              }}
+                              className="inline-flex items-center px-2.5 py-1 text-xs font-medium text-panda-primary bg-panda-primary/10 rounded hover:bg-panda-primary/20"
+                            >
+                              Transfer
+                            </button>
                             {ownerDisplayPhone && (
                               <a
                                 href={`tel:${ownerDisplayPhone}`}
@@ -5761,16 +5774,28 @@ export default function OpportunityDetail() {
                             >
                               Clear selection
                             </button>
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                await updateMutation.mutateAsync({ projectManagerId: selectedProjectManagerId || null });
-                              }}
-                              disabled={updateMutation.isPending}
-                              className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium text-white bg-panda-primary rounded-lg hover:bg-panda-dark disabled:opacity-50"
-                            >
-                              {updateMutation.isPending ? 'Saving…' : 'Assign PM'}
-                            </button>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  await updateMutation.mutateAsync({ projectManagerId: selectedProjectManagerId || null });
+                                }}
+                                disabled={updateMutation.isPending}
+                                className="inline-flex items-center justify-center px-2.5 py-1.5 text-xs font-medium text-white bg-panda-primary rounded hover:bg-panda-dark disabled:opacity-50"
+                              >
+                                {updateMutation.isPending ? 'Saving…' : 'Assign PM'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  await updateMutation.mutateAsync({ projectManagerId: selectedProjectManagerId || null });
+                                }}
+                                disabled={updateMutation.isPending}
+                                className="inline-flex items-center justify-center px-2.5 py-1.5 text-xs font-medium text-panda-primary bg-panda-primary/10 rounded hover:bg-panda-primary/20 disabled:opacity-50"
+                              >
+                                Transfer PM
+                              </button>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -5817,20 +5842,36 @@ export default function OpportunityDetail() {
                               <p className="px-3 py-2 text-xs text-gray-500">No active crews match your search.</p>
                             )}
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (!crewAssignmentAppointment?.id || !selectedCrewId) return;
-                              assignCrewMutation.mutate({
-                                appointmentId: crewAssignmentAppointment.id,
-                                resourceId: selectedCrewId,
-                              });
-                            }}
-                            disabled={!selectedCrewId || !crewAssignmentAppointment?.id || assignCrewMutation.isPending}
-                            className="inline-flex items-center justify-center px-3 py-2 text-sm font-medium text-white bg-panda-primary rounded-lg hover:bg-panda-dark disabled:opacity-50"
-                          >
-                            {assignCrewMutation.isPending ? 'Assigning…' : 'Assign'}
-                          </button>
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!crewAssignmentAppointment?.id || !selectedCrewId) return;
+                                assignCrewMutation.mutate({
+                                  appointmentId: crewAssignmentAppointment.id,
+                                  resourceId: selectedCrewId,
+                                });
+                              }}
+                              disabled={!selectedCrewId || !crewAssignmentAppointment?.id || assignCrewMutation.isPending}
+                              className="inline-flex items-center justify-center px-2.5 py-1.5 text-xs font-medium text-white bg-panda-primary rounded hover:bg-panda-dark disabled:opacity-50"
+                            >
+                              {assignCrewMutation.isPending ? 'Assigning…' : 'Assign Crew'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!crewAssignmentAppointment?.id || !selectedCrewId) return;
+                                assignCrewMutation.mutate({
+                                  appointmentId: crewAssignmentAppointment.id,
+                                  resourceId: selectedCrewId,
+                                });
+                              }}
+                              disabled={!selectedCrewId || !crewAssignmentAppointment?.id || assignCrewMutation.isPending}
+                              className="inline-flex items-center justify-center px-2.5 py-1.5 text-xs font-medium text-panda-primary bg-panda-primary/10 rounded hover:bg-panda-primary/20 disabled:opacity-50"
+                            >
+                              Transfer Crew
+                            </button>
+                          </div>
                         </div>
                         {!crewAssignmentAppointment?.id && (
                           <p className="text-xs text-amber-600">
@@ -7142,7 +7183,7 @@ export default function OpportunityDetail() {
                                 <div className="flex justify-between">
                                   <span className="text-sm text-gray-500">Date of Loss</span>
                                   <span className="text-sm font-medium text-gray-900">
-                                    {opportunity.dateOfLoss ? new Date(opportunity.dateOfLoss).toLocaleDateString() : '-'}
+                                    {formatDateFromStoredValue(opportunity.dateOfLoss) || '-'}
                                   </span>
                                 </div>
                                 <div className="flex justify-between">

@@ -178,6 +178,7 @@ export async function listInvoices(req, res, next) {
       accountId,
       status,
       isOverdue,
+      search,
       dateFrom,
       dateTo,
       page = 1,
@@ -200,6 +201,19 @@ export async function listInvoices(req, res, next) {
       where.invoiceDate = {};
       if (dateFrom) where.invoiceDate.gte = new Date(dateFrom);
       if (dateTo) where.invoiceDate.lte = new Date(dateTo);
+    }
+
+    if (search) {
+      where.OR = [
+        { invoiceNumber: { contains: search, mode: 'insensitive' } },
+        { account: { name: { contains: search, mode: 'insensitive' } } },
+        { account: { email: { contains: search, mode: 'insensitive' } } },
+        { account: { phone: { contains: search } } },
+        { account: { billingStreet: { contains: search, mode: 'insensitive' } } },
+        { account: { billingCity: { contains: search, mode: 'insensitive' } } },
+        { account: { billingState: { contains: search, mode: 'insensitive' } } },
+        { account: { billingPostalCode: { contains: search, mode: 'insensitive' } } },
+      ];
     }
 
     const skip = (parseInt(page) - 1) * parseInt(limit);

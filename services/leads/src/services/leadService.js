@@ -615,6 +615,10 @@ class LeadService {
         { phone: { contains: search } },
         { mobilePhone: { contains: search } },
         { company: { contains: search, mode: 'insensitive' } },
+        { street: { contains: search, mode: 'insensitive' } },
+        { city: { contains: search, mode: 'insensitive' } },
+        { state: { contains: search, mode: 'insensitive' } },
+        { postalCode: { contains: search, mode: 'insensitive' } },
       ];
     }
 
@@ -2958,6 +2962,11 @@ class LeadService {
         { lastName: { contains: search, mode: 'insensitive' } },
         { email: { contains: search, mode: 'insensitive' } },
         { phone: { contains: search } },
+        { mobilePhone: { contains: search } },
+        { street: { contains: search, mode: 'insensitive' } },
+        { city: { contains: search, mode: 'insensitive' } },
+        { state: { contains: search, mode: 'insensitive' } },
+        { postalCode: { contains: search, mode: 'insensitive' } },
       ];
     }
 

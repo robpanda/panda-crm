@@ -673,7 +673,21 @@ class OpportunityService {
     if (search) {
       where.OR = [
         { name: { contains: search, mode: 'insensitive' } },
+        { jobId: { contains: search, mode: 'insensitive' } },
+        { street: { contains: search, mode: 'insensitive' } },
+        { city: { contains: search, mode: 'insensitive' } },
+        { state: { contains: search, mode: 'insensitive' } },
+        { postalCode: { contains: search, mode: 'insensitive' } },
         { account: { name: { contains: search, mode: 'insensitive' } } },
+        { account: { billingStreet: { contains: search, mode: 'insensitive' } } },
+        { account: { billingCity: { contains: search, mode: 'insensitive' } } },
+        { account: { billingState: { contains: search, mode: 'insensitive' } } },
+        { account: { billingPostalCode: { contains: search, mode: 'insensitive' } } },
+        { contact: { firstName: { contains: search, mode: 'insensitive' } } },
+        { contact: { lastName: { contains: search, mode: 'insensitive' } } },
+        { contact: { email: { contains: search, mode: 'insensitive' } } },
+        { contact: { phone: { contains: search } } },
+        { contact: { mobilePhone: { contains: search } } },
       ];
     }
 
@@ -3064,6 +3078,19 @@ Be factual and professional. Highlight anything that needs attention.`;
       throw lastUpdateError;
     }
 
+    const requestedClaimFallbackFields = Object.keys(CLAIM_FALLBACK_FIELD_TO_COLUMN)
+      .filter((field) => hasOwnField(data, field));
+
+    if (requestedClaimFallbackFields.length > 0) {
+      try {
+        // Keep raw claim columns synchronized for mixed-schema environments.
+        await applyClaimRawFallback(id, data, requestedClaimFallbackFields);
+        opportunity = await hydrateClaimFallbackFromRaw(id, opportunity);
+      } catch (fallbackError) {
+        logger.warn(`Opportunity update raw-claim sync failed for ${id}: ${fallbackError.message}`);
+      }
+    }
+
     if (removedClaimFields.size > 0) {
       try {
         await applyClaimRawFallback(id, data, Array.from(removedClaimFields));
@@ -5218,7 +5245,20 @@ Be factual and professional. Highlight anything that needs attention.`;
       where.OR = [
         { name: { contains: search, mode: 'insensitive' } },
         { jobId: { contains: search, mode: 'insensitive' } },
+        { street: { contains: search, mode: 'insensitive' } },
+        { city: { contains: search, mode: 'insensitive' } },
+        { state: { contains: search, mode: 'insensitive' } },
+        { postalCode: { contains: search, mode: 'insensitive' } },
         { account: { name: { contains: search, mode: 'insensitive' } } },
+        { account: { billingStreet: { contains: search, mode: 'insensitive' } } },
+        { account: { billingCity: { contains: search, mode: 'insensitive' } } },
+        { account: { billingState: { contains: search, mode: 'insensitive' } } },
+        { account: { billingPostalCode: { contains: search, mode: 'insensitive' } } },
+        { contact: { firstName: { contains: search, mode: 'insensitive' } } },
+        { contact: { lastName: { contains: search, mode: 'insensitive' } } },
+        { contact: { email: { contains: search, mode: 'insensitive' } } },
+        { contact: { phone: { contains: search } } },
+        { contact: { mobilePhone: { contains: search } } },
       ];
     }
 
@@ -5545,7 +5585,20 @@ Be factual and professional. Highlight anything that needs attention.`;
       where.OR = [
         { name: { contains: search, mode: 'insensitive' } },
         { jobId: { contains: search, mode: 'insensitive' } },
+        { street: { contains: search, mode: 'insensitive' } },
+        { city: { contains: search, mode: 'insensitive' } },
+        { state: { contains: search, mode: 'insensitive' } },
+        { postalCode: { contains: search, mode: 'insensitive' } },
         { account: { name: { contains: search, mode: 'insensitive' } } },
+        { account: { billingStreet: { contains: search, mode: 'insensitive' } } },
+        { account: { billingCity: { contains: search, mode: 'insensitive' } } },
+        { account: { billingState: { contains: search, mode: 'insensitive' } } },
+        { account: { billingPostalCode: { contains: search, mode: 'insensitive' } } },
+        { contact: { firstName: { contains: search, mode: 'insensitive' } } },
+        { contact: { lastName: { contains: search, mode: 'insensitive' } } },
+        { contact: { email: { contains: search, mode: 'insensitive' } } },
+        { contact: { phone: { contains: search } } },
+        { contact: { mobilePhone: { contains: search } } },
       ];
     }
 
