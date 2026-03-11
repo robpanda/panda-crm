@@ -300,8 +300,9 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
     if (!viewAsSearch) return true;
     const search = viewAsSearch.toLowerCase();
     const name = `${u.firstName || ''} ${u.lastName || ''}`.toLowerCase();
+    const fullName = (u.fullName || '').toLowerCase();
     const email = (u.email || '').toLowerCase();
-    return name.includes(search) || email.includes(search);
+    return name.includes(search) || fullName.includes(search) || email.includes(search);
   });
 
   // Handle selecting a user to impersonate
@@ -876,7 +877,9 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
                           </div>
                           <div className="flex-1 min-w-0 text-left">
                             <p className="font-medium text-gray-900 truncate">
-                              {u.firstName && u.lastName ? `${u.firstName} ${u.lastName}` : u.email}
+                              {u.firstName && u.lastName
+                                ? `${u.firstName} ${u.lastName}`
+                                : u.fullName || u.email}
                             </p>
                             <p className="text-xs text-gray-500 truncate">{u.role?.name || u.department || ''}</p>
                           </div>
