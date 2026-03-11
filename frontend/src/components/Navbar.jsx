@@ -280,7 +280,7 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
   useEffect(() => {
     if (showViewAsMenu && canImpersonate && viewAsUsers.length === 0) {
       setViewAsLoading(true);
-      usersApi.getUsersForDropdown({ limit: 100 })
+      usersApi.getUsersForDropdown({ limit: 1000 })
         .then(response => {
           // Response is { success: true, data: [...users...] }
           const users = response?.data || response || [];

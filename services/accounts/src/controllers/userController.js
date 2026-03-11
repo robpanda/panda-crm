@@ -50,6 +50,7 @@ export const userController = {
         search: req.query.search,
         role: req.query.role,
         department: req.query.department,
+        limit: req.query.limit,
       });
       res.json({
         success: true,

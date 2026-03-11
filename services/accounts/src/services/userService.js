@@ -380,8 +380,11 @@ export const userService = {
    * @param {string} options.role - Filter by roleType (e.g., 'call_center', 'sales_rep')
    * @param {string} options.department - Filter by department
    */
-  async getUsersForDropdown({ isActive = true, search, role, department } = {}) {
+  async getUsersForDropdown({ isActive = true, search, role, department, limit = 100 } = {}) {
     const where = {};
+    const normalizedLimit = Number.isFinite(Number(limit))
+      ? Math.min(Math.max(parseInt(limit, 10), 1), 1000)
+      : 100;
 
     if (isActive !== undefined) {
       where.isActive = isActive;
@@ -399,6 +402,7 @@ export const userService = {
         { firstName: { contains: search, mode: 'insensitive' } },
         { lastName: { contains: search, mode: 'insensitive' } },
         { fullName: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
       ];
     }
 
@@ -414,8 +418,8 @@ export const userService = {
         department: true,
         officeAssignment: true,
       },
-      orderBy: { lastName: 'asc' },
-      take: 100,
+      orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }],
+      take: normalizedLimit,
     });
 
     return users;

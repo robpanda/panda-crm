@@ -609,13 +609,13 @@ export default function LeadDetail() {
   useEffect(() => {
     if (!lead?.id || !user?.id) return;
     const name = [lead.firstName, lead.lastName].filter(Boolean).join(' ');
-    const title = name || lead.company || 'Lead';
-    const subtitle = lead.email || lead.phone || lead.city || lead.street || '';
+    const label = name || lead.company || 'Lead';
+    const meta = lead.email || lead.phone || lead.city || lead.street || '';
     addRecentItem('leads', user.id, {
       id: lead.id,
-      title,
-      subtitle,
-      url: `/leads/${lead.id}`,
+      label,
+      meta,
+      path: `/leads/${lead.id}`,
     });
   }, [lead?.id, user?.id]);
 

@@ -20,6 +20,7 @@ const CRM_BASE_URL = (process.env.CRM_BASE_URL || process.env.FRONTEND_URL || 'h
 const BAMBOOGLI_SERVICE_URL = process.env.BAMBOOGLI_SERVICE_URL || 'http://localhost:3012';
 const BAMBOOGLI_PUBLIC_URL = process.env.BAMBOOGLI_PUBLIC_URL || 'https://bamboo.pandaadmin.com';
 const BAMBOOGLI_INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || null;
+const BAMBOOGLI_REQUEST_TIMEOUT_MS = Number(process.env.BAMBOOGLI_REQUEST_TIMEOUT_MS || 10000);
 
 function toAbsoluteCrmUrl(actionPath = '/') {
   if (typeof actionPath === 'string' && /^https?:\/\//i.test(actionPath)) {
@@ -33,7 +34,10 @@ function getBamboogliBaseUrls() {
   const candidates = [
     process.env.BAMBOOGLI_SERVICE_URL,
     process.env.BAMBOOGLI_INTERNAL_URL,
-    process.env.NODE_ENV === 'production' ? 'http://bamboogli-service:3012' : null,
+    process.env.BAMBOOGLI_URL,
+    'http://bamboogli-service:3012',
+    'http://panda-crm-bamboogli:3012',
+    'http://bamboogli:3012',
     BAMBOOGLI_SERVICE_URL,
     BAMBOOGLI_PUBLIC_URL,
   ].filter(Boolean);
@@ -51,12 +55,17 @@ async function postToBamboogli(path, payload) {
   const attempts = [];
   for (const baseUrl of getBamboogliBaseUrls()) {
     const requestUrl = `${baseUrl}${path}`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), BAMBOOGLI_REQUEST_TIMEOUT_MS);
     try {
       const response = await fetch(requestUrl, {
         method: 'POST',
         headers,
         body: JSON.stringify(payload),
+        signal: controller.signal,
       });
+
+      clearTimeout(timeout);
 
       if (response.ok) return response;
 
@@ -64,6 +73,8 @@ async function postToBamboogli(path, payload) {
       attempts.push(`${response.status} ${requestUrl} ${errorBody}`.trim());
     } catch (error) {
       attempts.push(`NETWORK ${requestUrl} ${error.message}`.trim());
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
