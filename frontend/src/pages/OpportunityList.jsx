@@ -367,11 +367,11 @@ export default function OpportunityList() {
                 type="text"
                 value={search}
                 onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-                placeholder="Search jobs..."
+                placeholder="Search by job #, name, email, phone, or address..."
                 className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none"
               />
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:flex lg:items-center gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:flex lg:items-center gap-3 w-full lg:w-auto">
               <select
                 value={stage}
                 onChange={(e) => { setStage(e.target.value); setPage(1); }}
@@ -392,7 +392,7 @@ export default function OpportunityList() {
               </select>
               <button
                 onClick={() => setShowFilters(!showFilters)}
-                className={`inline-flex items-center justify-center px-4 py-2 border rounded-lg transition-colors ${
+                className={`w-full lg:w-auto inline-flex items-center justify-center px-4 py-2 border rounded-lg transition-colors ${
                   showFilters || hasActiveFilters
                     ? 'border-panda-primary bg-panda-primary/5 text-panda-primary'
                     : 'border-gray-200 text-gray-600 hover:bg-gray-50'
@@ -407,13 +407,13 @@ export default function OpportunityList() {
               {hasActiveFilters && (
                 <button
                   onClick={clearFilters}
-                  className="flex items-center justify-center space-x-1 px-3 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg"
+                  className="w-full lg:w-auto flex items-center justify-center space-x-1 px-3 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg"
                 >
                   <X className="w-4 h-4" />
                   <span>Clear</span>
                 </button>
               )}
-              <div className="lg:ml-1">
+              <div className="w-full lg:w-auto lg:ml-1">
                 <ColumnSelector
                   columns={COLUMN_DEFINITIONS}
                   visibleColumns={visibleColumns}

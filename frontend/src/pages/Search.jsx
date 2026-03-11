@@ -17,14 +17,28 @@ function asCollection(payload, keys = []) {
   if (Array.isArray(payload)) return payload;
   if (!payload || typeof payload !== 'object') return [];
 
-  for (const key of keys) {
-    if (Array.isArray(payload[key])) {
-      return payload[key];
+  const candidateContainers = [
+    payload,
+    payload.data,
+    payload.data?.data,
+    payload.result,
+    payload.results,
+    payload.payload,
+  ].filter((candidate) => candidate && typeof candidate === 'object');
+
+  for (const container of candidateContainers) {
+    for (const key of keys) {
+      if (Array.isArray(container[key])) {
+        return container[key];
+      }
     }
+
+    if (Array.isArray(container.data)) return container.data;
+    if (Array.isArray(container.items)) return container.items;
+    if (Array.isArray(container.results)) return container.results;
+    if (Array.isArray(container.records)) return container.records;
   }
 
-  if (Array.isArray(payload.data)) return payload.data;
-  if (Array.isArray(payload.items)) return payload.items;
   return [];
 }
 
@@ -245,7 +259,7 @@ export default function Search() {
           {/* Opportunities */}
           {(activeTab === 'all' || activeTab === 'opportunities') && opportunities.length > 0 && (
             <ResultSection
-              title="Opportunities"
+              title="Jobs"
               icon={Target}
               items={opportunities}
               renderItem={(opp) => (

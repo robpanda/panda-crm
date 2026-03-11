@@ -753,7 +753,7 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
             <input
               type="text"
-              placeholder="Search accounts, contacts, opportunities..."
+              placeholder="Search leads, jobs, invoices, email, phone, address..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-9 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none transition-shadow bg-gray-50 focus:bg-white"
@@ -1087,7 +1087,7 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
             <input
               type="text"
-              placeholder="Search accounts, contacts, opportunities..."
+              placeholder="Search leads, jobs, invoices, email, phone, address..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               autoFocus

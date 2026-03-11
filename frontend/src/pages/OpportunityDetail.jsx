@@ -4174,6 +4174,15 @@ export default function OpportunityDetail() {
   const headerAddress = [opportunity?.street, opportunity?.city, opportunity?.state, opportunity?.postalCode]
     .filter(Boolean)
     .join(', ');
+  const normalizedWorkType = (() => {
+    const rawWorkType = String(opportunity?.workType || '').trim();
+    if (!rawWorkType) return 'Insurance Roofing';
+    const lowered = rawWorkType.toLowerCase();
+    if (lowered === 'unassigned work type' || lowered === 'unassigned' || lowered === 'not set') {
+      return 'Insurance Roofing';
+    }
+    return rawWorkType;
+  })();
   const headerPriorityLabel = String(opportunity?.priority || 'Normal').replace(/_/g, ' ');
   const financialWorksheetTotals = (() => {
     const buckets = {
@@ -4264,7 +4273,7 @@ export default function OpportunityDetail() {
 
               <div className="flex flex-wrap items-center gap-3">
                 <span className="inline-flex items-center px-3 py-1 rounded-md text-sm font-semibold bg-emerald-100 text-emerald-700">
-                  {opportunity.workType || 'Insurance Roofing'}
+                  {normalizedWorkType}
                 </span>
                 <span className={`inline-flex items-center px-3 py-1 rounded-md text-sm font-semibold ${
                   opportunity.isApproved ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
@@ -4776,7 +4785,7 @@ export default function OpportunityDetail() {
                               <option value="Interior">Interior</option>
                             </select>
                           ) : (
-                            <p className="font-medium text-gray-900">{opportunity.workType || 'Insurance Roofing'}</p>
+                            <p className="font-medium text-gray-900">{normalizedWorkType}</p>
                           )}
                         </div>
                         <div className={`bg-gray-50 p-4 rounded-lg border-l-4 border-blue-400 ${isEditMode ? 'ring-2 ring-blue-200' : ''}`}>
@@ -8850,7 +8859,7 @@ export default function OpportunityDetail() {
                 <div className="grid grid-cols-2 gap-x-8 gap-y-4">
                   <div>
                     <label className="text-sm text-gray-500">Work Type</label>
-                    <p className="font-medium text-gray-900">{opportunity.workType || 'Insurance Roofing'}</p>
+                    <p className="font-medium text-gray-900">{normalizedWorkType}</p>
                   </div>
                   <div>
                     <label className="text-sm text-gray-500">Lead Source</label>

@@ -269,7 +269,7 @@ export default function LeadList() {
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search by name, email, phone, or company..."
+                placeholder="Search by name, email, phone, company, or address..."
                 className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent transition-all"
               />
             </div>
@@ -278,7 +278,7 @@ export default function LeadList() {
             <select
               value={source}
               onChange={(e) => setSource(e.target.value)}
-              className="px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent bg-white min-w-[160px]"
+              className="w-full lg:w-auto px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent bg-white min-w-[160px]"
             >
               {sourceOptions.map((opt) => (
                 <option key={opt.value} value={opt.value}>
@@ -290,7 +290,7 @@ export default function LeadList() {
             {/* Filter Toggle */}
             <button
               onClick={() => setShowFilters(!showFilters)}
-              className={`inline-flex items-center px-4 py-2.5 border rounded-lg transition-colors ${
+              className={`w-full lg:w-auto inline-flex items-center justify-center px-4 py-2.5 border rounded-lg transition-colors ${
                 showFilters || hasActiveFilters
                   ? 'border-panda-primary bg-panda-primary/5 text-panda-primary'
                   : 'border-gray-200 text-gray-600 hover:bg-gray-50'
@@ -307,7 +307,7 @@ export default function LeadList() {
             {hasActiveFilters && (
               <button
                 onClick={clearFilters}
-                className="inline-flex items-center px-3 py-2.5 text-gray-500 hover:text-gray-700"
+                className="w-full lg:w-auto inline-flex items-center justify-center px-3 py-2.5 text-gray-500 hover:text-gray-700"
               >
                 <X className="w-4 h-4 mr-1" />
                 Clear
