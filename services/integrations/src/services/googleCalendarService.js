@@ -600,31 +600,54 @@ Notes: ${appointment.notes || 'None'}
    * Get all users and their calendar connection status
    */
   async getAllUsersCalendarStatus() {
-    const users = await prisma.user.findMany({
-      where: { isActive: true },
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        google_calendar_email: true,
-        google_calendar_sync_enabled: true,
-        google_calendar_last_sync_at: true,
-      },
-      orderBy: { lastName: 'asc' },
+    const mapUser = (user) => ({
+      id: user.id,
+      firstName: user.firstName || null,
+      lastName: user.lastName || null,
+      email: user.email || null,
+      google_calendar_email: user.google_calendar_email || null,
+      google_calendar_sync_enabled: Boolean(user.google_calendar_sync_enabled),
+      googleCalendarLastSyncAt: user.google_calendar_last_sync_at || null,
     });
 
-    // Return without testing each connection (too slow for 200+ users)
-    // Connection is tested when linking
-    return users.map(user => ({
-      id: user.id,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      email: user.email,
-      google_calendar_email: user.google_calendar_email,
-      google_calendar_sync_enabled: user.google_calendar_sync_enabled || false,
-      googleCalendarLastSyncAt: user.google_calendar_last_sync_at,
-    }));
+    try {
+      const users = await prisma.user.findMany({
+        where: { isActive: true },
+        select: {
+          id: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+          google_calendar_email: true,
+          google_calendar_sync_enabled: true,
+          google_calendar_last_sync_at: true,
+        },
+        orderBy: { lastName: 'asc' },
+      });
+      return users.map(mapUser);
+    } catch (error) {
+      const message = String(error?.message || '');
+      const isSchemaMismatch = /Unknown field|Unknown argument|P2022|P2021|column .* does not exist/i.test(message);
+      if (!isSchemaMismatch) {
+        throw error;
+      }
+
+      logger.warn('Google Calendar user status query hit schema mismatch, using compatibility fallback');
+      const fallbackUsers = await prisma.user.findMany({
+        where: { isActive: true },
+        select: {
+          id: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+          google_calendar_email: true,
+          google_calendar_sync_enabled: true,
+        },
+        orderBy: { lastName: 'asc' },
+      });
+
+      return fallbackUsers.map(mapUser);
+    }
   },
 };
 

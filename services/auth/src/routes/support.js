@@ -71,9 +71,20 @@ async function resolveSupportUserContext(req) {
 
   const users = await prisma.user.findMany({
     where: { OR: orFilters },
-    select: { id: true },
-    take: 5,
+    select: {
+      id: true,
+      cognitoId: true,
+      email: true,
+    },
+    take: 25,
   });
+
+  const normalizedTokenEmail = tokenEmail || null;
+  const resolvedUser =
+    users.find((user) => user.id === tokenUserId || user.cognitoId === tokenUserId)
+    || users.find((user) => normalizedTokenEmail && String(user.email || '').toLowerCase() === normalizedTokenEmail)
+    || users[0]
+    || null;
 
   const candidateUserIds = Array.from(
     new Set([tokenUserId, ...users.map((user) => user.id)].filter(Boolean))
@@ -83,7 +94,7 @@ async function resolveSupportUserContext(req) {
     tokenUserId,
     tokenEmail,
     emailVariants,
-    resolvedUserId: users[0]?.id || null,
+    resolvedUserId: resolvedUser?.id || null,
     candidateUserIds,
   };
 }
@@ -97,9 +108,18 @@ function isSupportAdmin(user = {}) {
 
   return roleType.includes('admin')
     || roleName.includes('admin')
-    || roleType.includes('system')
-    || roleName.includes('system')
-    || groups.some((group) => group.includes('admin') || group.includes('support'));
+    || roleType.includes('system_admin')
+    || roleName.includes('system_admin')
+    || groups.some((group) => group.includes('admin'));
+}
+
+function buildTicketIdentifierWhere(rawTicketId) {
+  return {
+    OR: [
+      { id: rawTicketId },
+      { ticket_number: rawTicketId },
+    ],
+  };
 }
 
 async function isSupportAdminResolved(req) {
@@ -243,7 +263,7 @@ router.get('/tickets/:id', authMiddleware, async (req, res) => {
     const canViewAllTickets = await isSupportAdminResolved(req);
     const ticket = await prisma.support_tickets.findFirst({
       where: {
-        id: req.params.id,
+        ...buildTicketIdentifierWhere(req.params.id),
         ...(canViewAllTickets
           ? {}
           : { OR: ownershipFilters }), // Users can only see their own tickets
@@ -281,7 +301,7 @@ router.get('/tickets/:id', authMiddleware, async (req, res) => {
 
     // Get messages
     const messages = await prisma.support_ticket_messages.findMany({
-      where: { ticket_id: req.params.id },
+      where: { ticket_id: ticket.id },
       include: {
         user: {
           select: {
@@ -303,7 +323,7 @@ router.get('/tickets/:id', authMiddleware, async (req, res) => {
     const attachments = messageIds.length > 0
       ? await prisma.support_ticket_attachments.findMany({
           where: {
-            ticket_id: req.params.id,
+            ticket_id: ticket.id,
             message_id: { in: messageIds },
           },
           orderBy: { created_at: 'asc' },
@@ -425,7 +445,7 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
     const canViewAllTickets = await isSupportAdminResolved(req);
     const ticket = await prisma.support_tickets.findFirst({
       where: {
-        id: req.params.id,
+        ...buildTicketIdentifierWhere(req.params.id),
         ...(canViewAllTickets
           ? {}
           : {
@@ -441,7 +461,7 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
     // Create message
     const newMessage = await prisma.support_ticket_messages.create({
       data: {
-        ticket_id: req.params.id,
+        ticket_id: ticket.id,
         user_id: userContext.resolvedUserId,
         message: normalizedMessage || 'Attachment(s) uploaded',
         is_internal: false,
@@ -457,7 +477,7 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
 
         await prisma.support_ticket_attachments.create({
           data: {
-            ticket_id: req.params.id,
+            ticket_id: ticket.id,
             message_id: newMessage.id,
             file_name: attachment.file_name || attachment.name || 'attachment',
             file_url: fileUrl,
@@ -488,7 +508,7 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
     }
 
     await prisma.support_tickets.update({
-      where: { id: req.params.id },
+      where: { id: ticket.id },
       data: updateData,
     });
 

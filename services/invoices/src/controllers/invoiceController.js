@@ -327,7 +327,7 @@ export async function createInvoice(req, res, next) {
     let invoice = null;
     let lastCreateError = null;
 
-    for (let attempt = 0; attempt < 5; attempt++) {
+    for (let attempt = 0; attempt < 20; attempt++) {
       try {
         const invoiceNumber = await generateInvoiceNumber(attempt);
         invoice = await prisma.invoice.create({
@@ -365,8 +365,12 @@ export async function createInvoice(req, res, next) {
         });
         break;
       } catch (createError) {
+        const target = createError?.meta?.target;
+        const targetValue = Array.isArray(target) ? target.join(',') : String(target || '');
         const isUniqueConstraintError = createError?.code === 'P2002'
-          && String(createError?.meta?.target || '').includes('invoice_number');
+          && (!targetValue
+            || /invoice_?number/i.test(targetValue)
+            || /invoice_?number/i.test(String(createError?.message || '')));
         if (!isUniqueConstraintError) {
           throw createError;
         }
