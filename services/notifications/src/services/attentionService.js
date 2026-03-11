@@ -1,7 +1,7 @@
 // Attention Queue Service
 // Manages attention items - things that need user action
 
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
@@ -369,6 +369,9 @@ export const attentionService = {
   async getStats(userId = null) {
     const where = userId ? { assignedToId: userId } : {};
     const activeWhere = { ...where, status: { in: ['PENDING', 'IN_PROGRESS'] } };
+    const typeWhereSql = userId
+      ? Prisma.sql`status IN ('PENDING','IN_PROGRESS') AND assigned_to_id = ${userId}`
+      : Prisma.sql`status IN ('PENDING','IN_PROGRESS')`;
 
     const [
       total,
@@ -380,7 +383,7 @@ export const attentionService = {
       low,
       overdue,
       byCategory,
-      byType,
+      byTypeRows,
     ] = await Promise.all([
       prisma.attentionItem.count({ where: activeWhere }),
       prisma.attentionItem.count({ where: { ...where, status: 'PENDING' } }),
@@ -397,11 +400,12 @@ export const attentionService = {
         where: activeWhere,
         _count: { category: true },
       }),
-      prisma.attentionItem.groupBy({
-        by: ['type'],
-        where: activeWhere,
-        _count: { type: true },
-      }),
+      prisma.$queryRaw`
+        SELECT type::text AS type, COUNT(*)::int AS count
+        FROM attention_items
+        WHERE ${typeWhereSql}
+        GROUP BY type
+      `,
     ]);
 
     return {
@@ -414,8 +418,8 @@ export const attentionService = {
         acc[item.category] = item._count.category;
         return acc;
       }, {}),
-      byType: byType.reduce((acc, item) => {
-        acc[item.type] = item._count.type;
+      byType: byTypeRows.reduce((acc, item) => {
+        acc[item.type] = Number(item.count) || 0;
         return acc;
       }, {}),
     };

@@ -1,5 +1,5 @@
 // Attention Queue Service
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
@@ -111,6 +111,9 @@ export async function getAttentionItems({
  */
 export async function getStats(userId = null) {
   const where = userId ? { assignedToId: userId } : {};
+  const typeWhereSql = userId
+    ? Prisma.sql`status IN ('PENDING','IN_PROGRESS') AND assigned_to_id = ${userId}`
+    : Prisma.sql`status IN ('PENDING','IN_PROGRESS')`;
 
   const [
     totalPending,
@@ -120,7 +123,7 @@ export async function getStats(userId = null) {
     totalSnoozed,
     byCategoryResults,
     byUrgencyResults,
-    byTypeResults,
+    byTypeRows,
   ] = await Promise.all([
     prisma.attentionItem.count({ where: { ...where, status: 'PENDING' } }),
     prisma.attentionItem.count({ where: { ...where, status: 'IN_PROGRESS' } }),
@@ -137,11 +140,12 @@ export async function getStats(userId = null) {
       where: { ...where, status: { in: ['PENDING', 'IN_PROGRESS'] } },
       _count: true,
     }),
-    prisma.attentionItem.groupBy({
-      by: ['type'],
-      where: { ...where, status: { in: ['PENDING', 'IN_PROGRESS'] } },
-      _count: true,
-    }),
+    prisma.$queryRaw`
+      SELECT type::text AS type, COUNT(*)::int AS count
+      FROM attention_items
+      WHERE ${typeWhereSql}
+      GROUP BY type
+    `,
   ]);
 
   const byCategory = {};
@@ -155,8 +159,8 @@ export async function getStats(userId = null) {
   });
 
   const byType = {};
-  byTypeResults.forEach((r) => {
-    byType[r.type] = r._count;
+  byTypeRows.forEach((r) => {
+    byType[r.type] = Number(r.count) || 0;
   });
 
   return {
