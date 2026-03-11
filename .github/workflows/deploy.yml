@@ -127,6 +127,7 @@ jobs:
 
           # Build Docker image
           docker build \
+            --platform linux/amd64 \
             --build-arg BUILD_SHA=$IMAGE_TAG \
             --build-arg BUILD_TIME="$BUILD_TIME" \
             -t $ECR_REGISTRY/$IMAGE_REPO:$IMAGE_TAG \
