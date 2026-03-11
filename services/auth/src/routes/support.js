@@ -151,7 +151,7 @@ async function isSupportAdminResolved(req) {
     .map((value) => String(value || '').toLowerCase())
     .filter(Boolean);
 
-  return values.some((value) => value.includes('admin') || value.includes('support') || value.includes('system'));
+  return values.some((value) => value.includes('admin') || value.includes('system'));
 }
 
 // Helper to generate ticket number
@@ -527,28 +527,28 @@ router.get('/admin/tickets', authMiddleware, async (req, res) => {
     }
 
     const tickets = await prisma.support_tickets.findMany({
-      include: {
-        user: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            email: true,
-          },
-        },
-        assigned_to: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-          },
-        },
-        _count: {
-          select: {
-            messages: true,
-            attachments: true,
-          },
-        },
+      select: {
+        id: true,
+        ticket_number: true,
+        subject: true,
+        description: true,
+        status: true,
+        priority: true,
+        category: true,
+        page_url: true,
+        screenshot_url: true,
+        browser_info: true,
+        user_id: true,
+        assigned_to_id: true,
+        resolved_at: true,
+        resolved_by_id: true,
+        first_response_at: true,
+        last_response_at: true,
+        response_time_mins: true,
+        resolution_time_mins: true,
+        related_help_article_id: true,
+        created_at: true,
+        updated_at: true,
       },
       orderBy: [
         { status: 'asc' },
@@ -557,7 +557,50 @@ router.get('/admin/tickets', authMiddleware, async (req, res) => {
       ],
     });
 
-    res.json({ tickets });
+    const userIds = Array.from(new Set(
+      tickets
+        .flatMap((ticket) => [ticket.user_id, ticket.assigned_to_id])
+        .filter(Boolean)
+    ));
+
+    const [users, messageCounts, attachmentCounts] = await Promise.all([
+      userIds.length > 0
+        ? prisma.user.findMany({
+            where: { id: { in: userIds } },
+            select: { id: true, firstName: true, lastName: true, fullName: true, email: true },
+          })
+        : Promise.resolve([]),
+      prisma.support_ticket_messages.groupBy({
+        by: ['ticket_id'],
+        where: { ticket_id: { in: tickets.map((t) => t.id) } },
+        _count: { ticket_id: true },
+      }),
+      prisma.support_ticket_attachments.groupBy({
+        by: ['ticket_id'],
+        where: { ticket_id: { in: tickets.map((t) => t.id) } },
+        _count: { ticket_id: true },
+      }),
+    ]);
+
+    const usersById = new Map(users.map((user) => [user.id, user]));
+    const messagesByTicketId = new Map(messageCounts.map((row) => [row.ticket_id, row._count.ticket_id || 0]));
+    const attachmentsByTicketId = new Map(attachmentCounts.map((row) => [row.ticket_id, row._count.ticket_id || 0]));
+
+    const hydratedTickets = tickets.map((ticket) => {
+      const owner = usersById.get(ticket.user_id) || null;
+      const assigned = usersById.get(ticket.assigned_to_id) || null;
+      return {
+        ...ticket,
+        user: owner,
+        assigned_to: assigned,
+        _count: {
+          messages: messagesByTicketId.get(ticket.id) || 0,
+          attachments: attachmentsByTicketId.get(ticket.id) || 0,
+        },
+      };
+    });
+
+    res.json({ tickets: hydratedTickets });
   } catch (error) {
     console.error('Failed to get admin tickets:', error);
     res.status(500).json({ error: 'Failed to load tickets' });
