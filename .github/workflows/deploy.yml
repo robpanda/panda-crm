@@ -117,13 +117,52 @@ jobs:
         run: |
           BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           IMAGE_REPO=""
+          ECS_SERVICE=""
 
-          if aws ecr describe-repositories --repository-names "panda-crm/$SERVICE_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
-            IMAGE_REPO="panda-crm/$SERVICE_NAME"
-          elif aws ecr describe-repositories --repository-names "panda-crm-$SERVICE_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+          for candidate in "$SERVICE_NAME-service" "panda-crm-$SERVICE_NAME" "$SERVICE_NAME"; do
+            SERVICE_STATUS=$(aws ecs describe-services \
+              --cluster "$ECS_CLUSTER" \
+              --services "$candidate" \
+              --region "$AWS_REGION" \
+              --query 'services[0].status' \
+              --output text 2>/dev/null || true)
+            if echo "$SERVICE_STATUS" | grep -qE 'ACTIVE|DRAINING'; then
+              ECS_SERVICE="$candidate"
+              break
+            fi
+          done
+
+          if [ -n "$ECS_SERVICE" ]; then
+            TASK_DEF_ARN=$(aws ecs describe-services \
+              --cluster "$ECS_CLUSTER" \
+              --services "$ECS_SERVICE" \
+              --region "$AWS_REGION" \
+              --query 'services[0].taskDefinition' \
+              --output text)
+            CURRENT_IMAGE=$(aws ecs describe-task-definition \
+              --task-definition "$TASK_DEF_ARN" \
+              --region "$AWS_REGION" \
+              --query 'taskDefinition.containerDefinitions[0].image' \
+              --output text)
+            CURRENT_REPO=$(echo "$CURRENT_IMAGE" | sed -E 's#^[^/]+/(.+):[^:]+$#\1#')
+            if [ -n "$CURRENT_REPO" ] && [ "$CURRENT_REPO" != "$CURRENT_IMAGE" ]; then
+              IMAGE_REPO="$CURRENT_REPO"
+            fi
+          fi
+
+          if [ -z "$IMAGE_REPO" ] && aws ecr describe-repositories --repository-names "panda-crm-$SERVICE_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
             IMAGE_REPO="panda-crm-$SERVICE_NAME"
+          elif [ -z "$IMAGE_REPO" ] && aws ecr describe-repositories --repository-names "panda-crm/$SERVICE_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+            IMAGE_REPO="panda-crm/$SERVICE_NAME"
           else
-            echo "::error::No ECR repository found for $SERVICE_NAME. Expected panda-crm/$SERVICE_NAME or panda-crm-$SERVICE_NAME"
+            if [ -z "$IMAGE_REPO" ]; then
+              echo "::error::No ECR repository found for $SERVICE_NAME. Expected panda-crm-$SERVICE_NAME or panda-crm/$SERVICE_NAME"
+              exit 1
+            fi
+          fi
+
+          if ! aws ecr describe-repositories --repository-names "$IMAGE_REPO" --region "$AWS_REGION" >/dev/null 2>&1; then
+            echo "::error::Selected ECR repository does not exist: $IMAGE_REPO"
             exit 1
           fi
 
@@ -147,20 +186,15 @@ jobs:
           SERVICE_NAME: ${{ matrix.service.name }}
           IMAGE_TAG: ${{ github.sha }}
         run: |
-          IMAGE_REPO=""
-          if aws ecr describe-repositories --repository-names "panda-crm/$SERVICE_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
-            IMAGE_REPO="panda-crm/$SERVICE_NAME"
-          elif aws ecr describe-repositories --repository-names "panda-crm-$SERVICE_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
-            IMAGE_REPO="panda-crm-$SERVICE_NAME"
-          else
-            echo "::error::No ECR repository found for $SERVICE_NAME while updating ECS"
-            exit 1
-          fi
-          IMAGE_URI="$ECR_REGISTRY/$IMAGE_REPO:$IMAGE_TAG"
-
           ECS_SERVICE=""
           for candidate in "$SERVICE_NAME-service" "panda-crm-$SERVICE_NAME" "$SERVICE_NAME"; do
-            if aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$candidate" --region "$AWS_REGION" --query 'services[0].status' --output text 2>/dev/null | grep -qE 'ACTIVE|DRAINING'; then
+            SERVICE_STATUS=$(aws ecs describe-services \
+              --cluster "$ECS_CLUSTER" \
+              --services "$candidate" \
+              --region "$AWS_REGION" \
+              --query 'services[0].status' \
+              --output text 2>/dev/null || true)
+            if echo "$SERVICE_STATUS" | grep -qE 'ACTIVE|DRAINING'; then
               ECS_SERVICE="$candidate"
               break
             fi
@@ -185,6 +219,20 @@ jobs:
           fi
 
           aws ecs describe-task-definition --task-definition "$TASK_DEF_ARN" --region "$AWS_REGION" --query 'taskDefinition' > taskdef.json
+          IMAGE_REPO=$(jq -r '.containerDefinitions[0].image' taskdef.json | sed -E 's#^[^/]+/(.+):[^:]+$#\1#')
+
+          if [ -z "$IMAGE_REPO" ] || [ "$IMAGE_REPO" = "null" ]; then
+            if aws ecr describe-repositories --repository-names "panda-crm-$SERVICE_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+              IMAGE_REPO="panda-crm-$SERVICE_NAME"
+            elif aws ecr describe-repositories --repository-names "panda-crm/$SERVICE_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+              IMAGE_REPO="panda-crm/$SERVICE_NAME"
+            else
+              echo "::error::No ECR repository found for $SERVICE_NAME while updating ECS"
+              exit 1
+            fi
+          fi
+
+          IMAGE_URI="$ECR_REGISTRY/$IMAGE_REPO:$IMAGE_TAG"
 
           CONTAINER_NAME=$(jq -r \
             --arg s "$SERVICE_NAME" \
@@ -217,6 +265,11 @@ jobs:
                   .registeredBy
                 )
             ' taskdef.json > taskdef-updated.json
+
+          if ! jq -e --arg image "$IMAGE_URI" '.containerDefinitions[] | select(.image == $image)' taskdef-updated.json >/dev/null; then
+            echo "::error::Image replacement did not apply for $SERVICE_NAME"
+            exit 1
+          fi
 
           NEW_TASK_DEF_ARN=$(aws ecs register-task-definition --region "$AWS_REGION" --cli-input-json file://taskdef-updated.json --query 'taskDefinition.taskDefinitionArn' --output text)
 
