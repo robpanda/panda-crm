@@ -76,6 +76,18 @@ const OPTIONAL_OPPORTUNITY_INCLUDE_FIELDS = new Set([
   'projectManager',
 ]);
 
+const CLAIM_FALLBACK_FIELD_TO_COLUMN = {
+  claimNumber: 'claim_number',
+  claimFiledDate: 'claim_filed_date',
+  insuranceCarrier: 'insurance_carrier',
+  adjusterName: 'adjuster_name',
+  adjusterEmail: 'adjuster_email',
+  adjusterOfficePhone: 'adjuster_office_phone',
+  fieldAdjusterMobile: 'field_adjuster_mobile',
+  damageLocation: 'damage_location',
+  dateOfLoss: 'date_of_loss',
+};
+
 function parseUnknownPrismaFieldName(error) {
   const message = error?.message || '';
   const unknownFieldMatch = message.match(/Unknown (?:field|argument) `([^`]+)`/);
@@ -102,6 +114,94 @@ function parseUnknownPrismaFieldName(error) {
   };
 
   return byColumnName[normalized] || null;
+}
+
+function normalizeClaimFallbackValue(fieldName, value) {
+  if (fieldName === 'claimFiledDate' || fieldName === 'dateOfLoss') {
+    return parseDate(value);
+  }
+  return value == null ? null : String(value);
+}
+
+async function applyClaimRawFallback(opportunityId, sourceData, candidateFields = []) {
+  const requestedFields = candidateFields
+    .filter((field) => CLAIM_FALLBACK_FIELD_TO_COLUMN[field] && hasOwnField(sourceData, field));
+
+  if (!opportunityId || requestedFields.length === 0) {
+    return;
+  }
+
+  const requestedColumns = requestedFields.map((field) => CLAIM_FALLBACK_FIELD_TO_COLUMN[field]);
+  const availableRows = await prisma.$queryRaw`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'opportunities'
+      AND column_name IN (${Prisma.join(requestedColumns)})
+  `;
+  const availableColumns = new Set((availableRows || []).map((row) => row.column_name));
+
+  const assignments = [];
+  const values = [];
+  let placeholderIndex = 1;
+
+  for (const field of requestedFields) {
+    const column = CLAIM_FALLBACK_FIELD_TO_COLUMN[field];
+    if (!availableColumns.has(column)) continue;
+    assignments.push(`"${column}" = $${placeholderIndex}`);
+    values.push(normalizeClaimFallbackValue(field, sourceData[field]));
+    placeholderIndex += 1;
+  }
+
+  if (assignments.length === 0) {
+    return;
+  }
+
+  assignments.push(`"updated_at" = NOW()`);
+  const sql = `UPDATE "opportunities" SET ${assignments.join(', ')} WHERE "id" = $${placeholderIndex}`;
+  await prisma.$executeRawUnsafe(sql, ...values, opportunityId);
+}
+
+async function hydrateClaimFallbackFromRaw(opportunityId, opportunity) {
+  if (!opportunityId || !opportunity) return opportunity;
+
+  const fields = Object.keys(CLAIM_FALLBACK_FIELD_TO_COLUMN);
+  const needsFallback = fields.some((field) => typeof opportunity[field] === 'undefined');
+  if (!needsFallback) {
+    return opportunity;
+  }
+
+  const rows = await prisma.$queryRaw`
+    SELECT
+      claim_number,
+      claim_filed_date,
+      insurance_carrier,
+      adjuster_name,
+      adjuster_email,
+      adjuster_office_phone,
+      field_adjuster_mobile,
+      damage_location,
+      date_of_loss
+    FROM opportunities
+    WHERE id = ${opportunityId}
+    LIMIT 1
+  `;
+
+  const row = rows?.[0];
+  if (!row) return opportunity;
+
+  return {
+    ...opportunity,
+    claimNumber: opportunity.claimNumber ?? row.claim_number ?? null,
+    claimFiledDate: opportunity.claimFiledDate ?? row.claim_filed_date ?? null,
+    insuranceCarrier: opportunity.insuranceCarrier ?? row.insurance_carrier ?? null,
+    adjusterName: opportunity.adjusterName ?? row.adjuster_name ?? null,
+    adjusterEmail: opportunity.adjusterEmail ?? row.adjuster_email ?? null,
+    adjusterOfficePhone: opportunity.adjusterOfficePhone ?? row.adjuster_office_phone ?? null,
+    fieldAdjusterMobile: opportunity.fieldAdjusterMobile ?? row.field_adjuster_mobile ?? null,
+    damageLocation: opportunity.damageLocation ?? row.damage_location ?? null,
+    dateOfLoss: opportunity.dateOfLoss ?? row.date_of_loss ?? null,
+  };
 }
 
 function parseBooleanFlag(value) {
@@ -694,7 +794,8 @@ class OpportunityService {
       }
 
       console.log(`[getOpportunityDetails] Found opportunity: ${opportunity.name}`);
-      const wrapper = this.createOpportunityWrapper(opportunity, true);
+      const hydratedOpportunity = await hydrateClaimFallbackFromRaw(id, opportunity);
+      const wrapper = this.createOpportunityWrapper(hydratedOpportunity, true);
       console.log(`[getOpportunityDetails] Wrapper created successfully`);
       return wrapper;
     } catch (error) {
@@ -2920,6 +3021,7 @@ Be factual and professional. Highlight anything that needs attention.`;
     let lastUpdateError;
     let updatePayload = { ...updateData };
     let includePayload = { ...include };
+    const removedClaimFields = new Set();
 
     const maxUpdateAttempts = OPTIONAL_OPPORTUNITY_CLAIM_FIELDS.size + OPTIONAL_OPPORTUNITY_INCLUDE_FIELDS.size + 1;
     for (let attempt = 0; attempt < maxUpdateAttempts; attempt += 1) {
@@ -2941,6 +3043,7 @@ Be factual and professional. Highlight anything that needs attention.`;
           logger.warn(
             `Opportunity update: runtime schema missing optional field "${unknownField}", retrying update without it`
           );
+          removedClaimFields.add(unknownField);
           delete updatePayload[unknownField];
           continue;
         }
@@ -2959,6 +3062,15 @@ Be factual and professional. Highlight anything that needs attention.`;
 
     if (!opportunity && lastUpdateError) {
       throw lastUpdateError;
+    }
+
+    if (removedClaimFields.size > 0) {
+      try {
+        await applyClaimRawFallback(id, data, Array.from(removedClaimFields));
+        opportunity = await hydrateClaimFallbackFromRaw(id, opportunity);
+      } catch (fallbackError) {
+        logger.warn(`Opportunity update fallback failed for ${id}: ${fallbackError.message}`);
+      }
     }
 
     logger.info(`Opportunity updated: ${id}`);
@@ -3059,7 +3171,8 @@ Be factual and professional. Highlight anything that needs attention.`;
       }
     }
 
-    return this.createOpportunityWrapper(opportunity, true);
+    const wrappedOpportunity = await hydrateClaimFallbackFromRaw(id, opportunity);
+    return this.createOpportunityWrapper(wrappedOpportunity, true);
   }
 
   /**
@@ -4977,6 +5090,7 @@ Be factual and professional. Highlight anything that needs attention.`;
       success: [],
       failed: [],
       total: opportunityIds.length,
+      canceledAppointments: 0,
     };
 
     for (const oppId of opportunityIds) {
@@ -4991,7 +5105,29 @@ Be factual and professional. Highlight anything that needs attention.`;
           continue;
         }
 
-        // Soft delete by setting stage to CLOSED_LOST and adding deletion marker
+        // Soft delete by setting stage to CLOSED_LOST and adding deletion marker.
+        // Also cancel any active service appointments tied to this job's work orders.
+        const workOrderIds = (await prisma.workOrder.findMany({
+          where: { opportunityId: oppId },
+          select: { id: true },
+        })).map((wo) => wo.id);
+
+        let canceledForOpportunity = 0;
+        if (workOrderIds.length > 0) {
+          const canceledResult = await prisma.serviceAppointment.updateMany({
+            where: {
+              workOrderId: { in: workOrderIds },
+              status: { in: ['NONE', 'SCHEDULED', 'DISPATCHED', 'IN_PROGRESS'] },
+            },
+            data: {
+              status: 'CANCELED',
+              description: 'Canceled automatically by bulk job delete',
+            },
+          });
+          canceledForOpportunity = canceledResult.count || 0;
+          results.canceledAppointments += canceledForOpportunity;
+        }
+
         await prisma.opportunity.update({
           where: { id: oppId },
           data: {
@@ -5009,8 +5145,13 @@ Be factual and professional. Highlight anything that needs attention.`;
             recordId: oppId,
             action: 'BULK_DELETE',
             oldValues: { stage: oldOpp.stage },
-            newValues: { stage: 'CLOSED_LOST', lostReason: 'Bulk Deleted', deletedAt: new Date() },
-            changedFields: ['stage', 'closeDate', 'lostReason', 'deletedAt'],
+            newValues: {
+              stage: 'CLOSED_LOST',
+              lostReason: 'Bulk Deleted',
+              deletedAt: new Date(),
+              canceledAppointments: canceledForOpportunity,
+            },
+            changedFields: ['stage', 'closeDate', 'lostReason', 'deletedAt', 'serviceAppointments'],
             userId: auditContext.userId,
             userEmail: auditContext.userEmail,
             source: 'api',

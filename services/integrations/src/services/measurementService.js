@@ -887,19 +887,33 @@ class MeasurementService {
 
         if (measurementsResponse.ok) {
           const measurementData = await measurementsResponse.json();
-          const measurements = this.parseGAFMeasurements(measurementData);
+          const normalizedPayload = {
+            ...measurementData,
+            ...statusData,
+            GAFOrderNumber: measurementData?.GAFOrderNumber || statusData?.gafOrderNumber || gafOrderNumber,
+            SubscriberOrderNumber: measurementData?.SubscriberOrderNumber || measurementReportId,
+            Status: statusData?.orderStatus || measurementData?.Status || 'Completed',
+          };
 
-          await prisma.measurementReport.update({
-            where: { id: measurementReportId },
-            data: {
-              orderStatus: 'DELIVERED',
-              deliveredAt: new Date(),
-              reportUrl: statusData.viewUrl || measurementData.viewUrl,
-              reportPdfUrl: statusData.pdfUrl || measurementData.pdfUrl,
-              ...measurements,
-              rawData: { statusData, measurementData },
-            },
-          });
+          try {
+            await this.processGAFReport(measurementReportId, normalizedPayload);
+            logger.info(`GAF report ${gafOrderNumber} hydrated via processGAFReport for ${measurementReportId}`);
+          } catch (processError) {
+            logger.warn(`GAF process fallback for ${measurementReportId}: ${processError.message}`);
+            const measurements = this.parseGAFMeasurements(measurementData);
+
+            await prisma.measurementReport.update({
+              where: { id: measurementReportId },
+              data: {
+                orderStatus: 'DELIVERED',
+                deliveredAt: new Date(),
+                reportUrl: statusData.viewUrl || measurementData.viewUrl,
+                reportPdfUrl: statusData.pdfUrl || measurementData.pdfUrl,
+                ...measurements,
+                rawData: { statusData, measurementData },
+              },
+            });
+          }
 
           logger.info(`GAF report ${gafOrderNumber} retrieved and stored for ${measurementReportId}`);
           return { success: true, status: 'DELIVERED' };
@@ -1804,21 +1818,84 @@ class MeasurementService {
   /**
    * Get measurement report for opportunity
    */
+  async hydrateReportDownloadData(report, options = {}) {
+    if (!report || typeof report !== 'object') return report;
+    const attemptedHydration = Boolean(options.attemptedHydration);
+
+    const rawData = (report.rawData && typeof report.rawData === 'object') ? report.rawData : {};
+    const normalizedWebhook = (rawData.normalizedWebhook && typeof rawData.normalizedWebhook === 'object')
+      ? rawData.normalizedWebhook
+      : null;
+    const pdfS3Key = normalizedWebhook?.pdfS3Key || rawData.pdfS3Key || null;
+
+    let reportPdfUrl = report.reportPdfUrl || null;
+    let reportUrl = report.reportUrl || null;
+
+    if (pdfS3Key) {
+      try {
+        reportPdfUrl = await this.getPdfPresignedUrl(pdfS3Key);
+      } catch (error) {
+        logger.warn(`Unable to refresh measurement PDF URL for ${report.id}: ${error.message}`);
+      }
+    } else if (report.provider === 'GAF_QUICKMEASURE' && rawData && Object.keys(rawData).length > 0) {
+      const normalized = this.normalizeGAFWebhookPayload(rawData);
+      if (normalized.reportAsset) {
+        reportPdfUrl = `${GAF_API_BASE}/download/${encodeURIComponent(normalized.reportAsset)}`;
+      } else if (normalized.homeownerReportAsset) {
+        reportPdfUrl = `${GAF_API_BASE}/download/${encodeURIComponent(normalized.homeownerReportAsset)}`;
+      }
+    }
+
+    const shouldAttemptGafHydration = !attemptedHydration
+      && report.provider === 'GAF_QUICKMEASURE'
+      && report.orderStatus === 'DELIVERED'
+      && !pdfS3Key
+      && rawData
+      && Object.keys(rawData).length > 0;
+
+    if (shouldAttemptGafHydration) {
+      try {
+        await this.processGAFReport(report.id, rawData);
+        const refreshed = await prisma.measurementReport.findUnique({ where: { id: report.id } });
+        if (refreshed) {
+          return this.hydrateReportDownloadData(refreshed, { attemptedHydration: true });
+        }
+      } catch (error) {
+        logger.warn(`GAF report hydration retry skipped for ${report.id}: ${error.message}`);
+      }
+    }
+
+    if (!reportUrl && reportPdfUrl) {
+      reportUrl = reportPdfUrl;
+    }
+
+    return {
+      ...report,
+      reportPdfUrl,
+      reportUrl,
+    };
+  }
+
   async getReportForOpportunity(opportunityId) {
-    return prisma.measurementReport.findFirst({
+    const report = await prisma.measurementReport.findFirst({
       where: { opportunityId },
       orderBy: { createdAt: 'desc' },
     });
+    if (!report) return report;
+    return this.hydrateReportDownloadData(report);
   }
 
   /**
    * Get all reports for opportunity
    */
   async getReportsForOpportunity(opportunityId) {
-    return prisma.measurementReport.findMany({
+    const reports = await prisma.measurementReport.findMany({
       where: { opportunityId },
       orderBy: { createdAt: 'desc' },
     });
+    if (!reports?.length) return reports;
+    const hydrated = await Promise.all(reports.map((report) => this.hydrateReportDownloadData(report)));
+    return hydrated;
   }
 
   /**

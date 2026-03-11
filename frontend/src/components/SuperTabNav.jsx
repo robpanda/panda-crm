@@ -73,7 +73,9 @@ export const CATEGORIES = {
     icon: MessageSquare,
     color: 'rose',
     subTabs: [
-      { id: 'conversations', label: 'Conversations' },
+      { id: 'internalComments', label: 'Internal Comments' },
+      { id: 'internalNotes', label: 'Internal Notes' },
+      { id: 'conversations', label: 'Customer Comms' },
       { id: 'communications', label: 'Communications' },
       { id: 'notifications', label: 'Notifications' },
       { id: 'activity', label: 'Activity' },
@@ -100,6 +102,8 @@ export const TAB_TO_CATEGORY = {
   cases: 'team',
   approvals: 'team',
   conversations: 'messages',
+  internalComments: 'messages',
+  internalNotes: 'messages',
   communications: 'messages',
   notifications: 'messages',
 };

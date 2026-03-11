@@ -971,12 +971,24 @@ export const opportunitiesApi = {
     return response.data;
   },
 
+  // Legacy compatibility alias used by OpportunityList.jsx
+  async bulkReassign(opportunityIds, newOwnerId) {
+    const response = await api.post('/api/opportunities/bulk-reassign', { opportunityIds, newOwnerId });
+    return response.data;
+  },
+
   async bulkUpdateStage(opportunityIds, stage) {
     const response = await api.post('/api/opportunities/bulk-update-stage', { opportunityIds, stage });
     return response.data;
   },
 
   async bulkDeleteOpportunities(opportunityIds) {
+    const response = await api.post('/api/opportunities/bulk-delete', { opportunityIds });
+    return response.data;
+  },
+
+  // Legacy compatibility alias used by OpportunityList.jsx
+  async bulkDelete(opportunityIds) {
     const response = await api.post('/api/opportunities/bulk-delete', { opportunityIds });
     return response.data;
   },

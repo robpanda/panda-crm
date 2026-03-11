@@ -3711,13 +3711,15 @@ export default function OpportunityDetail() {
     opportunity?.workType,
   ]);
   // Calculate badge counts for the new category tabs (must be before early returns)
+  const internalNotesCount = opportunity?.notes?.length || 0;
+  const internalCommentsCount = summary?.counts?.internalComments || 0;
   const categoryBadgeCounts = useMemo(() => ({
     schedule: (appointments?.length || 0) + (tasks?.filter(t => t.status !== 'COMPLETED')?.length || 0),
     financial: (invoices?.length || 0) + (commissions?.length || 0) + (quotes?.length || 0),
     documents: (documents?.documents?.length || 0) + (photos?.length || 0) + (activityData?.activities?.filter(a => a.sourceType !== 'ACCULYNX_IMPORT')?.length || 0),
     team: (contacts?.length || 0) + (workOrders?.length || 0) + (cases?.length || 0),
-    messages: totalUnread + unreadNotifications,
-  }), [appointments, tasks, invoices, commissions, quotes, documents, photos, activityData, contacts, workOrders, cases, totalUnread, unreadNotifications]);
+    messages: totalUnread + unreadNotifications + internalNotesCount + internalCommentsCount,
+  }), [appointments, tasks, invoices, commissions, quotes, documents, photos, activityData, contacts, workOrders, cases, totalUnread, unreadNotifications, internalNotesCount, internalCommentsCount]);
 
   // Calculate sub-tab counts for the current category (must be before early returns)
   const subTabCounts = useMemo(() => {
@@ -3749,15 +3751,15 @@ export default function OpportunityDetail() {
       case 'messages':
         return {
           conversations: totalUnread,
-          internalNotes: 0,
-          internalComments: 0,
+          internalNotes: internalNotesCount,
+          internalComments: internalCommentsCount,
           communications: activityData?.activities?.filter(a => a.sourceType === 'ACCULYNX_IMPORT')?.length || 0,
           notifications: unreadNotifications,
         };
       default:
         return {};
     }
-  }, [activeCategory, appointments, tasks, invoices, commissions, quotes, documents, photos, activityData, contacts, workOrders, cases, totalUnread, unreadNotifications]);
+  }, [activeCategory, appointments, tasks, invoices, commissions, quotes, documents, photos, activityData, contacts, workOrders, cases, totalUnread, unreadNotifications, internalNotesCount, internalCommentsCount]);
 
   // Early returns (after all hooks)
   if (isLoading) {

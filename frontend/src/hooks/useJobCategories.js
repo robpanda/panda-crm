@@ -92,6 +92,8 @@ export default function useJobCategories(initialCategory = 'schedule') {
 
     // Messages category
     counts.messages = (data.conversations?.length || 0) +
+                      (data.internalNotes?.length || 0) +
+                      (data.internalComments?.length || 0) +
                       (data.communications?.length || 0) +
                       (data.notifications?.length || 0) +
                       (data.activities?.length || 0);
@@ -123,6 +125,8 @@ export default function useJobCategories(initialCategory = 'schedule') {
         counts.approvals = 0; // Calculate if needed
         break;
       case 'messages':
+        counts.internalComments = data.internalComments?.length || 0;
+        counts.internalNotes = data.internalNotes?.length || 0;
         counts.conversations = data.conversations?.length || 0;
         counts.communications = data.communications?.length || 0;
         counts.notifications = data.notifications?.length || 0;
