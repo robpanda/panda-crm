@@ -5128,15 +5128,39 @@ Be factual and professional. Highlight anything that needs attention.`;
           results.canceledAppointments += canceledForOpportunity;
         }
 
-        await prisma.opportunity.update({
-          where: { id: oppId },
-          data: {
-            stage: 'CLOSED_LOST',
-            closeDate: new Date(),
-            lostReason: 'Bulk Deleted',
-            deletedAt: new Date(),
-          },
-        });
+        let usedLostReason = true;
+        const baseUpdateData = {
+          stage: 'CLOSED_LOST',
+          closeDate: new Date(),
+          lostReason: 'Bulk Deleted',
+          deletedAt: new Date(),
+        };
+
+        let updateData = { ...baseUpdateData };
+        let updated = false;
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          try {
+            await prisma.opportunity.update({
+              where: { id: oppId },
+              data: updateData,
+            });
+            updated = true;
+            break;
+          } catch (error) {
+            const unknownField = parseUnknownPrismaFieldName(error);
+            if (unknownField === 'lostReason' && hasOwnField(updateData, 'lostReason')) {
+              logger.warn('Opportunity bulk delete: runtime schema missing optional field "lostReason", retrying without it');
+              delete updateData.lostReason;
+              usedLostReason = false;
+              continue;
+            }
+            throw error;
+          }
+        }
+
+        if (!updated) {
+          throw new Error(`Failed to soft delete opportunity ${oppId}`);
+        }
 
         // Log audit
         await prisma.auditLog.create({
@@ -5147,11 +5171,17 @@ Be factual and professional. Highlight anything that needs attention.`;
             oldValues: { stage: oldOpp.stage },
             newValues: {
               stage: 'CLOSED_LOST',
-              lostReason: 'Bulk Deleted',
+              ...(usedLostReason ? { lostReason: 'Bulk Deleted' } : {}),
               deletedAt: new Date(),
               canceledAppointments: canceledForOpportunity,
             },
-            changedFields: ['stage', 'closeDate', 'lostReason', 'deletedAt', 'serviceAppointments'],
+            changedFields: [
+              'stage',
+              'closeDate',
+              ...(usedLostReason ? ['lostReason'] : []),
+              'deletedAt',
+              'serviceAppointments',
+            ],
             userId: auditContext.userId,
             userEmail: auditContext.userEmail,
             source: 'api',

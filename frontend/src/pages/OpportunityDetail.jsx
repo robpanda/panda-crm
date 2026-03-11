@@ -2618,8 +2618,12 @@ export default function OpportunityDetail() {
       ),
       fieldAdjusterMobile: claimForm.fieldAdjusterMobile || null,
     };
-    updateMutation.mutate(updateData);
-    setIsEditingClaim(false);
+    try {
+      await updateMutation.mutateAsync(updateData);
+      setIsEditingClaim(false);
+    } catch (error) {
+      // Mutation onError already sets a user-visible message; keep form open for correction.
+    }
   };
 
   // Work Order mutations

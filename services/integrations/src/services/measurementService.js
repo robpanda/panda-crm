@@ -1255,14 +1255,40 @@ class MeasurementService {
 
   normalizeGAFWebhookPayload(data) {
     const payload = data || {};
-    const roofMeasurement = payload.RoofMeasurement || payload.roofMeasurement || payload.measurements || null;
-    const assets = roofMeasurement?.Assets || roofMeasurement?.assets || payload.assets || {};
+    const nestedMeasurementPayload = (payload.measurementData && typeof payload.measurementData === 'object')
+      ? payload.measurementData
+      : {};
+    const nestedStatusPayload = (payload.statusData && typeof payload.statusData === 'object')
+      ? payload.statusData
+      : {};
+
+    const roofMeasurement = firstNonEmptyValue(
+      payload.RoofMeasurement,
+      payload.roofMeasurement,
+      payload.measurements,
+      nestedMeasurementPayload.RoofMeasurement,
+      nestedMeasurementPayload.roofMeasurement,
+      nestedMeasurementPayload.measurements,
+      nestedStatusPayload.RoofMeasurement,
+      nestedStatusPayload.roofMeasurement,
+      nestedStatusPayload.measurements
+    );
+    const assets = firstNonEmptyValue(
+      roofMeasurement?.Assets,
+      roofMeasurement?.assets,
+      payload.assets,
+      nestedMeasurementPayload.assets,
+      nestedStatusPayload.assets
+    ) || {};
     const hasProblemCode = Boolean(payload.ProblemCode || payload.problemCode);
     const hasMeasurementData = Boolean(
       roofMeasurement
       || payload.measurements
       || payload.reportPdfUrl
       || payload.pdfUrl
+      || nestedMeasurementPayload.measurements
+      || nestedMeasurementPayload.reportPdfUrl
+      || nestedMeasurementPayload.pdfUrl
       || firstNonEmptyValue(assets.Report, assets.report, assets.HomeownerReport, assets.homeownerReport)
     );
 
@@ -1272,7 +1298,19 @@ class MeasurementService {
       payload.orderNumber,
       payload.OrderNumber,
       payload.gafOrderNumber,
-      payload.GAFOrderNumber
+      payload.GAFOrderNumber,
+      nestedMeasurementPayload.orderId,
+      nestedMeasurementPayload.OrderId,
+      nestedMeasurementPayload.orderNumber,
+      nestedMeasurementPayload.OrderNumber,
+      nestedMeasurementPayload.gafOrderNumber,
+      nestedMeasurementPayload.GAFOrderNumber,
+      nestedStatusPayload.orderId,
+      nestedStatusPayload.OrderId,
+      nestedStatusPayload.orderNumber,
+      nestedStatusPayload.OrderNumber,
+      nestedStatusPayload.gafOrderNumber,
+      nestedStatusPayload.GAFOrderNumber
     );
     const subscriberOrderNumber = firstNonEmptyValue(
       payload.subscriberOrderNumber,
@@ -1280,13 +1318,27 @@ class MeasurementService {
       payload.SubscriberCustomField1,
       payload.subscriberCustomField1,
       payload.SubscriberReference,
-      payload.subscriberReference
+      payload.subscriberReference,
+      nestedMeasurementPayload.subscriberOrderNumber,
+      nestedMeasurementPayload.SubscriberOrderNumber,
+      nestedMeasurementPayload.SubscriberCustomField1,
+      nestedMeasurementPayload.subscriberCustomField1,
+      nestedMeasurementPayload.SubscriberReference,
+      nestedMeasurementPayload.subscriberReference
     );
     const rawStatus = firstNonEmptyValue(
       payload.status,
       payload.Status,
       payload.orderStatus,
-      payload.OrderStatus
+      payload.OrderStatus,
+      nestedMeasurementPayload.status,
+      nestedMeasurementPayload.Status,
+      nestedMeasurementPayload.orderStatus,
+      nestedMeasurementPayload.OrderStatus,
+      nestedStatusPayload.status,
+      nestedStatusPayload.Status,
+      nestedStatusPayload.orderStatus,
+      nestedStatusPayload.OrderStatus
     );
     const status = this.normalizeGAFWebhookStatus(rawStatus, hasMeasurementData, hasProblemCode);
 
@@ -1311,10 +1363,36 @@ class MeasurementService {
       xmlAsset,
       report3dUrl,
       modelUrl,
-      reportPdfUrl: firstNonEmptyValue(payload.reportPdfUrl, payload.pdfUrl),
-      reportUrl: firstNonEmptyValue(payload.reportUrl, payload.viewUrl, report3dUrl, modelUrl),
-      reportXmlUrl: firstNonEmptyValue(payload.reportXmlUrl, payload.xmlUrl),
-      reportJsonUrl: firstNonEmptyValue(payload.reportJsonUrl, payload.jsonUrl),
+      reportPdfUrl: firstNonEmptyValue(
+        payload.reportPdfUrl,
+        payload.pdfUrl,
+        nestedMeasurementPayload.reportPdfUrl,
+        nestedMeasurementPayload.pdfUrl,
+        nestedStatusPayload.reportPdfUrl,
+        nestedStatusPayload.pdfUrl
+      ),
+      reportUrl: firstNonEmptyValue(
+        payload.reportUrl,
+        payload.viewUrl,
+        nestedMeasurementPayload.reportUrl,
+        nestedMeasurementPayload.viewUrl,
+        nestedStatusPayload.reportUrl,
+        nestedStatusPayload.viewUrl,
+        report3dUrl,
+        modelUrl
+      ),
+      reportXmlUrl: firstNonEmptyValue(
+        payload.reportXmlUrl,
+        payload.xmlUrl,
+        nestedMeasurementPayload.reportXmlUrl,
+        nestedMeasurementPayload.xmlUrl
+      ),
+      reportJsonUrl: firstNonEmptyValue(
+        payload.reportJsonUrl,
+        payload.jsonUrl,
+        nestedMeasurementPayload.reportJsonUrl,
+        nestedMeasurementPayload.jsonUrl
+      ),
     };
   }
 
@@ -1653,7 +1731,18 @@ class MeasurementService {
       }
     }
     if (!reportPdfUrl && pdfAsset) {
-      reportPdfUrl = `${GAF_API_BASE}/download/${encodeURIComponent(pdfAsset)}`;
+      reportPdfUrl = isHttpUrl(pdfAsset)
+        ? pdfAsset
+        : `${GAF_API_BASE}/download/${encodeURIComponent(pdfAsset)}`;
+    }
+
+    if (!pdfStorage && reportPdfUrl) {
+      try {
+        pdfStorage = await this.downloadAndStoreGAFAsset(reportPdfUrl, reportId, accessToken, 'application/pdf');
+        reportPdfUrl = pdfStorage?.presignedUrl || reportPdfUrl;
+      } catch (error) {
+        logger.warn(`GAF direct PDF persistence warning for report ${reportId}: ${error.message}`);
+      }
     }
     if (!reportXmlUrl && xmlAsset) {
       try {
