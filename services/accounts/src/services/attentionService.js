@@ -110,52 +110,50 @@ export async function getAttentionItems({
  * Get attention queue statistics
  */
 export async function getStats(userId = null) {
-  const where = userId ? { assignedToId: userId } : {};
-  const typeWhereSql = userId
-    ? Prisma.sql`status IN ('PENDING','IN_PROGRESS') AND assigned_to_id = ${userId}`
-    : Prisma.sql`status IN ('PENDING','IN_PROGRESS')`;
+  const userPredicate = userId
+    ? Prisma.sql`assigned_to_id = ${userId}`
+    : Prisma.sql`TRUE`;
+  const activePredicate = Prisma.sql`${userPredicate} AND status IN ('PENDING','IN_PROGRESS')`;
 
-  const [
-    totalPending,
-    totalInProgress,
-    totalCompleted,
-    totalDismissed,
-    totalSnoozed,
-    byCategoryResults,
-    byUrgencyResults,
-    byTypeRows,
-  ] = await Promise.all([
-    prisma.attentionItem.count({ where: { ...where, status: 'PENDING' } }),
-    prisma.attentionItem.count({ where: { ...where, status: 'IN_PROGRESS' } }),
-    prisma.attentionItem.count({ where: { ...where, status: 'COMPLETED' } }),
-    prisma.attentionItem.count({ where: { ...where, status: 'DISMISSED' } }),
-    prisma.attentionItem.count({ where: { ...where, status: 'SNOOZED' } }),
-    prisma.attentionItem.groupBy({
-      by: ['category'],
-      where: { ...where, status: { in: ['PENDING', 'IN_PROGRESS'] } },
-      _count: true,
-    }),
-    prisma.attentionItem.groupBy({
-      by: ['urgency'],
-      where: { ...where, status: { in: ['PENDING', 'IN_PROGRESS'] } },
-      _count: true,
-    }),
+  const [countRows, byCategoryRows, byUrgencyRows, byTypeRows] = await Promise.all([
+    prisma.$queryRaw`
+      SELECT
+        COUNT(*) FILTER (WHERE ${userPredicate} AND status = 'PENDING')::int AS pending,
+        COUNT(*) FILTER (WHERE ${userPredicate} AND status = 'IN_PROGRESS')::int AS in_progress,
+        COUNT(*) FILTER (WHERE ${userPredicate} AND status = 'COMPLETED')::int AS completed,
+        COUNT(*) FILTER (WHERE ${userPredicate} AND status = 'DISMISSED')::int AS dismissed,
+        COUNT(*) FILTER (WHERE ${userPredicate} AND status = 'SNOOZED')::int AS snoozed
+      FROM attention_items
+    `,
+    prisma.$queryRaw`
+      SELECT category::text AS category, COUNT(*)::int AS count
+      FROM attention_items
+      WHERE ${activePredicate}
+      GROUP BY category
+    `,
+    prisma.$queryRaw`
+      SELECT urgency::text AS urgency, COUNT(*)::int AS count
+      FROM attention_items
+      WHERE ${activePredicate}
+      GROUP BY urgency
+    `,
     prisma.$queryRaw`
       SELECT type::text AS type, COUNT(*)::int AS count
       FROM attention_items
-      WHERE ${typeWhereSql}
+      WHERE ${activePredicate}
       GROUP BY type
     `,
   ]);
+  const counts = Array.isArray(countRows) && countRows[0] ? countRows[0] : {};
 
   const byCategory = {};
-  byCategoryResults.forEach((r) => {
-    byCategory[r.category] = r._count;
+  byCategoryRows.forEach((r) => {
+    byCategory[r.category] = Number(r.count) || 0;
   });
 
   const byUrgency = {};
-  byUrgencyResults.forEach((r) => {
-    byUrgency[r.urgency] = r._count;
+  byUrgencyRows.forEach((r) => {
+    byUrgency[r.urgency] = Number(r.count) || 0;
   });
 
   const byType = {};
@@ -164,12 +162,12 @@ export async function getStats(userId = null) {
   });
 
   return {
-    total: totalPending + totalInProgress,
-    pending: totalPending,
-    inProgress: totalInProgress,
-    completed: totalCompleted,
-    dismissed: totalDismissed,
-    snoozed: totalSnoozed,
+    total: (Number(counts.pending) || 0) + (Number(counts.in_progress) || 0),
+    pending: Number(counts.pending) || 0,
+    inProgress: Number(counts.in_progress) || 0,
+    completed: Number(counts.completed) || 0,
+    dismissed: Number(counts.dismissed) || 0,
+    snoozed: Number(counts.snoozed) || 0,
     byCategory,
     byUrgency,
     byType,

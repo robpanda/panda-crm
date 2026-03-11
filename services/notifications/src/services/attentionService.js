@@ -367,55 +367,61 @@ export const attentionService = {
    * Get attention queue statistics
    */
   async getStats(userId = null) {
-    const where = userId ? { assignedToId: userId } : {};
-    const activeWhere = { ...where, status: { in: ['PENDING', 'IN_PROGRESS'] } };
-    const typeWhereSql = userId
-      ? Prisma.sql`status IN ('PENDING','IN_PROGRESS') AND assigned_to_id = ${userId}`
-      : Prisma.sql`status IN ('PENDING','IN_PROGRESS')`;
+    const userPredicate = userId
+      ? Prisma.sql`assigned_to_id = ${userId}`
+      : Prisma.sql`TRUE`;
+    const activePredicate = Prisma.sql`${userPredicate} AND status IN ('PENDING','IN_PROGRESS')`;
 
-    const [
-      total,
-      pending,
-      inProgress,
-      critical,
-      high,
-      medium,
-      low,
-      overdue,
-      byCategory,
-      byTypeRows,
-    ] = await Promise.all([
-      prisma.attentionItem.count({ where: activeWhere }),
-      prisma.attentionItem.count({ where: { ...where, status: 'PENDING' } }),
-      prisma.attentionItem.count({ where: { ...where, status: 'IN_PROGRESS' } }),
-      prisma.attentionItem.count({ where: { ...activeWhere, urgency: 'CRITICAL' } }),
-      prisma.attentionItem.count({ where: { ...activeWhere, urgency: 'HIGH' } }),
-      prisma.attentionItem.count({ where: { ...activeWhere, urgency: 'MEDIUM' } }),
-      prisma.attentionItem.count({ where: { ...activeWhere, urgency: 'LOW' } }),
-      prisma.attentionItem.count({
-        where: { ...activeWhere, dueDate: { lt: new Date() } },
-      }),
-      prisma.attentionItem.groupBy({
-        by: ['category'],
-        where: activeWhere,
-        _count: { category: true },
-      }),
+    const [countRows, urgencyRows, byCategoryRows, byTypeRows] = await Promise.all([
+      prisma.$queryRaw`
+        SELECT
+          COUNT(*) FILTER (WHERE ${activePredicate})::int AS total,
+          COUNT(*) FILTER (WHERE ${userPredicate} AND status = 'PENDING')::int AS pending,
+          COUNT(*) FILTER (WHERE ${userPredicate} AND status = 'IN_PROGRESS')::int AS in_progress,
+          COUNT(*) FILTER (WHERE ${activePredicate} AND urgency = 'CRITICAL')::int AS critical,
+          COUNT(*) FILTER (WHERE ${activePredicate} AND urgency = 'HIGH')::int AS high,
+          COUNT(*) FILTER (WHERE ${activePredicate} AND urgency = 'MEDIUM')::int AS medium,
+          COUNT(*) FILTER (WHERE ${activePredicate} AND urgency = 'LOW')::int AS low,
+          COUNT(*) FILTER (WHERE ${activePredicate} AND due_date < NOW())::int AS overdue
+        FROM attention_items
+      `,
+      prisma.$queryRaw`
+        SELECT urgency::text AS urgency, COUNT(*)::int AS count
+        FROM attention_items
+        WHERE ${activePredicate}
+        GROUP BY urgency
+      `,
+      prisma.$queryRaw`
+        SELECT category::text AS category, COUNT(*)::int AS count
+        FROM attention_items
+        WHERE ${activePredicate}
+        GROUP BY category
+      `,
       prisma.$queryRaw`
         SELECT type::text AS type, COUNT(*)::int AS count
         FROM attention_items
-        WHERE ${typeWhereSql}
+        WHERE ${activePredicate}
         GROUP BY type
       `,
     ]);
 
+    const counts = Array.isArray(countRows) && countRows[0] ? countRows[0] : {};
+    const byUrgency = { critical: 0, high: 0, medium: 0, low: 0 };
+    urgencyRows.forEach((row) => {
+      const key = String(row.urgency || '').toLowerCase();
+      if (Object.prototype.hasOwnProperty.call(byUrgency, key)) {
+        byUrgency[key] = Number(row.count) || 0;
+      }
+    });
+
     return {
-      total,
-      pending,
-      inProgress,
-      byUrgency: { critical, high, medium, low },
-      overdue,
-      byCategory: byCategory.reduce((acc, item) => {
-        acc[item.category] = item._count.category;
+      total: Number(counts.total) || 0,
+      pending: Number(counts.pending) || 0,
+      inProgress: Number(counts.in_progress) || 0,
+      byUrgency,
+      overdue: Number(counts.overdue) || 0,
+      byCategory: byCategoryRows.reduce((acc, item) => {
+        acc[item.category] = Number(item.count) || 0;
         return acc;
       }, {}),
       byType: byTypeRows.reduce((acc, item) => {
