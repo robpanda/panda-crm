@@ -234,27 +234,31 @@ jobs:
 
           IMAGE_URI="$ECR_REGISTRY/$IMAGE_REPO:$IMAGE_TAG"
 
-          CONTAINER_NAME=$(jq -r \
+          CONTAINER_INDEX=$(jq -r \
             --arg s "$SERVICE_NAME" \
             '
-              .containerDefinitions[].name as $n
-              | select($n == $s or $n == ("panda-crm-" + $s) or $n == ($s + "-service"))
-            ' taskdef.json | head -n 1)
-
-          if [ -z "$CONTAINER_NAME" ]; then
-            CONTAINER_NAME=$(jq -r '.containerDefinitions[0].name' taskdef.json)
-          fi
-
-          if [ -z "$CONTAINER_NAME" ] || [ "$CONTAINER_NAME" = "null" ]; then
-            echo "::error::Unable to resolve container definition for $SERVICE_NAME"
-            exit 1
-          fi
+              (
+                .containerDefinitions
+                | to_entries
+                | map(
+                    select(
+                      .value.name == $s
+                      or .value.name == ("panda-crm-" + $s)
+                      or .value.name == ($s + "-service")
+                    )
+                  )
+                | first
+                | .key
+              ) // 0
+            ' taskdef.json)
+          echo "Using container index: $CONTAINER_INDEX"
+          echo "Using image URI: $IMAGE_URI"
 
           jq \
             --arg image "$IMAGE_URI" \
-            --arg container "$CONTAINER_NAME" \
+            --argjson idx "$CONTAINER_INDEX" \
             '
-              .containerDefinitions |= map(if .name == $container then .image = $image else . end)
+              .containerDefinitions[$idx].image = $image
               | del(
                   .taskDefinitionArn,
                   .revision,
@@ -266,7 +270,7 @@ jobs:
                 )
             ' taskdef.json > taskdef-updated.json
 
-          if ! jq -e --arg image "$IMAGE_URI" '.containerDefinitions[] | select(.image == $image)' taskdef-updated.json >/dev/null; then
+          if ! jq -e --argjson idx "$CONTAINER_INDEX" --arg image "$IMAGE_URI" '.containerDefinitions[$idx].image == $image' taskdef-updated.json >/dev/null; then
             echo "::error::Image replacement did not apply for $SERVICE_NAME"
             exit 1
           fi
