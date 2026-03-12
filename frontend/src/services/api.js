@@ -4691,6 +4691,14 @@ export const documentsApi = {
     const response = await api.get(`/api/documents/repository/by-job/${opportunityId}`, { params });
     return response.data;
   },
+
+  async deleteRepositoryDocument(documentId, options = {}) {
+    const response = await api.delete(`/api/documents/repository/${documentId}`, {
+      params: options,
+      data: options,
+    });
+    return response.data;
+  },
 };
 
 // ==========================================

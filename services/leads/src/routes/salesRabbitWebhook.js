@@ -428,6 +428,7 @@ router.post('/webhook', validateWebhookSecret, async (req, res) => {
       salesRabbitUser: repEmail,
       isSelfGen: parseBool(data.isSelfGen) || parseBool(data.selfGen),
       ownerId,
+      leadSetById: ownerId,
       _auditContext: {
         userId: null,
         userEmail: 'salesrabbit-webhook',

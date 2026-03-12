@@ -2575,7 +2575,7 @@ export default function OpportunityDetail() {
     if (!confirmed) return;
 
     try {
-      await documentsApi.deleteRepositoryDocument(file.id);
+      await documentsApi.deleteRepositoryDocument(file.id, { opportunityId: id });
       await queryClient.invalidateQueries({ queryKey: ['opportunityRepositoryFiles', id] });
       setShowRepositoryFileGallery(false);
       setSelectedRepositoryFileIndex(0);
@@ -4244,6 +4244,15 @@ export default function OpportunityDetail() {
     }
     return rawWorkType;
   })();
+  const leadCreditorDisplayName = (() => {
+    const explicitLeadCreditor = String(opportunity?.leadCreditor || '').trim();
+    if (explicitLeadCreditor) return explicitLeadCreditor;
+
+    const derivedLeadSetBy = String(opportunity?.leadSetByName || '').trim();
+    if (derivedLeadSetBy) return derivedLeadSetBy;
+
+    return 'Not set';
+  })();
   const headerPriorityLabel = String(opportunity?.priority || 'Normal').replace(/_/g, ' ');
   const financialWorksheetTotals = (() => {
     const buckets = {
@@ -4785,10 +4794,6 @@ export default function OpportunityDetail() {
                             <p className="font-medium text-gray-900">{opportunity.stage?.replace(/_/g, ' ') || 'Approved'}</p>
                           )}
                         </div>
-                        <div className="bg-gray-50 p-4 rounded-lg border-l-4 border-purple-400">
-                          <label className="text-sm text-gray-500">Approved</label>
-                          <p className="font-medium text-green-600">Yes</p>
-                        </div>
                         <div className={`bg-gray-50 p-4 rounded-lg border-l-4 border-purple-400 ${isEditMode ? 'ring-2 ring-blue-200' : ''}`}>
                           <label className="text-sm text-gray-500">Status</label>
                           {isEditMode ? (
@@ -4875,8 +4880,8 @@ export default function OpportunityDetail() {
                               className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:ring-2 focus:ring-panda-primary focus:border-transparent"
                             />
                           ) : (
-                            <p className={`font-medium ${opportunity.leadCreditor ? 'text-gray-900' : 'text-gray-500 italic'}`}>
-                              {opportunity.leadCreditor || 'Not set'}
+                            <p className={`font-medium ${leadCreditorDisplayName !== 'Not set' ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                              {leadCreditorDisplayName}
                             </p>
                           )}
                         </div>
@@ -8968,7 +8973,9 @@ export default function OpportunityDetail() {
                   </div>
                   <div>
                     <label className="text-sm text-gray-500">Lead Creditor</label>
-                    <p className="font-medium text-gray-500 italic">Not set</p>
+                    <p className={`font-medium ${leadCreditorDisplayName !== 'Not set' ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                      {leadCreditorDisplayName}
+                    </p>
                   </div>
                   <div>
                     <label className="text-sm text-gray-500">Account Name</label>

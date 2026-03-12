@@ -879,6 +879,23 @@ class OpportunityService {
       console.log(`[getOpportunityDetails] Found opportunity: ${opportunity.name}`);
       const hydratedOpportunity = await hydrateClaimFallbackFromRaw(id, opportunity);
       const wrapper = this.createOpportunityWrapper(hydratedOpportunity, true);
+      const convertedLead = await prisma.lead.findFirst({
+        where: { convertedOpportunityId: id },
+        select: {
+          leadSetById: true,
+          leadSetBy: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+            },
+          },
+        },
+      });
+      if (convertedLead?.leadSetBy) {
+        wrapper.leadSetById = convertedLead.leadSetById;
+        wrapper.leadSetByName = `${convertedLead.leadSetBy.firstName || ''} ${convertedLead.leadSetBy.lastName || ''}`.trim();
+      }
       console.log(`[getOpportunityDetails] Wrapper created successfully`);
       return wrapper;
     } catch (error) {

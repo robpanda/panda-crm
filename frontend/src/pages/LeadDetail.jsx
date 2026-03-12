@@ -735,10 +735,8 @@ export default function LeadDetail() {
     try {
       await leadsApi.selectSalesPath(id, path);
       queryClient.invalidateQueries(['lead', id]);
-      const workType = path === 'RETAIL' ? 'Retail' : 'Insurance';
       await handleConvert({
         opportunityType: path,
-        workType,
       });
     } catch (error) {
       alert(error?.message || 'Unable to select sales path.');
@@ -1611,14 +1609,12 @@ export default function LeadDetail() {
               <div className="flex justify-between">
                 <span className="text-gray-500">Tentative Date</span>
                 <span className="text-gray-900">
-                  {lead.tentativeAppointmentDate
-                    ? lead.tentativeAppointmentDate.split('T')[0]
-                    : '-'}
+                  {formatAppointmentDateDisplay(lead.tentativeAppointmentDate)}
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">Tentative Time</span>
-                <span className="text-gray-900">{lead.tentativeAppointmentTime || '-'}</span>
+                <span className="text-gray-900">{formatAppointmentTimeDisplay(lead.tentativeAppointmentTime)}</span>
               </div>
             </div>
           )}

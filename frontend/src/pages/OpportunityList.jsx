@@ -667,7 +667,7 @@ export default function OpportunityList() {
                     )}
                     {isColumnVisible('account') && (
                       <td className="px-6 py-4 text-sm text-gray-600">
-                        {opp.account?.name || '-'}
+                        {opp.accountName || '-'}
                       </td>
                     )}
                     {isColumnVisible('amount') && (
@@ -686,7 +686,7 @@ export default function OpportunityList() {
                     )}
                     {isColumnVisible('type') && (
                       <td className="px-6 py-4 text-sm text-gray-600">
-                        {opp.type || '-'}
+                        {opp.workType || ''}
                       </td>
                     )}
                     {isColumnVisible('closeDate') && (

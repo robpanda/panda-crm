@@ -220,6 +220,82 @@ router.get('/stats', async (req, res, next) => {
 });
 
 /**
+ * DELETE /api/documents/repository/:id
+ * Delete a document or unlink it from a specific job.
+ *
+ * If opportunityId is provided, remove only that job link first.
+ * If no links remain afterward, delete the document record.
+ */
+router.delete('/:id', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const opportunityId = req.body?.opportunityId || req.query?.opportunityId || null;
+
+    const document = await prisma.document.findUnique({
+      where: { id },
+      include: {
+        links: {
+          select: {
+            id: true,
+            opportunityId: true,
+          },
+        },
+      },
+    });
+
+    if (!document) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Document not found' },
+      });
+    }
+
+    let removedLinkCount = 0;
+
+    if (opportunityId) {
+      const deletedLinks = await prisma.documentLink.deleteMany({
+        where: {
+          documentId: id,
+          opportunityId,
+        },
+      });
+
+      removedLinkCount = deletedLinks.count || 0;
+
+      if (removedLinkCount === 0) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'Document is not linked to this job' },
+        });
+      }
+    }
+
+    const remainingLinks = await prisma.documentLink.count({
+      where: { documentId: id },
+    });
+
+    if (!opportunityId || remainingLinks === 0) {
+      await prisma.document.delete({
+        where: { id },
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        id,
+        removedLinkCount,
+        deletedDocument: !opportunityId || remainingLinks === 0,
+        remainingLinks,
+      },
+    });
+  } catch (error) {
+    logger.error('Error deleting document:', error);
+    next(error);
+  }
+});
+
+/**
  * GET /api/documents/repository/by-job/:opportunityId
  * Get all documents linked to a specific opportunity (job)
  * NOTE: This route MUST be defined BEFORE /:id to avoid Express matching "by-job" as an id
@@ -295,10 +371,19 @@ router.get('/by-job/:opportunityId', async (req, res, next) => {
     const transformedDocs = documents.map((doc) => ({
       id: doc.id,
       title: doc.title,
+      description: doc.description,
+      fileName: doc.fileName,
       fileType: doc.fileType,
       fileExtension: doc.fileExtension,
       contentSize: doc.contentSize,
       createdAt: doc.createdAt,
+      updatedAt: doc.updatedAt,
+      contentUrl: doc.contentUrl,
+      downloadUrl: doc.contentUrl,
+      signedContentUrl: doc.contentUrl,
+      url: doc.contentUrl,
+      sourceType: doc.sourceType,
+      isArchived: doc.isArchived,
       category: categorizeDocument(doc.title, doc.fileType),
       linkedVia: doc.links.map((link) => ({
         type: link.linkedRecordType,
