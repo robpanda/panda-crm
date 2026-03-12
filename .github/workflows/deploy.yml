@@ -107,6 +107,7 @@ jobs:
 
       - name: Build, tag, and push Docker image
         if: steps.check.outputs.should_deploy == 'true'
+        id: build-image
         env:
           IMAGE_TAG: ${{ github.sha }}
           SERVICE_NAME: ${{ matrix.service.name }}
@@ -124,6 +125,7 @@ jobs:
           fi
 
           echo "Using ECR repository: $IMAGE_REPO"
+          echo "image_repo=$IMAGE_REPO" >> $GITHUB_OUTPUT
 
           # Build Docker image
           docker build \
@@ -142,6 +144,8 @@ jobs:
         if: steps.check.outputs.should_deploy == 'true'
         env:
           SERVICE_NAME: ${{ matrix.service.name }}
+          IMAGE_TAG: ${{ github.sha }}
+          IMAGE_REPO: ${{ steps.build-image.outputs.image_repo }}
         run: |
           ECS_SERVICE=""
           for candidate in "$SERVICE_NAME-service" "panda-crm-$SERVICE_NAME" "$SERVICE_NAME"; do
@@ -157,11 +161,64 @@ jobs:
           fi
 
           echo "Updating ECS service: $ECS_SERVICE"
+          CURRENT_TASK_DEFINITION=$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --region "$AWS_REGION" \
+            --query 'services[0].taskDefinition' \
+            --output text)
+
+          echo "Current task definition: $CURRENT_TASK_DEFINITION"
+
+          NEW_IMAGE="$ECR_REGISTRY/$IMAGE_REPO:$IMAGE_TAG"
+          echo "Using image: $NEW_IMAGE"
+
+          aws ecs describe-task-definition \
+            --task-definition "$CURRENT_TASK_DEFINITION" \
+            --region "$AWS_REGION" \
+            > task-definition.json
+
+          jq --arg IMAGE "$NEW_IMAGE" '
+            .taskDefinition
+            | del(
+                .taskDefinitionArn,
+                .revision,
+                .status,
+                .requiresAttributes,
+                .compatibilities,
+                .registeredAt,
+                .registeredBy
+              )
+            | .containerDefinitions = (
+                .containerDefinitions
+                | if length == 1 then
+                    map(.image = $IMAGE)
+                  else
+                    map(
+                      if .name == env.SERVICE_NAME then
+                        .image = $IMAGE
+                      else
+                        .
+                      end
+                    )
+                  end
+              )
+          ' task-definition.json > task-definition-updated.json
+
+          NEW_TASK_DEFINITION=$(aws ecs register-task-definition \
+            --region "$AWS_REGION" \
+            --cli-input-json file://task-definition-updated.json \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)
+
+          echo "Registered task definition: $NEW_TASK_DEFINITION"
+
           aws ecs update-service \
-            --cluster $ECS_CLUSTER \
-            --service $ECS_SERVICE \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --task-definition "$NEW_TASK_DEFINITION" \
             --force-new-deployment \
-            --region $AWS_REGION
+            --region "$AWS_REGION"
 
   notify:
     name: Deployment Notification
