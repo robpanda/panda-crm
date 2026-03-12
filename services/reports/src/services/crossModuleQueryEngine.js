@@ -26,7 +26,7 @@ const MODULE_TO_PRISMA = {
 };
 
 // Operator mappings for filter conditions
-const OPERATORS = {
+export const OPERATORS = {
   equals: (value) => value,
   not: (value) => ({ not: value }),
   contains: (value) => ({ contains: value, mode: 'insensitive' }),

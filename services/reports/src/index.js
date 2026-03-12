@@ -43,6 +43,7 @@ app.use(authMiddleware);
 
 // Routes - /api/* to match ALB path-based routing
 app.use('/api/analytics', analyticsRoutes);
+app.use('/api/reports-dashboards', dashboardRoutes);
 app.use('/api/reports', reportsRoutes);
 app.use('/api/dashboards', dashboardRoutes);
 app.use('/api/modules', modulesRoutes);

@@ -35,8 +35,7 @@ import AdvancedReportEditor from './pages/AdvancedReportEditor';
 import AnalyticsShell from './pages/analytics/AnalyticsShell';
 import AnalyticsOverview from './pages/analytics/AnalyticsOverview';
 import AnalyticsSchedules from './pages/analytics/AnalyticsSchedules';
-import AnalyticsHealth from './pages/analytics/AnalyticsHealth';
-import AnalyticsMetabase from './pages/analytics/AnalyticsMetabase';
+import AnalyticsSettings from './pages/analytics/AnalyticsSettings';
 import AnalyticsRedirect from './pages/analytics/AnalyticsRedirect';
 import More from './pages/More';
 import PriceBooks from './pages/PriceBooks';
@@ -54,7 +53,6 @@ import Cases from './pages/Cases';
 import Emails from './pages/Emails';
 import MyCommissions from './pages/MyCommissions';
 import SalesRepDashboard from './pages/SalesRepDashboard';
-import AIInsightsFeed from './pages/AIInsightsFeed';
 import CustomerPortal from './pages/CustomerPortal';
 import PMPortal from './pages/PMPortal';
 import SubcontractorPortal from './pages/SubcontractorPortal';
@@ -242,9 +240,11 @@ export default function App() {
           <Route path="dashboards/:id" element={<DashboardView />} />
           <Route path="dashboards/:id/edit" element={<DashboardBuilder />} />
           <Route path="schedules" element={<AnalyticsSchedules />} />
-          <Route path="ai" element={<AIInsightsFeed />} />
-          <Route path="health" element={<AnalyticsHealth />} />
-          <Route path="metabase" element={<AnalyticsMetabase />} />
+          <Route path="settings" element={<Navigate to="/analytics/settings/health" replace />} />
+          <Route path="settings/:section" element={<AnalyticsSettings />} />
+          <Route path="ai" element={<Navigate to="/analytics/settings/ai" replace />} />
+          <Route path="health" element={<Navigate to="/analytics/settings/health" replace />} />
+          <Route path="metabase" element={<Navigate to="/analytics/settings/metabase" replace />} />
         </Route>
 
         {/* Admin Routes */}

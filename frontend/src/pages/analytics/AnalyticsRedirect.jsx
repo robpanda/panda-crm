@@ -66,12 +66,12 @@ export default function AnalyticsRedirect() {
     }
 
     if (tab === 'ai-insights') {
-      navigate('/analytics/ai', { replace: true });
+      navigate('/analytics/settings/ai', { replace: true });
       return;
     }
 
     if (tab === 'metabase') {
-      navigate('/analytics/metabase', { replace: true });
+      navigate('/analytics/dashboards?tab=external', { replace: true });
       return;
     }
 

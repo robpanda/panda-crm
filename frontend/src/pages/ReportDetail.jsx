@@ -1,40 +1,73 @@
-import { useState, useEffect, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Calendar, Copy, Pencil, Play, Star, Trash2 } from 'lucide-react';
 import { reportsApi } from '../services/api';
 import { GlobalDateRangePicker } from '../components/reports';
+import ReportRenderer from '../components/reports/ReportRenderer';
+import DataSourceBadge from '../components/analytics/DataSourceBadge';
+import VerifiedBadge from '../components/analytics/VerifiedBadge';
 import { useAnalyticsBadgeContext } from '../components/analytics/AnalyticsBadgeContext';
 import { deriveDataSource } from '../utils/analyticsSource';
 import { toAnalyticsDateParams } from '../utils/analyticsDateRange';
-import { formatDateMDY } from '../utils/formatters';
-import KPICard from '../components/reports/KPICard';
-import BarChartWidget from '../components/reports/charts/BarChartWidget';
-import LineChartWidget from '../components/reports/charts/LineChartWidget';
-import TableWidget from '../components/reports/charts/TableWidget';
+import {
+  buildDuplicateReportPayload,
+  formatReportTimestamp,
+  getReportCreatedByLabel,
+  getReportTablesUsed,
+} from '../utils/reporting';
 
 export default function ReportDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const analyticsBadges = useAnalyticsBadgeContext();
   const verification = analyticsBadges?.verification || { status: 'unknown', reason: 'Verification unavailable.' };
 
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [report, setReport] = useState(null);
-  const [data, setData] = useState(null);
+  const [payload, setPayload] = useState(null);
   const [dateRange, setDateRange] = useState({ preset: 'THIS_MONTH' });
+
+  const dateRangeLabel = useMemo(() => {
+    const presets = {
+      ALL_DATA: 'All Data',
+      TODAY: 'Today',
+      YESTERDAY: 'Yesterday',
+      THIS_WEEK: 'This Week',
+      LAST_WEEK: 'Last Week',
+      THIS_MONTH: 'This Month',
+      LAST_MONTH: 'Last Month',
+      THIS_YEAR: 'This Year',
+      LAST_YEAR: 'Last Year',
+      ROLLING_7: 'Rolling 7 Days',
+      ROLLING_30: 'Rolling 30 Days',
+      ROLLING_90: 'Rolling 90 Days',
+      ROLLING_365: 'Rolling 365 Days',
+    };
+
+    return presets[dateRange?.preset] || 'Custom Range';
+  }, [dateRange]);
 
   useEffect(() => {
     loadReport();
   }, [id]);
 
+  useEffect(() => {
+    if (searchParams.get('run') !== '1' || !report) return;
+
+    runReport(report).finally(() => {
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete('run');
+      setSearchParams(nextParams, { replace: true });
+    });
+  }, [report, searchParams, setSearchParams]);
+
   const loadReport = async () => {
     try {
       setLoading(true);
       const response = await reportsApi.getSavedReport(id);
-      const reportData = response?.data || response;
-      if (reportData) {
-        setReport(reportData);
-      }
+      setReport(response);
     } catch (error) {
       console.error('Failed to load report:', error);
     } finally {
@@ -53,9 +86,11 @@ export default function ReportDetail() {
         includeComparison: Boolean(dateRange?.comparison),
       });
 
-      if (response?.success || response?.data) {
-        setData(response.data || response);
-      }
+      setPayload(response);
+      setReport((prev) => ({
+        ...prev,
+        lastRunAt: new Date().toISOString(),
+      }));
     } catch (error) {
       console.error('Failed to run report:', error);
     } finally {
@@ -75,36 +110,33 @@ export default function ReportDetail() {
   const handleToggleFavorite = async () => {
     try {
       await reportsApi.toggleFavorite(id);
-      setReport(prev => ({ ...prev, isFavorite: !prev.isFavorite }));
+      setReport((prev) => ({ ...prev, isFavorite: !prev.isFavorite }));
     } catch (error) {
       console.error('Failed to toggle favorite:', error);
     }
   };
 
-  const dateRangeLabel = useMemo(() => {
-    const presets = {
-      ALL_DATA: 'All Data',
-      TODAY: 'Today',
-      YESTERDAY: 'Yesterday',
-      THIS_WEEK: 'This Week',
-      LAST_WEEK: 'Last Week',
-      THIS_MONTH: 'This Month',
-      LAST_MONTH: 'Last Month',
-      THIS_YEAR: 'This Year',
-      LAST_YEAR: 'Last Year',
-      ROLLING_7: 'Rolling 7 Days',
-      ROLLING_30: 'Rolling 30 Days',
-      ROLLING_90: 'Rolling 90 Days',
-      ROLLING_365: 'Rolling 365 Days',
-    };
-    if (dateRange?.preset === 'CUSTOM' && dateRange?.startDate && dateRange?.endDate) {
-      return `${formatDateMDY(dateRange.startDate)} - ${formatDateMDY(dateRange.endDate)}`;
+  const handleDuplicate = async () => {
+    if (!report) return;
+
+    try {
+      const duplicate = await reportsApi.createReport(buildDuplicateReportPayload(report));
+      navigate(`/analytics/reports/${duplicate.id}`);
+    } catch (error) {
+      console.error('Failed to duplicate report:', error);
     }
-    if (dateRange?.preset === 'ROLLING_CUSTOM' && dateRange?.rollingDays) {
-      return `Rolling ${dateRange.rollingDays} Days`;
+  };
+
+  const handleDelete = async () => {
+    if (!report || !window.confirm(`Delete "${report.name}"?`)) return;
+
+    try {
+      await reportsApi.deleteReport(report.id);
+      navigate('/analytics/reports');
+    } catch (error) {
+      console.error('Failed to delete report:', error);
     }
-    return presets[dateRange?.preset] || 'Custom Range';
-  }, [dateRange]);
+  };
 
   if (loading) {
     return (
@@ -129,73 +161,135 @@ export default function ReportDetail() {
   }
 
   const emptyStateContext = {
-    title: report?.name || 'Report',
+    title: report.name,
     source: deriveDataSource(report),
     verifiedStatus: verification.status,
     verifiedReason: verification.reason,
     failedChecks: verification.failedChecks || [],
-    rowCount: data?.rowCount ?? data?.rows?.length ?? 0,
+    rowCount: 0,
     filters: {
       'Date Range': dateRangeLabel,
+      Tables: getReportTablesUsed(report).join(', '),
     },
   };
 
   return (
-    <div className="p-6">
-      {/* Header */}
-      <div className="flex items-start justify-between mb-6">
-        <div>
-          <div className="flex items-center gap-3 mb-2">
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm xl:flex-row xl:items-start xl:justify-between">
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center gap-3">
             <button
+              type="button"
               onClick={() => navigate('/analytics/reports')}
-              className="text-gray-400 hover:text-gray-600"
+              className="text-sm font-medium text-gray-500 hover:text-gray-700"
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-              </svg>
+              Back to Library
             </button>
-            <h1 className="text-2xl font-bold text-gray-900">{report.name}</h1>
             <button
+              type="button"
               onClick={handleToggleFavorite}
-              className={`p-1 rounded ${report.isFavorite ? 'text-yellow-500' : 'text-gray-400 hover:text-yellow-500'}`}
+              className={`rounded-lg p-2 transition-colors ${
+                report.isFavorite ? 'text-amber-500 hover:bg-amber-50' : 'text-gray-300 hover:bg-gray-50 hover:text-amber-500'
+              }`}
             >
-              <svg className="w-5 h-5" fill={report.isFavorite ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
-              </svg>
+              <Star className="h-5 w-5" fill={report.isFavorite ? 'currentColor' : 'none'} />
             </button>
           </div>
-          {report.description && (
-            <p className="text-gray-500">{report.description}</p>
-          )}
+
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">{report.name}</h1>
+            {report.description && <p className="mt-2 text-gray-500">{report.description}</p>}
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 text-sm text-gray-600 md:grid-cols-2 xl:grid-cols-4">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-gray-400">Data source</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <DataSourceBadge source={deriveDataSource(report)} />
+                <VerifiedBadge status={verification.status} reason={verification.reason} />
+              </div>
+            </div>
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-gray-400">Tables used</div>
+              <div className="mt-2 text-gray-900">{getReportTablesUsed(report).join(', ')}</div>
+            </div>
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-gray-400">Last run</div>
+              <div className="mt-2 text-gray-900">{formatReportTimestamp(report.lastRunAt)}</div>
+            </div>
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-gray-400">Created by</div>
+              <div className="mt-2 text-gray-900">{getReportCreatedByLabel(report)}</div>
+            </div>
+          </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap gap-2">
           <button
-            onClick={() => navigate(`/analytics/reports/${id}/edit`)}
-            className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
+            type="button"
+            onClick={() => runReport()}
+            disabled={running}
+            className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
           >
+            <Play className="h-4 w-4" />
+            Run
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate(`/analytics/reports/${id}/edit`)}
+            className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+          >
+            <Pencil className="h-4 w-4" />
             Edit
           </button>
           <button
-            onClick={() => navigate(`/analytics/reports/advanced/${id}`)}
-            className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50"
+            type="button"
+            onClick={() => navigate(`/analytics/reports/${id}/edit?mode=advanced`)}
+            className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
           >
+            <Pencil className="h-4 w-4" />
             Advanced
           </button>
-          <div className="relative group">
-            <button className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-50">
+          <button
+            type="button"
+            onClick={() => navigate(`/analytics/schedules?reportId=${id}`)}
+            className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+          >
+            <Calendar className="h-4 w-4" />
+            Schedule
+          </button>
+          <button
+            type="button"
+            onClick={handleDuplicate}
+            className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+          >
+            <Copy className="h-4 w-4" />
+            Duplicate
+          </button>
+          <button
+            type="button"
+            onClick={handleDelete}
+            className="inline-flex items-center gap-2 rounded-lg border border-rose-200 px-4 py-2 text-sm font-medium text-rose-700 hover:bg-rose-50"
+          >
+            <Trash2 className="h-4 w-4" />
+            Delete
+          </button>
+          <div className="group relative">
+            <button className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
               Export
             </button>
-            <div className="hidden group-hover:block absolute right-0 top-full mt-1 bg-white shadow-lg rounded-lg border border-gray-200 py-1 z-10">
+            <div className="absolute right-0 top-full z-10 mt-2 hidden min-w-40 rounded-lg border border-gray-200 bg-white py-1 shadow-lg group-hover:block">
               <button
+                type="button"
                 onClick={() => handleExport('csv')}
-                className="block w-full px-4 py-2 text-left text-sm hover:bg-gray-50"
+                className="block w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50"
               >
                 Export as CSV
               </button>
               <button
+                type="button"
                 onClick={() => handleExport('pdf')}
-                className="block w-full px-4 py-2 text-left text-sm hover:bg-gray-50"
+                className="block w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50"
               >
                 Export as PDF
               </button>
@@ -204,86 +298,33 @@ export default function ReportDetail() {
         </div>
       </div>
 
-      {/* Filters */}
-      <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-6">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <GlobalDateRangePicker
-              value={dateRange}
-              onChange={setDateRange}
-              showComparison={true}
-            />
-          </div>
-
-          <button
-            onClick={() => runReport()}
-            disabled={running}
-            className="px-6 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90 disabled:opacity-50 flex items-center gap-2"
-          >
-            {running && (
-              <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-              </svg>
-            )}
-            Run Report
-          </button>
+      <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <GlobalDateRangePicker
+            value={dateRange}
+            onChange={setDateRange}
+            showComparison={true}
+          />
+          <div className="text-sm text-gray-500">Showing results for {dateRangeLabel}</div>
         </div>
       </div>
 
-      {/* Results */}
-      {data && (
-        <div className="space-y-6">
-          <div className="text-sm text-gray-500">
-            Showing data for: {dateRangeLabel}
-          </div>
-
-          {report.chartType === 'KPI' && (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              {(data.metrics || []).map((metric, index) => (
-                <KPICard
-                  key={index}
-                  title={metric.label}
-                  value={metric.value}
-                  previousValue={metric.previousValue}
-                  format={metric.format || 'number'}
-                  emptyStateContext={emptyStateContext}
-                />
-              ))}
-            </div>
-          )}
-
-          {report.chartType === 'BAR' && (
-            <BarChartWidget
-              title={report.name}
-              data={data.chartData || []}
-              dataKey="value"
-              nameKey="name"
-              loading={running}
-              emptyStateContext={emptyStateContext}
-            />
-          )}
-
-          {(report.chartType === 'LINE' || report.chartType === 'AREA') && (
-            <LineChartWidget
-              title={report.name}
-              data={data.chartData || []}
-              lines={data.series || [{ dataKey: 'value', name: 'Value', color: 'primary' }]}
-              xAxisKey="date"
-              loading={running}
-              showArea={report.chartType === 'AREA'}
-              emptyStateContext={emptyStateContext}
-            />
-          )}
-
-          {report.chartType === 'TABLE' && (
-            <TableWidget
-              data={data.rows || []}
-              columns={(report.selectedFields || []).map((field) => ({ key: field, label: field }))}
-              emptyStateContext={emptyStateContext}
-              loading={running}
-            />
-          )}
+      {payload ? (
+        <ReportRenderer
+          report={report}
+          payload={payload}
+          loading={running}
+          title={report.name}
+          subtitle={payload?.data?.results?.period || payload?.results?.period || null}
+          emptyStateContext={emptyStateContext}
+        />
+      ) : (
+        <div className="rounded-2xl border border-dashed border-gray-300 bg-white px-6 py-14 text-center">
+          <Play className="mx-auto h-10 w-10 text-gray-300" />
+          <h3 className="mt-4 text-lg font-semibold text-gray-900">Run this report to load results</h3>
+          <p className="mt-2 text-sm text-gray-500">
+            The saved configuration is ready. Use the Run button to execute it for the selected date range.
+          </p>
         </div>
       )}
     </div>

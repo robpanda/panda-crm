@@ -77,7 +77,7 @@ function DashboardCard({ dashboard, verification }) {
         <VerifiedBadge status={verification.status} reason={verification.reason} />
       </div>
       <div className="mt-3 text-xs text-gray-400">
-        {dashboard.widgets?.length || 0} widgets
+        {dashboard.widgetCount || dashboard.widgets?.length || dashboard._count?.widgets || 0} widgets
       </div>
     </Link>
   );
