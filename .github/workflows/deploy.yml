@@ -26,6 +26,7 @@ on:
           - bamboogli
           - notifications
           - photocam
+          - reports
 
 env:
   AWS_REGION: us-east-2
@@ -52,6 +53,8 @@ jobs:
           - name: workorders
             port: 3005
           - name: quotes
+            port: 3006
+          - name: reports
             port: 3006
           - name: invoices
             port: 3007
