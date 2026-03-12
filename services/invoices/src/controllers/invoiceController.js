@@ -43,8 +43,9 @@ const lineItemSchema = z.object({
 
 const additionalChargeSchema = z.object({
   name: z.string().min(1).default('Supplement'),
-  amount: z.number().nonnegative(),
+  amount: z.number(),
   notes: z.string().optional().nullable(),
+  percentageOfTotal: z.number().nonnegative().optional().nullable(),
   chargeType: z.enum(['LATE_FEE', 'SERVICE_FEE', 'PROCESSING_FEE', 'ADJUSTMENT', 'OTHER']).optional(),
 });
 
@@ -114,6 +115,11 @@ function calculateTotals(lineItems, taxAmount = 0) {
     tax: tax.toNumber(),
     total: total.toNumber(),
   };
+}
+
+function stripInvoiceActivityMeta(notes) {
+  if (typeof notes !== 'string') return notes || '';
+  return notes.replace(/^\[\[actor:[^\]]+\]\]\s*/i, '').trim();
 }
 
 async function getFreshInvoicePdfUrl(pdfKey, expiresIn = 3600 * 24 * 7) {
@@ -478,7 +484,7 @@ export async function updateInvoice(req, res, next) {
       if (hasAdditionalCharges) {
         await tx.invoiceAdditionalCharge.deleteMany({ where: { invoiceId: id } });
         const normalizedCharges = data.additionalCharges
-          .filter((charge) => Number(charge.amount || 0) > 0)
+          .filter((charge) => Number(charge.amount || 0) !== 0)
           .map((charge) => ({
             invoiceId: id,
             name: charge.name || 'Supplement',
@@ -486,6 +492,7 @@ export async function updateInvoice(req, res, next) {
             fixedAmount: Number(charge.amount || 0),
             chargeType: charge.chargeType || 'ADJUSTMENT',
             notes: charge.notes || null,
+            percentageOfTotal: charge.percentageOfTotal ?? null,
           }));
         if (normalizedCharges.length > 0) {
           await tx.invoiceAdditionalCharge.createMany({ data: normalizedCharges });
@@ -1014,9 +1021,10 @@ async function generateInvoicePdfInternal(invoice) {
       const chargeAmount = Number(charge.amount ?? charge.fixedAmount ?? 0);
       page.drawText(chargeName, { x: tableLeft + 10, y, size: 10, font: fontRegular, color: COLORS.dark });
       page.drawText(formatCurrency(chargeAmount), { x: width - 130, y, size: 10, font: fontBold, color: COLORS.dark });
-      if (charge.notes) {
+      const chargeNotes = stripInvoiceActivityMeta(charge.notes);
+      if (chargeNotes) {
         y -= 12;
-        page.drawText(String(charge.notes).slice(0, 80), { x: tableLeft + 20, y, size: 8, font: fontRegular, color: COLORS.gray });
+        page.drawText(String(chargeNotes).slice(0, 80), { x: tableLeft + 20, y, size: 8, font: fontRegular, color: COLORS.gray });
       }
       y -= 18;
       page.drawLine({ start: { x: tableLeft, y: y + 8 }, end: { x: width - 50, y: y + 8 }, thickness: 0.5, color: COLORS.lightGray });

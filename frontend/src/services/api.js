@@ -6440,90 +6440,67 @@ export const subcontractorPortalApi = {
   },
 };
 
+const CUSTOMER_PORTAL_BASES = ['/api/opportunities/portal', '/api/portal'];
+
+const shouldRetryPortalRequest = (error) => [401, 403, 404].includes(error?.response?.status);
+
+async function requestCustomerPortal({ method = 'get', suffix, data, params }) {
+  let lastError = null;
+
+  for (const basePath of CUSTOMER_PORTAL_BASES) {
+    try {
+      const response = await publicApi.request({
+        method,
+        url: `${basePath}${suffix}`,
+        data,
+        params,
+      });
+      return response.data;
+    } catch (error) {
+      lastError = error;
+      if (!shouldRetryPortalRequest(error)) {
+        throw error;
+      }
+    }
+  }
+
+  throw lastError;
+}
+
 // Customer Portal API (Public - No Auth Required)
 export const customerPortalApi = {
   // Get project info by portal token
   async getProject(token) {
-    try {
-      const response = await publicApi.get(`/api/portal/${token}`);
-      return response.data;
-    } catch (error) {
-      if (error?.response?.status === 404) {
-        const response = await publicApi.get(`/api/opportunities/portal/${token}`);
-        return response.data;
-      }
-      throw error;
-    }
+    return requestCustomerPortal({ suffix: `/${token}` });
   },
 
   // Get project info by job id (fallback for legacy links)
   async getProjectByJobId(jobId) {
-    const response = await publicApi.get(`/api/portal/job/${jobId}`);
-    return response.data;
+    return requestCustomerPortal({ suffix: `/job/${jobId}` });
   },
 
   // Get workflow stages for timeline
   async getStages(token) {
-    try {
-      const response = await publicApi.get(`/api/portal/${token}/stages`);
-      return response.data;
-    } catch (error) {
-      if (error?.response?.status === 404) {
-        const response = await publicApi.get(`/api/opportunities/portal/${token}/stages`);
-        return response.data;
-      }
-      throw error;
-    }
+    return requestCustomerPortal({ suffix: `/${token}/stages` });
   },
 
   // Get photo galleries
   async getGalleries(token) {
-    try {
-      const response = await publicApi.get(`/api/portal/${token}/galleries`);
-      return response.data;
-    } catch (error) {
-      if (error?.response?.status === 404) {
-        const response = await publicApi.get(`/api/opportunities/portal/${token}/galleries`);
-        return response.data;
-      }
-      throw error;
-    }
+    return requestCustomerPortal({ suffix: `/${token}/galleries` });
   },
 
   // Send message to PM
   async sendMessage(token, message, senderName, senderPhone) {
-    try {
-      const response = await publicApi.post(`/api/portal/${token}/message`, {
-        message,
-        senderName,
-        senderPhone,
-      });
-      return response.data;
-    } catch (error) {
-      if (error?.response?.status === 404) {
-        const response = await publicApi.post(`/api/opportunities/portal/${token}/message`, {
-          message,
-          senderName,
-          senderPhone,
-        });
-        return response.data;
-      }
-      throw error;
-    }
+    return requestCustomerPortal({
+      method: 'post',
+      suffix: `/${token}/message`,
+      data: { message, senderName, senderPhone },
+    });
   },
 
   // Get customer's appointments
   async getAppointments(token) {
-    try {
-      const response = await publicApi.get(`/api/portal/${token}/appointments`);
-      return response.data;
-    } catch (error) {
-      if (error?.response?.status === 404) {
-        const response = await publicApi.get(`/api/opportunities/portal/${token}/appointments`);
-        return response.data;
-      }
-      throw error;
-    }
+    return requestCustomerPortal({ suffix: `/${token}/appointments` });
   },
 
   // Get available time slots
@@ -6531,112 +6508,49 @@ export const customerPortalApi = {
     const params = startDate && typeof startDate === 'object'
       ? startDate
       : { startDate, endDate, workTypeId };
-    try {
-      const response = await publicApi.get(`/api/portal/${token}/available-slots`, { params });
-      return response.data;
-    } catch (error) {
-      if ([404, 401, 403].includes(error?.response?.status)) {
-        const response = await publicApi.get(`/api/opportunities/portal/${token}/available-slots`, { params });
-        return response.data;
-      }
-      throw error;
-    }
+    return requestCustomerPortal({ suffix: `/${token}/available-slots`, params });
   },
 
   // Book a new appointment
   async bookAppointment(token, bookingData) {
-    try {
-      const response = await publicApi.post(`/api/portal/${token}/book`, bookingData);
-      return response.data;
-    } catch (error) {
-      if (error?.response?.status === 404) {
-        const response = await publicApi.post(`/api/opportunities/portal/${token}/book`, bookingData);
-        return response.data;
-      }
-      throw error;
-    }
+    return requestCustomerPortal({
+      method: 'post',
+      suffix: `/${token}/book`,
+      data: bookingData,
+    });
   },
 
   // Reschedule existing appointment
   async rescheduleAppointment(token, appointmentId, rescheduleData) {
-    try {
-      const response = await publicApi.post(
-        `/api/portal/${token}/appointments/${appointmentId}/reschedule`,
-        rescheduleData
-      );
-      return response.data;
-    } catch (error) {
-      if (error?.response?.status === 404) {
-        const response = await publicApi.post(
-          `/api/opportunities/portal/${token}/appointments/${appointmentId}/reschedule`,
-          rescheduleData
-        );
-        return response.data;
-      }
-      throw error;
-    }
+    return requestCustomerPortal({
+      method: 'post',
+      suffix: `/${token}/appointments/${appointmentId}/reschedule`,
+      data: rescheduleData,
+    });
   },
 
   // Cancel appointment
   async cancelAppointment(token, appointmentId, reason) {
-    try {
-      const response = await publicApi.post(
-        `/api/portal/${token}/appointments/${appointmentId}/cancel`,
-        { reason }
-      );
-      return response.data;
-    } catch (error) {
-      if (error?.response?.status === 404) {
-        const response = await publicApi.post(
-          `/api/opportunities/portal/${token}/appointments/${appointmentId}/cancel`,
-          { reason }
-        );
-        return response.data;
-      }
-      throw error;
-    }
+    return requestCustomerPortal({
+      method: 'post',
+      suffix: `/${token}/appointments/${appointmentId}/cancel`,
+      data: { reason },
+    });
   },
 
   // Get Stripe payment link
   async getPaymentLink(token) {
-    try {
-      const response = await publicApi.get(`/api/portal/${token}/payment-link`);
-      return response.data;
-    } catch (error) {
-      if (error?.response?.status === 404) {
-        const response = await publicApi.get(`/api/opportunities/portal/${token}/payment-link`);
-        return response.data;
-      }
-      throw error;
-    }
+    return requestCustomerPortal({ suffix: `/${token}/payment-link` });
   },
 
   // Get invoices + payments summary
   async getInvoices(token) {
-    try {
-      const response = await publicApi.get(`/api/portal/${token}/payments`);
-      return response.data;
-    } catch (error) {
-      if (error?.response?.status === 404) {
-        const response = await publicApi.get(`/api/opportunities/portal/${token}/payments`);
-        return response.data;
-      }
-      throw error;
-    }
+    return requestCustomerPortal({ suffix: `/${token}/payments` });
   },
 
   // Get payments info
   async getPayments(token) {
-    try {
-      const response = await publicApi.get(`/api/portal/${token}/payments`);
-      return response.data;
-    } catch (error) {
-      if (error?.response?.status === 404) {
-        const response = await publicApi.get(`/api/opportunities/portal/${token}/payments`);
-        return response.data;
-      }
-      throw error;
-    }
+    return requestCustomerPortal({ suffix: `/${token}/payments` });
   },
 };
 

@@ -17,6 +17,8 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024 }, // 50MB limit for screenshots/docs in replies
 });
 
+const PANDA_EMPLOYEE_EMAIL_DOMAINS = new Set(['pandaexteriors.com', 'panda-exteriors.com']);
+
 // S3 configuration
 const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-east-2' });
 const BUCKET_NAME = process.env.S3_BUCKET_NAME || 'panda-crm-support';
@@ -177,6 +179,66 @@ function buildTicketIdentifierWhere(rawTicketId) {
   };
 }
 
+function buildEmailLookupCandidates(email) {
+  if (typeof email !== 'string') return [];
+
+  const trimmed = email.trim();
+  if (!trimmed) return [];
+
+  const candidates = [];
+  const seen = new Set();
+
+  const addCandidate = (value) => {
+    const candidate = String(value || '').trim();
+    if (!candidate) return;
+    const key = candidate.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push(candidate);
+  };
+
+  const lowerEmail = trimmed.toLowerCase();
+  addCandidate(trimmed);
+  addCandidate(lowerEmail);
+
+  const atIndex = lowerEmail.lastIndexOf('@');
+  if (atIndex <= 0 || atIndex === lowerEmail.length - 1) {
+    return candidates;
+  }
+
+  const localPart = lowerEmail.slice(0, atIndex);
+  const domainPart = lowerEmail.slice(atIndex + 1);
+  addCandidate(`${localPart}@${domainPart}`);
+
+  if (PANDA_EMPLOYEE_EMAIL_DOMAINS.has(domainPart)) {
+    const dotlessLocalPart = localPart.replace(/\./g, '');
+    for (const domain of PANDA_EMPLOYEE_EMAIL_DOMAINS) {
+      addCandidate(`${localPart}@${domain}`);
+      addCandidate(`${dotlessLocalPart}@${domain}`);
+    }
+  }
+
+  return candidates;
+}
+
+function pickBestEmailMatch(users, emailCandidates) {
+  if (!Array.isArray(users) || !users.length) return null;
+  const rankedCandidates = emailCandidates.map((candidate) => candidate.toLowerCase());
+
+  return [...users].sort((a, b) => {
+    const aEmail = String(a.email || '').toLowerCase();
+    const bEmail = String(b.email || '').toLowerCase();
+    const aRank = rankedCandidates.indexOf(aEmail);
+    const bRank = rankedCandidates.indexOf(bEmail);
+    const safeARank = aRank === -1 ? Number.MAX_SAFE_INTEGER : aRank;
+    const safeBRank = bRank === -1 ? Number.MAX_SAFE_INTEGER : bRank;
+
+    if (safeARank !== safeBRank) return safeARank - safeBRank;
+    if (a.isActive !== b.isActive) return Number(b.isActive) - Number(a.isActive);
+    return 0;
+  })[0];
+}
+
 async function resolveAuthenticatedUser(authUser) {
   if (!authUser) return null;
 
@@ -209,16 +271,20 @@ async function resolveAuthenticatedUser(authUser) {
   }
 
   if (authUser.email) {
-    const byEmail = await prisma.user.findFirst({
+    const emailCandidates = buildEmailLookupCandidates(authUser.email);
+    const usersByEmail = await prisma.user.findMany({
       where: {
         isActive: true,
-        email: {
-          equals: String(authUser.email).trim(),
-          mode: 'insensitive',
-        },
+        OR: emailCandidates.map((candidate) => ({
+          email: {
+            equals: candidate,
+            mode: 'insensitive',
+          },
+        })),
       },
       select: SUPPORT_USER_SELECT,
     });
+    const byEmail = pickBestEmailMatch(usersByEmail, emailCandidates);
     if (byEmail) return byEmail;
   }
 

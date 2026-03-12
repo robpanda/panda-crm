@@ -109,16 +109,86 @@ import {
 
 const getInvoiceTotalValue = (invoice) => Number(invoice?.total ?? invoice?.totalAmount ?? 0);
 
+const INVOICE_ACTIVITY_META_PATTERN = /^\[\[actor:([^\]]+)\]\]\s*/i;
+
+const parseInvoiceActivityNotes = (notes) => {
+  const raw = typeof notes === 'string' ? notes : '';
+  const match = raw.match(INVOICE_ACTIVITY_META_PATTERN);
+  return {
+    actorName: match?.[1]?.trim() || null,
+    displayNotes: raw.replace(INVOICE_ACTIVITY_META_PATTERN, '').trim(),
+  };
+};
+
+const encodeInvoiceActivityNotes = (notes, actorName) => {
+  const baseNotes = parseInvoiceActivityNotes(notes).displayNotes;
+  if (!actorName) return baseNotes;
+  return `[[actor:${actorName}]] ${baseNotes}`.trim();
+};
+
+const computeInvoiceLineItemTotal = (item) => {
+  const quantity = Number(item?.quantity ?? 1);
+  const unitPrice = Number(item?.unitPrice ?? item?.price ?? 0);
+  const storedTotal = Number(item?.totalPrice ?? item?.totalAmount ?? item?.total);
+  const computedTotal = Number.isFinite(quantity * unitPrice) ? quantity * unitPrice : 0;
+
+  if (Number.isFinite(storedTotal) && storedTotal > 0) {
+    return storedTotal;
+  }
+
+  return computedTotal;
+};
+
+const normalizeInvoiceAdditionalCharge = (charge) => {
+  const amount = Number(charge?.amount ?? charge?.fixedAmount ?? 0);
+  const percentageOfTotal = charge?.percentageOfTotal === null || charge?.percentageOfTotal === undefined
+    ? null
+    : Number(charge.percentageOfTotal);
+  const { actorName, displayNotes } = parseInvoiceActivityNotes(charge?.notes);
+
+  return {
+    ...charge,
+    amount,
+    fixedAmount: Number(charge?.fixedAmount ?? amount ?? 0),
+    percentageOfTotal,
+    notes: displayNotes,
+    actorName,
+    isDiscount: amount < 0,
+  };
+};
+
 const normalizeInvoiceTotals = (invoice) => {
   if (!invoice || typeof invoice !== 'object') return invoice;
-  const total = getInvoiceTotalValue(invoice);
+  const normalizedLineItems = Array.isArray(invoice.lineItems)
+    ? invoice.lineItems.map((item) => {
+      const totalPrice = computeInvoiceLineItemTotal(item);
+      return {
+        ...item,
+        quantity: Number(item?.quantity ?? 1),
+        unitPrice: Number(item?.unitPrice ?? item?.price ?? 0),
+        totalPrice,
+      };
+    })
+    : [];
+  const normalizedCharges = Array.isArray(invoice.additionalCharges)
+    ? invoice.additionalCharges.map(normalizeInvoiceAdditionalCharge)
+    : [];
+  const computedSubtotal = normalizedLineItems.reduce((sum, item) => sum + Number(item.totalPrice || 0), 0);
+  const computedAdjustments = normalizedCharges.reduce((sum, charge) => sum + Number(charge.amount || 0), 0);
+  const tax = Number(invoice.tax ?? 0);
+  const storedTotal = getInvoiceTotalValue(invoice);
+  const computedTotal = computedSubtotal + tax + computedAdjustments;
+  const total = computedTotal > 0 ? computedTotal : storedTotal;
   const amountPaid = Number(invoice.amountPaid ?? 0);
   const balanceDue = invoice.balanceDue !== undefined && invoice.balanceDue !== null
-    ? Number(invoice.balanceDue)
+    ? Math.max(Number(invoice.balanceDue), 0)
     : Math.max(total - amountPaid, 0);
 
   return {
     ...invoice,
+    subtotal: computedSubtotal > 0 ? computedSubtotal : Number(invoice.subtotal ?? 0),
+    lineItems: normalizedLineItems,
+    additionalCharges: normalizedCharges,
     total,
     totalAmount: total,
     amountPaid,
@@ -233,7 +303,24 @@ function formatDateFromStoredValue(value) {
   const [year, month, day] = datePart.split('-').map((n) => Number(n));
   if (!year || !month || !day) return null;
   const utcDate = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
-  return utcDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+  return utcDate.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric', timeZone: 'UTC' });
+}
+
+function formatLocalAppointmentDateTime(value) {
+  if (!value) return 'Not scheduled';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return 'Not scheduled';
+  const date = parsed.toLocaleDateString('en-US', {
+    month: '2-digit',
+    day: '2-digit',
+    year: 'numeric',
+  });
+  const time = parsed.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+  return `${date} at ${time}`;
 }
 
 // SMS Modal Component with Canned Responses (same as LeadDetail)
@@ -632,6 +719,7 @@ function InvoiceDetailModal({
   onOpenSendInvoice,
   onOpenPayInvoice,
   activities = [],
+  currentUser,
 }) {
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -686,6 +774,42 @@ function InvoiceDetailModal({
     return parsed.toISOString().slice(0, 10);
   };
 
+  const actorDisplayName = currentUser?.fullName
+    || currentUser?.name
+    || `${currentUser?.firstName || ''} ${currentUser?.lastName || ''}`.trim()
+    || 'System User';
+
+  const getAdjustmentComputedAmount = useCallback((charge, subtotal = 0) => {
+    const entryKind = charge?.entryKind === 'discount' ? 'discount' : 'charge';
+    const calcMode = charge?.calcMode === 'percent' ? 'percent' : 'amount';
+    const rawValue = Number(charge?.inputValue ?? charge?.amount ?? 0);
+    if (!Number.isFinite(rawValue) || rawValue === 0) return 0;
+
+    const baseAmount = calcMode === 'percent'
+      ? Number(((subtotal * rawValue) / 100).toFixed(2))
+      : Math.abs(rawValue);
+
+    return entryKind === 'discount' ? -Math.abs(baseAmount) : Math.abs(baseAmount);
+  }, []);
+
+  const buildAdjustmentPayload = useCallback((charge, subtotal = 0) => {
+    const amount = getAdjustmentComputedAmount(charge, subtotal);
+    const entryKind = charge?.entryKind === 'discount' ? 'discount' : 'charge';
+    const calcMode = charge?.calcMode === 'percent' ? 'percent' : 'amount';
+    const displayName = charge?.name?.trim() || (entryKind === 'discount' ? 'Discount' : 'Supplement');
+    const persistedNotes = encodeInvoiceActivityNotes(charge?.notes || '', actorDisplayName);
+
+    return {
+      name: displayName,
+      amount,
+      notes: persistedNotes,
+      chargeType: 'ADJUSTMENT',
+      percentageOfTotal: entryKind === 'discount' && calcMode === 'percent'
+        ? Number(charge?.inputValue || 0)
+        : null,
+    };
+  }, [actorDisplayName, getAdjustmentComputedAmount]);
+
   const hydrateFormFromInvoice = useCallback((sourceInvoice) => ({
     invoiceDate: formatDateInput(sourceInvoice?.invoiceDate),
     dueDate: formatDateInput(sourceInvoice?.dueDate),
@@ -697,13 +821,21 @@ function InvoiceDetailModal({
       quantity: Number(item.quantity || 1),
       unitPrice: Number(item.unitPrice || item.price || 0),
     })),
-    additionalCharges: (sourceInvoice?.additionalCharges || []).map((charge) => ({
-      id: charge.id || null,
-      name: charge.name || 'Supplement',
-      amount: Number(charge.amount || charge.fixedAmount || 0),
-      notes: charge.notes || '',
-      chargeType: charge.chargeType || 'ADJUSTMENT',
-    })),
+    additionalCharges: (sourceInvoice?.additionalCharges || []).map((charge) => {
+      const normalizedCharge = normalizeInvoiceAdditionalCharge(charge);
+      return {
+        id: normalizedCharge.id || null,
+        name: normalizedCharge.name || (normalizedCharge.isDiscount ? 'Discount' : 'Supplement'),
+        amount: normalizedCharge.amount,
+        notes: normalizedCharge.notes || '',
+        chargeType: normalizedCharge.chargeType || 'ADJUSTMENT',
+        entryKind: normalizedCharge.isDiscount ? 'discount' : 'charge',
+        calcMode: normalizedCharge.percentageOfTotal ? 'percent' : 'amount',
+        inputValue: normalizedCharge.percentageOfTotal
+          ? Math.abs(Number(normalizedCharge.percentageOfTotal || 0))
+          : Math.abs(Number(normalizedCharge.amount || 0)),
+      };
+    }),
   }), []);
 
   useEffect(() => {
@@ -737,11 +869,31 @@ function InvoiceDetailModal({
     () => form.lineItems.reduce((sum, item) => sum + (Number(item.quantity) * Number(item.unitPrice)), 0),
     [form.lineItems]
   );
-  const supplementsTotal = useMemo(
-    () => form.additionalCharges.reduce((sum, charge) => sum + Number(charge.amount || 0), 0),
-    [form.additionalCharges]
+  const normalizedAdjustments = useMemo(
+    () => form.additionalCharges.map((charge) => ({
+      ...charge,
+      amount: getAdjustmentComputedAmount(charge, lineItemsSubtotal),
+    })),
+    [form.additionalCharges, getAdjustmentComputedAmount, lineItemsSubtotal]
   );
-  const computedTotal = lineItemsSubtotal + Number(form.tax || 0) + supplementsTotal;
+  const supplementsTotal = useMemo(
+    () => normalizedAdjustments.filter((charge) => Number(charge.amount || 0) > 0)
+      .reduce((sum, charge) => sum + Number(charge.amount || 0), 0),
+    [normalizedAdjustments]
+  );
+  const discountsTotal = useMemo(
+    () => Math.abs(
+      normalizedAdjustments
+        .filter((charge) => Number(charge.amount || 0) < 0)
+        .reduce((sum, charge) => sum + Number(charge.amount || 0), 0)
+    ),
+    [normalizedAdjustments]
+  );
+  const adjustmentsNetTotal = useMemo(
+    () => normalizedAdjustments.reduce((sum, charge) => sum + Number(charge.amount || 0), 0),
+    [normalizedAdjustments]
+  );
+  const computedTotal = lineItemsSubtotal + Number(form.tax || 0) + adjustmentsNetTotal;
   const invoiceAmountPaid = Number(invoice.amountPaid || 0);
   const computedBalanceDue = Math.max(computedTotal - invoiceAmountPaid, 0);
 
@@ -750,7 +902,7 @@ function InvoiceDetailModal({
   const canPay = invoice.status !== 'PAID' && Number(invoice.balanceDue || 0) > 0;
   const activityItems = useMemo(() => {
     const rawItems = Array.isArray(activities) ? activities : [];
-    return rawItems
+    const communicationItems = rawItems
       .filter((item) => {
         const type = String(item?.activityType || item?.type || '').toLowerCase();
         return type.includes('sms') || type.includes('email') || type.includes('phone') || type.includes('call');
@@ -760,9 +912,24 @@ function InvoiceDetailModal({
         label: String(item?.activityType || item?.type || 'Activity').replace(/_/g, ' '),
         timestamp: item.createdAt || item.date || item.updatedAt || null,
         summary: item.subject || item.title || item.body || item.message || item.description || 'Communication activity',
-      }))
+      }));
+    const invoiceAdjustmentItems = (invoice.additionalCharges || [])
+      .filter((charge) => Number(charge.amount || 0) !== 0)
+      .map((charge) => {
+        const details = normalizeInvoiceAdditionalCharge(charge);
+        const label = details.amount < 0 ? 'discount added' : 'adjustment added';
+        const notes = details.notes || (details.amount < 0 ? details.name || 'Discount' : details.name || 'Adjustment');
+        const actorName = details.actorName || 'Unknown user';
+        return {
+          id: `invoice-adjustment-${details.id || details.name}-${details.createdAt || ''}`,
+          label,
+          timestamp: details.createdAt || details.updatedAt || null,
+          summary: `${actorName} added ${details.name || (details.amount < 0 ? 'a discount' : 'an adjustment')}${notes ? ` • ${notes}` : ''}`,
+        };
+      });
+    return [...communicationItems, ...invoiceAdjustmentItems]
       .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
-  }, [activities]);
+  }, [activities, invoice.additionalCharges]);
   const lastContactedAt = activityItems[0]?.timestamp || null;
 
   const updateInvoiceMutation = useMutation({
@@ -815,10 +982,16 @@ function InvoiceDetailModal({
   const handleAdditionalChargeChange = (index, key, value) => {
     setForm((prev) => {
       const updated = [...prev.additionalCharges];
+      const normalizedValue = ['amount', 'inputValue', 'percentageOfTotal'].includes(key)
+        ? Number(value || 0)
+        : value;
       updated[index] = {
         ...updated[index],
-        [key]: key === 'amount' ? Number(value) : value,
+        [key]: normalizedValue,
       };
+      if (key === 'entryKind' && value === 'charge') {
+        updated[index].calcMode = 'amount';
+      }
       return { ...prev, additionalCharges: updated };
     });
   };
@@ -854,13 +1027,8 @@ function InvoiceDetailModal({
         unitPrice: Number(item.unitPrice || 0),
       })),
       additionalCharges: form.additionalCharges
-        .filter((charge) => Number(charge.amount || 0) > 0)
-        .map((charge) => ({
-          name: charge.name?.trim() || 'Supplement',
-          amount: Number(charge.amount || 0),
-          notes: charge.notes || '',
-          chargeType: 'ADJUSTMENT',
-        })),
+        .map((charge) => buildAdjustmentPayload(charge, lineItemsSubtotal))
+        .filter((charge) => Number(charge.amount || 0) !== 0),
     };
 
     updateInvoiceMutation.mutate(payload);
@@ -1089,46 +1257,101 @@ function InvoiceDetailModal({
 
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <h4 className="text-sm font-semibold text-gray-800">Supplements / Additional Charges</h4>
-                  <button
-                    type="button"
-                    onClick={() => setForm((prev) => ({
-                      ...prev,
-                      additionalCharges: [
-                        ...prev.additionalCharges,
-                        { name: 'Supplement', amount: 0, notes: '', chargeType: 'ADJUSTMENT' },
-                      ],
-                    }))}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-panda-primary bg-white border border-panda-primary/20 rounded-md hover:bg-panda-primary/5"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    Add Charge
-                  </button>
+                  <h4 className="text-sm font-semibold text-gray-800">Adjustments</h4>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setForm((prev) => ({
+                        ...prev,
+                        additionalCharges: [
+                          ...prev.additionalCharges,
+                          {
+                            name: 'Supplement',
+                            amount: 0,
+                            inputValue: 0,
+                            notes: '',
+                            chargeType: 'ADJUSTMENT',
+                            entryKind: 'charge',
+                            calcMode: 'amount',
+                          },
+                        ],
+                      }))}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-panda-primary bg-white border border-panda-primary/20 rounded-md hover:bg-panda-primary/5"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      Add Charge
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setForm((prev) => ({
+                        ...prev,
+                        additionalCharges: [
+                          ...prev.additionalCharges,
+                          {
+                            name: 'Discount',
+                            amount: 0,
+                            inputValue: 0,
+                            notes: '',
+                            chargeType: 'ADJUSTMENT',
+                            entryKind: 'discount',
+                            calcMode: 'amount',
+                          },
+                        ],
+                      }))}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-red-600 bg-white border border-red-200 rounded-md hover:bg-red-50"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      Add Discount
+                    </button>
+                  </div>
                 </div>
                 <div className="space-y-2">
                   {form.additionalCharges.map((charge, index) => (
-                    <div key={`charge-${index}`} className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center bg-white border border-gray-200 rounded-lg p-2">
+                    <div key={`charge-${index}`} className="grid grid-cols-1 gap-2 rounded-lg border border-gray-200 bg-white p-3 sm:grid-cols-12">
                       <input
                         type="text"
                         value={charge.name}
                         onChange={(event) => handleAdditionalChargeChange(index, 'name', event.target.value)}
-                        placeholder="Charge name"
-                        className="sm:col-span-4 border border-gray-300 rounded px-2 py-1.5 text-sm"
+                        placeholder="Adjustment name"
+                        className="sm:col-span-3 border border-gray-300 rounded px-2 py-1.5 text-sm"
                       />
+                      <select
+                        value={charge.entryKind || 'charge'}
+                        onChange={(event) => handleAdditionalChargeChange(index, 'entryKind', event.target.value)}
+                        className="sm:col-span-2 border border-gray-300 rounded px-2 py-1.5 text-sm"
+                      >
+                        <option value="charge">Charge</option>
+                        <option value="discount">Discount</option>
+                      </select>
+                      {(charge.entryKind || 'charge') === 'discount' && (
+                        <select
+                          value={charge.calcMode || 'amount'}
+                          onChange={(event) => handleAdditionalChargeChange(index, 'calcMode', event.target.value)}
+                          className="sm:col-span-2 border border-gray-300 rounded px-2 py-1.5 text-sm"
+                        >
+                          <option value="amount">Amount</option>
+                          <option value="percent">Percent</option>
+                        </select>
+                      )}
                       <input
                         type="number"
                         min="0"
                         step="0.01"
-                        value={charge.amount}
-                        onChange={(event) => handleAdditionalChargeChange(index, 'amount', event.target.value)}
-                        className="sm:col-span-3 border border-gray-300 rounded px-2 py-1.5 text-sm"
+                        value={charge.inputValue ?? Math.abs(Number(charge.amount || 0))}
+                        onChange={(event) => handleAdditionalChargeChange(index, 'inputValue', event.target.value)}
+                        className={`${(charge.entryKind || 'charge') === 'discount' ? 'sm:col-span-2' : 'sm:col-span-3'} border border-gray-300 rounded px-2 py-1.5 text-sm`}
                       />
+                      {(charge.entryKind || 'charge') === 'discount' && (charge.calcMode || 'amount') === 'percent' && (
+                        <div className="sm:col-span-1 flex items-center text-xs font-medium text-gray-500">
+                          %
+                        </div>
+                      )}
                       <input
                         type="text"
                         value={charge.notes}
                         onChange={(event) => handleAdditionalChargeChange(index, 'notes', event.target.value)}
                         placeholder="Notes"
-                        className="sm:col-span-4 border border-gray-300 rounded px-2 py-1.5 text-sm"
+                        className={`${(charge.entryKind || 'charge') === 'discount' && (charge.calcMode || 'amount') === 'percent' ? 'sm:col-span-3' : 'sm:col-span-4'} border border-gray-300 rounded px-2 py-1.5 text-sm`}
                       />
                       <button
                         type="button"
@@ -1143,6 +1366,9 @@ function InvoiceDetailModal({
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
+                      <div className="sm:col-span-12 text-xs text-gray-500">
+                        Saved amount: {formatCurrency(getAdjustmentComputedAmount(charge, lineItemsSubtotal))}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1166,6 +1392,10 @@ function InvoiceDetailModal({
                 <div className="flex items-center justify-between">
                   <span className="text-gray-600">Supplements / Charges</span>
                   <span className="font-medium">{formatCurrency(supplementsTotal)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-600">Discounts</span>
+                  <span className="font-medium text-red-600">-{formatCurrency(discountsTotal)}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-gray-600">Tax</span>
@@ -1219,7 +1449,7 @@ function InvoiceDetailModal({
             </div>
           )}
 
-          {!isEditing && activeInvoiceTab === 'details' && Array.isArray(invoice.additionalCharges) && invoice.additionalCharges.length > 0 && (
+          {!isEditing && activeInvoiceTab === 'details' && Array.isArray(invoice.additionalCharges) && invoice.additionalCharges.some((charge) => Number(charge.amount || charge.fixedAmount || 0) > 0) && (
             <div>
               <h3 className="text-sm font-medium text-gray-900 mb-2">Supplements / Additional Charges</h3>
               <div className="border rounded-lg overflow-hidden">
@@ -1232,10 +1462,36 @@ function InvoiceDetailModal({
                     </tr>
                   </thead>
                   <tbody>
-                    {invoice.additionalCharges.map((charge, idx) => (
+                    {invoice.additionalCharges.filter((charge) => Number(charge.amount || charge.fixedAmount || 0) > 0).map((charge, idx) => (
                       <tr key={charge.id || idx} className="border-t">
                         <td className="p-2">{charge.name || 'Supplement'}</td>
                         <td className="p-2 text-right">{formatCurrency(charge.amount || charge.fixedAmount)}</td>
+                        <td className="p-2 text-gray-600">{charge.notes || '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {!isEditing && activeInvoiceTab === 'details' && Array.isArray(invoice.additionalCharges) && invoice.additionalCharges.some((charge) => Number(charge.amount || charge.fixedAmount || 0) < 0) && (
+            <div>
+              <h3 className="text-sm font-medium text-gray-900 mb-2">Discounts</h3>
+              <div className="border rounded-lg overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="text-left p-2 text-gray-600">Name</th>
+                      <th className="text-right p-2 text-gray-600">Amount</th>
+                      <th className="text-left p-2 text-gray-600">Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invoice.additionalCharges.filter((charge) => Number(charge.amount || charge.fixedAmount || 0) < 0).map((charge, idx) => (
+                      <tr key={charge.id || idx} className="border-t">
+                        <td className="p-2">{charge.name || 'Discount'}</td>
+                        <td className="p-2 text-right text-red-600">-{formatCurrency(Math.abs(Number(charge.amount || charge.fixedAmount || 0)))}</td>
                         <td className="p-2 text-gray-600">{charge.notes || '-'}</td>
                       </tr>
                     ))}
@@ -6519,13 +6775,7 @@ export default function OpportunityDetail() {
                           <div className="flex items-center text-gray-500">
                             <Clock className="w-4 h-4 mr-1" />
                             {apt.scheduledStart ? (
-                              <span>
-                                {new Date(apt.scheduledStart).toLocaleDateString('en-US', {
-                                  weekday: 'short', month: 'short', day: 'numeric'
-                                })} at {new Date(apt.scheduledStart).toLocaleTimeString('en-US', {
-                                  hour: 'numeric', minute: '2-digit'
-                                })}
-                              </span>
+                              <span>{formatLocalAppointmentDateTime(apt.scheduledStart)}</span>
                             ) : (
                               <span>Not scheduled</span>
                             )}
@@ -12014,11 +12264,7 @@ export default function OpportunityDetail() {
                 </p>
                 {selectedAppointmentForCrew.scheduledStart && (
                   <p className="text-xs text-gray-500 mt-1">
-                    {new Date(selectedAppointmentForCrew.scheduledStart).toLocaleDateString('en-US', {
-                      weekday: 'short', month: 'short', day: 'numeric'
-                    })} at {new Date(selectedAppointmentForCrew.scheduledStart).toLocaleTimeString('en-US', {
-                      hour: 'numeric', minute: '2-digit'
-                    })}
+                    {formatLocalAppointmentDateTime(selectedAppointmentForCrew.scheduledStart)}
                   </p>
                 )}
                 {selectedAppointmentForCrew.assignedResource && (
@@ -12747,6 +12993,7 @@ export default function OpportunityDetail() {
         <InvoiceDetailModal
           invoice={selectedInvoice}
           activities={activityData?.activities || []}
+          currentUser={currentUser}
           onInvoiceUpdated={(updatedInvoice) => {
             const normalizedInvoice = normalizeInvoiceTotals(updatedInvoice);
             queryClient.invalidateQueries({ queryKey: ['opportunityInvoices', id] });
