@@ -20,6 +20,23 @@ import CommunicationsTab from '../components/CommunicationsTab';
 import UserSearchDropdown from '../components/UserSearchDropdown';
 import { WIZARD_LEAD_SOURCES } from '../constants/leadOptions';
 
+function resolveMergeFieldValue(source, path) {
+  if (!source || !path) return '';
+  return String(path)
+    .split('.')
+    .filter(Boolean)
+    .reduce((value, key) => (value !== undefined && value !== null ? value[key] : undefined), source) ?? '';
+}
+
+function interpolateMergeFields(template, mergeData = {}) {
+  if (!template) return '';
+  return String(template).replace(/\{\{\s*([^}]+?)\s*\}\}|\{([a-zA-Z0-9_.]+)\}/g, (match, dottedKey, simpleKey) => {
+    const key = (dottedKey || simpleKey || '').trim();
+    const resolved = resolveMergeFieldValue(mergeData, key);
+    return resolved === undefined || resolved === null ? '' : String(resolved);
+  });
+}
+
 // SMS Modal Component with Canned Responses
 function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {} }) {
   const [message, setMessage] = useState('');
@@ -56,8 +73,6 @@ function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {
 
     const template = templates.find((t) => t.id === templateId);
     if (template) {
-      // Interpolate merge fields
-      let interpolated = template.body || '';
       const data = {
         firstName: mergeData.firstName || '',
         lastName: mergeData.lastName || '',
@@ -66,13 +81,7 @@ function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {
         phone: mergeData.phone || phone,
         ...mergeData,
       };
-
-      // Replace {{variable}} and {variable} patterns
-      interpolated = interpolated.replace(/\{\{?(\w+)\}?\}/g, (match, key) => {
-        return data[key] !== undefined && data[key] !== '' ? data[key] : match;
-      });
-
-      setMessage(interpolated);
+      setMessage(interpolateMergeFields(template.body || '', data));
     }
   };
 
@@ -252,20 +261,8 @@ function EmailModal({ isOpen, onClose, email, recipientName, onSent, mergeData =
         ...mergeData,
       };
 
-      // Interpolate subject
-      let interpolatedSubject = template.subject || '';
-      interpolatedSubject = interpolatedSubject.replace(/\{\{?(\w+)\}?\}/g, (match, key) => {
-        return data[key] !== undefined && data[key] !== '' ? data[key] : match;
-      });
-
-      // Interpolate body
-      let interpolatedBody = template.body || '';
-      interpolatedBody = interpolatedBody.replace(/\{\{?(\w+)\}?\}/g, (match, key) => {
-        return data[key] !== undefined && data[key] !== '' ? data[key] : match;
-      });
-
-      setSubject(interpolatedSubject);
-      setBody(interpolatedBody);
+      setSubject(interpolateMergeFields(template.subject || '', data));
+      setBody(interpolateMergeFields(template.body || '', data));
     }
   };
 
@@ -609,35 +606,17 @@ export default function LeadDetail() {
   useEffect(() => {
     if (!lead?.id || !user?.id) return;
     const name = [lead.firstName, lead.lastName].filter(Boolean).join(' ');
-    const label = name || lead.company || 'Lead';
-    const meta = lead.email || lead.phone || lead.city || lead.street || '';
+    const title = name || lead.company || 'Lead';
+    const subtitle = lead.email || lead.phone || lead.city || lead.street || '';
     addRecentItem('leads', user.id, {
       id: lead.id,
-      label,
-      meta,
-      path: `/leads/${lead.id}`,
+      title,
+      subtitle,
+      url: `/leads/${lead.id}`,
     });
   }, [lead?.id, user?.id]);
 
-  const userIdentityCandidates = [
-    user?.id,
-    user?.userId,
-    user?.cognitoId,
-    user?.sub,
-    user?.email ? String(user.email).toLowerCase() : null,
-  ].filter(Boolean).map((value) => String(value));
-  const leadOwnerIdentityCandidates = [
-    lead?.ownerId,
-    lead?.owner?.id,
-    lead?.owner?.cognitoId,
-    lead?.owner?.email ? String(lead.owner.email).toLowerCase() : null,
-  ].filter(Boolean).map((value) => String(value));
-  const isOwner = userIdentityCandidates.some((value) => leadOwnerIdentityCandidates.includes(value));
-  const normalizedRoleType = String(user?.roleType || user?.role?.roleType || '').toLowerCase();
-  const normalizedRoleName = String(typeof user?.role === 'string' ? user.role : user?.role?.name || '').toLowerCase();
-  const canConvertLead = isOwner
-    || ['admin', 'executive', 'office_manager', 'sales_manager', 'call_center_manager'].includes(normalizedRoleType)
-    || /(admin|manager|executive)/.test(normalizedRoleName);
+  const isOwner = Boolean(user?.id && (lead?.ownerId === user.id || lead?.owner?.id === user.id));
   useEffect(() => {
     if (!lead || leadActionStep !== 'noInspection') return;
     if (isSuggestingInspectionSlot) return;
@@ -753,7 +732,9 @@ export default function LeadDetail() {
     try {
       await leadsApi.selectSalesPath(id, path);
       queryClient.invalidateQueries(['lead', id]);
-      await handleConvert();
+      await handleConvert({
+        opportunityType: path,
+      });
     } catch (error) {
       alert(error?.message || 'Unable to select sales path.');
     }
@@ -1044,9 +1025,9 @@ export default function LeadDetail() {
               {lead.status !== 'CONVERTED' && !lead.isConverted && (
                 <button
                   onClick={() => handleConvert()}
-                  disabled={convertMutation.isPending || !canConvertLead}
+                  disabled={convertMutation.isPending || !isOwner}
                   className={`flex items-center space-x-2 px-4 py-2 rounded-lg ${
-                    convertMutation.isPending || !canConvertLead
+                    convertMutation.isPending || !isOwner
                       ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                       : 'bg-gradient-to-r from-green-500 to-emerald-500 text-white hover:opacity-90'
                   }`}
@@ -1625,14 +1606,12 @@ export default function LeadDetail() {
               <div className="flex justify-between">
                 <span className="text-gray-500">Tentative Date</span>
                 <span className="text-gray-900">
-                  {lead.tentativeAppointmentDate
-                    ? lead.tentativeAppointmentDate.split('T')[0]
-                    : '-'}
+                  {formatAppointmentDateDisplay(lead.tentativeAppointmentDate)}
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">Tentative Time</span>
-                <span className="text-gray-900">{lead.tentativeAppointmentTime || '-'}</span>
+                <span className="text-gray-900">{formatAppointmentTimeDisplay(lead.tentativeAppointmentTime)}</span>
               </div>
             </div>
           )}
@@ -1686,6 +1665,17 @@ export default function LeadDetail() {
           state: lead.state,
           status: lead.status,
           leadSource: lead.source,
+          contact: {
+            firstName: lead.firstName,
+            lastName: lead.lastName,
+            fullName: `${lead.firstName} ${lead.lastName}`,
+            email: lead.email,
+            phone: lead.mobilePhone || lead.phone,
+          },
+          appointment: {
+            date: formatAppointmentDateDisplay(lead.tentativeAppointmentDate),
+            time: formatAppointmentTimeDisplay(lead.tentativeAppointmentTime),
+          },
         }}
         onSent={() => {
           // Optionally refresh data or show success toast
@@ -1712,6 +1702,17 @@ export default function LeadDetail() {
           state: lead.state,
           status: lead.status,
           leadSource: lead.source,
+          contact: {
+            firstName: lead.firstName,
+            lastName: lead.lastName,
+            fullName: `${lead.firstName} ${lead.lastName}`,
+            email: lead.email,
+            phone: lead.mobilePhone || lead.phone,
+          },
+          appointment: {
+            date: formatAppointmentDateDisplay(lead.tentativeAppointmentDate),
+            time: formatAppointmentTimeDisplay(lead.tentativeAppointmentTime),
+          },
         }}
         onSent={() => {
           // Optionally refresh data or show success toast
@@ -1753,9 +1754,9 @@ export default function LeadDetail() {
               <button
                 type="button"
                 onClick={() => handleConvert()}
-                disabled={!canConvertLead}
+                disabled={!isOwner}
                 className={`w-full px-4 py-2 rounded-lg ${
-                  canConvertLead
+                  isOwner
                     ? 'bg-green-600 text-white hover:bg-green-700'
                     : 'bg-gray-200 text-gray-400 cursor-not-allowed'
                 }`}

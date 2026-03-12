@@ -19,6 +19,22 @@ import {
 } from 'lucide-react';
 import api from '../../services/api';
 
+const buildFallbackStats = (tickets = []) => {
+  const normalizedTickets = Array.isArray(tickets) ? tickets : [];
+  const totalOpen = normalizedTickets.filter((ticket) => !['RESOLVED', 'CLOSED'].includes(ticket.status)).length;
+  const resolvedCount = normalizedTickets.filter((ticket) => ['RESOLVED', 'CLOSED'].includes(ticket.status)).length;
+  const unassigned = normalizedTickets.filter((ticket) => !ticket.assigned_to_id).length;
+
+  return {
+    totalOpen,
+    unassigned,
+    avgResponseTime: null,
+    resolutionRate: normalizedTickets.length
+      ? Math.round((resolvedCount / normalizedTickets.length) * 100)
+      : 0,
+  };
+};
+
 const STATUS_CONFIG = {
   NEW: { label: 'New', color: 'bg-blue-100 text-blue-700', icon: Circle },
   IN_PROGRESS: { label: 'In Progress', color: 'bg-yellow-100 text-yellow-700', icon: Clock },
@@ -38,6 +54,7 @@ export default function AdminSupportTickets() {
   const [priorityFilter, setPriorityFilter] = useState('all');
   const [assignedFilter, setAssignedFilter] = useState('all');
   const [stats, setStats] = useState(null);
+  const [loadError, setLoadError] = useState('');
 
   useEffect(() => {
     loadAllTickets();
@@ -47,10 +64,25 @@ export default function AdminSupportTickets() {
   const loadAllTickets = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/api/support/admin/tickets');
-      setTickets(response.data.tickets || []);
+      setLoadError('');
+      const response = await api.get('/api/support/tickets');
+      const ticketList = response.data.tickets || [];
+      setTickets(ticketList);
+      setStats((prev) => prev || buildFallbackStats(ticketList));
     } catch (error) {
       console.error('Failed to load tickets:', error);
+      try {
+        const fallbackResponse = await api.get('/api/support/admin/tickets');
+        const ticketList = fallbackResponse.data.tickets || [];
+        setTickets(ticketList);
+        setStats(buildFallbackStats(ticketList));
+        setLoadError('Loaded support tickets using the admin fallback path.');
+      } catch (fallbackError) {
+        console.error('Failed to load tickets:', fallbackError);
+        setTickets([]);
+        setStats(buildFallbackStats([]));
+        setLoadError('Failed to load tickets');
+      }
     } finally {
       setLoading(false);
     }
@@ -62,6 +94,7 @@ export default function AdminSupportTickets() {
       setStats(response.data);
     } catch (error) {
       console.error('Failed to load stats:', error);
+      setStats((prev) => prev || buildFallbackStats(tickets));
     }
   };
 
@@ -149,6 +182,12 @@ export default function AdminSupportTickets() {
           </button>
         </div>
       </div>
+
+      {loadError && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          {loadError}
+        </div>
+      )}
 
       {/* Stats Grid */}
       {stats && (

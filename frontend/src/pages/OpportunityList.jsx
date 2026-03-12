@@ -360,22 +360,22 @@ export default function OpportunityList() {
 
         {/* Search and Filters */}
         <div className="p-4 border-b border-gray-100">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:gap-4">
-            <div className="w-full lg:flex-1 relative">
+          <div className="flex flex-col xl:flex-row xl:items-center gap-4">
+            <div className="w-full xl:flex-1 relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
               <input
                 type="text"
                 value={search}
                 onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-                placeholder="Search by job #, name, email, phone, or address..."
+                placeholder="Search jobs, account, email, phone, address..."
                 className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none"
               />
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:flex lg:items-center gap-3 w-full lg:w-auto">
+            <div className="flex flex-col sm:flex-row gap-3 w-full xl:w-auto">
               <select
                 value={stage}
                 onChange={(e) => { setStage(e.target.value); setPage(1); }}
-                className="w-full lg:w-auto px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none bg-white"
+                className="w-full sm:w-auto px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none bg-white"
               >
                 {stageOptions.map((opt) => (
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -384,7 +384,7 @@ export default function OpportunityList() {
               <select
                 value={type}
                 onChange={(e) => { setType(e.target.value); setPage(1); }}
-                className="w-full lg:w-auto px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none bg-white"
+                className="w-full sm:w-auto px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none bg-white"
               >
                 {typeOptions.map((opt) => (
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -392,7 +392,7 @@ export default function OpportunityList() {
               </select>
               <button
                 onClick={() => setShowFilters(!showFilters)}
-                className={`w-full lg:w-auto inline-flex items-center justify-center px-4 py-2 border rounded-lg transition-colors ${
+                className={`inline-flex items-center justify-center px-4 py-2 border rounded-lg transition-colors ${
                   showFilters || hasActiveFilters
                     ? 'border-panda-primary bg-panda-primary/5 text-panda-primary'
                     : 'border-gray-200 text-gray-600 hover:bg-gray-50'
@@ -407,13 +407,13 @@ export default function OpportunityList() {
               {hasActiveFilters && (
                 <button
                   onClick={clearFilters}
-                  className="w-full lg:w-auto flex items-center justify-center space-x-1 px-3 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg"
+                  className="flex items-center justify-center space-x-1 px-3 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg"
                 >
                   <X className="w-4 h-4" />
                   <span>Clear</span>
                 </button>
               )}
-              <div className="w-full lg:w-auto lg:ml-1">
+              <div className="w-full sm:w-auto">
                 <ColumnSelector
                   columns={COLUMN_DEFINITIONS}
                   visibleColumns={visibleColumns}
@@ -671,7 +671,7 @@ export default function OpportunityList() {
                     )}
                     {isColumnVisible('account') && (
                       <td className="px-6 py-4 text-sm text-gray-600">
-                        {opp.account?.name || opp.accountName || '-'}
+                        {opp.accountName || '-'}
                       </td>
                     )}
                     {isColumnVisible('amount') && (
@@ -690,7 +690,7 @@ export default function OpportunityList() {
                     )}
                     {isColumnVisible('type') && (
                       <td className="px-6 py-4 text-sm text-gray-600">
-                        {opp.type || '-'}
+                        {opp.workType || ''}
                       </td>
                     )}
                     {isColumnVisible('closeDate') && (
@@ -698,7 +698,11 @@ export default function OpportunityList() {
                         {opp.closeDate ? (
                           <span className="flex items-center">
                             <Calendar className="w-3 h-3 mr-1" />
-                            {new Date(opp.closeDate).toLocaleDateString()}
+                            {new Date(opp.closeDate).toLocaleDateString('en-US', {
+                              month: '2-digit',
+                              day: '2-digit',
+                              year: 'numeric',
+                            })}
                           </span>
                         ) : '-'}
                       </td>
@@ -710,7 +714,11 @@ export default function OpportunityList() {
                     )}
                     {isColumnVisible('createdAt') && (
                       <td className="px-6 py-4 text-sm text-gray-600">
-                        {opp.createdAt ? new Date(opp.createdAt).toLocaleDateString() : '-'}
+                        {opp.createdAt ? new Date(opp.createdAt).toLocaleDateString('en-US', {
+                          month: '2-digit',
+                          day: '2-digit',
+                          year: 'numeric',
+                        }) : '-'}
                       </td>
                     )}
                     {isColumnVisible('source') && (

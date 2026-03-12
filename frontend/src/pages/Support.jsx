@@ -57,7 +57,7 @@ export default function Support() {
 
   useEffect(() => {
     loadTickets();
-  }, [user?.id]);
+  }, []);
 
   const loadTickets = async () => {
     try {

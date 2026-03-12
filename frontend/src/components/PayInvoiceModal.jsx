@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { loadStripe } from '@stripe/stripe-js';
 import {
   Elements,
-  PaymentElement,
+  CardElement,
   useStripe,
   useElements,
 } from '@stripe/react-stripe-js';
@@ -19,6 +19,25 @@ import {
   Building2,
 } from 'lucide-react';
 
+const CARD_ELEMENT_OPTIONS = {
+  hidePostalCode: true,
+  disableLink: true,
+  style: {
+    base: {
+      fontSize: '16px',
+      color: '#1f2937',
+      fontFamily: 'Inter, system-ui, sans-serif',
+      '::placeholder': {
+        color: '#9ca3af',
+      },
+    },
+    invalid: {
+      color: '#dc2626',
+      iconColor: '#dc2626',
+    },
+  },
+};
+
 // Payment Form Component (uses Stripe hooks)
 function PaymentForm({ invoice, paymentAmount, onSuccess, onCancel, clientSecret }) {
   const stripe = useStripe();
@@ -26,6 +45,7 @@ function PaymentForm({ invoice, paymentAmount, onSuccess, onCancel, clientSecret
   const queryClient = useQueryClient();
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentError, setPaymentError] = useState(null);
+  const [cardComplete, setCardComplete] = useState(false);
 
   const recordPaymentMutation = useMutation({
     mutationFn: (data) => paymentsApi.createPayment(data),
@@ -48,20 +68,17 @@ function PaymentForm({ invoice, paymentAmount, onSuccess, onCancel, clientSecret
     setPaymentError(null);
 
     try {
-      // Confirm the payment with Stripe
-      const { error: submitError } = await elements.submit();
-      if (submitError) {
-        setPaymentError(submitError.message);
+      const cardElement = elements?.getElement(CardElement);
+      if (!cardElement) {
+        setPaymentError('Payment form is still loading. Please wait a moment and try again.');
         setIsProcessing(false);
         return;
       }
 
-      const { error, paymentIntent } = await stripe.confirmPayment({
-        elements,
-        confirmParams: {
-          return_url: window.location.href,
+      const { error, paymentIntent } = await stripe.confirmCardPayment(clientSecret, {
+        payment_method: {
+          card: cardElement,
         },
-        redirect: 'if_required',
       });
 
       if (error) {
@@ -91,11 +108,19 @@ function PaymentForm({ invoice, paymentAmount, onSuccess, onCancel, clientSecret
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
-      <PaymentElement
-        options={{
-          layout: 'tabs',
-        }}
-      />
+      <div className="rounded-lg border border-gray-300 bg-white p-3 focus-within:border-panda-primary focus-within:ring-2 focus-within:ring-panda-primary/20">
+        <CardElement
+          options={CARD_ELEMENT_OPTIONS}
+          onChange={(event) => {
+            setCardComplete(event.complete);
+            if (event.error?.message) {
+              setPaymentError(event.error.message);
+            } else {
+              setPaymentError(null);
+            }
+          }}
+        />
+      </div>
 
       {paymentError && (
         <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
@@ -115,7 +140,7 @@ function PaymentForm({ invoice, paymentAmount, onSuccess, onCancel, clientSecret
         </button>
         <button
           type="submit"
-          disabled={isProcessing || !stripe || !elements}
+          disabled={isProcessing || !stripe || !elements || !cardComplete}
           className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center justify-center gap-2"
         >
           {isProcessing ? (
@@ -357,7 +382,7 @@ export default function PayInvoiceModal({ isOpen, onClose, invoice, opportunity 
                   />
 
                   <p className="text-xs text-gray-500 text-center">
-                    Payments are securely processed by Stripe. Your card information is never stored on our servers.
+                    Payments are securely processed by Stripe. Internal checkout supports credit card only.
                   </p>
                 </div>
               </Elements>
