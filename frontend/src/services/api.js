@@ -765,6 +765,11 @@ export const opportunitiesApi = {
     }
   },
 
+  async getPortalMessages(id) {
+    const response = await api.get(`/api/opportunities/${id}/portal-messages`);
+    return response.data?.data || [];
+  },
+
   async getWorkOrders(id) {
     const response = await api.get(`/api/opportunities/${id}/work-orders`);
     return response.data.data;

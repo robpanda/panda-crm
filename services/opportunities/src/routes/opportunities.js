@@ -742,6 +742,16 @@ router.get('/:id/activity', async (req, res, next) => {
   }
 });
 
+// Get customer portal-originated messages for Customer Comms visibility
+router.get('/:id/portal-messages', async (req, res, next) => {
+  try {
+    const messages = await opportunityService.getOpportunityPortalMessages(req.params.id);
+    res.json({ success: true, data: messages });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Generate AI summary for activity/message content
 router.post('/:id/activity/summarize', async (req, res, next) => {
   try {

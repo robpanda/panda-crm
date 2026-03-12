@@ -1872,6 +1872,113 @@ class MeasurementService {
     });
   }
 
+  getGAFAssetState(report) {
+    const rawData = (report?.rawData && typeof report.rawData === 'object')
+      ? report.rawData
+      : {};
+    const normalizedWebhook = (rawData.normalizedWebhook && typeof rawData.normalizedWebhook === 'object')
+      ? rawData.normalizedWebhook
+      : {};
+
+    return {
+      rawData,
+      normalizedWebhook,
+      pdfS3Key: normalizedWebhook.pdfS3Key || rawData.pdfS3Key || null,
+      pdfDocumentId: normalizedWebhook.pdfDocumentId || rawData.pdfDocumentId || null,
+      reportPdfUrl: report?.reportPdfUrl || null,
+      reportUrl: report?.reportUrl || null,
+      deliveredAt: report?.deliveredAt || null,
+    };
+  }
+
+  needsGAFAssetBackfill(report) {
+    if (!report || report.provider !== 'GAF_QUICKMEASURE') return false;
+
+    const state = this.getGAFAssetState(report);
+    const hasStoredPayload = state.rawData && Object.keys(state.rawData).length > 0;
+    if (!hasStoredPayload) return false;
+
+    if (!state.pdfS3Key) return true;
+    if (!state.pdfDocumentId) return true;
+    if (!state.reportPdfUrl && !state.reportUrl) return true;
+    if (report.orderStatus === 'DELIVERED' && !state.deliveredAt) return true;
+
+    return false;
+  }
+
+  async backfillGAFAssets(options = {}) {
+    const {
+      limit = 50,
+      opportunityId = null,
+      reportId = null,
+    } = options;
+
+    const parsedLimit = Number.parseInt(limit, 10);
+    const safeLimit = Number.isFinite(parsedLimit)
+      ? Math.min(Math.max(parsedLimit, 1), 200)
+      : 50;
+
+    const reports = await prisma.measurementReport.findMany({
+      where: {
+        provider: 'GAF_QUICKMEASURE',
+        orderStatus: 'DELIVERED',
+        ...(opportunityId ? { opportunityId } : {}),
+        ...(reportId ? { id: reportId } : {}),
+      },
+      select: {
+        id: true,
+        opportunityId: true,
+        orderNumber: true,
+        externalId: true,
+        orderStatus: true,
+        deliveredAt: true,
+        reportPdfUrl: true,
+        reportUrl: true,
+        rawData: true,
+        provider: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+      take: reportId ? 1 : Math.max(safeLimit * 3, safeLimit),
+    });
+
+    const evaluated = reports.map((report) => ({
+      ...report,
+      needsBackfill: this.needsGAFAssetBackfill(report),
+    }));
+    const candidates = evaluated.filter((report) => report.needsBackfill).slice(0, safeLimit);
+    const results = [];
+
+    for (const candidate of candidates) {
+      try {
+        await this.processGAFReport(candidate.id, candidate.rawData);
+        results.push({
+          id: candidate.id,
+          orderNumber: candidate.orderNumber || candidate.externalId || null,
+          status: 'backfilled',
+        });
+      } catch (error) {
+        logger.warn(`GAF asset backfill failed for ${candidate.id}: ${error.message}`);
+        results.push({
+          id: candidate.id,
+          orderNumber: candidate.orderNumber || candidate.externalId || null,
+          status: 'failed',
+          error: error.message,
+        });
+      }
+    }
+
+    return {
+      scanned: evaluated.length,
+      candidateCount: evaluated.filter((report) => report.needsBackfill).length,
+      processed: results.length,
+      backfilled: results.filter((result) => result.status === 'backfilled').length,
+      failed: results.filter((result) => result.status === 'failed').length,
+      healthy: evaluated.filter((report) => !report.needsBackfill).length,
+      results,
+    };
+  }
+
   parseGAFMeasurements(data) {
     const roof = data.roof || data.RoofMeasurement || data.roofMeasurement || {};
     const facets = toNumberOrNull(firstNonEmptyValue(roof.faceCount, roof.Facets));
@@ -1951,11 +2058,10 @@ class MeasurementService {
     if (!report || typeof report !== 'object') return report;
     const attemptedHydration = Boolean(options.attemptedHydration);
 
-    const rawData = (report.rawData && typeof report.rawData === 'object') ? report.rawData : {};
-    const normalizedWebhook = (rawData.normalizedWebhook && typeof rawData.normalizedWebhook === 'object')
-      ? rawData.normalizedWebhook
-      : null;
-    const pdfS3Key = normalizedWebhook?.pdfS3Key || rawData.pdfS3Key || null;
+    const {
+      rawData,
+      pdfS3Key,
+    } = this.getGAFAssetState(report);
 
     let reportPdfUrl = report.reportPdfUrl || null;
     let reportUrl = report.reportUrl || null;
@@ -1975,12 +2081,7 @@ class MeasurementService {
       }
     }
 
-    const shouldAttemptGafHydration = !attemptedHydration
-      && report.provider === 'GAF_QUICKMEASURE'
-      && report.orderStatus === 'DELIVERED'
-      && !pdfS3Key
-      && rawData
-      && Object.keys(rawData).length > 0;
+    const shouldAttemptGafHydration = !attemptedHydration && this.needsGAFAssetBackfill(report);
 
     if (shouldAttemptGafHydration) {
       try {

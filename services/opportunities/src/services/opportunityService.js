@@ -1350,6 +1350,86 @@ class OpportunityService {
     };
   }
 
+  parseCustomerPortalNoteBody(body) {
+    const noteBody = String(body || '');
+    const prefix = '[Customer Portal]';
+    if (!noteBody.startsWith(prefix)) {
+      return {
+        senderName: 'Customer',
+        senderPhone: null,
+        message: noteBody.trim(),
+      };
+    }
+
+    const remainder = noteBody.slice(prefix.length).trim();
+    const separatorIndex = remainder.indexOf(':');
+    if (separatorIndex === -1) {
+      return {
+        senderName: 'Customer',
+        senderPhone: null,
+        message: remainder,
+      };
+    }
+
+    const senderPart = remainder.slice(0, separatorIndex).trim();
+    const message = remainder.slice(separatorIndex + 1).trim();
+    const senderMatch = senderPart.match(/^(.*?)(?:\s*\(([^)]+)\))?$/);
+
+    return {
+      senderName: senderMatch?.[1]?.trim() || 'Customer',
+      senderPhone: senderMatch?.[2]?.trim() || null,
+      message,
+    };
+  }
+
+  async getOpportunityPortalMessages(opportunityId) {
+    const notes = await prisma.note.findMany({
+      where: {
+        opportunityId,
+        OR: [
+          { title: 'Customer Portal Message' },
+          { body: { startsWith: '[Customer Portal]' } },
+        ],
+      },
+      include: {
+        createdBy: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    return notes.map((note) => {
+      const parsed = this.parseCustomerPortalNoteBody(note.body);
+      const authorName = note.createdBy
+        ? `${note.createdBy.firstName || ''} ${note.createdBy.lastName || ''}`.trim() || note.createdBy.email
+        : null;
+
+      return {
+        id: note.id,
+        title: note.title,
+        message: parsed.message || note.body || '',
+        senderName: parsed.senderName || 'Customer',
+        senderPhone: parsed.senderPhone || null,
+        createdAt: note.createdAt,
+        updatedAt: note.updatedAt,
+        rawBody: note.body,
+        author: note.createdBy
+          ? {
+              id: note.createdBy.id,
+              name: authorName,
+              email: note.createdBy.email,
+            }
+          : null,
+      };
+    });
+  }
+
   /**
    * Get hub summary with counts of all related records
    * This powers the Opportunity Hub overview section

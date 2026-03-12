@@ -255,6 +255,23 @@ router.post('/gaf/store-assets/:id', authMiddleware, async (req, res, next) => {
 });
 
 /**
+ * POST /measurements/gaf/backfill-assets - Backfill missing GAF PDFs/repository links
+ * Additive recovery route for delivered reports missing stored assets or linked documents.
+ */
+router.post('/gaf/backfill-assets', authMiddleware, async (req, res, next) => {
+  try {
+    const result = await measurementService.backfillGAFAssets({
+      limit: req.body?.limit ?? req.query?.limit,
+      opportunityId: req.body?.opportunityId ?? req.query?.opportunityId ?? null,
+      reportId: req.body?.reportId ?? req.query?.reportId ?? null,
+    });
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * POST /measurements/gaf/process-pending - Process all pending GAF reports
  * Batch job endpoint - can be called by scheduler or manually
  */
