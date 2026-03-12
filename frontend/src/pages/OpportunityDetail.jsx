@@ -631,12 +631,14 @@ function InvoiceDetailModal({
   onInvoiceUpdated,
   onOpenSendInvoice,
   onOpenPayInvoice,
+  activities = [],
 }) {
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
   const [editError, setEditError] = useState(null);
   const [editSuccess, setEditSuccess] = useState(null);
+  const [activeInvoiceTab, setActiveInvoiceTab] = useState('details');
   const [form, setForm] = useState({
     invoiceDate: '',
     dueDate: '',
@@ -661,6 +663,20 @@ function InvoiceDetailModal({
       style: 'currency',
       currency: 'USD',
     }).format(Number(amount) || 0);
+  };
+
+  const formatRelativeTime = (value) => {
+    if (!value) return '-';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return '-';
+    return parsed.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    });
   };
 
   const formatDateInput = (value) => {
@@ -695,6 +711,7 @@ function InvoiceDetailModal({
     setIsEditing(false);
     setEditError(null);
     setEditSuccess(null);
+    setActiveInvoiceTab('details');
   }, [invoice, hydrateFormFromInvoice]);
 
   useEffect(() => {
@@ -731,6 +748,22 @@ function InvoiceDetailModal({
   const canSendOrResend = (invoice.status || 'DRAFT') !== 'VOID';
   const sendLabel = ['SENT', 'OVERDUE', 'PARTIAL', 'PAID'].includes(invoice.status) ? 'Resend' : 'Send';
   const canPay = invoice.status !== 'PAID' && Number(invoice.balanceDue || 0) > 0;
+  const activityItems = useMemo(() => {
+    const rawItems = Array.isArray(activities) ? activities : [];
+    return rawItems
+      .filter((item) => {
+        const type = String(item?.activityType || item?.type || '').toLowerCase();
+        return type.includes('sms') || type.includes('email') || type.includes('phone') || type.includes('call');
+      })
+      .map((item) => ({
+        id: item.id,
+        label: String(item?.activityType || item?.type || 'Activity').replace(/_/g, ' '),
+        timestamp: item.createdAt || item.date || item.updatedAt || null,
+        summary: item.subject || item.title || item.body || item.message || item.description || 'Communication activity',
+      }))
+      .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+  }, [activities]);
+  const lastContactedAt = activityItems[0]?.timestamp || null;
 
   const updateInvoiceMutation = useMutation({
     mutationFn: (payload) => invoicesApi.updateInvoice(invoice.id, payload),
@@ -938,6 +971,29 @@ function InvoiceDetailModal({
             </span>
           </div>
 
+          {!isEditing && (
+            <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1">
+              <button
+                type="button"
+                onClick={() => setActiveInvoiceTab('details')}
+                className={`px-4 py-2 rounded-md text-sm ${
+                  activeInvoiceTab === 'details' ? 'bg-panda-primary text-white' : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                Details
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveInvoiceTab('activity')}
+                className={`px-4 py-2 rounded-md text-sm ${
+                  activeInvoiceTab === 'activity' ? 'bg-panda-primary text-white' : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                Activity
+              </button>
+            </div>
+          )}
+
           {isEditing && (
             <div className="space-y-4 border border-blue-100 bg-blue-50/40 rounded-lg p-4">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -1128,7 +1184,7 @@ function InvoiceDetailModal({
           )}
 
           {/* Line Items */}
-          {!isEditing && invoice.lineItems && invoice.lineItems.length > 0 && (
+          {!isEditing && activeInvoiceTab === 'details' && invoice.lineItems && invoice.lineItems.length > 0 && (
             <div>
               <h3 className="text-sm font-medium text-gray-900 mb-2">Line Items</h3>
               <div className="border rounded-lg overflow-hidden">
@@ -1147,7 +1203,14 @@ function InvoiceDetailModal({
                         <td className="p-2">{item.description || item.name}</td>
                         <td className="p-2 text-right">{item.quantity || 1}</td>
                         <td className="p-2 text-right">{formatCurrency(item.unitPrice || item.price)}</td>
-                        <td className="p-2 text-right">{formatCurrency(item.totalAmount || item.total)}</td>
+                        <td className="p-2 text-right">
+                          {formatCurrency(
+                            item.totalPrice
+                            ?? item.totalAmount
+                            ?? item.total
+                            ?? ((Number(item.quantity || 1) * Number(item.unitPrice || item.price || 0)) || 0)
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -1156,8 +1219,43 @@ function InvoiceDetailModal({
             </div>
           )}
 
+          {!isEditing && activeInvoiceTab === 'details' && Array.isArray(invoice.additionalCharges) && invoice.additionalCharges.length > 0 && (
+            <div>
+              <h3 className="text-sm font-medium text-gray-900 mb-2">Supplements / Additional Charges</h3>
+              <div className="border rounded-lg overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="text-left p-2 text-gray-600">Name</th>
+                      <th className="text-right p-2 text-gray-600">Amount</th>
+                      <th className="text-left p-2 text-gray-600">Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invoice.additionalCharges.map((charge, idx) => (
+                      <tr key={charge.id || idx} className="border-t">
+                        <td className="p-2">{charge.name || 'Supplement'}</td>
+                        <td className="p-2 text-right">{formatCurrency(charge.amount || charge.fixedAmount)}</td>
+                        <td className="p-2 text-gray-600">{charge.notes || '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {!isEditing && activeInvoiceTab === 'details' && invoice.notes && (
+            <div>
+              <h3 className="text-sm font-medium text-gray-900 mb-2">Notes</h3>
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                {invoice.notes}
+              </div>
+            </div>
+          )}
+
           {/* Payment History */}
-          {!isEditing && (
+          {!isEditing && activeInvoiceTab === 'details' && (
             <div>
             <h3 className="text-sm font-medium text-gray-900 mb-2">Payment History</h3>
             {loading ? (
@@ -1184,6 +1282,33 @@ function InvoiceDetailModal({
             ) : (
               <p className="text-sm text-gray-500 py-2">No payments recorded for this invoice.</p>
             )}
+            </div>
+          )}
+
+          {!isEditing && activeInvoiceTab === 'activity' && (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Last Contacted</p>
+                <p className="mt-1 text-sm font-medium text-gray-900">
+                  {lastContactedAt ? formatDate(lastContactedAt) : 'No communication recorded'}
+                </p>
+              </div>
+
+              {activityItems.length > 0 ? (
+                <div className="space-y-2">
+                  {activityItems.slice(0, 12).map((item) => (
+                    <div key={item.id} className="rounded-lg border border-gray-200 p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm font-medium text-gray-900 capitalize">{item.label}</p>
+                        <span className="text-xs text-gray-400">{formatRelativeTime(item.timestamp)}</span>
+                      </div>
+                      <p className="mt-1 text-sm text-gray-600 break-words">{item.summary}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-500">No communication activity recorded for this invoice yet.</p>
+              )}
             </div>
           )}
         </div>
@@ -12621,6 +12746,7 @@ export default function OpportunityDetail() {
       {showInvoiceDetailModal && selectedInvoice && (
         <InvoiceDetailModal
           invoice={selectedInvoice}
+          activities={activityData?.activities || []}
           onInvoiceUpdated={(updatedInvoice) => {
             const normalizedInvoice = normalizeInvoiceTotals(updatedInvoice);
             queryClient.invalidateQueries({ queryKey: ['opportunityInvoices', id] });

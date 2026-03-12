@@ -155,6 +155,7 @@ function canManageAllSupportTickets(authUser, dbUser) {
     : [];
 
   if (dbRoleType === 'admin' || dbRoleType === 'support_admin' || dbRoleType === 'system') return true;
+  if (hasAdminIndicator(dbRoleName)) return true;
   if (
     dbRoleName === 'support administrator'
     || dbRoleName === 'support admin'

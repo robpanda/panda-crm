@@ -885,7 +885,7 @@ ${Buffer.from(pdfResult.pdfBytes).toString('base64')}`;
 // Internal PDF generation (replicates pdfService.generateInvoicePdf logic)
 async function generateInvoicePdfInternal(invoice) {
   const { PDFDocument, StandardFonts, rgb } = await import('pdf-lib');
-  const { v4: uuidv4 } = await import('uuid');
+  const { randomUUID } = await import('node:crypto');
   const { PutObjectCommand } = await import('@aws-sdk/client-s3');
 
   const COMPANY_INFO = getInvoiceCompanyInfo();
@@ -1004,6 +1004,25 @@ async function generateInvoicePdfInternal(invoice) {
     page.drawLine({ start: { x: tableLeft, y: y - 8 }, end: { x: width - 50, y: y - 8 }, thickness: 0.5, color: COLORS.lightGray });
   }
 
+  if (Array.isArray(invoice.additionalCharges) && invoice.additionalCharges.length > 0) {
+    y -= 28;
+    page.drawText('Additional Charges', { x: tableLeft, y, size: 11, font: fontBold, color: COLORS.dark });
+    y -= 18;
+
+    for (const charge of invoice.additionalCharges) {
+      const chargeName = charge.name || 'Additional Charge';
+      const chargeAmount = Number(charge.amount ?? charge.fixedAmount ?? 0);
+      page.drawText(chargeName, { x: tableLeft + 10, y, size: 10, font: fontRegular, color: COLORS.dark });
+      page.drawText(formatCurrency(chargeAmount), { x: width - 130, y, size: 10, font: fontBold, color: COLORS.dark });
+      if (charge.notes) {
+        y -= 12;
+        page.drawText(String(charge.notes).slice(0, 80), { x: tableLeft + 20, y, size: 8, font: fontRegular, color: COLORS.gray });
+      }
+      y -= 18;
+      page.drawLine({ start: { x: tableLeft, y: y + 8 }, end: { x: width - 50, y: y + 8 }, thickness: 0.5, color: COLORS.lightGray });
+    }
+  }
+
   // Totals Section
   y -= 40;
   const totalsX = width - 200;
@@ -1055,7 +1074,7 @@ async function generateInvoicePdfInternal(invoice) {
 
   // Upload to S3
   const S3_BUCKET = process.env.DOCUMENTS_BUCKET || 'panda-crm-documents';
-  const key = `invoices/${invoice.invoiceNumber}-${uuidv4().slice(0, 8)}.pdf`;
+  const key = `invoices/${invoice.invoiceNumber}-${randomUUID().slice(0, 8)}.pdf`;
 
   await s3Client.send(new PutObjectCommand({
     Bucket: S3_BUCKET,

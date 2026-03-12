@@ -360,65 +360,69 @@ export default function OpportunityList() {
 
         {/* Search and Filters */}
         <div className="p-4 border-b border-gray-100">
-          <div className="flex items-center gap-4">
-            <div className="flex-1 relative">
+          <div className="flex flex-col xl:flex-row xl:items-center gap-4">
+            <div className="w-full xl:flex-1 relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
               <input
                 type="text"
                 value={search}
                 onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-                placeholder="Search jobs..."
+                placeholder="Search jobs, account, email, phone, address..."
                 className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none"
               />
             </div>
-            <select
-              value={stage}
-              onChange={(e) => { setStage(e.target.value); setPage(1); }}
-              className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none bg-white"
-            >
-              {stageOptions.map((opt) => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
-            </select>
-            <select
-              value={type}
-              onChange={(e) => { setType(e.target.value); setPage(1); }}
-              className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none bg-white"
-            >
-              {typeOptions.map((opt) => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
-            </select>
-            <button
-              onClick={() => setShowFilters(!showFilters)}
-              className={`inline-flex items-center px-4 py-2 border rounded-lg transition-colors ${
-                showFilters || hasActiveFilters
-                  ? 'border-panda-primary bg-panda-primary/5 text-panda-primary'
-                  : 'border-gray-200 text-gray-600 hover:bg-gray-50'
-              }`}
-            >
-              <Filter className="w-4 h-4 mr-2" />
-              Filters
-              {hasActiveFilters && (
-                <span className="ml-2 w-2 h-2 bg-panda-primary rounded-full"></span>
-              )}
-            </button>
-            {hasActiveFilters && (
-              <button
-                onClick={clearFilters}
-                className="flex items-center space-x-1 px-3 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg"
+            <div className="flex flex-col sm:flex-row gap-3 w-full xl:w-auto">
+              <select
+                value={stage}
+                onChange={(e) => { setStage(e.target.value); setPage(1); }}
+                className="w-full sm:w-auto px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none bg-white"
               >
-                <X className="w-4 h-4" />
-                <span>Clear</span>
+                {stageOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+              <select
+                value={type}
+                onChange={(e) => { setType(e.target.value); setPage(1); }}
+                className="w-full sm:w-auto px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none bg-white"
+              >
+                {typeOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+              <button
+                onClick={() => setShowFilters(!showFilters)}
+                className={`inline-flex items-center justify-center px-4 py-2 border rounded-lg transition-colors ${
+                  showFilters || hasActiveFilters
+                    ? 'border-panda-primary bg-panda-primary/5 text-panda-primary'
+                    : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                <Filter className="w-4 h-4 mr-2" />
+                Filters
+                {hasActiveFilters && (
+                  <span className="ml-2 w-2 h-2 bg-panda-primary rounded-full"></span>
+                )}
               </button>
-            )}
-            <ColumnSelector
-              columns={COLUMN_DEFINITIONS}
-              visibleColumns={visibleColumns}
-              onChange={setVisibleColumns}
-              storageKey="opportunities-list"
-              defaultColumns={DEFAULT_COLUMNS}
-            />
+              {hasActiveFilters && (
+                <button
+                  onClick={clearFilters}
+                  className="flex items-center justify-center space-x-1 px-3 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg"
+                >
+                  <X className="w-4 h-4" />
+                  <span>Clear</span>
+                </button>
+              )}
+              <div className="w-full sm:w-auto">
+                <ColumnSelector
+                  columns={COLUMN_DEFINITIONS}
+                  visibleColumns={visibleColumns}
+                  onChange={setVisibleColumns}
+                  storageKey="opportunities-list"
+                  defaultColumns={DEFAULT_COLUMNS}
+                />
+              </div>
+            </div>
           </div>
         </div>
 

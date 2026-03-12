@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import {
   listNotifications,
+  listOutboxNotifications,
   getNotification,
   createNotification,
   markAsRead,
@@ -153,6 +154,7 @@ router.post('/inspectors/for-notification', async (req, res, next) => {
 
 // Counts
 router.get('/unread-count', getUnreadCount);
+router.get('/outbox', listOutboxNotifications);
 
 // By opportunity (for Opportunity Hub)
 router.get('/opportunity/:opportunityId', getNotificationsByOpportunity);

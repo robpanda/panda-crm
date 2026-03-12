@@ -137,6 +137,16 @@ const adminNavItems = [
   { path: '/admin/workflows', icon: ClipboardCheck, label: 'Workflows' },
 ];
 
+const SEARCH_MODULE_OPTIONS = [
+  { value: 'all', label: 'All' },
+  { value: 'accounts', label: 'Accounts' },
+  { value: 'contacts', label: 'Contacts' },
+  { value: 'leads', label: 'Leads' },
+  { value: 'jobs', label: 'Jobs' },
+  { value: 'invoices', label: 'Invoices' },
+  { value: 'mentions', label: 'Mentions' },
+];
+
 export default function Navbar({ onMenuClick, showMenuButton }) {
   const {
     user,
@@ -158,6 +168,7 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
   const [showAdminMenu, setShowAdminMenu] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchModule, setSearchModule] = useState('all');
   const [showViewAsMenu, setShowViewAsMenu] = useState(false);
   const [viewAsSearch, setViewAsSearch] = useState('');
   const [viewAsUsers, setViewAsUsers] = useState([]);
@@ -259,7 +270,11 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
   const handleSearch = (e) => {
     e.preventDefault();
     if (searchQuery.trim()) {
-      navigate(`/search?q=${encodeURIComponent(searchQuery.trim())}`);
+      const params = new URLSearchParams({ q: searchQuery.trim() });
+      if (searchModule && searchModule !== 'all') {
+        params.set('module', searchModule);
+      }
+      navigate(`/search?${params.toString()}`);
       setSearchQuery('');
       setShowSearch(false);
     }
@@ -793,12 +808,24 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
         </div>
 
         {/* Center - Search */}
-        <form onSubmit={handleSearch} className="hidden md:flex flex-1 max-w-md mx-4">
-          <div className="relative w-full">
+        <form onSubmit={handleSearch} className="hidden md:flex flex-1 max-w-3xl mx-4 items-center gap-2">
+          <div className="shrink-0">
+            <select
+              value={searchModule}
+              onChange={(e) => setSearchModule(e.target.value)}
+              className="h-10 rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-700 focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none"
+              aria-label="Search module"
+            >
+              {SEARCH_MODULE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </div>
+          <div className="relative w-full min-w-0">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
             <input
               type="text"
-              placeholder="Search leads, jobs, invoices, email, phone, address..."
+              placeholder="Search accounts, contacts, leads, jobs, invoices, email, phone, address..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-9 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none transition-shadow bg-gray-50 focus:bg-white"
@@ -1130,16 +1157,27 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
       {/* Mobile search overlay */}
       {showSearch && (
         <div className="absolute top-16 left-0 right-0 bg-white border-b border-gray-200 p-4 md:hidden shadow-lg">
-          <form onSubmit={handleSearch} className="relative">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
-            <input
-              type="text"
-              placeholder="Search leads, jobs, invoices, email, phone, address..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              autoFocus
-              className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none text-base"
-            />
+          <form onSubmit={handleSearch} className="space-y-3">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
+              <input
+                type="text"
+                placeholder="Search accounts, contacts, leads, jobs, invoices..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                autoFocus
+                className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none text-base"
+              />
+            </div>
+            <select
+              value={searchModule}
+              onChange={(e) => setSearchModule(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 bg-white px-3 py-3 text-base text-gray-700 focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none"
+            >
+              {SEARCH_MODULE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
           </form>
         </div>
       )}

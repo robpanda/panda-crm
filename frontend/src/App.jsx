@@ -97,6 +97,7 @@ import Help from './pages/Help';
 // Support
 import Support from './pages/Support';
 import SupportTicketDetail from './pages/SupportTicketDetail';
+import Notifications from './pages/Notifications';
 
 // Search
 import Search from './pages/Search';
@@ -224,6 +225,7 @@ export default function App() {
         <Route path="help" element={<Help />} />
         <Route path="support" element={<Support />} />
         <Route path="support/:id" element={<SupportTicketDetail />} />
+        <Route path="notifications" element={<Notifications />} />
 
         {/* Analytics Hub */}
         <Route path="analytics" element={<AnalyticsShell />}>
