@@ -1,73 +1,305 @@
-import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { Link, useNavigate } from 'react-router-dom';
-import { reportsApi } from '../services/api';
-import { deriveDataSource } from '../utils/analyticsSource';
+import { useMemo, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import {
+  BarChart3,
+  Copy,
+  ExternalLink,
+  FolderOpen,
+  Globe,
+  LayoutGrid,
+  Lock,
+  MoreVertical,
+  Pencil,
+  Plus,
+  Search,
+  Shield,
+  Star,
+  Trash2,
+  Users,
+} from 'lucide-react';
+import { metabaseApi, reportsApi } from '../services/api';
+import MetabaseWidget from '../components/metabase/MetabaseWidget';
 import DataSourceBadge from '../components/analytics/DataSourceBadge';
 import VerifiedBadge from '../components/analytics/VerifiedBadge';
-import {
-  Plus,
-  LayoutGrid,
-  Star,
-  Clock,
-  MoreVertical,
-  Edit,
-  Trash2,
-  Copy,
-  ChevronRight,
-  BarChart3,
-  FileText,
-  Search,
-  Users,
-  Lock,
-  Globe,
-  FolderOpen,
-  Shield,
-} from 'lucide-react';
+import { deriveDataSource } from '../utils/analyticsSource';
+import { formatReportTimestamp } from '../utils/reporting';
 import { useAnalyticsBadgeContext } from '../components/analytics/AnalyticsBadgeContext';
+
+const DASHBOARD_TABS = [
+  { id: 'all', label: 'All Dashboards', icon: LayoutGrid },
+  { id: 'favorites', label: 'Favorites', icon: Star },
+  { id: 'shared', label: 'Shared', icon: Users },
+  { id: 'external', label: 'External Dashboards', icon: ExternalLink },
+];
+
+function DashboardCard({ dashboard, verification, onEdit, onDuplicate, onDelete }) {
+  const [showMenu, setShowMenu] = useState(false);
+  const visibility = dashboard.visibility || (dashboard.isPublic ? 'PUBLIC' : 'PRIVATE');
+  const visibilityLabel = dashboard.visibilityLabel || (visibility === 'TEAM' ? 'Team' : visibility === 'PUBLIC' ? 'Shared' : 'Private');
+  const VisibilityIcon = visibility === 'PRIVATE' ? Lock : visibility === 'TEAM' ? Users : Globe;
+  const hasManagementActions = Boolean(
+    dashboard?.capabilities?.canEdit
+    || dashboard?.capabilities?.canDuplicate
+    || dashboard?.capabilities?.canDelete
+  );
+
+  return (
+    <div className="group rounded-2xl border border-gray-200 bg-white shadow-sm transition-all hover:border-gray-300 hover:shadow-md">
+      <div className="p-5">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-3">
+              <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${dashboard.isDefault ? 'bg-amber-500' : 'bg-panda-primary'}`}>
+                <LayoutGrid className="h-5 w-5 text-white" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <h3 className="truncate text-lg font-semibold text-gray-900">{dashboard.name}</h3>
+                  {dashboard.isDefault && (
+                    <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
+                      Default
+                    </span>
+                  )}
+                </div>
+                <div className="mt-1 flex items-center gap-2 text-xs text-gray-500">
+                  {visibility !== 'PRIVATE' ? (
+                    <span className="inline-flex items-center gap-1">
+                      <VisibilityIcon className="h-3 w-3" />
+                      {visibilityLabel}
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1">
+                      <VisibilityIcon className="h-3 w-3" />
+                      {visibilityLabel}
+                    </span>
+                  )}
+                  <span>{formatReportTimestamp(dashboard.updatedAt || dashboard.createdAt)}</span>
+                </div>
+              </div>
+            </div>
+            {dashboard.description && (
+              <p className="mt-3 text-sm text-gray-500">{dashboard.description}</p>
+            )}
+            <div className="mt-3 flex flex-wrap gap-2">
+              <DataSourceBadge source={deriveDataSource(dashboard)} />
+              <VerifiedBadge status={verification.status} reason={verification.reason} />
+            </div>
+          </div>
+
+          {hasManagementActions && (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setShowMenu((value) => !value)}
+                className="rounded-lg p-2 text-gray-400 hover:bg-gray-50 hover:text-gray-600"
+              >
+                <MoreVertical className="h-4 w-4" />
+              </button>
+              {showMenu && (
+                <div className="absolute right-0 top-full z-10 mt-2 min-w-44 rounded-xl border border-gray-200 bg-white py-1 shadow-lg">
+                  {dashboard?.capabilities?.canEdit && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onEdit();
+                        setShowMenu(false);
+                      }}
+                      className="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                    >
+                      <Pencil className="h-4 w-4" />
+                      Edit
+                    </button>
+                  )}
+                  {dashboard?.capabilities?.canDuplicate && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onDuplicate();
+                        setShowMenu(false);
+                      }}
+                      className="flex w-full items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                    >
+                      <Copy className="h-4 w-4" />
+                      Duplicate
+                    </button>
+                  )}
+                  {dashboard?.capabilities?.canDelete && !dashboard.isDefault && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onDelete();
+                        setShowMenu(false);
+                      }}
+                      className="flex w-full items-center gap-2 px-4 py-2 text-sm text-rose-700 hover:bg-rose-50"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      Delete
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between border-t border-gray-100 px-5 py-3">
+        <div className="text-sm text-gray-500">
+          {dashboard.widgetCount || dashboard.widgets?.length || dashboard._count?.widgets || 0} widgets
+        </div>
+        <Link
+          to={`/analytics/dashboards/${dashboard.id}`}
+          className="text-sm font-medium text-panda-primary hover:text-panda-secondary"
+        >
+          Open Dashboard
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+function ExternalDashboardsPanel({ selectedDashboard, onSelectDashboard, searchQuery }) {
+  const { data: metabaseStatus } = useQuery({
+    queryKey: ['metabase-status', 'dashboards'],
+    queryFn: () => metabaseApi.getStatus(),
+    retry: false,
+  });
+
+  const isConnected = Boolean(metabaseStatus?.data?.connected);
+
+  const { data: metabaseDashboards, isLoading } = useQuery({
+    queryKey: ['metabase-dashboards', 'dashboards'],
+    queryFn: () => metabaseApi.getDashboards(),
+    enabled: isConnected,
+  });
+
+  const dashboards = Array.isArray(metabaseDashboards?.data) ? metabaseDashboards.data : [];
+  const filteredDashboards = dashboards.filter((dashboard) =>
+    !searchQuery
+    || (dashboard.name || dashboard.title || '').toLowerCase().includes(searchQuery.toLowerCase())
+    || (dashboard.description || '').toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  if (!isConnected) {
+    return (
+      <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6">
+        <h3 className="text-lg font-semibold text-gray-900">Metabase is not connected</h3>
+        <p className="mt-2 text-sm text-gray-600">
+          Connect Metabase in Analytics Settings to surface external dashboards here.
+        </p>
+        <Link
+          to="/analytics/settings/metabase"
+          className="mt-4 inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100"
+        >
+          Open Metabase Settings
+        </Link>
+      </div>
+    );
+  }
+
+  if (isLoading) {
+    return <div className="text-sm text-gray-500">Loading external dashboards...</div>;
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
+        <h3 className="text-lg font-semibold text-gray-900">External dashboards are ready</h3>
+        <p className="mt-2 text-sm text-gray-600">
+          Metabase dashboards live here so teams can access native and external analytics from the same dashboard library.
+        </p>
+      </div>
+
+      {filteredDashboards.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-gray-300 bg-white px-6 py-14 text-center">
+          <BarChart3 className="mx-auto h-12 w-12 text-gray-300" />
+          <h3 className="mt-4 text-lg font-semibold text-gray-900">No external dashboards found</h3>
+          <p className="mt-2 text-sm text-gray-500">
+            {searchQuery
+              ? 'Try a different search term.'
+              : 'Metabase is connected, but no dashboards are currently available.'}
+          </p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          {filteredDashboards.map((dashboard) => (
+            <button
+              key={dashboard.id}
+              type="button"
+              onClick={() => onSelectDashboard(dashboard.id)}
+              className={`rounded-2xl border p-5 text-left transition-colors ${
+                selectedDashboard === dashboard.id
+                  ? 'border-teal-400 bg-teal-50'
+                  : 'border-gray-200 bg-white hover:border-gray-300'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <div className="rounded-xl bg-teal-100 p-3 text-teal-700">
+                  <BarChart3 className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900">{dashboard.name || dashboard.title}</h3>
+                  {dashboard.description && (
+                    <p className="mt-1 text-sm text-gray-500">{dashboard.description}</p>
+                  )}
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {selectedDashboard && (
+        <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+          <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+            <h3 className="text-lg font-semibold text-gray-900">External Dashboard</h3>
+            <button
+              type="button"
+              onClick={() => onSelectDashboard(null)}
+              className="text-sm font-medium text-gray-500 hover:text-gray-700"
+            >
+              Close
+            </button>
+          </div>
+          <MetabaseWidget type="dashboard" id={selectedDashboard} height={720} mode="interactive" />
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Dashboards({ embedded = false }) {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState('all');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [showMenu, setShowMenu] = useState(null);
+  const queryClient = useQueryClient();
   const analyticsBadges = useAnalyticsBadgeContext();
   const verification = analyticsBadges?.verification || { status: 'unknown', reason: 'Verification unavailable.' };
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedExternalDashboard, setSelectedExternalDashboard] = useState(null);
+  const requestedTab = searchParams.get('tab') || 'all';
+  const activeTab = DASHBOARD_TABS.some((tab) => tab.id === requestedTab) ? requestedTab : 'all';
 
-  // Fetch dashboards
-  const { data: dashboardsData, isLoading, refetch } = useQuery({
-    queryKey: ['dashboards', activeTab],
+  const { data: dashboardsData, isLoading } = useQuery({
+    queryKey: ['dashboards', 'library'],
     queryFn: () => reportsApi.getDashboards({ includeWidgets: false }),
   });
 
-  const dashboards = dashboardsData?.data || [];
+  const dashboards = Array.isArray(dashboardsData?.data) ? dashboardsData.data : dashboardsData?.data || [];
+  const canManageDashboards = dashboardsData?.meta?.canWrite !== false;
 
-  // Filter dashboards based on tab and search
-  const filteredDashboards = dashboards.filter(dashboard => {
-    const matchesSearch = !searchQuery ||
-      dashboard.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      dashboard.description?.toLowerCase().includes(searchQuery.toLowerCase());
+  const filteredDashboards = useMemo(() => {
+    return dashboards.filter((dashboard) => {
+      const matchesSearch = !searchQuery
+        || dashboard.name?.toLowerCase().includes(searchQuery.toLowerCase())
+        || dashboard.description?.toLowerCase().includes(searchQuery.toLowerCase());
 
-    if (activeTab === 'favorites') {
-      return matchesSearch && dashboard.isFavorite;
-    }
-    if (activeTab === 'shared') {
-      return matchesSearch && (dashboard.isPublic || dashboard.sharedWithRoles?.length > 0);
-    }
-    return matchesSearch;
-  });
-
-  const handleDelete = async (dashboardId) => {
-    if (window.confirm('Are you sure you want to delete this dashboard?')) {
-      try {
-        await reportsApi.deleteDashboard(dashboardId);
-        refetch();
-      } catch (error) {
-        console.error('Failed to delete dashboard:', error);
-      }
-    }
-    setShowMenu(null);
-  };
+      if (!matchesSearch) return false;
+      if (activeTab === 'favorites') return Boolean(dashboard.isFavorite);
+      if (activeTab === 'shared') return Boolean(dashboard.isPublic || dashboard.sharedWithRoles?.length > 0);
+      return true;
+    });
+  }, [activeTab, dashboards, searchQuery]);
 
   const handleDuplicate = async (dashboard) => {
     try {
@@ -76,339 +308,156 @@ export default function Dashboards({ embedded = false }) {
         name: `${dashboard.name} (Copy)`,
         isDefault: false,
       });
-      refetch();
+      await queryClient.invalidateQueries({ queryKey: ['dashboards'] });
     } catch (error) {
       console.error('Failed to duplicate dashboard:', error);
     }
-    setShowMenu(null);
   };
 
-  const formatDate = (dateString) => {
-    const date = new Date(dateString);
-    const now = new Date();
-    const diffMs = now - date;
-    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  const handleDelete = async (dashboardId) => {
+    if (!window.confirm('Are you sure you want to delete this dashboard?')) return;
 
-    if (diffDays === 0) return 'Today';
-    if (diffDays === 1) return 'Yesterday';
-    if (diffDays < 7) return `${diffDays} days ago`;
-    if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`;
-    return date.toLocaleDateString();
+    try {
+      await reportsApi.deleteDashboard(dashboardId);
+      await queryClient.invalidateQueries({ queryKey: ['dashboards'] });
+    } catch (error) {
+      console.error('Failed to delete dashboard:', error);
+    }
   };
 
   return (
     <div className="space-y-6">
-      {/* Header - hidden when embedded */}
       {!embedded && (
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Dashboards</h1>
-            <p className="text-gray-500">Create and manage custom dashboards</p>
-          </div>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => navigate('/analytics/dashboards/new')}
-              className="flex items-center space-x-2 px-4 py-2.5 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg hover:opacity-90 transition-opacity shadow-md"
-            >
-              <Plus className="w-4 h-4" />
-              <span className="hidden sm:inline">Create Dashboard</span>
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Executive Dashboards Banner - hidden when embedded */}
-      {!embedded && (
-        <Link
-          to="/analytics/dashboards/executive"
-          className="block bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200 rounded-xl p-4 hover:border-amber-300 hover:shadow-md transition-all group"
-        >
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shadow-lg">
-                <FolderOpen className="w-6 h-6 text-white" />
-              </div>
-              <div>
-                <h3 className="font-semibold text-gray-900 group-hover:text-amber-700 transition-colors">
-                  Executive Dashboards
-                </h3>
-                <p className="text-sm text-gray-500">
-                  Pre-built dashboards for Sales, Production, Insurance, Interiors, and CAT teams
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-amber-600 bg-amber-100 px-2 py-1 rounded-full">
-                6 Dashboards
-              </span>
-              <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-amber-600 group-hover:translate-x-1 transition-all" />
-            </div>
-          </div>
-        </Link>
-      )}
-
-      {/* Claims Operations Dashboard Banner - hidden when embedded */}
-      {!embedded && (
-        <Link
-          to="/analytics/dashboards/claims-onboarding"
-          className="block bg-gradient-to-r from-teal-50 to-cyan-50 border border-teal-200 rounded-xl p-4 hover:border-teal-300 hover:shadow-md transition-all group"
-        >
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-teal-500 to-cyan-600 flex items-center justify-center shadow-lg">
-                <Shield className="w-6 h-6 text-white" />
-              </div>
-              <div>
-                <h3 className="font-semibold text-gray-900 group-hover:text-teal-700 transition-colors">
-                  Claims Operations
-                </h3>
-                <p className="text-sm text-gray-500">
-                  PandaClaims onboarding workflow, photo review queue, and claims pipeline tracking
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-teal-600 bg-teal-100 px-2 py-1 rounded-full">
-                3 Dashboards
-              </span>
-              <ChevronRight className="w-5 h-5 text-gray-400 group-hover:text-teal-600 group-hover:translate-x-1 transition-all" />
-            </div>
-          </div>
-        </Link>
-      )}
-
-      {/* Tab Navigation + Search */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex space-x-1 bg-gray-100 p-1 rounded-xl w-fit">
-          {[
-            { id: 'all', label: 'All Dashboards', icon: LayoutGrid },
-            { id: 'favorites', label: 'Favorites', icon: Star },
-            { id: 'shared', label: 'Shared', icon: Users },
-          ].map((tab) => {
-            const Icon = tab.icon;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-all ${
-                  activeTab === tab.id
-                    ? 'bg-white text-gray-900 shadow-sm'
-                    : 'text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                <Icon className="w-4 h-4" />
-                <span className="text-sm font-medium">{tab.label}</span>
-              </button>
-            );
-          })}
-          {/* Link back to Reports */}
-          {!embedded && (
-            <Link
-              to="/analytics/reports"
-              className="flex items-center space-x-2 px-4 py-2 rounded-lg transition-all text-gray-600 hover:text-gray-900"
-            >
-              <BarChart3 className="w-4 h-4" />
-              <span className="text-sm font-medium">Reports</span>
-            </Link>
-          )}
-        </div>
-
-        {/* Search */}
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
-          <input
-            type="text"
-            placeholder="Search dashboards..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none text-sm w-64"
-          />
-        </div>
-      </div>
-
-      {/* Dashboards Grid */}
-      {isLoading ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {[1, 2, 3, 4, 5, 6].map((i) => (
-            <div key={i} className="bg-white rounded-xl shadow-sm border border-gray-100 p-5 animate-pulse">
-              <div className="h-6 bg-gray-200 rounded w-2/3 mb-3"></div>
-              <div className="h-4 bg-gray-100 rounded w-full mb-4"></div>
-              <div className="h-4 bg-gray-100 rounded w-1/2"></div>
-            </div>
-          ))}
-        </div>
-      ) : filteredDashboards.length === 0 ? (
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-12 text-center">
-          <LayoutGrid className="w-12 h-12 mx-auto mb-4 text-gray-300" />
-          <h3 className="text-lg font-medium text-gray-900">No dashboards found</h3>
-          <p className="text-sm text-gray-500 mt-2">
-            {searchQuery
-              ? 'Try a different search term'
-              : 'Create your first dashboard to get started'}
-          </p>
-          <button
-            onClick={() => navigate('/analytics/dashboards/new')}
-            className="mt-4 px-6 py-2 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg hover:opacity-90"
-          >
-            Create Dashboard
-          </button>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredDashboards.map((dashboard) => (
-            <div
-              key={dashboard.id}
-              className="bg-white rounded-xl shadow-sm border border-gray-100 hover:shadow-md hover:border-gray-200 transition-all group"
-            >
-              {/* Card Header */}
-              <div className="p-5 pb-3">
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                      dashboard.isDefault
-                        ? 'bg-gradient-to-br from-amber-400 to-orange-500'
-                        : 'bg-gradient-to-br from-panda-primary to-panda-secondary'
-                    }`}>
-                      <LayoutGrid className="w-5 h-5 text-white" />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h3 className="font-semibold text-gray-900">{dashboard.name}</h3>
-                        {dashboard.isDefault && (
-                          <span className="px-2 py-0.5 text-xs font-medium bg-amber-100 text-amber-700 rounded-full">
-                            Default
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2 mt-1">
-                        {dashboard.isPublic ? (
-                          <span className="flex items-center text-xs text-gray-500">
-                            <Globe className="w-3 h-3 mr-1" />
-                            Public
-                          </span>
-                        ) : (
-                          <span className="flex items-center text-xs text-gray-500">
-                            <Lock className="w-3 h-3 mr-1" />
-                            Private
-                          </span>
-                        )}
-                      </div>
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        <DataSourceBadge source={deriveDataSource(dashboard)} />
-                        <VerifiedBadge status={verification.status} reason={verification.reason} />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Menu */}
-                  <div className="relative">
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setShowMenu(showMenu === dashboard.id ? null : dashboard.id);
-                      }}
-                      className="p-1.5 rounded-lg hover:bg-gray-100 opacity-0 group-hover:opacity-100 transition-opacity"
-                    >
-                      <MoreVertical className="w-4 h-4 text-gray-500" />
-                    </button>
-
-                    {showMenu === dashboard.id && (
-                      <div className="absolute right-0 top-8 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-10">
-                        <button
-                          onClick={() => {
-                            navigate(`/analytics/dashboards/${dashboard.id}/edit`);
-                            setShowMenu(null);
-                          }}
-                          className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-                        >
-                          <Edit className="w-4 h-4 mr-3" />
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => handleDuplicate(dashboard)}
-                          className="flex items-center w-full px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
-                        >
-                          <Copy className="w-4 h-4 mr-3" />
-                          Duplicate
-                        </button>
-                        {!dashboard.isDefault && (
-                          <button
-                            onClick={() => handleDelete(dashboard.id)}
-                            className="flex items-center w-full px-4 py-2 text-sm text-red-600 hover:bg-red-50"
-                          >
-                            <Trash2 className="w-4 h-4 mr-3" />
-                            Delete
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Description */}
-                {dashboard.description && (
-                  <p className="text-sm text-gray-500 mt-3 line-clamp-2">
-                    {dashboard.description}
-                  </p>
-                )}
-              </div>
-
-              {/* Card Footer */}
-              <div className="px-5 py-3 border-t border-gray-100 flex items-center justify-between">
-                <div className="flex items-center gap-4 text-xs text-gray-500">
-                  <span className="flex items-center gap-1">
-                    <LayoutGrid className="w-3.5 h-3.5" />
-                    {dashboard.widgetCount || dashboard.widgets?.length || 0} widgets
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <Clock className="w-3.5 h-3.5" />
-                    {formatDate(dashboard.updatedAt)}
-                  </span>
-                </div>
-
-                <Link
-                  to={`/analytics/dashboards/${dashboard.id}`}
-                  className="flex items-center text-sm font-medium text-panda-primary hover:text-panda-secondary"
-                >
-                  View
-                  <ChevronRight className="w-4 h-4 ml-1" />
-                </Link>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Quick Create Section */}
-      <div className="bg-gradient-to-r from-gray-50 to-gray-100 rounded-xl p-6">
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <div>
-            <h3 className="text-lg font-semibold text-gray-900">Quick Start Templates</h3>
-            <p className="text-sm text-gray-500 mt-1">
-              Start with a pre-built dashboard template
+            <p className="text-gray-500">
+              Dashboards organize saved reports and external analytics in one place.
             </p>
           </div>
-          <div className="flex flex-wrap gap-3">
-            {[
-              { name: 'Sales Overview', icon: BarChart3 },
-              { name: 'Pipeline Tracker', icon: FileText },
-              { name: 'Team Performance', icon: Users },
-            ].map((template) => {
-              const Icon = template.icon;
+          {canManageDashboards && (
+            <button
+              type="button"
+              onClick={() => navigate('/analytics/dashboards/new')}
+              className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-indigo-700"
+            >
+              <Plus className="h-4 w-4" />
+              New Dashboard
+            </button>
+          )}
+        </div>
+      )}
+
+      {!embedded && !isLoading && !canManageDashboards && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
+          <h3 className="text-lg font-semibold text-gray-900">Legacy dashboards are available here</h3>
+          <p className="mt-2 text-sm text-gray-600">
+            Production dashboard viewing remains live in this unified library. Edit and create actions stay hidden until the dashboards backend is unified with the report-backed builder.
+          </p>
+        </div>
+      )}
+
+      {!embedded && activeTab !== 'external' && (
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          <Link
+            to="/analytics/dashboards/executive"
+            className="rounded-2xl border border-amber-200 bg-gradient-to-r from-amber-50 to-orange-50 p-5 transition-all hover:border-amber-300 hover:shadow-md"
+          >
+            <div className="flex items-center gap-4">
+              <div className="rounded-xl bg-amber-500 p-3 text-white">
+                <FolderOpen className="h-6 w-6" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Executive Dashboards</h3>
+                <p className="mt-1 text-sm text-gray-500">
+                  Pre-built dashboards for Sales, Production, Insurance, Interiors, and CAT teams.
+                </p>
+              </div>
+            </div>
+          </Link>
+          <Link
+            to="/analytics/dashboards/claims-onboarding"
+            className="rounded-2xl border border-teal-200 bg-gradient-to-r from-teal-50 to-cyan-50 p-5 transition-all hover:border-teal-300 hover:shadow-md"
+          >
+            <div className="flex items-center gap-4">
+              <div className="rounded-xl bg-teal-600 p-3 text-white">
+                <Shield className="h-6 w-6" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Claims Operations</h3>
+                <p className="mt-1 text-sm text-gray-500">
+                  PandaClaims onboarding workflow, review queues, and claims pipeline tracking.
+                </p>
+              </div>
+            </div>
+          </Link>
+        </div>
+      )}
+
+      <div className="rounded-2xl border border-gray-200 bg-white p-4">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-wrap gap-2">
+            {DASHBOARD_TABS.map((tab) => {
+              const Icon = tab.icon;
               return (
                 <button
-                  key={template.name}
-                  onClick={() => navigate('/analytics/dashboards/new', { state: { template: template.name } })}
-                  className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-lg hover:border-panda-primary hover:shadow-sm transition-all text-sm"
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setSearchParams(tab.id === 'all' ? {} : { tab: tab.id }, { replace: true })}
+                  className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium transition-colors ${
+                    activeTab === tab.id ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:text-gray-900'
+                  }`}
                 >
-                  <Icon className="w-4 h-4 text-panda-primary" />
-                  {template.name}
+                  <Icon className="h-4 w-4" />
+                  {tab.label}
                 </button>
               );
             })}
           </div>
+
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder={activeTab === 'external' ? 'Search external dashboards...' : 'Search dashboards...'}
+              className="w-full rounded-xl border border-gray-300 py-2.5 pl-10 pr-4 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100 lg:w-72"
+            />
+          </div>
         </div>
       </div>
+
+      {activeTab === 'external' ? (
+        <ExternalDashboardsPanel
+          selectedDashboard={selectedExternalDashboard}
+          onSelectDashboard={setSelectedExternalDashboard}
+          searchQuery={searchQuery}
+        />
+      ) : isLoading ? (
+        <div className="text-sm text-gray-500">Loading dashboards...</div>
+      ) : filteredDashboards.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-gray-300 bg-white px-6 py-14 text-center">
+          <LayoutGrid className="mx-auto h-12 w-12 text-gray-300" />
+          <h3 className="mt-4 text-lg font-semibold text-gray-900">No dashboards found</h3>
+          <p className="mt-2 text-sm text-gray-500">
+            {searchQuery ? 'Try a different search term.' : 'Create your first dashboard to start organizing reports.'}
+          </p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+          {filteredDashboards.map((dashboard) => (
+            <DashboardCard
+              key={dashboard.id}
+              dashboard={dashboard}
+              verification={verification}
+              onEdit={() => navigate(`/analytics/dashboards/${dashboard.id}/edit`)}
+              onDuplicate={() => handleDuplicate(dashboard)}
+              onDelete={() => handleDelete(dashboard.id)}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

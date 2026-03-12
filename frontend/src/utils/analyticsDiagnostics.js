@@ -26,34 +26,44 @@ const isTightDateRange = (label, value) => {
 
 export const buildDiagnostics = (context) => {
   const diagnostics = [];
+  const filters = normalizeFilters(context?.filters);
+  const dateFilter = filters.find((filter) => toLower(filter.label).includes('date'));
+  const normalizedStatus = normalizeVerificationStatus(context?.verifiedStatus);
+  const source = toLower(context?.source);
 
   if (context?.missingConfig) {
     diagnostics.push('Missing dashboard configuration or layout.');
   }
 
   if (context?.rowCount === 0 || context?.isEmpty) {
-    diagnostics.push('No rows returned.');
+    diagnostics.push('No records in the selected date range.');
   }
 
-  const filters = normalizeFilters(context?.filters);
   if (filters.length > 0) {
-    const dateFilter = filters.find((filter) => toLower(filter.label).includes('date'));
     if (filters.length > 1 || (dateFilter && isTightDateRange(dateFilter.label, dateFilter.value))) {
-      diagnostics.push('Filters may be too restrictive.');
+      diagnostics.push('Filters too restrictive.');
     }
   }
 
-  const normalizedStatus = normalizeVerificationStatus(context?.verifiedStatus);
   if (normalizedStatus === 'needs_review') {
     diagnostics.push('Analytics health checks reported issues.');
   }
 
-  const source = toLower(context?.source);
-  if (source.includes('legacy')) {
-    diagnostics.push('Legacy source may have incomplete mappings.');
+  if (source.includes('legacy') || normalizedStatus === 'needs_review') {
+    diagnostics.push('Data mapping missing.');
   }
   if (source.includes('metabase')) {
     diagnostics.push('Metabase permissions or locked filters may be blocking data.');
+  }
+
+  if (!diagnostics.includes('No records in the selected date range.')) {
+    diagnostics.push('No records in the selected date range.');
+  }
+  if (!diagnostics.includes('Filters too restrictive.')) {
+    diagnostics.push('Filters too restrictive.');
+  }
+  if (!diagnostics.includes('Data mapping missing.')) {
+    diagnostics.push('Data mapping missing.');
   }
 
   return diagnostics;

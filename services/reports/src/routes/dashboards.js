@@ -6,6 +6,126 @@ import { logger } from '../middleware/logger.js';
 const router = Router();
 const prisma = new PrismaClient();
 
+const VALID_WIDGET_TYPES = new Set([
+  'KPI_CARD',
+  'BAR_CHART',
+  'LINE_CHART',
+  'AREA_CHART',
+  'PIE_CHART',
+  'DONUT_CHART',
+  'TABLE',
+  'STAT_LIST',
+]);
+
+const WIDGET_TYPE_ALIASES = {
+  KPI: 'KPI_CARD',
+  BAR: 'BAR_CHART',
+  LINE: 'LINE_CHART',
+  AREA: 'AREA_CHART',
+  PIE: 'PIE_CHART',
+  DONUT: 'DONUT_CHART',
+  LIST: 'STAT_LIST',
+  REPORT: 'REPORT',
+};
+
+const CHART_TYPE_TO_WIDGET_TYPE = {
+  KPI: 'KPI_CARD',
+  BAR: 'BAR_CHART',
+  LINE: 'LINE_CHART',
+  AREA: 'AREA_CHART',
+  PIE: 'PIE_CHART',
+  DONUT: 'DONUT_CHART',
+  TABLE: 'TABLE',
+};
+
+async function loadSavedReportsById(client, widgets = []) {
+  const savedReportIds = [...new Set(
+    widgets
+      .map((widget) => widget?.savedReportId)
+      .filter(Boolean),
+  )];
+
+  if (savedReportIds.length === 0) {
+    return new Map();
+  }
+
+  const savedReports = await client.savedReport.findMany({
+    where: { id: { in: savedReportIds } },
+    select: {
+      id: true,
+      chartType: true,
+      name: true,
+    },
+  });
+
+  return new Map(savedReports.map((report) => [report.id, report]));
+}
+
+function getMissingSavedReportIds(widgets = [], savedReportsById = new Map()) {
+  return [...new Set(
+    widgets
+      .map((widget) => widget?.savedReportId)
+      .filter(Boolean)
+      .filter((reportId) => !savedReportsById.has(reportId)),
+  )];
+}
+
+function resolveWidgetType(widget = {}, savedReportsById = new Map()) {
+  const rawWidgetType = String(widget.widgetType || '').toUpperCase();
+  const aliasedWidgetType = WIDGET_TYPE_ALIASES[rawWidgetType] || rawWidgetType;
+
+  if (widget.savedReportId) {
+    const savedReport = savedReportsById.get(widget.savedReportId);
+    const savedReportWidgetType = CHART_TYPE_TO_WIDGET_TYPE[String(savedReport?.chartType || '').toUpperCase()];
+
+    if (savedReportWidgetType) {
+      return savedReportWidgetType;
+    }
+
+    if (VALID_WIDGET_TYPES.has(aliasedWidgetType)) {
+      return aliasedWidgetType;
+    }
+
+    return 'TABLE';
+  }
+
+  if (VALID_WIDGET_TYPES.has(aliasedWidgetType)) {
+    return aliasedWidgetType;
+  }
+
+  return null;
+}
+
+function normalizeWidgetInput(widget = {}, index = 0, columns = 2, savedReportsById = new Map()) {
+  const widgetType = resolveWidgetType(widget, savedReportsById);
+
+  if (!widgetType) {
+    return null;
+  }
+
+  return {
+    widgetType,
+    title: widget.title,
+    subtitle: widget.subtitle,
+    positionX: widget.positionX ?? (index % columns),
+    positionY: widget.positionY ?? Math.floor(index / columns),
+    width: widget.width ?? 1,
+    height: widget.height ?? 1,
+    savedReportId: widget.savedReportId,
+    dataSource: widget.dataSource,
+    metricField: widget.metricField,
+    metricFunction: widget.metricFunction,
+    groupByField: widget.groupByField,
+    filters: widget.filters,
+    comparisonEnabled: widget.comparisonEnabled ?? false,
+    comparisonType: widget.comparisonType,
+    formatType: widget.formatType,
+    iconName: widget.iconName,
+    iconColor: widget.iconColor,
+    chartConfig: widget.chartConfig,
+  };
+}
+
 /**
  * GET /api/dashboards
  * List dashboards
@@ -26,11 +146,16 @@ router.get('/', async (req, res, next) => {
 
     const dashboards = await prisma.dashboard.findMany({
       where,
-      include: includeWidgets === 'true' ? {
-        widgets: {
-          orderBy: [{ positionY: 'asc' }, { positionX: 'asc' }],
+      include: {
+        ...(includeWidgets === 'true' ? {
+          widgets: {
+            orderBy: [{ positionY: 'asc' }, { positionX: 'asc' }],
+          },
+        } : {}),
+        _count: {
+          select: { widgets: true },
         },
-      } : undefined,
+      },
       orderBy: [
         { isDefault: 'desc' },
         { updatedAt: 'desc' },
@@ -39,7 +164,10 @@ router.get('/', async (req, res, next) => {
 
     res.json({
       success: true,
-      data: dashboards,
+      data: dashboards.map((dashboard) => ({
+        ...dashboard,
+        widgetCount: dashboard._count?.widgets || dashboard.widgets?.length || 0,
+      })),
     });
   } catch (error) {
     next(error);
@@ -123,6 +251,33 @@ router.post('/', async (req, res, next) => {
       });
     }
 
+    const savedReportsById = await loadSavedReportsById(prisma, widgets);
+    const missingSavedReportIds = getMissingSavedReportIds(widgets, savedReportsById);
+
+    if (missingSavedReportIds.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: `Saved report not found: ${missingSavedReportIds.join(', ')}`,
+        },
+      });
+    }
+
+    const normalizedWidgets = widgets.map((widget, index) =>
+      normalizeWidgetInput(widget, index, columns, savedReportsById)
+    );
+
+    if (normalizedWidgets.some((widget) => !widget)) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'One or more dashboard widgets have an invalid widgetType',
+        },
+      });
+    }
+
     const dashboard = await prisma.dashboard.create({
       data: {
         name,
@@ -133,28 +288,8 @@ router.post('/', async (req, res, next) => {
         isPublic,
         sharedWithRoles,
         createdById: userId,
-        widgets: widgets.length > 0 ? {
-          create: widgets.map((w, index) => ({
-            widgetType: w.widgetType,
-            title: w.title,
-            subtitle: w.subtitle,
-            positionX: w.positionX ?? (index % columns),
-            positionY: w.positionY ?? Math.floor(index / columns),
-            width: w.width ?? 1,
-            height: w.height ?? 1,
-            savedReportId: w.savedReportId,
-            dataSource: w.dataSource,
-            metricField: w.metricField,
-            metricFunction: w.metricFunction,
-            groupByField: w.groupByField,
-            filters: w.filters,
-            comparisonEnabled: w.comparisonEnabled ?? false,
-            comparisonType: w.comparisonType,
-            formatType: w.formatType,
-            iconName: w.iconName,
-            iconColor: w.iconColor,
-            chartConfig: w.chartConfig,
-          })),
+        widgets: normalizedWidgets.length > 0 ? {
+          create: normalizedWidgets,
         } : undefined,
       },
       include: {
@@ -211,24 +346,74 @@ router.put('/:id', async (req, res, next) => {
       defaultDateRange,
       isPublic,
       sharedWithRoles,
+      widgets,
     } = req.body;
 
-    const dashboard = await prisma.dashboard.update({
-      where: { id },
-      data: {
-        ...(name !== undefined && { name }),
-        ...(description !== undefined && { description }),
-        ...(layout !== undefined && { layout }),
-        ...(columns !== undefined && { columns }),
-        ...(defaultDateRange !== undefined && { defaultDateRange }),
-        ...(isPublic !== undefined && { isPublic }),
-        ...(sharedWithRoles !== undefined && { sharedWithRoles }),
-      },
-      include: {
-        widgets: {
-          orderBy: [{ positionY: 'asc' }, { positionX: 'asc' }],
+    let normalizedWidgets = null;
+
+    if (widgets !== undefined) {
+      const savedReportsById = await loadSavedReportsById(prisma, widgets);
+      const missingSavedReportIds = getMissingSavedReportIds(widgets, savedReportsById);
+
+      if (missingSavedReportIds.length > 0) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: `Saved report not found: ${missingSavedReportIds.join(', ')}`,
+          },
+        });
+      }
+
+      normalizedWidgets = widgets.map((widget, index) =>
+        normalizeWidgetInput(widget, index, columns || existing.columns || 2, savedReportsById)
+      );
+
+      if (normalizedWidgets.some((widget) => !widget)) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'One or more dashboard widgets have an invalid widgetType',
+          },
+        });
+      }
+    }
+
+    const dashboard = await prisma.$transaction(async (tx) => {
+      if (widgets !== undefined) {
+        await tx.dashboardWidget.deleteMany({
+          where: { dashboardId: id },
+        });
+      }
+
+      return tx.dashboard.update({
+        where: { id },
+        data: {
+          ...(name !== undefined && { name }),
+          ...(description !== undefined && { description }),
+          ...(layout !== undefined && { layout }),
+          ...(columns !== undefined && { columns }),
+          ...(defaultDateRange !== undefined && { defaultDateRange }),
+          ...(isPublic !== undefined && { isPublic }),
+          ...(sharedWithRoles !== undefined && { sharedWithRoles }),
+          ...(normalizedWidgets !== null ? {
+            widgets: {
+              create: normalizedWidgets,
+            },
+          } : {}),
         },
-      },
+        include: {
+          widgets: {
+            include: {
+              savedReport: {
+                select: { id: true, name: true, reportType: true, chartType: true },
+              },
+            },
+            orderBy: [{ positionY: 'asc' }, { positionX: 'asc' }],
+          },
+        },
+      });
     });
 
     logger.info('Updated dashboard:', { dashboardId: id, userId });
@@ -347,28 +532,55 @@ router.post('/:id/widgets', async (req, res, next) => {
       });
     }
 
+    const savedReportsById = await loadSavedReportsById(prisma, [{ savedReportId }]);
+    const missingSavedReportIds = getMissingSavedReportIds([{ savedReportId }], savedReportsById);
+
+    if (missingSavedReportIds.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: `Saved report not found: ${missingSavedReportIds.join(', ')}`,
+        },
+      });
+    }
+
+    const normalizedWidget = normalizeWidgetInput({
+      widgetType,
+      title,
+      subtitle,
+      positionX,
+      positionY,
+      width,
+      height,
+      savedReportId,
+      dataSource,
+      metricField,
+      metricFunction,
+      groupByField,
+      filters,
+      comparisonEnabled,
+      comparisonType,
+      formatType,
+      iconName,
+      iconColor,
+      chartConfig,
+    }, 0, dashboard.columns || 2, savedReportsById);
+
+    if (!normalizedWidget) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Invalid widgetType supplied for dashboard widget',
+        },
+      });
+    }
+
     const widget = await prisma.dashboardWidget.create({
       data: {
         dashboardId: id,
-        widgetType,
-        title,
-        subtitle,
-        positionX,
-        positionY,
-        width,
-        height,
-        savedReportId,
-        dataSource,
-        metricField,
-        metricFunction,
-        groupByField,
-        filters,
-        comparisonEnabled,
-        comparisonType,
-        formatType,
-        iconName,
-        iconColor,
-        chartConfig,
+        ...normalizedWidget,
       },
     });
 
@@ -410,9 +622,43 @@ router.put('/:id/widgets/:widgetId', async (req, res, next) => {
       });
     }
 
+    let data = req.body;
+
+    if (req.body.widgetType !== undefined || req.body.savedReportId !== undefined) {
+      const savedReportsById = await loadSavedReportsById(prisma, [req.body]);
+      const missingSavedReportIds = getMissingSavedReportIds([req.body], savedReportsById);
+
+      if (missingSavedReportIds.length > 0) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: `Saved report not found: ${missingSavedReportIds.join(', ')}`,
+          },
+        });
+      }
+
+      const normalizedWidgetType = resolveWidgetType(req.body, savedReportsById);
+
+      if (!normalizedWidgetType) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Invalid widgetType supplied for dashboard widget',
+          },
+        });
+      }
+
+      data = {
+        ...req.body,
+        widgetType: normalizedWidgetType,
+      };
+    }
+
     const widget = await prisma.dashboardWidget.update({
       where: { id: widgetId },
-      data: req.body,
+      data,
     });
 
     res.json({

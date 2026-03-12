@@ -304,6 +304,27 @@ export const MODULES = {
   },
 };
 
+function getVirtualFieldsForModule(module) {
+  const virtualFields = [];
+
+  if (module?.relationships?.owner) {
+    virtualFields.push({
+      id: 'ownerName',
+      type: 'string',
+      label: 'Owner Name',
+      sortable: true,
+      searchable: true,
+      filterable: false,
+      groupable: false,
+      virtual: true,
+      relation: 'owner',
+      sourceField: 'fullName',
+    });
+  }
+
+  return virtualFields;
+}
+
 // Get module by name (case-insensitive, handles pluralization)
 export function getModule(name) {
   const normalizedName = name.toLowerCase();
@@ -344,7 +365,7 @@ export function getAvailableModules() {
     singularName: module.singularName,
     icon: module.icon,
     description: module.description,
-    fieldCount: Object.keys(module.fields).length,
+    fieldCount: Object.keys(module.fields).length + getVirtualFieldsForModule(module).length,
   }));
 }
 
@@ -354,20 +375,23 @@ export function getModuleFields(moduleName, options = {}) {
   if (!module) return [];
 
   const { filterable, sortable, groupable, aggregatable, searchable } = options;
+  const fields = [
+    ...Object.entries(module.fields).map(([key, field]) => ({
+      id: key,
+      ...field,
+    })),
+    ...getVirtualFieldsForModule(module),
+  ];
 
-  return Object.entries(module.fields)
-    .filter(([_, field]) => {
+  return fields
+    .filter((field) => {
       if (filterable && !field.filterable) return false;
       if (sortable && !field.sortable) return false;
       if (groupable && !field.groupable) return false;
       if (aggregatable && !field.aggregatable) return false;
       if (searchable && !field.searchable) return false;
       return true;
-    })
-    .map(([key, field]) => ({
-      id: key,
-      ...field,
-    }));
+    });
 }
 
 // Get relationships for a module
