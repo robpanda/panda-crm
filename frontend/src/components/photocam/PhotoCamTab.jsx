@@ -53,6 +53,9 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
   const [typeFilter, setTypeFilter] = useState('all');
   const [selectedPhotos, setSelectedPhotos] = useState([]);
   const [selectionMode, setSelectionMode] = useState(false);
+  const [isSelectingAllPages, setIsSelectingAllPages] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize] = useState(50);
   const [lightboxPhoto, setLightboxPhoto] = useState(null);
   const [lightboxIndex, setLightboxIndex] = useState(0);
   const [isUploading, setIsUploading] = useState(false);
@@ -102,8 +105,13 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
 
   // Fetch photos for the project
   const { data: photosData, isLoading: photosLoading, refetch: refetchPhotos } = useQuery({
-    queryKey: ['photocam-photos', project?.id, typeFilter],
-    queryFn: () => photocamApi.getPhotos(project.id, { type: typeFilter !== 'all' ? typeFilter : undefined }),
+    queryKey: ['photocam-photos', project?.id, typeFilter, searchTerm, currentPage, pageSize],
+    queryFn: () => photocamApi.getPhotos(project.id, {
+      type: typeFilter !== 'all' ? typeFilter : undefined,
+      search: searchTerm || undefined,
+      page: currentPage,
+      limit: pageSize,
+    }),
     enabled: !!project?.id,
   });
 
@@ -490,7 +498,17 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
     },
   });
 
-  const photos = photosData?.data || photosData || [];
+  const photos = Array.isArray(photosData?.data)
+    ? photosData.data
+    : Array.isArray(photosData)
+      ? photosData
+      : [];
+  const photosPagination = photosData?.pagination || {
+    page: currentPage,
+    limit: pageSize,
+    total: photos.length,
+    totalPages: 1,
+  };
 
   const galleryItems = Array.isArray(galleriesData?.data)
     ? galleriesData.data
@@ -535,16 +553,7 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
     return items;
   }, [selectedChecklist]);
 
-  // Filter photos by search term
-  const filteredPhotos = photos.filter(photo => {
-    if (!searchTerm) return true;
-    const term = searchTerm.toLowerCase();
-    return (
-      photo.caption?.toLowerCase().includes(term) ||
-      photo.fileName?.toLowerCase().includes(term) ||
-      photo.tags?.some(t => t.toLowerCase().includes(term))
-    );
-  });
+  const filteredPhotos = photos;
 
   useEffect(() => {
     if (selectedPhotos.length === 0) {
@@ -558,7 +567,12 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
     setActionMessage(null);
     setPendingExportJobId(null);
     setPendingExportAttempts(0);
+    setCurrentPage(1);
   }, [activeSubTab, project?.id]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [typeFilter, searchTerm]);
 
   useEffect(() => () => clearLongPressTimer(), []);
 
@@ -687,7 +701,57 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
 
   const selectAllVisible = () => {
     setSelectionMode(true);
-    setSelectedPhotos(filteredPhotos.map((photo) => photo.id));
+    setSelectedPhotos((prev) => {
+      const set = new Set(prev);
+      filteredPhotos.forEach((photo) => set.add(photo.id));
+      return Array.from(set);
+    });
+  };
+
+  const selectAllAcrossPages = async () => {
+    if (!project?.id) return;
+    setSelectionMode(true);
+    setIsSelectingAllPages(true);
+    try {
+      const firstPage = await photocamApi.getPhotos(project.id, {
+        type: typeFilter !== 'all' ? typeFilter : undefined,
+        search: searchTerm || undefined,
+        page: 1,
+        limit: 200,
+      });
+
+      const firstItems = Array.isArray(firstPage?.data) ? firstPage.data : [];
+      const totalPages = Number(firstPage?.pagination?.totalPages || 1);
+      const collected = new Set(firstItems.map((item) => item.id).filter(Boolean));
+
+      for (let page = 2; page <= totalPages; page += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        const pageResult = await photocamApi.getPhotos(project.id, {
+          type: typeFilter !== 'all' ? typeFilter : undefined,
+          search: searchTerm || undefined,
+          page,
+          limit: 200,
+        });
+        const items = Array.isArray(pageResult?.data) ? pageResult.data : [];
+        items.forEach((item) => {
+          if (item?.id) collected.add(item.id);
+        });
+      }
+
+      const ids = Array.from(collected);
+      setSelectedPhotos(ids);
+      setActionMessage({
+        type: 'success',
+        text: `Selected ${ids.length} photo${ids.length === 1 ? '' : 's'} across all pages.`,
+      });
+    } catch (error) {
+      setActionMessage({
+        type: 'error',
+        text: error?.response?.data?.error?.message || 'Unable to select all pages right now.',
+      });
+    } finally {
+      setIsSelectingAllPages(false);
+    }
   };
 
   const clearSelection = () => {
@@ -902,7 +966,7 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
           <div className="space-y-2">
             <div className="flex items-center justify-between text-sm">
               <span className="text-gray-500">
-                {filteredPhotos.length} photo{filteredPhotos.length !== 1 ? 's' : ''}
+                {photosPagination.total || filteredPhotos.length} photo{(photosPagination.total || filteredPhotos.length) !== 1 ? 's' : ''}
                 {selectedPhotos.length > 0 && (
                   <span className="ml-2 text-panda-primary font-medium">
                     ({selectedPhotos.length} selected)
@@ -925,7 +989,14 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
                       onClick={selectAllVisible}
                       className="px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50"
                     >
-                      Select All
+                      Select Page
+                    </button>
+                    <button
+                      onClick={selectAllAcrossPages}
+                      disabled={isSelectingAllPages}
+                      className="px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+                    >
+                      {isSelectingAllPages ? 'Selecting…' : 'Select All Results'}
                     </button>
                     <button
                       onClick={clearSelection}
@@ -1103,6 +1174,32 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
                   )}
                 </div>
               ))}
+            </div>
+          )}
+
+          {!photosLoading && (photosPagination.totalPages || 1) > 1 && (
+            <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-white px-3 py-2">
+              <p className="text-xs text-gray-500">
+                Page {photosPagination.page} of {photosPagination.totalPages} ({photosPagination.total} total)
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                  disabled={photosPagination.page <= 1}
+                  className="rounded border border-gray-200 px-2 py-1 text-xs text-gray-700 disabled:opacity-50"
+                >
+                  Previous
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCurrentPage((prev) => Math.min(photosPagination.totalPages, prev + 1))}
+                  disabled={photosPagination.page >= photosPagination.totalPages}
+                  className="rounded border border-gray-200 px-2 py-1 text-xs text-gray-700 disabled:opacity-50"
+                >
+                  Next
+                </button>
+              </div>
             </div>
           )}
         </>

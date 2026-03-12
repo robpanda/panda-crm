@@ -16,6 +16,70 @@ const S3_BUCKET = process.env.S3_BUCKET || 'pandasign-documents';
 // SES client for email notifications
 const sesClient = new SESClient({ region: process.env.AWS_REGION || 'us-east-2' });
 const FROM_EMAIL = process.env.SES_FROM_EMAIL || 'notifications@pandaexteriors.com';
+const CRM_BASE_URL = (process.env.CRM_BASE_URL || process.env.FRONTEND_URL || 'https://crm.pandaadmin.com').replace(/\/+$/, '');
+const BAMBOOGLI_SERVICE_URL = process.env.BAMBOOGLI_SERVICE_URL || 'http://localhost:3012';
+const BAMBOOGLI_PUBLIC_URL = process.env.BAMBOOGLI_PUBLIC_URL || 'https://bamboo.pandaadmin.com';
+const BAMBOOGLI_INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || null;
+const BAMBOOGLI_REQUEST_TIMEOUT_MS = Number(process.env.BAMBOOGLI_REQUEST_TIMEOUT_MS || 10000);
+
+function toAbsoluteCrmUrl(actionPath = '/') {
+  if (typeof actionPath === 'string' && /^https?:\/\//i.test(actionPath)) {
+    return actionPath;
+  }
+  const normalizedPath = String(actionPath || '/').startsWith('/') ? String(actionPath) : `/${String(actionPath)}`;
+  return `${CRM_BASE_URL}${normalizedPath}`;
+}
+
+function getBamboogliBaseUrls() {
+  const candidates = [
+    process.env.BAMBOOGLI_SERVICE_URL,
+    process.env.BAMBOOGLI_INTERNAL_URL,
+    process.env.BAMBOOGLI_URL,
+    'http://bamboogli-service:3012',
+    'http://panda-crm-bamboogli:3012',
+    'http://bamboogli:3012',
+    BAMBOOGLI_SERVICE_URL,
+    BAMBOOGLI_PUBLIC_URL,
+  ].filter(Boolean);
+
+  return [...new Set(candidates.map((url) => String(url).replace(/\/+$/, '')))];
+}
+
+async function postToBamboogli(path, payload) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (BAMBOOGLI_INTERNAL_API_KEY) {
+    headers.Authorization = `ApiKey ${BAMBOOGLI_INTERNAL_API_KEY}`;
+    headers['x-api-key'] = BAMBOOGLI_INTERNAL_API_KEY;
+  }
+
+  const attempts = [];
+  for (const baseUrl of getBamboogliBaseUrls()) {
+    const requestUrl = `${baseUrl}${path}`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), BAMBOOGLI_REQUEST_TIMEOUT_MS);
+    try {
+      const response = await fetch(requestUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+
+      if (response.ok) return response;
+
+      const errorBody = await response.text().catch(() => '');
+      attempts.push(`${response.status} ${requestUrl} ${errorBody}`.trim());
+    } catch (error) {
+      attempts.push(`NETWORK ${requestUrl} ${error.message}`.trim());
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  throw new Error(`Bamboogli request failed: ${attempts.join(' | ')}`);
+}
 
 const DISPOSITION_CATEGORIES = {
   INSPECTION_NOT_COMPLETED: 'INSPECTION_NOT_COMPLETED',
@@ -37,10 +101,257 @@ const DISPOSITION_STAGE_MAP = {
   RETAIL_NOT_SOLD: 'CLOSED_LOST',
 };
 
+const INTERNAL_COMMENT_TITLE_PREFIX = 'INTERNAL_COMMENT|';
+
 function parseDate(value) {
   if (!value) return null;
-  const parsed = new Date(value);
+  const rawValue = String(value).trim();
+
+  // Date-only values should persist as calendar dates without timezone drift.
+  // Store at midday UTC so US timezones render the same day consistently.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(rawValue)) {
+    const parsed = new Date(`${rawValue}T12:00:00.000Z`);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  const parsed = new Date(rawValue);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function hasOwnField(obj, key) {
+  return Object.prototype.hasOwnProperty.call(obj || {}, key);
+}
+
+const OPTIONAL_OPPORTUNITY_CLAIM_FIELDS = new Set([
+  'stageName',
+  'claimNumber',
+  'claimFiledDate',
+  'insuranceCarrier',
+  'adjusterName',
+  'adjusterEmail',
+  'adjusterOfficePhone',
+  'fieldAdjusterMobile',
+  'damageLocation',
+  'dateOfLoss',
+]);
+
+const OPTIONAL_OPPORTUNITY_INCLUDE_FIELDS = new Set([
+  'projectManager',
+]);
+
+const CLAIM_FALLBACK_FIELD_TO_COLUMN = {
+  claimNumber: 'claim_number',
+  claimFiledDate: 'claim_filed_date',
+  insuranceCarrier: 'insurance_carrier',
+  adjusterName: 'adjuster_name',
+  adjusterEmail: 'adjuster_email',
+  adjusterOfficePhone: 'adjuster_office_phone',
+  fieldAdjusterMobile: 'field_adjuster_mobile',
+  damageLocation: 'damage_location',
+  dateOfLoss: 'date_of_loss',
+};
+
+function parseUnknownPrismaFieldName(error) {
+  const message = error?.message || '';
+  const unknownFieldMatch = message.match(/Unknown (?:field|argument) `([^`]+)`/);
+  if (unknownFieldMatch?.[1]) {
+    return unknownFieldMatch[1];
+  }
+
+  const missingColumnMatch = message.match(/column [^\"]*\"([^\"]+)\" does not exist/i);
+  const missingColumn = missingColumnMatch?.[1];
+  if (!missingColumn) return null;
+
+  const normalized = String(missingColumn).trim().toLowerCase();
+  const byColumnName = {
+    stage_name: 'stageName',
+    claim_number: 'claimNumber',
+    claim_filed_date: 'claimFiledDate',
+    insurance_carrier: 'insuranceCarrier',
+    adjuster_name: 'adjusterName',
+    adjuster_email: 'adjusterEmail',
+    adjuster_office_phone: 'adjusterOfficePhone',
+    field_adjuster_mobile: 'fieldAdjusterMobile',
+    damage_location: 'damageLocation',
+    date_of_loss: 'dateOfLoss',
+  };
+
+  return byColumnName[normalized] || null;
+}
+
+function normalizeClaimFallbackValue(fieldName, value) {
+  if (fieldName === 'claimFiledDate' || fieldName === 'dateOfLoss') {
+    return parseDate(value);
+  }
+  return value == null ? null : String(value);
+}
+
+async function applyClaimRawFallback(opportunityId, sourceData, candidateFields = []) {
+  const requestedFields = candidateFields
+    .filter((field) => CLAIM_FALLBACK_FIELD_TO_COLUMN[field] && hasOwnField(sourceData, field));
+
+  if (!opportunityId || requestedFields.length === 0) {
+    return;
+  }
+
+  const requestedColumns = requestedFields.map((field) => CLAIM_FALLBACK_FIELD_TO_COLUMN[field]);
+  const availableRows = await prisma.$queryRaw`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'opportunities'
+      AND column_name IN (${Prisma.join(requestedColumns)})
+  `;
+  const availableColumns = new Set((availableRows || []).map((row) => row.column_name));
+
+  const assignments = [];
+  const values = [];
+  let placeholderIndex = 1;
+
+  for (const field of requestedFields) {
+    const column = CLAIM_FALLBACK_FIELD_TO_COLUMN[field];
+    if (!availableColumns.has(column)) continue;
+    assignments.push(`"${column}" = $${placeholderIndex}`);
+    values.push(normalizeClaimFallbackValue(field, sourceData[field]));
+    placeholderIndex += 1;
+  }
+
+  if (assignments.length === 0) {
+    return;
+  }
+
+  assignments.push(`"updated_at" = NOW()`);
+  const sql = `UPDATE "opportunities" SET ${assignments.join(', ')} WHERE "id" = $${placeholderIndex}`;
+  await prisma.$executeRawUnsafe(sql, ...values, opportunityId);
+}
+
+async function hydrateClaimFallbackFromRaw(opportunityId, opportunity) {
+  if (!opportunityId || !opportunity) return opportunity;
+
+  const fields = Object.keys(CLAIM_FALLBACK_FIELD_TO_COLUMN);
+  const needsFallback = fields.some((field) => opportunity[field] == null);
+  if (!needsFallback) {
+    return opportunity;
+  }
+
+  let rows;
+  try {
+    rows = await prisma.$queryRaw`
+      SELECT
+        claim_number,
+        claim_filed_date,
+        insurance_carrier,
+        adjuster_name,
+        adjuster_email,
+        adjuster_office_phone,
+        field_adjuster_mobile,
+        damage_location,
+        date_of_loss
+      FROM opportunities
+      WHERE id = ${opportunityId}
+      LIMIT 1
+    `;
+  } catch (error) {
+    logger.warn(`Claim fallback hydration skipped for ${opportunityId}: ${error.message}`);
+    return opportunity;
+  }
+
+  const row = rows?.[0];
+  if (!row) return opportunity;
+
+  return {
+    ...opportunity,
+    claimNumber: opportunity.claimNumber ?? row.claim_number ?? null,
+    claimFiledDate: opportunity.claimFiledDate ?? row.claim_filed_date ?? null,
+    insuranceCarrier: opportunity.insuranceCarrier ?? row.insurance_carrier ?? null,
+    adjusterName: opportunity.adjusterName ?? row.adjuster_name ?? null,
+    adjusterEmail: opportunity.adjusterEmail ?? row.adjuster_email ?? null,
+    adjusterOfficePhone: opportunity.adjusterOfficePhone ?? row.adjuster_office_phone ?? null,
+    fieldAdjusterMobile: opportunity.fieldAdjusterMobile ?? row.field_adjuster_mobile ?? null,
+    damageLocation: opportunity.damageLocation ?? row.damage_location ?? null,
+    dateOfLoss: opportunity.dateOfLoss ?? row.date_of_loss ?? null,
+  };
+}
+
+function parseBooleanFlag(value) {
+  if (value === true || value === false) return value;
+  if (value === 1 || value === '1') return true;
+  if (value === 0 || value === '0') return false;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+  }
+  return false;
+}
+
+function normalizeEntityId(value) {
+  if (value == null) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? String(value) : null;
+  }
+  if (typeof value === 'object') {
+    const candidates = [value.id, value.userId, value.ownerId, value.newOwnerId, value.value, value.key];
+    for (const candidate of candidates) {
+      const normalized = normalizeEntityId(candidate);
+      if (normalized) return normalized;
+    }
+  }
+  return null;
+}
+
+function normalizeDepartmentTag(value) {
+  const normalized = String(value || 'general')
+    .trim()
+    .toLowerCase()
+    .replace(/\|/g, '')
+    .replace(/\s+/g, '_');
+  return normalized || 'general';
+}
+
+function toInternalCommentTitle(departmentTag = 'general', isResolved = false) {
+  return `${INTERNAL_COMMENT_TITLE_PREFIX}${normalizeDepartmentTag(departmentTag)}|${isResolved ? '1' : '0'}`;
+}
+
+function parseInternalCommentTitle(title) {
+  if (typeof title !== 'string' || !title.startsWith(INTERNAL_COMMENT_TITLE_PREFIX)) {
+    return null;
+  }
+
+  const remainder = title.slice(INTERNAL_COMMENT_TITLE_PREFIX.length);
+  const [departmentTagRaw = 'general', resolvedRaw = '0'] = remainder.split('|');
+  return {
+    departmentTag: normalizeDepartmentTag(departmentTagRaw),
+    isResolved: resolvedRaw === '1' || String(resolvedRaw).toLowerCase() === 'true',
+  };
+}
+
+function extractMentionUserId(mention) {
+  if (!mention) return null;
+  if (typeof mention === 'string') return mention;
+  return mention.userId || mention.id || null;
+}
+
+function formatTransferCounts(counts = {}) {
+  const labels = {
+    tasks: 'tasks',
+    events: 'events',
+    commissions: 'commissions',
+    serviceContracts: 'service contracts',
+    photoProjects: 'photo projects',
+    opportunityAttentionItems: 'job attention items',
+    caseAttentionItems: 'case attention items',
+    appointmentAssignments: 'appointment assignments',
+  };
+
+  return Object.entries(labels)
+    .filter(([key]) => Number(counts[key] || 0) > 0)
+    .map(([key, label]) => `${counts[key]} ${label}`)
+    .join(', ');
 }
 
 function validateAppointmentResultPayload(payload = {}) {
@@ -287,6 +598,84 @@ async function getNotificationService() {
 }
 
 class OpportunityService {
+  async resolveActorUserId(actor = null) {
+    if (!actor) return null;
+
+    const idCandidates = [
+      actor.id,
+      actor.userId,
+      actor.sub,
+      actor.username,
+    ].filter(Boolean);
+
+    for (const candidate of idCandidates) {
+      const found = await prisma.user.findUnique({
+        where: { id: String(candidate) },
+        select: { id: true },
+      });
+      if (found?.id) return found.id;
+
+      const foundByCognito = await prisma.user.findFirst({
+        where: { cognitoId: String(candidate) },
+        select: { id: true },
+      });
+      if (foundByCognito?.id) return foundByCognito.id;
+    }
+
+    if (actor.email) {
+      const rawEmail = String(actor.email).trim().toLowerCase();
+      const emailCandidates = new Set([rawEmail]);
+      const [local = '', domain = ''] = rawEmail.split('@');
+      if (local && domain) {
+        // Keep fallback conservative to avoid mis-attribution.
+        emailCandidates.add(`${local}@${domain.replace('panda-exteriors.com', 'pandaexteriors.com')}`);
+        emailCandidates.add(`${local}@${domain.replace('pandaexteriors.com', 'panda-exteriors.com')}`);
+      }
+
+      for (const email of emailCandidates) {
+        const foundByEmail = await prisma.user.findFirst({
+          where: { email: { equals: email, mode: 'insensitive' } },
+          select: { id: true },
+        });
+        if (foundByEmail?.id) return foundByEmail.id;
+      }
+
+      // Final fallback: match email local-part ignoring punctuation only when unique.
+      if (local && domain) {
+        const normalizedLocal = local.replace(/[._-]/g, '');
+        const domainCandidates = new Set([
+          domain,
+          domain.replace('panda-exteriors.com', 'pandaexteriors.com'),
+          domain.replace('pandaexteriors.com', 'panda-exteriors.com'),
+        ]);
+
+        for (const domainCandidate of domainCandidates) {
+          const possibleUsers = await prisma.user.findMany({
+            where: {
+              email: {
+                endsWith: `@${domainCandidate}`,
+                mode: 'insensitive',
+              },
+            },
+            select: { id: true, email: true },
+            take: 25,
+          });
+
+          const normalizedMatches = possibleUsers.filter((candidate) => {
+            const [candidateLocal = ''] = String(candidate.email || '').toLowerCase().split('@');
+            return candidateLocal.replace(/[._-]/g, '') === normalizedLocal;
+          });
+
+          if (normalizedMatches.length === 1) {
+            return normalizedMatches[0].id;
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
   /**
    * Get opportunities with filtering and pagination
    * Replicates: SalesLeaderOpportunityListController.getOpportunities()
@@ -353,7 +742,21 @@ class OpportunityService {
     if (search) {
       where.OR = [
         { name: { contains: search, mode: 'insensitive' } },
+        { jobId: { contains: search, mode: 'insensitive' } },
+        { street: { contains: search, mode: 'insensitive' } },
+        { city: { contains: search, mode: 'insensitive' } },
+        { state: { contains: search, mode: 'insensitive' } },
+        { postalCode: { contains: search, mode: 'insensitive' } },
         { account: { name: { contains: search, mode: 'insensitive' } } },
+        { account: { billingStreet: { contains: search, mode: 'insensitive' } } },
+        { account: { billingCity: { contains: search, mode: 'insensitive' } } },
+        { account: { billingState: { contains: search, mode: 'insensitive' } } },
+        { account: { billingPostalCode: { contains: search, mode: 'insensitive' } } },
+        { contact: { firstName: { contains: search, mode: 'insensitive' } } },
+        { contact: { lastName: { contains: search, mode: 'insensitive' } } },
+        { contact: { email: { contains: search, mode: 'insensitive' } } },
+        { contact: { phone: { contains: search } } },
+        { contact: { mobilePhone: { contains: search } } },
       ];
     }
 
@@ -416,6 +819,9 @@ class OpportunityService {
           owner: {
             select: { id: true, firstName: true, lastName: true, email: true },
           },
+          projectManager: {
+            select: { id: true, firstName: true, lastName: true, email: true, phone: true, mobilePhone: true },
+          },
           lineItems: {
             orderBy: { sortOrder: 'asc' },
             include: { product: true },
@@ -471,7 +877,8 @@ class OpportunityService {
       }
 
       console.log(`[getOpportunityDetails] Found opportunity: ${opportunity.name}`);
-      const wrapper = this.createOpportunityWrapper(opportunity, true);
+      const hydratedOpportunity = await hydrateClaimFallbackFromRaw(id, opportunity);
+      const wrapper = this.createOpportunityWrapper(hydratedOpportunity, true);
       console.log(`[getOpportunityDetails] Wrapper created successfully`);
       return wrapper;
     } catch (error) {
@@ -630,6 +1037,397 @@ class OpportunityService {
       mailingState: c.mailingState,
       mailingPostalCode: c.mailingPostalCode,
     }));
+  }
+
+  /**
+   * Generate a customer portal link for an opportunity.
+   * Kept lightweight and non-destructive: no schema writes required.
+   */
+  async generatePortalLink(id, options = {}) {
+    const opportunityId = normalizeEntityId(id);
+    if (!opportunityId) {
+      const error = new Error('Opportunity ID is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const opportunity = await prisma.opportunity.findUnique({
+      where: { id: opportunityId },
+      select: {
+        id: true,
+        jobId: true,
+        accountId: true,
+        account: {
+          select: { id: true, name: true },
+        },
+      },
+    });
+
+    if (!opportunity) {
+      const error = new Error(`Opportunity not found: ${opportunityId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const expiresInDaysRaw = Number(options?.expiresInDays);
+    const expiresInDays = Number.isFinite(expiresInDaysRaw) && expiresInDaysRaw > 0
+      ? Math.min(Math.trunc(expiresInDaysRaw), 365)
+      : 30;
+
+    const expiresAt = new Date();
+    expiresAt.setUTCDate(expiresAt.getUTCDate() + expiresInDays);
+
+    // Use stable identifiers only; this avoids creating fragile state while keeping the
+    // portal-link endpoint available for invoice/send flows.
+    const portalToken = (opportunity.jobId || opportunity.id || '').trim();
+    const encodedToken = encodeURIComponent(portalToken);
+    const baseUrl = (
+      process.env.CRM_BASE_URL
+      || process.env.FRONTEND_URL
+      || CRM_BASE_URL
+      || 'https://crm.pandaadmin.com'
+    ).replace(/\/+$/, '');
+    const portalUrl = `${baseUrl}/portal/${encodedToken}`;
+
+    return {
+      opportunityId: opportunity.id,
+      jobId: opportunity.jobId || null,
+      accountId: opportunity.accountId || null,
+      accountName: opportunity.account?.name || null,
+      token: portalToken,
+      expiresAt: expiresAt.toISOString(),
+      portalUrl,
+      portalLink: portalUrl,
+      url: portalUrl,
+      link: portalUrl,
+    };
+  }
+
+  async resolveOpportunityByPortalToken(token) {
+    const rawToken = typeof token === 'string' ? decodeURIComponent(token).trim() : '';
+    if (!rawToken) {
+      const error = new Error('Portal token is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const include = {
+      account: {
+        select: {
+          id: true,
+          name: true,
+          phone: true,
+          email: true,
+          billingStreet: true,
+          billingCity: true,
+          billingState: true,
+          billingPostalCode: true,
+        },
+      },
+      contact: {
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          fullName: true,
+          phone: true,
+          mobilePhone: true,
+          email: true,
+        },
+      },
+      owner: {
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+          phone: true,
+          mobilePhone: true,
+        },
+      },
+      projectManager: {
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+          phone: true,
+          mobilePhone: true,
+        },
+      },
+    };
+
+    let opportunity = await prisma.opportunity.findFirst({
+      where: { jobId: rawToken, deletedAt: null },
+      include,
+    });
+
+    if (!opportunity) {
+      opportunity = await prisma.opportunity.findFirst({
+        where: { id: rawToken, deletedAt: null },
+        include,
+      });
+    }
+
+    if (!opportunity) {
+      const error = new Error('Invalid portal link');
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    return { token: rawToken, opportunity };
+  }
+
+  async getCustomerPortalProject(token) {
+    const { token: resolvedToken, opportunity } = await this.resolveOpportunityByPortalToken(token);
+
+    const contactName = opportunity.contact?.fullName
+      || `${opportunity.contact?.firstName || ''} ${opportunity.contact?.lastName || ''}`.trim()
+      || opportunity.account?.name
+      || opportunity.name;
+
+    const contactPhone = opportunity.contact?.phone || opportunity.contact?.mobilePhone || opportunity.account?.phone || null;
+    const contactEmail = opportunity.contact?.email || opportunity.account?.email || null;
+
+    const manager = opportunity.projectManager || opportunity.owner || null;
+
+    const stageOrder = [
+      'LEAD_UNASSIGNED',
+      'LEAD_ASSIGNED',
+      'SCHEDULED',
+      'INSPECTED',
+      'CLAIM_FILED',
+      'APPROVED',
+      'CONTRACT_SIGNED',
+      'IN_PRODUCTION',
+      'COMPLETED',
+    ];
+    const currentIndex = Math.max(stageOrder.indexOf(opportunity.stage), 0);
+    const progressPercent = Math.round(((currentIndex + 1) / stageOrder.length) * 100);
+
+    return {
+      token: resolvedToken,
+      project: {
+        id: opportunity.id,
+        jobId: opportunity.jobId,
+        name: opportunity.name,
+        stage: opportunity.stage,
+        status: opportunity.status,
+        installDate: opportunity.appointmentDate || null,
+        street: opportunity.street || opportunity.account?.billingStreet || null,
+        city: opportunity.city || opportunity.account?.billingCity || null,
+        state: opportunity.state || opportunity.account?.billingState || null,
+        postalCode: opportunity.postalCode || opportunity.account?.billingPostalCode || null,
+        address: {
+          street: opportunity.street || opportunity.account?.billingStreet || null,
+          city: opportunity.city || opportunity.account?.billingCity || null,
+          state: opportunity.state || opportunity.account?.billingState || null,
+          postalCode: opportunity.postalCode || opportunity.account?.billingPostalCode || null,
+        },
+        accountName: opportunity.account?.name || contactName,
+        accountPhone: contactPhone,
+        accountEmail: contactEmail,
+      },
+      contact: {
+        name: contactName,
+        phone: contactPhone,
+        email: contactEmail,
+      },
+      projectManager: manager
+        ? {
+            id: manager.id,
+            firstName: manager.firstName || null,
+            lastName: manager.lastName || null,
+            name: `${manager.firstName || ''} ${manager.lastName || ''}`.trim(),
+            phone: manager.mobilePhone || manager.phone || null,
+            email: manager.email || null,
+          }
+        : null,
+      progress: {
+        percent: Number.isFinite(progressPercent) ? progressPercent : 0,
+      },
+    };
+  }
+
+  async getCustomerPortalStages(token) {
+    const { opportunity } = await this.resolveOpportunityByPortalToken(token);
+
+    const orderedStages = [
+      { code: 'LEAD_ASSIGNED', name: 'Lead Assigned' },
+      { code: 'SCHEDULED', name: 'Scheduled' },
+      { code: 'INSPECTED', name: 'Inspected' },
+      { code: 'CLAIM_FILED', name: 'Claim Filed' },
+      { code: 'APPROVED', name: 'Approved' },
+      { code: 'CONTRACT_SIGNED', name: 'Contract Signed' },
+      { code: 'IN_PRODUCTION', name: 'In Production' },
+      { code: 'COMPLETED', name: 'Completed' },
+    ];
+
+    const activeIndex = Math.max(orderedStages.findIndex((stage) => stage.code === opportunity.stage), 0);
+
+    return orderedStages.map((stage, index) => ({
+      number: index + 1,
+      name: stage.name,
+      status: index < activeIndex ? 'completed' : (index === activeIndex ? 'in_progress' : 'pending'),
+      is_enabled: true,
+      completedAt: index < activeIndex ? opportunity.updatedAt : null,
+    }));
+  }
+
+  async getCustomerPortalGalleries(token) {
+    await this.resolveOpportunityByPortalToken(token);
+    return [];
+  }
+
+  async getCustomerPortalAppointments(token) {
+    const { opportunity } = await this.resolveOpportunityByPortalToken(token);
+    const result = await this.getOpportunityAppointments(opportunity.id);
+    return result?.appointments || [];
+  }
+
+  async getCustomerPortalPayments(token) {
+    const { opportunity } = await this.resolveOpportunityByPortalToken(token);
+    const billing = await this.getOpportunityInvoices(opportunity.id);
+    const invoices = billing?.invoices || [];
+    const payments = invoices.flatMap((invoice) => invoice.payments || []);
+
+    return {
+      invoices,
+      payments,
+      summary: billing?.summary || null,
+    };
+  }
+
+  async getCustomerPortalPaymentLink(token) {
+    const billing = await this.getCustomerPortalPayments(token);
+    const unpaidInvoice = (billing.invoices || []).find((invoice) => Number(invoice.balanceDue || 0) > 0);
+
+    return {
+      paymentLink: unpaidInvoice?.stripePaymentLinkUrl || unpaidInvoice?.stripeHostedInvoiceUrl || null,
+      invoiceId: unpaidInvoice?.id || null,
+      invoiceNumber: unpaidInvoice?.invoiceNumber || null,
+    };
+  }
+
+  async sendCustomerPortalMessage(token, payload = {}) {
+    const { opportunity } = await this.resolveOpportunityByPortalToken(token);
+    const body = String(payload?.message || '').trim();
+    if (!body) {
+      const error = new Error('Message is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const sender = String(payload?.senderName || '').trim() || 'Customer';
+    const senderPhone = String(payload?.senderPhone || '').trim();
+    const noteBody = senderPhone
+      ? `[Customer Portal] ${sender} (${senderPhone}): ${body}`
+      : `[Customer Portal] ${sender}: ${body}`;
+
+    // Notes require a non-null creator in this schema. If the job has no owner yet,
+    // acknowledge safely without a write to avoid surfacing a 500 to the customer portal.
+    if (!opportunity.ownerId) {
+      return {
+        id: null,
+        createdAt: new Date().toISOString(),
+        message: body,
+        persisted: false,
+      };
+    }
+
+    const note = await this.createOpportunityNote(opportunity.id, {
+      title: 'Customer Portal Message',
+      body: noteBody,
+      isPinned: false,
+      createdById: opportunity.ownerId,
+    });
+
+    return {
+      id: note.id,
+      createdAt: note.createdAt,
+      message: body,
+      persisted: true,
+    };
+  }
+
+  parseCustomerPortalNoteBody(body) {
+    const noteBody = String(body || '');
+    const prefix = '[Customer Portal]';
+    if (!noteBody.startsWith(prefix)) {
+      return {
+        senderName: 'Customer',
+        senderPhone: null,
+        message: noteBody.trim(),
+      };
+    }
+
+    const remainder = noteBody.slice(prefix.length).trim();
+    const separatorIndex = remainder.indexOf(':');
+    if (separatorIndex === -1) {
+      return {
+        senderName: 'Customer',
+        senderPhone: null,
+        message: remainder,
+      };
+    }
+
+    const senderPart = remainder.slice(0, separatorIndex).trim();
+    const message = remainder.slice(separatorIndex + 1).trim();
+    const senderMatch = senderPart.match(/^(.*?)(?:\s*\(([^)]+)\))?$/);
+
+    return {
+      senderName: senderMatch?.[1]?.trim() || 'Customer',
+      senderPhone: senderMatch?.[2]?.trim() || null,
+      message,
+    };
+  }
+
+  async getOpportunityPortalMessages(opportunityId) {
+    const notes = await prisma.note.findMany({
+      where: {
+        opportunityId,
+        OR: [
+          { title: 'Customer Portal Message' },
+          { body: { startsWith: '[Customer Portal]' } },
+        ],
+      },
+      include: {
+        createdBy: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+          },
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    return notes.map((note) => {
+      const parsed = this.parseCustomerPortalNoteBody(note.body);
+      const authorName = note.createdBy
+        ? `${note.createdBy.firstName || ''} ${note.createdBy.lastName || ''}`.trim() || note.createdBy.email
+        : null;
+
+      return {
+        id: note.id,
+        title: note.title,
+        message: parsed.message || note.body || '',
+        senderName: parsed.senderName || 'Customer',
+        senderPhone: parsed.senderPhone || null,
+        createdAt: note.createdAt,
+        updatedAt: note.updatedAt,
+        rawBody: note.body,
+        author: note.createdBy
+          ? {
+              id: note.createdBy.id,
+              name: authorName,
+              email: note.createdBy.email,
+            }
+          : null,
+      };
+    });
   }
 
   /**
@@ -1473,79 +2271,389 @@ Be factual and professional. Highlight anything that needs attention.`;
   }
 
   /**
+   * Resolve mentions for opportunity comments/replies and create in-app notifications.
+   */
+  async notifyOpportunityMentions({
+    opportunityId,
+    content,
+    mentions = [],
+    actor = null,
+    actorUserId = null,
+    opportunityName = null,
+    opportunityJobId = null,
+    actionPath = null,
+  }) {
+    const mentionUserIds = [...new Set((mentions || [])
+      .map(extractMentionUserId)
+      .filter(Boolean))];
+
+    if (mentionUserIds.length === 0) {
+      return 0;
+    }
+
+    const users = await prisma.user.findMany({
+      where: { id: { in: mentionUserIds } },
+      select: { id: true, email: true, mobilePhone: true, firstName: true, lastName: true },
+    });
+    const userById = new Map(users.map((u) => [u.id, u]));
+    const actorRecord = actorUserId
+      ? await prisma.user.findUnique({
+          where: { id: actorUserId },
+          select: { firstName: true, lastName: true, email: true },
+        })
+      : null;
+    const actorName = `${actorRecord?.firstName || actor?.firstName || ''} ${actorRecord?.lastName || actor?.lastName || ''}`.trim()
+      || actorRecord?.email
+      || actor?.email
+      || 'Someone';
+    const subjectName = opportunityName || opportunityJobId || 'an opportunity';
+    const preview = (content || '').substring(0, 100);
+    const resolvedActionPath = actionPath || `/jobs/${opportunityId}`;
+    const absoluteActionUrl = toAbsoluteCrmUrl(resolvedActionPath);
+
+    for (const userId of mentionUserIds) {
+      const mentionedUser = userById.get(userId);
+      if (!mentionedUser) continue;
+      if (actorUserId && mentionedUser.id === actorUserId) continue;
+
+      await prisma.notification.create({
+        data: {
+          userId,
+          type: 'MENTION',
+          title: `${actorName} mentioned you`,
+          message: `You were mentioned on ${subjectName}: "${preview}${(content || '').length > 100 ? '...' : ''}"`,
+          opportunityId,
+          actionUrl: resolvedActionPath,
+          actionLabel: 'View Job',
+          sourceType: 'OPPORTUNITY',
+          sourceId: opportunityId,
+          status: 'UNREAD',
+        },
+      });
+
+      if (mentionedUser.email) {
+        this.sendMentionEmail({
+          toEmail: mentionedUser.email,
+          toName: mentionedUser.firstName || 'there',
+          mentionerName: actorName,
+          opportunityName: subjectName,
+          actionUrl: absoluteActionUrl,
+          messagePreview: (content || '').substring(0, 200),
+        }).catch((err) => logger.warn(`Failed to send mention email to ${mentionedUser.email}: ${err.message}`));
+      }
+
+      if (mentionedUser.mobilePhone) {
+        this.sendMentionSms({
+          toPhone: mentionedUser.mobilePhone,
+          mentionerName: actorName,
+          opportunityName: subjectName,
+          actionUrl: absoluteActionUrl,
+        }).catch((err) => logger.warn(`Failed to send mention SMS to ${mentionedUser.mobilePhone}: ${err.message}`));
+      }
+    }
+
+    return mentionUserIds.length;
+  }
+
+  /**
    * Add a reply with @mentions - creates a note and sends notifications
    */
   async addReplyWithMentions(opportunityId, { content, parentId, mentions, channel }, user) {
-    // Create the note/reply
+    const actorUserId = await this.resolveActorUserId(user);
+    if (!actorUserId) {
+      const error = new Error('Unable to resolve the logged-in user for this reply');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const normalizedContent = String(content || '').trim();
+    if (!normalizedContent && (!mentions || mentions.length === 0)) {
+      const error = new Error('Reply content is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
     const note = await prisma.note.create({
       data: {
         opportunityId,
-        subject: `Reply to ${channel || 'message'}`,
-        body: content,
-        userId: user?.id,
-        parentId: parentId || null,
+        title: parentId ? `REPLY|${parentId}` : `REPLY|${channel || 'message'}`,
+        body: normalizedContent || '(mention)',
+        createdById: actorUserId,
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
       },
     });
 
-    // Send notifications to mentioned users
+    let mentionsNotified = 0;
     if (mentions && mentions.length > 0) {
       const opportunity = await prisma.opportunity.findUnique({
         where: { id: opportunityId },
         select: { name: true, jobId: true },
       });
-
-      const notificationPromises = mentions.map(async (mention) => {
-        // Create in-app notification
-        await prisma.notification.create({
-          data: {
-            userId: mention.userId,
-            type: 'MENTION',
-            title: `${user?.firstName || 'Someone'} mentioned you`,
-            message: `You were mentioned in a reply on ${opportunity?.name || opportunity?.jobId || 'an opportunity'}: "${content.substring(0, 100)}${content.length > 100 ? '...' : ''}"`,
-            opportunityId: opportunityId,
-            actionUrl: `/jobs/${opportunityId}`,
-            actionLabel: 'View Job',
-            sourceType: 'OPPORTUNITY',
-            sourceId: opportunityId,
-            status: 'UNREAD',
-          },
-        });
-
-        // Get user email for email notification
-        const mentionedUser = await prisma.user.findUnique({
-          where: { id: mention.userId },
-          select: { email: true, firstName: true },
-        });
-
-        if (mentionedUser?.email) {
-          // Send email notification (fire and forget)
-          this.sendMentionEmail({
-            toEmail: mentionedUser.email,
-            toName: mentionedUser.firstName,
-            mentionerName: `${user?.firstName} ${user?.lastName}`,
-            opportunityName: opportunity?.name || opportunity?.jobId,
-            opportunityId,
-            messagePreview: content.substring(0, 200),
-          }).catch(err => console.error('Failed to send mention email:', err));
-        }
+      mentionsNotified = await this.notifyOpportunityMentions({
+        opportunityId,
+        content: normalizedContent || note.body,
+        mentions,
+        actor: user,
+        actorUserId,
+        opportunityName: opportunity?.name,
+        opportunityJobId: opportunity?.jobId,
+        actionPath: `/jobs/${opportunityId}?tab=messages&noteId=${note.id}`,
       });
-
-      await Promise.all(notificationPromises);
     }
 
     return {
       ...note,
-      mentionsNotified: mentions?.length || 0,
+      mentionsNotified,
     };
+  }
+
+  async getOpportunityInternalComments(opportunityId) {
+    const comments = await prisma.note.findMany({
+      where: {
+        opportunityId,
+        title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return comments.map((comment) => {
+      const meta = parseInternalCommentTitle(comment.title) || {
+        departmentTag: 'general',
+        isResolved: false,
+      };
+      return {
+        id: comment.id,
+        content: comment.body,
+        body: comment.body,
+        departmentTag: meta.departmentTag,
+        isResolved: meta.isResolved,
+        createdAt: comment.createdAt,
+        updatedAt: comment.updatedAt,
+        author: comment.createdBy
+          ? {
+              id: comment.createdBy.id,
+              firstName: comment.createdBy.firstName,
+              lastName: comment.createdBy.lastName,
+              email: comment.createdBy.email,
+            }
+          : null,
+        replies: [],
+        attachmentUrls: [],
+      };
+    });
+  }
+
+  async createOpportunityInternalComment(opportunityId, payload = {}, user = null) {
+    const content = String(payload.content || payload.body || '').trim();
+    if (!content) {
+      const error = new Error('Comment content is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const actorUserId = await this.resolveActorUserId(user);
+    if (!actorUserId) {
+      const error = new Error('Unable to resolve the logged-in user for this internal comment');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const opportunity = await prisma.opportunity.findUnique({
+      where: { id: opportunityId },
+      select: { id: true, name: true, jobId: true },
+    });
+    if (!opportunity) {
+      const error = new Error(`Opportunity not found: ${opportunityId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const departmentTag = normalizeDepartmentTag(payload.departmentTag || payload.department || 'general');
+    const isResolved = Boolean(payload.isResolved);
+
+    const comment = await prisma.note.create({
+      data: {
+        opportunityId,
+        title: toInternalCommentTitle(departmentTag, isResolved),
+        body: content,
+        createdById: actorUserId,
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+    });
+
+    const mentionsNotified = await this.notifyOpportunityMentions({
+      opportunityId,
+      content,
+      mentions: payload.mentions || [],
+      actor: user,
+      actorUserId,
+      opportunityName: opportunity.name,
+      opportunityJobId: opportunity.jobId,
+      actionPath: `/jobs/${opportunityId}?tab=messages&internalCommentId=${comment.id}`,
+    });
+
+    return {
+      id: comment.id,
+      content: comment.body,
+      body: comment.body,
+      departmentTag,
+      isResolved,
+      createdAt: comment.createdAt,
+      updatedAt: comment.updatedAt,
+      author: comment.createdBy
+        ? {
+            id: comment.createdBy.id,
+            firstName: comment.createdBy.firstName,
+            lastName: comment.createdBy.lastName,
+            email: comment.createdBy.email,
+          }
+        : null,
+      replies: [],
+      attachmentUrls: [],
+      mentionsNotified,
+    };
+  }
+
+  async updateOpportunityInternalComment(opportunityId, commentId, payload = {}, user = null) {
+    const existing = await prisma.note.findFirst({
+      where: {
+        id: commentId,
+        opportunityId,
+        title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+    });
+
+    if (!existing) {
+      const error = new Error(`Internal comment not found: ${commentId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const meta = parseInternalCommentTitle(existing.title) || {
+      departmentTag: 'general',
+      isResolved: false,
+    };
+    const nextDepartment = hasOwnField(payload, 'departmentTag') || hasOwnField(payload, 'department')
+      ? normalizeDepartmentTag(payload.departmentTag || payload.department)
+      : meta.departmentTag;
+    const nextResolved = hasOwnField(payload, 'isResolved')
+      ? Boolean(payload.isResolved)
+      : meta.isResolved;
+    const nextContent = hasOwnField(payload, 'content') || hasOwnField(payload, 'body')
+      ? String(payload.content || payload.body || '').trim()
+      : existing.body;
+
+    if (!nextContent) {
+      const error = new Error('Comment content is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const updated = await prisma.note.update({
+      where: { id: commentId },
+      data: {
+        title: toInternalCommentTitle(nextDepartment, nextResolved),
+        body: nextContent,
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+    });
+
+    const mentionsNotified = await this.notifyOpportunityMentions({
+      opportunityId,
+      content: nextContent,
+      mentions: payload.mentions || [],
+      actor: user,
+    });
+
+    return {
+      id: updated.id,
+      content: updated.body,
+      body: updated.body,
+      departmentTag: nextDepartment,
+      isResolved: nextResolved,
+      createdAt: updated.createdAt,
+      updatedAt: updated.updatedAt,
+      author: updated.createdBy
+        ? {
+            id: updated.createdBy.id,
+            firstName: updated.createdBy.firstName,
+            lastName: updated.createdBy.lastName,
+            email: updated.createdBy.email,
+          }
+        : null,
+      replies: [],
+      attachmentUrls: [],
+      mentionsNotified,
+    };
+  }
+
+  async deleteOpportunityInternalComment(opportunityId, commentId) {
+    const existing = await prisma.note.findFirst({
+      where: {
+        id: commentId,
+        opportunityId,
+        title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+      },
+      select: { id: true },
+    });
+
+    if (!existing) {
+      const error = new Error(`Internal comment not found: ${commentId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    await prisma.note.delete({ where: { id: commentId } });
+    return { success: true, deletedId: commentId };
   }
 
   /**
    * Send email notification for @mention
    */
-  async sendMentionEmail({ toEmail, toName, mentionerName, opportunityName, opportunityId, messagePreview }) {
-    try {
-      const opportunityUrl = `https://bamboo.pandaadmin.com/opportunities/${opportunityId}`;
+  async sendMentionEmail({ toEmail, toName, mentionerName, opportunityName, actionUrl, messagePreview }) {
+    const opportunityUrl = toAbsoluteCrmUrl(actionUrl || '/jobs');
+    const subject = `${mentionerName} mentioned you on ${opportunityName}`;
+    const bodyText = `You were mentioned by ${mentionerName} on ${opportunityName}: "${messagePreview}"\n\nView at: ${opportunityUrl}`;
+    const bodyHtml = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #333;">You were mentioned in a conversation</h2>
+        <p>Hi ${toName},</p>
+        <p><strong>${mentionerName}</strong> mentioned you in a reply on <strong>${opportunityName}</strong>:</p>
+        <div style="background: #f5f5f5; padding: 15px; border-radius: 8px; margin: 15px 0;">
+          <p style="margin: 0; color: #666;">"${messagePreview}"</p>
+        </div>
+        <a href="${opportunityUrl}" style="display: inline-block; background: #667eea; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin-top: 10px;">
+          View Conversation
+        </a>
+        <p style="color: #999; font-size: 12px; margin-top: 30px;">
+          This is an automated notification from Panda CRM.
+        </p>
+      </div>
+    `;
 
+    try {
       await sesClient.send(new SendEmailCommand({
         Source: FROM_EMAIL,
         Destination: {
@@ -1553,29 +2661,14 @@ Be factual and professional. Highlight anything that needs attention.`;
         },
         Message: {
           Subject: {
-            Data: `${mentionerName} mentioned you on ${opportunityName}`,
+            Data: subject,
           },
           Body: {
             Html: {
-              Data: `
-                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-                  <h2 style="color: #333;">You were mentioned in a conversation</h2>
-                  <p>Hi ${toName},</p>
-                  <p><strong>${mentionerName}</strong> mentioned you in a reply on <strong>${opportunityName}</strong>:</p>
-                  <div style="background: #f5f5f5; padding: 15px; border-radius: 8px; margin: 15px 0;">
-                    <p style="margin: 0; color: #666;">"${messagePreview}"</p>
-                  </div>
-                  <a href="${opportunityUrl}" style="display: inline-block; background: #667eea; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin-top: 10px;">
-                    View Conversation
-                  </a>
-                  <p style="color: #999; font-size: 12px; margin-top: 30px;">
-                    This is an automated notification from Panda CRM.
-                  </p>
-                </div>
-              `,
+              Data: bodyHtml,
             },
             Text: {
-              Data: `You were mentioned by ${mentionerName} on ${opportunityName}: "${messagePreview}"\n\nView at: ${opportunityUrl}`,
+              Data: bodyText,
             },
           },
         },
@@ -1583,9 +2676,29 @@ Be factual and professional. Highlight anything that needs attention.`;
 
       console.log(`Mention email sent to ${toEmail}`);
     } catch (error) {
-      console.error('Error sending mention email:', error);
-      throw error;
+      logger.warn(`SES mention email failed for ${toEmail}, falling back to Bamboogli: ${error.message}`);
+      const fallbackResponse = await postToBamboogli('/api/messages/send/email', {
+        to: toEmail,
+        subject,
+        body: bodyText,
+        bodyHtml,
+        sentById: 'system',
+      });
+      if (!fallbackResponse.ok) {
+        throw new Error(`Mention email fallback failed with status ${fallbackResponse.status}`);
+      }
     }
+  }
+
+  async sendMentionSms({ toPhone, mentionerName, opportunityName, actionUrl }) {
+    const smsBody = `${mentionerName} mentioned you on ${opportunityName}. View: ${toAbsoluteCrmUrl(actionUrl || '/jobs')}`;
+    const response = await postToBamboogli('/api/messages/send/sms', {
+      to: toPhone,
+      body: smsBody,
+      sentById: 'system',
+    });
+
+    if (!response.ok) throw new Error(`SMS delivery failed with status ${response.status}`);
   }
 
   /**
@@ -1604,7 +2717,7 @@ Be factual and professional. Highlight anything that needs attention.`;
         where: { opportunityId },
         orderBy: { createdAt: 'desc' },
         include: {
-          user: { select: { firstName: true, lastName: true, email: true } },
+          createdBy: { select: { id: true, firstName: true, lastName: true, email: true } },
         },
       }),
     ]);
@@ -1613,13 +2726,17 @@ Be factual and professional. Highlight anything that needs attention.`;
     const threads = [];
     const notesByParent = new Map();
 
-    // Group notes by parentId
+    // Group notes using REPLY|<parentId> title convention for backward-compatible reply threading
     notes.forEach(note => {
-      const parentId = note.parentId || 'root';
+      const replyMatch = typeof note.title === 'string' ? note.title.match(/^REPLY\|(.+)$/) : null;
+      const parentId = replyMatch?.[1] || 'root';
       if (!notesByParent.has(parentId)) {
         notesByParent.set(parentId, []);
       }
-      notesByParent.get(parentId).push(note);
+      notesByParent.get(parentId).push({
+        ...note,
+        user: note.createdBy || null,
+      });
     });
 
     // Build threads from activities and root notes
@@ -1639,7 +2756,7 @@ Be factual and professional. Highlight anything that needs attention.`;
     // Add root-level notes (not replies)
     const rootNotes = notesByParent.get('root') || [];
     rootNotes.forEach(note => {
-      if (!note.parentId) {
+      if (!(typeof note.title === 'string' && note.title.startsWith('REPLY|'))) {
         threads.push({
           ...note,
           itemType: 'note',
@@ -1905,30 +3022,138 @@ Be factual and professional. Highlight anything that needs attention.`;
    * Update opportunity
    */
   async updateOpportunity(id, data, userId = null) {
-    // Get the current opportunity state for change detection
-    const previousState = await prisma.opportunity.findUnique({
-      where: { id },
-      select: {
-        stage: true,
-        status: true,
-        stageName: true,
-        isApproved: true,
-        claimNumber: true,
-        claimFiledDate: true,
-        insuranceCarrier: true,
-        isPandaClaims: true,
-        type: true,
-        rcvAmount: true,
-        acvAmount: true,
-        deductible: true,
-        // Expediting fields for trigger detection
-        flatRoof: true,
-        lineDrop: true,
-        supplementRequired: true,
-        supplementHoldsJob: true,
-      },
-    });
+    // Get the current opportunity state for change detection.
+    // Fallback avoids 500s if runtime Prisma client is older than DB schema.
+    const previousStateSelect = {
+      stage: true,
+      status: true,
+      isApproved: true,
+      claimNumber: true,
+      claimFiledDate: true,
+      insuranceCarrier: true,
+      adjusterName: true,
+      adjusterEmail: true,
+      adjusterOfficePhone: true,
+      fieldAdjusterMobile: true,
+      isPandaClaims: true,
+      type: true,
+      rcvAmount: true,
+      acvAmount: true,
+      deductible: true,
+      // Expediting fields for trigger detection
+      flatRoof: true,
+      lineDrop: true,
+      supplementRequired: true,
+      supplementHoldsJob: true,
+    };
 
+    let previousState = null;
+    const previousStateSelectMutable = { ...previousStateSelect };
+    for (let attempt = 0; attempt <= OPTIONAL_OPPORTUNITY_CLAIM_FIELDS.size; attempt += 1) {
+      try {
+        previousState = await prisma.opportunity.findUnique({
+          where: { id },
+          select: previousStateSelectMutable,
+        });
+        break;
+      } catch (error) {
+        const unknownField = parseUnknownPrismaFieldName(error);
+        if (!unknownField || !OPTIONAL_OPPORTUNITY_CLAIM_FIELDS.has(unknownField) || !hasOwnField(previousStateSelectMutable, unknownField)) {
+          throw error;
+        }
+        logger.warn(
+          `Opportunity update: runtime schema missing optional field "${unknownField}", retrying previous-state select without it`
+        );
+        delete previousStateSelectMutable[unknownField];
+      }
+    }
+
+    const updateData = {
+      name: data.name,
+      description: data.description,
+      stage: data.stage,
+      status: data.status,
+      probability: data.probability,
+      closeDate: data.closeDate ? new Date(data.closeDate) : undefined,
+      appointmentDate: data.appointmentDate ? new Date(data.appointmentDate) : undefined,
+      soldDate: data.soldDate ? new Date(data.soldDate) : undefined,
+      amount: data.amount,
+      contractTotal: data.contractTotal,
+      type: data.type,
+      workType: data.workType,
+      leadSource: data.leadSource,
+      isSelfGen: data.isSelfGen,
+      isPandaClaims: data.isPandaClaims,
+      isApproved: data.isApproved,
+      rcvAmount: data.rcvAmount,
+      acvAmount: data.acvAmount,
+      deductible: data.deductible,
+      supplementsTotal: data.supplementsTotal,
+      // Address fields
+      street: data.street,
+      city: data.city,
+      state: data.state,
+      postalCode: data.postalCode,
+      accountId: data.accountId,
+      contactId: data.contactId,
+      ownerId: data.ownerId,
+      projectManagerId: data.projectManagerId,
+      // Invoice workflow fields
+      invoiceStatus: data.invoiceStatus,
+      invoiceReadyDate: data.invoiceReadyDate ? new Date(data.invoiceReadyDate) : undefined,
+      invoicedDate: data.invoicedDate ? new Date(data.invoicedDate) : undefined,
+      followUpDate: data.followUpDate ? new Date(data.followUpDate) : undefined,
+    };
+
+    if (hasOwnField(data, 'claimNumber')) {
+      updateData.claimNumber = data.claimNumber || null;
+    }
+
+    if (hasOwnField(data, 'claimFiledDate')) {
+      updateData.claimFiledDate = parseDate(data.claimFiledDate);
+    }
+
+    if (hasOwnField(data, 'insuranceCarrier')) {
+      updateData.insuranceCarrier = data.insuranceCarrier || null;
+    }
+
+    if (hasOwnField(data, 'adjusterName')) {
+      updateData.adjusterName = data.adjusterName || null;
+    }
+
+    if (hasOwnField(data, 'adjusterEmail')) {
+      updateData.adjusterEmail = data.adjusterEmail || null;
+    }
+
+    if (hasOwnField(data, 'adjusterOfficePhone')) {
+      updateData.adjusterOfficePhone = data.adjusterOfficePhone || null;
+    }
+
+    if (hasOwnField(data, 'fieldAdjusterMobile')) {
+      updateData.fieldAdjusterMobile = data.fieldAdjusterMobile || null;
+    }
+
+    if (hasOwnField(data, 'damageLocation')) {
+      updateData.damageLocation = data.damageLocation || null;
+    }
+
+    if (hasOwnField(data, 'dateOfLoss')) {
+      updateData.dateOfLoss = parseDate(data.dateOfLoss);
+    }
+
+    if (hasOwnField(data, 'ownerId')) {
+      updateData.owner = data.ownerId
+        ? { connect: { id: data.ownerId } }
+        : { disconnect: true };
+      delete updateData.ownerId;
+    }
+
+    if (hasOwnField(data, 'projectManagerId')) {
+      updateData.projectManager = data.projectManagerId
+        ? { connect: { id: data.projectManagerId } }
+        : { disconnect: true };
+      delete updateData.projectManagerId;
+    }
     // Handle line items separately if provided
     if (data.lineItems !== undefined) {
       // Delete existing line items and recreate
@@ -1952,54 +3177,82 @@ Be factual and professional. Highlight anything that needs attention.`;
       }
     }
 
-    const opportunity = await prisma.opportunity.update({
-      where: { id },
-      data: {
-        name: data.name,
-        description: data.description,
-        stage: data.stage,
-        status: data.status,
-        stageName: data.stageName,
-        probability: data.probability,
-        closeDate: data.closeDate ? new Date(data.closeDate) : undefined,
-        appointmentDate: data.appointmentDate ? new Date(data.appointmentDate) : undefined,
-        soldDate: data.soldDate ? new Date(data.soldDate) : undefined,
-        amount: data.amount,
-        contractTotal: data.contractTotal,
-        type: data.type,
-        workType: data.workType,
-        leadSource: data.leadSource,
-        isSelfGen: data.isSelfGen,
-        isPandaClaims: data.isPandaClaims,
-        isApproved: data.isApproved,
-        claimNumber: data.claimNumber,
-        claimFiledDate: data.claimFiledDate ? new Date(data.claimFiledDate) : undefined,
-        insuranceCarrier: data.insuranceCarrier,
-        rcvAmount: data.rcvAmount,
-        acvAmount: data.acvAmount,
-        deductible: data.deductible,
-        supplementsTotal: data.supplementsTotal,
-        // Address fields
-        street: data.street,
-        city: data.city,
-        state: data.state,
-        postalCode: data.postalCode,
-        accountId: data.accountId,
-        contactId: data.contactId,
-        ownerId: data.ownerId,
-        // Invoice workflow fields
-        invoiceStatus: data.invoiceStatus,
-        invoiceReadyDate: data.invoiceReadyDate ? new Date(data.invoiceReadyDate) : undefined,
-        invoicedDate: data.invoicedDate ? new Date(data.invoicedDate) : undefined,
-        followUpDate: data.followUpDate ? new Date(data.followUpDate) : undefined,
-      },
-      include: {
-        account: { select: { id: true, name: true } },
-        contact: { select: { id: true, firstName: true, lastName: true } },
-        owner: { select: { id: true, firstName: true, lastName: true } },
-        lineItems: { include: { product: true } },
-      },
-    });
+    const include = {
+      account: { select: { id: true, name: true } },
+      contact: { select: { id: true, firstName: true, lastName: true } },
+      owner: { select: { id: true, firstName: true, lastName: true, email: true, phone: true, mobilePhone: true } },
+      projectManager: { select: { id: true, firstName: true, lastName: true, email: true, phone: true, mobilePhone: true } },
+      lineItems: { include: { product: true } },
+    };
+
+    let opportunity;
+    let lastUpdateError;
+    let updatePayload = { ...updateData };
+    let includePayload = { ...include };
+    const removedClaimFields = new Set();
+
+    const maxUpdateAttempts = OPTIONAL_OPPORTUNITY_CLAIM_FIELDS.size + OPTIONAL_OPPORTUNITY_INCLUDE_FIELDS.size + 1;
+    for (let attempt = 0; attempt < maxUpdateAttempts; attempt += 1) {
+      try {
+        opportunity = await prisma.opportunity.update({
+          where: { id },
+          data: updatePayload,
+          include: includePayload,
+        });
+        break;
+      } catch (error) {
+        lastUpdateError = error;
+        const unknownField = parseUnknownPrismaFieldName(error);
+        if (!unknownField) {
+          throw error;
+        }
+
+        if (OPTIONAL_OPPORTUNITY_CLAIM_FIELDS.has(unknownField) && hasOwnField(updatePayload, unknownField)) {
+          logger.warn(
+            `Opportunity update: runtime schema missing optional field "${unknownField}", retrying update without it`
+          );
+          removedClaimFields.add(unknownField);
+          delete updatePayload[unknownField];
+          continue;
+        }
+
+        if (OPTIONAL_OPPORTUNITY_INCLUDE_FIELDS.has(unknownField) && hasOwnField(includePayload, unknownField)) {
+          logger.warn(
+            `Opportunity update: runtime schema missing optional include "${unknownField}", retrying update without it`
+          );
+          delete includePayload[unknownField];
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+    if (!opportunity && lastUpdateError) {
+      throw lastUpdateError;
+    }
+
+    const requestedClaimFallbackFields = Object.keys(CLAIM_FALLBACK_FIELD_TO_COLUMN)
+      .filter((field) => hasOwnField(data, field));
+
+    if (requestedClaimFallbackFields.length > 0) {
+      try {
+        // Keep raw claim columns synchronized for mixed-schema environments.
+        await applyClaimRawFallback(id, data, requestedClaimFallbackFields);
+        opportunity = await hydrateClaimFallbackFromRaw(id, opportunity);
+      } catch (fallbackError) {
+        logger.warn(`Opportunity update raw-claim sync failed for ${id}: ${fallbackError.message}`);
+      }
+    }
+
+    if (removedClaimFields.size > 0) {
+      try {
+        await applyClaimRawFallback(id, data, Array.from(removedClaimFields));
+        opportunity = await hydrateClaimFallbackFromRaw(id, opportunity);
+      } catch (fallbackError) {
+        logger.warn(`Opportunity update fallback failed for ${id}: ${fallbackError.message}`);
+      }
+    }
 
     logger.info(`Opportunity updated: ${id}`);
 
@@ -2099,7 +3352,8 @@ Be factual and professional. Highlight anything that needs attention.`;
       }
     }
 
-    return this.createOpportunityWrapper(opportunity, true);
+    const wrappedOpportunity = await hydrateClaimFallbackFromRaw(id, opportunity);
+    return this.createOpportunityWrapper(wrappedOpportunity, true);
   }
 
   /**
@@ -2153,6 +3407,26 @@ Be factual and professional. Highlight anything that needs attention.`;
       damageLocation: payload.damageLocation || undefined,
     };
 
+    const normalizedWorkType = String(payload.workType || '').trim();
+    const stormDamageAnswer = String(payload?.answers?.stormDamage || '').trim().toLowerCase();
+    const isInsurancePath = normalizedWorkType.toLowerCase() === 'insurance'
+      || [DISPOSITION_CATEGORIES.INSURANCE_CLAIM_FILED, DISPOSITION_CATEGORIES.INSURANCE_NO_CLAIM]
+        .includes(payload.dispositionCategory)
+      || stormDamageAnswer === 'yes';
+    const isRetailPath = normalizedWorkType.toLowerCase() === 'retail'
+      || [DISPOSITION_CATEGORIES.RETAIL_SOLD, DISPOSITION_CATEGORIES.RETAIL_NOT_SOLD]
+        .includes(payload.dispositionCategory)
+      || stormDamageAnswer === 'no';
+
+    // Work type is intentionally set only after Result Appointment completion.
+    if (isInsurancePath) {
+      updateData.workType = 'Insurance';
+      updateData.type = 'INSURANCE';
+    } else if (isRetailPath) {
+      updateData.workType = 'Retail';
+      updateData.type = 'RETAIL';
+    }
+
     if (payload.autoStageUpdate !== false) {
       const stage = DISPOSITION_STAGE_MAP[payload.dispositionCategory];
       if (stage) {
@@ -2171,9 +3445,96 @@ Be factual and professional. Highlight anything that needs attention.`;
       },
     });
 
+    let scheduling = null;
+    const followUpModeRaw = payload?.answers?.followUpMode || payload?.answers?.rescheduleMode;
+    const followUpMode = String(followUpModeRaw || '').trim().toUpperCase();
+    const followUpTaskType = String(payload?.answers?.followUpTaskType || 'CALL').trim().toUpperCase();
+    const followUpNotes = String(payload?.answers?.followUpNotes || payload?.notes || '').trim();
+    const shouldScheduleFollowUp = (
+      [DISPOSITION_CATEGORIES.RESCHEDULED, DISPOSITION_CATEGORIES.FOLLOW_UP_SCHEDULED]
+        .includes(payload.dispositionCategory)
+      && followUpAt
+    );
+
+    if (shouldScheduleFollowUp) {
+      try {
+        if (followUpMode === 'VIRTUAL') {
+          const taskSubjectPrefix = followUpTaskType === 'EMAIL' ? 'Email' : followUpTaskType === 'OTHER' ? 'Follow-up' : 'Call';
+          const createdTask = await prisma.task.create({
+            data: {
+              subject: `${taskSubjectPrefix}: ${opportunity.name || 'Job follow-up'}`,
+              description: followUpNotes || null,
+              dueDate: followUpAt,
+              assignedToId: opportunity.ownerId || null,
+              opportunityId: id,
+              status: 'NOT_STARTED',
+              priority: 'NORMAL',
+            },
+            select: {
+              id: true,
+              subject: true,
+              dueDate: true,
+              status: true,
+            },
+          });
+
+          scheduling = {
+            mode: 'VIRTUAL',
+            success: true,
+            task: createdTask,
+          };
+        } else {
+          const scheduledStart = new Date(followUpAt);
+          const scheduledEnd = new Date(scheduledStart.getTime() + (60 * 60 * 1000));
+          let appointmentResult = null;
+
+          if (payload.appointmentId && payload.dispositionCategory === DISPOSITION_CATEGORIES.RESCHEDULED) {
+            try {
+              appointmentResult = await this.rescheduleAppointment(id, payload.appointmentId, {
+                scheduledStart: scheduledStart.toISOString(),
+                scheduledEnd: scheduledEnd.toISOString(),
+                notes: followUpNotes || null,
+                rescheduledBy: userContext?.userId || null,
+              });
+            } catch (rescheduleError) {
+              logger.warn(
+                `Result appointment could not reschedule existing appointment ${payload.appointmentId} for ${id}: ${rescheduleError.message}`
+              );
+            }
+          }
+
+          if (!appointmentResult) {
+            appointmentResult = await this.bookAppointment(id, {
+              scheduledStart: scheduledStart.toISOString(),
+              scheduledEnd: scheduledEnd.toISOString(),
+              notes: followUpNotes || null,
+              bookedBy: userContext?.userId || null,
+            });
+          }
+
+          scheduling = {
+            mode: 'IN_PERSON',
+            success: true,
+            appointment: appointmentResult?.serviceAppointment || appointmentResult?.appointment || null,
+            workOrder: appointmentResult?.workOrder || null,
+          };
+        }
+      } catch (schedulingError) {
+        logger.warn(`Result appointment follow-up side effect failed for ${id}: ${schedulingError.message}`);
+        scheduling = {
+          mode: followUpMode === 'VIRTUAL' ? 'VIRTUAL' : 'IN_PERSON',
+          success: false,
+          error: schedulingError.message,
+        };
+      }
+    }
+
+    const wrappedOpportunity = await hydrateClaimFallbackFromRaw(id, updatedOpportunity);
+
     return {
-      opportunity: this.createOpportunityWrapper(updatedOpportunity, true),
+      opportunity: this.createOpportunityWrapper(wrappedOpportunity, true),
       appointmentResult,
+      scheduling,
     };
   }
 
@@ -2274,6 +3635,20 @@ Be factual and professional. Highlight anything that needs attention.`;
       // Owner
       ownerId: opp.ownerId,
       ownerName: opp.owner ? `${opp.owner.firstName} ${opp.owner.lastName}` : 'Unassigned',
+      projectManagerId: opp.projectManagerId || null,
+      projectManager: opp.projectManager || null,
+      // Insurance / claim
+      claimNumber: opp.claimNumber,
+      claimFiledDate: opp.claimFiledDate,
+      insuranceCarrier: opp.insuranceCarrier,
+      adjusterName: opp.adjusterName,
+      adjusterEmail: opp.adjusterEmail,
+      adjusterOfficePhone: opp.adjusterOfficePhone,
+      fieldAdjusterMobile: opp.fieldAdjusterMobile,
+      rcvAmount: opp.rcvAmount ? Number(opp.rcvAmount) : null,
+      acvAmount: opp.acvAmount ? Number(opp.acvAmount) : null,
+      deductible: opp.deductible ? Number(opp.deductible) : null,
+      supplementsTotal: opp.supplementsTotal ? Number(opp.supplementsTotal) : null,
       // Timestamps
       createdAt: opp.createdAt,
       updatedAt: opp.updatedAt,
@@ -2289,17 +3664,6 @@ Be factual and professional. Highlight anything that needs attention.`;
       stageClass: this.getStageClass(opp.stage),
       typeClass: this.getTypeClass(opp.type),
     };
-
-    // Insurance fields
-    if (opp.type === 'INSURANCE') {
-      wrapper.claimNumber = opp.claimNumber;
-      wrapper.claimFiledDate = opp.claimFiledDate;
-      wrapper.insuranceCarrier = opp.insuranceCarrier;
-      wrapper.rcvAmount = opp.rcvAmount ? Number(opp.rcvAmount) : null;
-      wrapper.acvAmount = opp.acvAmount ? Number(opp.acvAmount) : null;
-      wrapper.deductible = opp.deductible ? Number(opp.deductible) : null;
-      wrapper.supplementsTotal = opp.supplementsTotal ? Number(opp.supplementsTotal) : null;
-    }
 
     // Include related records for detail view
     if (includeDetails) {
@@ -3332,16 +4696,18 @@ Be factual and professional. Highlight anything that needs attention.`;
     const users = await prisma.user.findMany({
       where: {
         isActive: true,
-        role: {
-          in: ['SALES_REP', 'PROJECT_MANAGER', 'SALES_MANAGER', 'OFFICE_MANAGER', 'ADMIN'],
-        },
       },
       select: {
         id: true,
         firstName: true,
         lastName: true,
         email: true,
-        role: true,
+        role: {
+          select: {
+            name: true,
+            roleType: true,
+          },
+        },
         officeAssignment: true,
         _count: {
           select: {
@@ -3364,7 +4730,7 @@ Be factual and professional. Highlight anything that needs attention.`;
       firstName: user.firstName,
       lastName: user.lastName,
       email: user.email,
-      role: user.role,
+      role: user.role?.name || user.role?.roleType || null,
       office: user.officeAssignment,
       activeJobCount: user._count.ownedOpportunities,
     }));
@@ -3454,9 +4820,11 @@ Be factual and professional. Highlight anything that needs attention.`;
         await prisma.opportunity.update({
           where: { id: opp.id },
           data: {
-            ownerId: newOwnerId,
-            assignedById: auditContext.userId,
-            assignedAt: new Date(),
+            // Use relation connect to remain compatible with Prisma clients
+            // where ownerId scalar is not exposed in OpportunityUpdateInput.
+            owner: {
+              connect: { id: newOwnerId },
+            },
           },
         });
 
@@ -3511,6 +4879,402 @@ Be factual and professional. Highlight anything that needs attention.`;
     );
 
     return results;
+  }
+
+  /**
+   * Transfer a single opportunity to a different owner.
+   * Compatibility endpoint for clients posting to /:id/transfer.
+   * @param {string} opportunityId - Opportunity ID
+   * @param {string} newOwnerId - New owner user ID
+   * @param {Object} transferOptions - Transfer behavior options
+   * @param {Object} auditContext - Context for audit logging
+   */
+  async transferOpportunity(opportunityId, newOwnerId, transferOptions = {}, auditContext = {}) {
+    const normalizedOpportunityId = normalizeEntityId(opportunityId);
+    const normalizedNewOwnerId = normalizeEntityId(newOwnerId);
+
+    if (!normalizedOpportunityId) {
+      const error = new Error('Opportunity ID is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    if (!normalizedNewOwnerId) {
+      const error = new Error('New owner ID is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    let normalizedTransferOptions = transferOptions && typeof transferOptions === 'object' ? transferOptions : {};
+    let normalizedAuditContext = auditContext && typeof auditContext === 'object' ? auditContext : {};
+
+    // Backward compatibility: older callers passed auditContext as 3rd argument.
+    if (normalizedTransferOptions && !Object.keys(normalizedAuditContext).length) {
+      const looksLikeAuditContext = Boolean(
+        hasOwnField(normalizedTransferOptions, 'userId')
+        || hasOwnField(normalizedTransferOptions, 'userEmail')
+        || hasOwnField(normalizedTransferOptions, 'ipAddress')
+        || hasOwnField(normalizedTransferOptions, 'userAgent')
+      );
+
+      if (looksLikeAuditContext) {
+        normalizedAuditContext = normalizedTransferOptions;
+        normalizedTransferOptions = {};
+      }
+    }
+
+    const transferRelatedItems = parseBooleanFlag(
+      normalizedTransferOptions.transferRelatedItems
+      ?? normalizedTransferOptions.transferRelated
+      ?? normalizedTransferOptions.transferAllAssociated
+      ?? normalizedTransferOptions.transferAssociatedRecords
+    );
+
+    const auditUserId = normalizeEntityId(normalizedAuditContext.userId);
+
+    const [opportunity, newOwner, auditUser] = await Promise.all([
+      prisma.opportunity.findUnique({
+        where: { id: normalizedOpportunityId },
+        include: {
+          owner: {
+            select: { id: true, firstName: true, lastName: true, email: true },
+          },
+          account: {
+            select: { id: true, name: true, billingCity: true, billingState: true },
+          },
+          contact: {
+            select: { id: true, firstName: true, lastName: true, phone: true, email: true },
+          },
+          _count: {
+            select: { quotes: true, workOrders: true },
+          },
+        },
+      }),
+      prisma.user.findUnique({
+        where: { id: normalizedNewOwnerId },
+        select: { id: true, firstName: true, lastName: true, email: true, isActive: true },
+      }),
+      auditUserId
+        ? prisma.user.findUnique({
+            where: { id: auditUserId },
+            select: { id: true },
+          }).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+
+    if (!opportunity) {
+      const error = new Error(`Opportunity not found: ${normalizedOpportunityId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    if (!newOwner) {
+      const error = new Error(`User not found: ${newOwnerId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    if (!newOwner.isActive) {
+      const error = new Error('Cannot transfer to inactive user');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const previousOwnerName = opportunity.owner
+      ? `${opportunity.owner.firstName} ${opportunity.owner.lastName}`
+      : 'Unassigned';
+    const newOwnerName = `${newOwner.firstName} ${newOwner.lastName}`;
+
+    const relatedTransferBase = {
+      requested: transferRelatedItems,
+      completed: false,
+      skippedReason: null,
+      counts: {
+        tasks: 0,
+        events: 0,
+        commissions: 0,
+        serviceContracts: 0,
+        photoProjects: 0,
+        opportunityAttentionItems: 0,
+        caseAttentionItems: 0,
+        appointmentAssignments: 0,
+      },
+    };
+
+    if (opportunity.ownerId === normalizedNewOwnerId) {
+      return {
+        transferred: false,
+        reason: 'ALREADY_ASSIGNED',
+        opportunity: this.createOpportunityWrapper(opportunity),
+        previousOwner: opportunity.owner
+          ? {
+              id: opportunity.owner.id,
+              name: previousOwnerName,
+              email: opportunity.owner.email,
+            }
+          : null,
+        newOwner: {
+          id: newOwner.id,
+          name: newOwnerName,
+          email: newOwner.email,
+        },
+        relatedTransfer: {
+          ...relatedTransferBase,
+          skippedReason: transferRelatedItems ? 'ALREADY_ASSIGNED' : null,
+        },
+      };
+    }
+
+    const oldOwnerId = opportunity.ownerId || null;
+    const resolvedAuditUserId = auditUser?.id || null;
+
+    const updatedOpportunity = await prisma.$transaction(async (tx) => tx.opportunity.update({
+      where: { id: normalizedOpportunityId },
+      data: {
+        // Use relation connect to avoid scalar ownerId update validation failures.
+        owner: {
+          connect: { id: normalizedNewOwnerId },
+        },
+      },
+      include: {
+        account: {
+          select: { id: true, name: true, billingCity: true, billingState: true },
+        },
+        contact: {
+          select: { id: true, firstName: true, lastName: true, phone: true, email: true },
+        },
+        owner: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+        _count: {
+          select: { quotes: true, workOrders: true },
+        },
+      },
+    }));
+
+    let relatedTransfer = { ...relatedTransferBase };
+    if (transferRelatedItems) {
+      try {
+        relatedTransfer = await prisma.$transaction(async (tx) => this.transferRelatedOpportunityOwnership(tx, {
+          opportunityId: normalizedOpportunityId,
+          accountId: opportunity.accountId || null,
+          oldOwnerId,
+          newOwnerId: normalizedNewOwnerId,
+        }));
+      } catch (error) {
+        logger.error('Related assignment transfer failed after owner transfer', {
+          opportunityId: normalizedOpportunityId,
+          oldOwnerId,
+          newOwnerId: normalizedNewOwnerId,
+          error: error.message,
+        });
+
+        relatedTransfer = {
+          ...relatedTransferBase,
+          skippedReason: 'RELATED_TRANSFER_FAILED',
+          error: error.message,
+        };
+      }
+    }
+
+    const relatedCountsSummary = formatTransferCounts(relatedTransfer.counts);
+    const relatedSummaryText = transferRelatedItems
+      ? relatedCountsSummary
+        ? ` Related records transferred: ${relatedCountsSummary}.`
+        : ` Related records transfer requested, but no matching assignments were found.`
+      : '';
+
+    await prisma.note.create({
+      data: {
+        title: 'Job Reassigned',
+        body: `Job reassigned from ${previousOwnerName} to ${newOwnerName}.${relatedSummaryText}${normalizedAuditContext.userEmail ? ` Reassigned by: ${normalizedAuditContext.userEmail}` : ''}`,
+        opportunityId: normalizedOpportunityId,
+        createdById: resolvedAuditUserId || newOwner.id,
+      },
+    }).catch((error) => {
+      logger.warn(`Failed to create reassignment note for ${normalizedOpportunityId}: ${error.message}`);
+    });
+
+    logger.info(
+      `Job ${normalizedOpportunityId} transferred from ${previousOwnerName} to ${newOwnerName}` +
+      `${transferRelatedItems ? ` (related: ${relatedCountsSummary || 'none moved'})` : ''}`
+    );
+
+    return {
+      transferred: true,
+      opportunity: this.createOpportunityWrapper(updatedOpportunity),
+      previousOwner: opportunity.owner
+        ? {
+            id: opportunity.owner.id,
+            name: previousOwnerName,
+            email: opportunity.owner.email,
+          }
+        : null,
+      newOwner: {
+        id: newOwner.id,
+        name: newOwnerName,
+        email: newOwner.email,
+      },
+      relatedTransfer,
+    };
+  }
+
+  async transferRelatedOpportunityOwnership(tx, options = {}) {
+    const {
+      opportunityId,
+      accountId,
+      oldOwnerId,
+      newOwnerId,
+    } = options;
+
+    const result = {
+      requested: true,
+      completed: false,
+      skippedReason: null,
+      counts: {
+        tasks: 0,
+        events: 0,
+        commissions: 0,
+        serviceContracts: 0,
+        photoProjects: 0,
+        opportunityAttentionItems: 0,
+        caseAttentionItems: 0,
+        appointmentAssignments: 0,
+      },
+    };
+
+    if (!oldOwnerId) {
+      result.skippedReason = 'NO_PREVIOUS_OWNER';
+      return result;
+    }
+
+    const [
+      taskUpdate,
+      eventUpdate,
+      commissionUpdate,
+      serviceContractUpdate,
+      photoProjectUpdate,
+      opportunityAttentionUpdate,
+    ] = await Promise.all([
+      tx.task.updateMany({
+        where: { opportunityId, assignedToId: oldOwnerId },
+        data: { assignedToId: newOwnerId },
+      }),
+      tx.event.updateMany({
+        where: { opportunityId, ownerId: oldOwnerId },
+        data: { ownerId: newOwnerId },
+      }),
+      tx.commission.updateMany({
+        where: { opportunityId, ownerId: oldOwnerId },
+        data: { ownerId: newOwnerId },
+      }),
+      tx.serviceContract.updateMany({
+        where: { opportunityId, ownerId: oldOwnerId },
+        data: { ownerId: newOwnerId },
+      }),
+      tx.photoProject.updateMany({
+        where: { opportunityId, ownerId: oldOwnerId },
+        data: { ownerId: newOwnerId },
+      }),
+      tx.attentionItem.updateMany({
+        where: { opportunityId, assignedToId: oldOwnerId },
+        data: { assignedToId: newOwnerId },
+      }),
+    ]);
+
+    result.counts.tasks = taskUpdate.count;
+    result.counts.events = eventUpdate.count;
+    result.counts.commissions = commissionUpdate.count;
+    result.counts.serviceContracts = serviceContractUpdate.count;
+    result.counts.photoProjects = photoProjectUpdate.count;
+    result.counts.opportunityAttentionItems = opportunityAttentionUpdate.count;
+
+    if (accountId) {
+      const accountCaseIds = await tx.case.findMany({
+        where: { accountId },
+        select: { id: true },
+      });
+      const caseIds = accountCaseIds.map((record) => record.id);
+      if (caseIds.length > 0) {
+        const caseAttentionUpdate = await tx.attentionItem.updateMany({
+          where: {
+            caseId: { in: caseIds },
+            assignedToId: oldOwnerId,
+          },
+          data: { assignedToId: newOwnerId },
+        });
+        result.counts.caseAttentionItems = caseAttentionUpdate.count;
+      }
+    }
+
+    const [oldOwnerResource, newOwnerResource] = await Promise.all([
+      tx.serviceResource.findFirst({
+        where: { userId: oldOwnerId, isActive: true },
+        select: { id: true },
+      }),
+      tx.serviceResource.findFirst({
+        where: { userId: newOwnerId, isActive: true },
+        select: { id: true },
+      }),
+    ]);
+
+    if (
+      oldOwnerResource?.id
+      && newOwnerResource?.id
+      && oldOwnerResource.id !== newOwnerResource.id
+    ) {
+      const assignments = await tx.assignedResource.findMany({
+        where: {
+          serviceResourceId: oldOwnerResource.id,
+          serviceAppointment: {
+            workOrder: {
+              opportunityId,
+            },
+          },
+        },
+        select: {
+          id: true,
+          serviceAppointmentId: true,
+          isPrimaryResource: true,
+        },
+      });
+
+      for (const assignment of assignments) {
+        const existingAssignment = await tx.assignedResource.findFirst({
+          where: {
+            serviceAppointmentId: assignment.serviceAppointmentId,
+            serviceResourceId: newOwnerResource.id,
+          },
+          select: {
+            id: true,
+            isPrimaryResource: true,
+          },
+        });
+
+        if (existingAssignment) {
+          if (assignment.isPrimaryResource && !existingAssignment.isPrimaryResource) {
+            await tx.assignedResource.update({
+              where: { id: existingAssignment.id },
+              data: { isPrimaryResource: true },
+            });
+          }
+
+          await tx.assignedResource.delete({
+            where: { id: assignment.id },
+          });
+        } else {
+          await tx.assignedResource.update({
+            where: { id: assignment.id },
+            data: { serviceResourceId: newOwnerResource.id },
+          });
+        }
+
+        result.counts.appointmentAssignments += 1;
+      }
+    }
+
+    result.completed = true;
+    return result;
   }
 
   /**
@@ -3584,6 +5348,7 @@ Be factual and professional. Highlight anything that needs attention.`;
       success: [],
       failed: [],
       total: opportunityIds.length,
+      canceledAppointments: 0,
     };
 
     for (const oppId of opportunityIds) {
@@ -3598,16 +5363,67 @@ Be factual and professional. Highlight anything that needs attention.`;
           continue;
         }
 
-        // Soft delete by setting stage to CLOSED_LOST and adding deletion marker
-        await prisma.opportunity.update({
-          where: { id: oppId },
-          data: {
+        // Soft delete by setting stage to CLOSED_LOST and adding deletion marker.
+        // Also cancel any active service appointments tied to this job's work orders.
+        const workOrderIds = (await prisma.workOrder.findMany({
+          where: { opportunityId: oppId },
+          select: { id: true },
+        })).map((wo) => wo.id);
+
+        let canceledForOpportunity = 0;
+        if (workOrderIds.length > 0) {
+          const canceledResult = await prisma.serviceAppointment.updateMany({
+            where: {
+              workOrderId: { in: workOrderIds },
+              status: { in: ['NONE', 'SCHEDULED', 'DISPATCHED', 'IN_PROGRESS'] },
+            },
+            data: {
+              status: 'CANCELED',
+              description: 'Canceled automatically by bulk job delete',
+            },
+          });
+          canceledForOpportunity = canceledResult.count || 0;
+          results.canceledAppointments += canceledForOpportunity;
+        }
+
+        const closedAt = new Date();
+        const updateCandidates = [
+          {
             stage: 'CLOSED_LOST',
-            closeDate: new Date(),
-            lostReason: 'Bulk Deleted',
-            deletedAt: new Date(),
+            closeDate: closedAt,
+            deletedAt: closedAt,
           },
-        });
+          {
+            stage: 'CLOSED_LOST',
+            closeDate: closedAt,
+          },
+        ];
+
+        let deletedWithMarker = false;
+        let updated = false;
+        let lastUpdateError = null;
+        for (const candidate of updateCandidates) {
+          try {
+            await prisma.opportunity.update({
+              where: { id: oppId },
+              data: candidate,
+            });
+            deletedWithMarker = Boolean(candidate.deletedAt);
+            updated = true;
+            break;
+          } catch (updateError) {
+            const message = String(updateError?.message || '');
+            const isSchemaMismatch = /Unknown argument|Unknown field|P2022|P2021/i.test(message);
+            if (!isSchemaMismatch) {
+              throw updateError;
+            }
+            lastUpdateError = updateError;
+          }
+        }
+
+        if (!updated) {
+          throw lastUpdateError || new Error('Failed to soft delete opportunity');
+        }
 
         // Log audit
         await prisma.auditLog.create({
@@ -3616,8 +5432,17 @@ Be factual and professional. Highlight anything that needs attention.`;
             recordId: oppId,
             action: 'BULK_DELETE',
             oldValues: { stage: oldOpp.stage },
-            newValues: { stage: 'CLOSED_LOST', lostReason: 'Bulk Deleted', deletedAt: new Date() },
-            changedFields: ['stage', 'closeDate', 'lostReason', 'deletedAt'],
+            newValues: {
+              stage: 'CLOSED_LOST',
+              deletedAt: deletedWithMarker ? closedAt : null,
+              canceledAppointments: canceledForOpportunity,
+            },
+            changedFields: [
+              'stage',
+              'closeDate',
+              ...(deletedWithMarker ? ['deletedAt'] : []),
+              'serviceAppointments',
+            ],
             userId: auditContext.userId,
             userEmail: auditContext.userEmail,
             source: 'api',
@@ -3654,7 +5479,20 @@ Be factual and professional. Highlight anything that needs attention.`;
       where.OR = [
         { name: { contains: search, mode: 'insensitive' } },
         { jobId: { contains: search, mode: 'insensitive' } },
+        { street: { contains: search, mode: 'insensitive' } },
+        { city: { contains: search, mode: 'insensitive' } },
+        { state: { contains: search, mode: 'insensitive' } },
+        { postalCode: { contains: search, mode: 'insensitive' } },
         { account: { name: { contains: search, mode: 'insensitive' } } },
+        { account: { billingStreet: { contains: search, mode: 'insensitive' } } },
+        { account: { billingCity: { contains: search, mode: 'insensitive' } } },
+        { account: { billingState: { contains: search, mode: 'insensitive' } } },
+        { account: { billingPostalCode: { contains: search, mode: 'insensitive' } } },
+        { contact: { firstName: { contains: search, mode: 'insensitive' } } },
+        { contact: { lastName: { contains: search, mode: 'insensitive' } } },
+        { contact: { email: { contains: search, mode: 'insensitive' } } },
+        { contact: { phone: { contains: search } } },
+        { contact: { mobilePhone: { contains: search } } },
       ];
     }
 
@@ -3701,7 +5539,6 @@ Be factual and professional. Highlight anything that needs attention.`;
       data: {
         deletedAt: null,
         stage: 'LEAD_ASSIGNED', // Reset to a reasonable stage
-        lostReason: null,
         updatedAt: new Date(),
       },
     });
@@ -3981,7 +5818,20 @@ Be factual and professional. Highlight anything that needs attention.`;
       where.OR = [
         { name: { contains: search, mode: 'insensitive' } },
         { jobId: { contains: search, mode: 'insensitive' } },
+        { street: { contains: search, mode: 'insensitive' } },
+        { city: { contains: search, mode: 'insensitive' } },
+        { state: { contains: search, mode: 'insensitive' } },
+        { postalCode: { contains: search, mode: 'insensitive' } },
         { account: { name: { contains: search, mode: 'insensitive' } } },
+        { account: { billingStreet: { contains: search, mode: 'insensitive' } } },
+        { account: { billingCity: { contains: search, mode: 'insensitive' } } },
+        { account: { billingState: { contains: search, mode: 'insensitive' } } },
+        { account: { billingPostalCode: { contains: search, mode: 'insensitive' } } },
+        { contact: { firstName: { contains: search, mode: 'insensitive' } } },
+        { contact: { lastName: { contains: search, mode: 'insensitive' } } },
+        { contact: { email: { contains: search, mode: 'insensitive' } } },
+        { contact: { phone: { contains: search } } },
+        { contact: { mobilePhone: { contains: search } } },
       ];
     }
 
@@ -4015,15 +5865,31 @@ Be factual and professional. Highlight anything that needs attention.`;
               },
             },
           },
-          _count: {
-            select: {
-              cases: { where: { status: { not: 'CLOSED' } } },
-            },
-          },
         },
       }),
       prisma.opportunity.count({ where }),
     ]);
+
+    const openCasesByOpportunity = new Map();
+    if (jobs.length > 0) {
+      const accountIds = [...new Set(jobs.map((job) => job.accountId).filter(Boolean))];
+      if (accountIds.length > 0) {
+        const openCasesByAccount = await prisma.case.groupBy({
+          by: ['accountId'],
+          where: {
+            accountId: { in: accountIds },
+            status: { not: 'CLOSED' },
+          },
+          _count: { _all: true },
+        });
+        const accountCaseMap = new Map(
+          openCasesByAccount.map((row) => [row.accountId, row._count?._all || 0])
+        );
+        jobs.forEach((job) => {
+          openCasesByOpportunity.set(job.id, accountCaseMap.get(job.accountId) || 0);
+        });
+      }
+    }
 
     return {
       data: jobs.map(job => ({
@@ -4043,7 +5909,7 @@ Be factual and professional. Highlight anything that needs attention.`;
           name: `${job.owner.firstName || ''} ${job.owner.lastName || ''}`.trim() || job.owner.email,
         } : null,
         pendingApprovalRequest: job.approvalRequests[0] || null,
-        openCasesCount: job._count.cases,
+        openCasesCount: openCasesByOpportunity.get(job.id) || 0,
       })),
       pagination: {
         page,
@@ -4183,7 +6049,18 @@ Be factual and professional. Highlight anything that needs attention.`;
     if (!approverId) {
       // Find an admin user as fallback
       const admin = await prisma.user.findFirst({
-        where: { role: 'ADMIN', isActive: true },
+        where: {
+          isActive: true,
+          role: {
+            is: {
+              isActive: true,
+              OR: [
+                { name: { equals: 'ADMIN', mode: 'insensitive' } },
+                { roleType: { equals: 'ADMIN', mode: 'insensitive' } },
+              ],
+            },
+          },
+        },
         select: { id: true },
       });
       approverId = admin?.id;

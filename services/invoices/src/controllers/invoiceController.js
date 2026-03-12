@@ -41,6 +41,13 @@ const lineItemSchema = z.object({
   unitPrice: z.number().nonnegative(),
 });
 
+const additionalChargeSchema = z.object({
+  name: z.string().min(1).default('Supplement'),
+  amount: z.number().nonnegative(),
+  notes: z.string().optional().nullable(),
+  chargeType: z.enum(['LATE_FEE', 'SERVICE_FEE', 'PROCESSING_FEE', 'ADJUSTMENT', 'OTHER']).optional(),
+});
+
 const createInvoiceSchema = z.object({
   accountId: z.string(),
   opportunityId: z.string().optional(),
@@ -60,14 +67,28 @@ const updateInvoiceSchema = z.object({
   dueDate: z.string().datetime().optional(),
   terms: z.number().int().positive().optional(),
   tax: z.number().nonnegative().optional(),
+  notes: z.string().optional().nullable(),
+  lineItems: z.array(lineItemSchema).optional(),
+  additionalCharges: z.array(additionalChargeSchema).optional(),
   status: z.enum(['DRAFT', 'PENDING', 'SENT', 'PARTIAL', 'PAID', 'OVERDUE', 'VOID']).optional(),
 });
 
 // Generate invoice number
-async function generateInvoiceNumber() {
-  const count = await prisma.invoice.count();
-  const num = count + 1;
-  return `INV-${String(num).padStart(7, '0')}`;
+async function generateInvoiceNumber(increment = 0) {
+  const latest = await prisma.invoice.findFirst({
+    where: {
+      invoiceNumber: {
+        startsWith: 'INV-',
+      },
+    },
+    select: { invoiceNumber: true },
+    orderBy: { invoiceNumber: 'desc' },
+  });
+
+  const latestNumeric = Number(String(latest?.invoiceNumber || '').replace(/^INV-/, ''));
+  const base = Number.isFinite(latestNumeric) && latestNumeric > 0 ? latestNumeric : 0;
+  const next = base + 1 + Math.max(0, Number(increment) || 0);
+  return `INV-${String(next).padStart(7, '0')}`;
 }
 
 // Calculate invoice totals
@@ -95,6 +116,72 @@ function calculateTotals(lineItems, taxAmount = 0) {
   };
 }
 
+async function getFreshInvoicePdfUrl(pdfKey, expiresIn = 3600 * 24 * 7) {
+  if (!pdfKey) return null;
+
+  const S3_BUCKET = process.env.DOCUMENTS_BUCKET || 'panda-crm-documents';
+  return getSignedUrl(
+    s3Client,
+    new GetObjectCommand({ Bucket: S3_BUCKET, Key: pdfKey }),
+    { expiresIn }
+  );
+}
+
+const DEFAULT_INVOICE_COMPANY = {
+  name: 'Panda Exteriors',
+  addressLine1: '14409 Greenview Dr Suite 202',
+  cityStateZip: 'Laurel, MD 20708',
+  phone: '(301) 276-4323',
+  email: 'info@pandaexteriors.com',
+};
+
+function getInvoiceCompanyInfo() {
+  const name = process.env.INVOICE_COMPANY_NAME || process.env.COMPANY_NAME || DEFAULT_INVOICE_COMPANY.name;
+  const addressLine1 = process.env.INVOICE_COMPANY_ADDRESS_LINE1
+    || process.env.INVOICE_COMPANY_ADDRESS_LINE_1
+    || process.env.COMPANY_ADDRESS_LINE1
+    || process.env.COMPANY_ADDRESS_LINE_1
+    || DEFAULT_INVOICE_COMPANY.addressLine1;
+  const cityStateZip = process.env.INVOICE_COMPANY_CITY_STATE_ZIP
+    || process.env.COMPANY_CITY_STATE_ZIP
+    || DEFAULT_INVOICE_COMPANY.cityStateZip;
+  const phone = process.env.INVOICE_COMPANY_PHONE || process.env.COMPANY_PHONE || DEFAULT_INVOICE_COMPANY.phone;
+  const email = process.env.INVOICE_COMPANY_EMAIL
+    || process.env.COMPANY_EMAIL
+    || process.env.EMAIL_FROM_ADDRESS
+    || DEFAULT_INVOICE_COMPANY.email;
+
+  return {
+    name,
+    address: addressLine1,
+    cityStateZip,
+    fullAddress: `${addressLine1}, ${cityStateZip}`,
+    phone,
+    email,
+  };
+}
+
+function normalizePortalUrl(value) {
+  if (!value) return null;
+  const url = String(value).trim();
+  if (!/^https?:\/\/\S+$/i.test(url)) return null;
+  return url;
+}
+
+function extractCustomerPortalUrlFromMessage(value) {
+  if (!value || typeof value !== 'string') return null;
+  const labeledMatch = value.match(/Customer\s*Portal\s*:\s*(https?:\/\/\S+)/i);
+  if (labeledMatch?.[1]) {
+    return normalizePortalUrl(labeledMatch[1]);
+  }
+
+  const directMatch = value.match(/https?:\/\/[^\s]*\/portal\/[^\s]+/i);
+  if (directMatch?.[0]) {
+    return normalizePortalUrl(directMatch[0]);
+  }
+  return null;
+}
+
 // List invoices
 export async function listInvoices(req, res, next) {
   try {
@@ -102,6 +189,7 @@ export async function listInvoices(req, res, next) {
       accountId,
       status,
       isOverdue,
+      search,
       dateFrom,
       dateTo,
       page = 1,
@@ -124,6 +212,19 @@ export async function listInvoices(req, res, next) {
       where.invoiceDate = {};
       if (dateFrom) where.invoiceDate.gte = new Date(dateFrom);
       if (dateTo) where.invoiceDate.lte = new Date(dateTo);
+    }
+
+    if (search) {
+      where.OR = [
+        { invoiceNumber: { contains: search, mode: 'insensitive' } },
+        { account: { name: { contains: search, mode: 'insensitive' } } },
+        { account: { email: { contains: search, mode: 'insensitive' } } },
+        { account: { phone: { contains: search } } },
+        { account: { billingStreet: { contains: search, mode: 'insensitive' } } },
+        { account: { billingCity: { contains: search, mode: 'insensitive' } } },
+        { account: { billingState: { contains: search, mode: 'insensitive' } } },
+        { account: { billingPostalCode: { contains: search, mode: 'insensitive' } } },
+      ];
     }
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
@@ -180,6 +281,7 @@ export async function getInvoice(req, res, next) {
           orderBy: { paymentDate: 'desc' },
         },
         lineItems: true,
+        additionalCharges: true,
       },
     });
 
@@ -206,7 +308,6 @@ export async function getInvoice(req, res, next) {
 export async function createInvoice(req, res, next) {
   try {
     const data = createInvoiceSchema.parse(req.body);
-    const invoiceNumber = await generateInvoiceNumber();
 
     // Verify account exists
     const account = await prisma.account.findUnique({
@@ -223,39 +324,69 @@ export async function createInvoice(req, res, next) {
     const invoiceDate = data.invoiceDate ? new Date(data.invoiceDate) : new Date();
     const dueDate = addDays(invoiceDate, data.terms);
 
-    const invoice = await prisma.invoice.create({
-      data: {
-        invoiceNumber,
-        accountId: data.accountId,
-        opportunityId: data.opportunityId || null,
-        status: 'DRAFT',
-        invoiceDate,
-        dueDate,
-        terms: data.terms,
-        subtotal,
-        tax,
-        total,
-        amountPaid: 0,
-        balanceDue: total,
-        // Insurance-specific fields
-        isInsuranceInvoice: data.isInsuranceInvoice || false,
-        insuranceCarrier: data.insuranceCarrier || null,
-        claimNumber: data.claimNumber || null,
-        notes: data.notes || null,
-        lineItems: {
-          create: lineItems.map((item) => ({
-            description: item.description,
-            quantity: item.quantity,
-            unitPrice: item.unitPrice,
-            totalPrice: item.totalPrice,
-          })),
-        },
-      },
-      include: {
-        account: { select: { id: true, name: true } },
-        lineItems: true,
-      },
-    });
+    let invoice = null;
+    let lastCreateError = null;
+
+    for (let attempt = 0; attempt < 20; attempt++) {
+      try {
+        const retryBump = attempt < 5
+          ? attempt
+          : attempt + Math.floor(Math.random() * 500);
+        const invoiceNumber = await generateInvoiceNumber(retryBump);
+        invoice = await prisma.invoice.create({
+          data: {
+            invoiceNumber,
+            accountId: data.accountId,
+            opportunityId: data.opportunityId || null,
+            status: 'DRAFT',
+            invoiceDate,
+            dueDate,
+            terms: data.terms,
+            subtotal,
+            tax,
+            total,
+            amountPaid: 0,
+            balanceDue: total,
+            // Insurance-specific fields (Prisma model uses snake_case columns)
+            is_insurance_invoice: data.isInsuranceInvoice || false,
+            insurance_carrier: data.insuranceCarrier || null,
+            claim_number: data.claimNumber || null,
+            notes: data.notes || null,
+            lineItems: {
+              create: lineItems.map((item) => ({
+                description: item.description,
+                quantity: item.quantity,
+                unitPrice: item.unitPrice,
+                totalPrice: item.totalPrice,
+              })),
+            },
+          },
+          include: {
+            account: { select: { id: true, name: true } },
+            lineItems: true,
+          },
+        });
+        break;
+      } catch (createError) {
+        const target = createError?.meta?.target;
+        const targetValue = Array.isArray(target) ? target.join(',') : String(target || '');
+        const errorMessage = String(createError?.message || '');
+        const isUniqueConstraintError = createError?.code === 'P2002'
+          || /unique constraint failed/i.test(errorMessage);
+        const isInvoiceNumberConstraint = !targetValue
+          || /invoice_?number/i.test(targetValue)
+          || /invoice_?number/i.test(errorMessage);
+        const shouldRetry = isUniqueConstraintError && isInvoiceNumberConstraint;
+        if (!shouldRetry) {
+          throw createError;
+        }
+        lastCreateError = createError;
+      }
+    }
+
+    if (!invoice) {
+      throw lastCreateError || new Error('Unable to create unique invoice number');
+    }
 
     res.status(201).json(invoice);
   } catch (error) {
@@ -269,7 +400,13 @@ export async function updateInvoice(req, res, next) {
     const { id } = req.params;
     const data = updateInvoiceSchema.parse(req.body);
 
-    const existing = await prisma.invoice.findUnique({ where: { id } });
+    const existing = await prisma.invoice.findUnique({
+      where: { id },
+      include: {
+        lineItems: true,
+        additionalCharges: true,
+      },
+    });
     if (!existing) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
@@ -280,6 +417,8 @@ export async function updateInvoice(req, res, next) {
     }
 
     const updateData = { ...data };
+    const hasLineItems = Array.isArray(data.lineItems);
+    const hasAdditionalCharges = Array.isArray(data.additionalCharges);
 
     // Recalculate due date if terms or invoice date changed
     if (data.invoiceDate || data.terms) {
@@ -290,18 +429,83 @@ export async function updateInvoice(req, res, next) {
       updateData.dueDate = addDays(invoiceDate, terms);
     }
 
-    const invoice = await prisma.invoice.update({
-      where: { id },
-      data: {
-        ...updateData,
-        invoiceDate: data.invoiceDate ? new Date(data.invoiceDate) : undefined,
-        dueDate: updateData.dueDate,
-      },
-      include: {
-        account: { select: { id: true, name: true } },
-        lineItems: true,
-        payments: true,
-      },
+    if (hasLineItems || hasAdditionalCharges || data.tax !== undefined) {
+      const safeLineItems = hasLineItems ? data.lineItems : (existing.lineItems || []);
+      const lineTotals = calculateTotals(
+        safeLineItems.map((item) => ({
+          description: item.description,
+          quantity: Number(item.quantity || 1),
+          unitPrice: Number(item.unitPrice || 0),
+        })),
+        0
+      );
+      const sourceCharges = hasAdditionalCharges ? data.additionalCharges : (existing.additionalCharges || []);
+      const additionalChargesTotal = sourceCharges
+        .reduce((sum, charge) => sum + Number(charge.amount || 0), 0);
+      const taxAmount = Number(data.tax ?? existing.tax ?? 0);
+      const subtotal = lineTotals.subtotal;
+      const total = new Decimal(subtotal).plus(taxAmount).plus(additionalChargesTotal).toNumber();
+      const amountPaid = Number(existing.amountPaid || 0);
+
+      updateData.subtotal = subtotal;
+      updateData.tax = taxAmount;
+      updateData.total = total;
+      updateData.balanceDue = Math.max(total - amountPaid, 0);
+    }
+
+    delete updateData.lineItems;
+    delete updateData.additionalCharges;
+
+    const invoice = await prisma.$transaction(async (tx) => {
+      if (hasLineItems) {
+        await tx.invoiceLineItem.deleteMany({ where: { invoiceId: id } });
+        if (data.lineItems.length > 0) {
+          const normalizedLineItems = data.lineItems.map((item) => ({
+            description: item.description,
+            quantity: Number(item.quantity || 1),
+            unitPrice: Number(item.unitPrice || 0),
+            totalPrice: new Decimal(item.quantity || 1).times(Number(item.unitPrice || 0)).toNumber(),
+          }));
+          await tx.invoiceLineItem.createMany({
+            data: normalizedLineItems.map((item) => ({
+              invoiceId: id,
+              ...item,
+            })),
+          });
+        }
+      }
+
+      if (hasAdditionalCharges) {
+        await tx.invoiceAdditionalCharge.deleteMany({ where: { invoiceId: id } });
+        const normalizedCharges = data.additionalCharges
+          .filter((charge) => Number(charge.amount || 0) > 0)
+          .map((charge) => ({
+            invoiceId: id,
+            name: charge.name || 'Supplement',
+            amount: Number(charge.amount || 0),
+            fixedAmount: Number(charge.amount || 0),
+            chargeType: charge.chargeType || 'ADJUSTMENT',
+            notes: charge.notes || null,
+          }));
+        if (normalizedCharges.length > 0) {
+          await tx.invoiceAdditionalCharge.createMany({ data: normalizedCharges });
+        }
+      }
+
+      return tx.invoice.update({
+        where: { id },
+        data: {
+          ...updateData,
+          invoiceDate: data.invoiceDate ? new Date(data.invoiceDate) : undefined,
+          dueDate: updateData.dueDate,
+        },
+        include: {
+          account: { select: { id: true, name: true } },
+          lineItems: true,
+          additionalCharges: true,
+          payments: true,
+        },
+      });
     });
 
     res.json(invoice);
@@ -344,6 +548,8 @@ export async function sendInvoice(req, res, next) {
     const { id } = req.params;
     const {
       recipientEmail,    // Override email address
+      recipientType,     // homeowner | insurance
+      customerPortalUrl, // Optional explicit portal URL for homeowner email
       ccEmails = [],     // CC recipients
       subject,           // Custom subject
       message,           // Custom message body
@@ -356,7 +562,7 @@ export async function sendInvoice(req, res, next) {
         account: true,
         lineItems: true,
         payments: {
-          where: { status: 'COMPLETED' },
+          where: { status: 'SETTLED' },
           orderBy: { paymentDate: 'desc' },
         },
       },
@@ -366,8 +572,8 @@ export async function sendInvoice(req, res, next) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
 
-    if (invoice.status !== 'DRAFT' && invoice.status !== 'PENDING') {
-      return res.status(400).json({ error: 'Invoice already sent or processed' });
+    if (invoice.status === 'VOID') {
+      return res.status(400).json({ error: 'Cannot send a void invoice' });
     }
 
     // Determine recipient email
@@ -435,6 +641,11 @@ export async function sendInvoice(req, res, next) {
     const dueDateFormatted = invoice.dueDate
       ? format(new Date(invoice.dueDate), 'MMMM d, yyyy')
       : 'Upon Receipt';
+    const companyInfo = getInvoiceCompanyInfo();
+    const resolvedCustomerPortalUrl = normalizePortalUrl(customerPortalUrl)
+      || extractCustomerPortalUrlFromMessage(message)
+      || null;
+    const showCustomerPortalButton = recipientType !== 'insurance' && Boolean(resolvedCustomerPortalUrl);
 
     const defaultMessage = `Dear ${invoice.account?.name || 'Customer'},
 
@@ -449,9 +660,10 @@ ${paymentLink ? `Pay Online: ${paymentLink}` : ''}
 
 Thank you for your business!
 
-Panda Exteriors
-(240) 801-6665
-info@pandaexteriors.com`;
+${companyInfo.name}
+${companyInfo.fullAddress}
+${companyInfo.phone}
+${companyInfo.email}`;
 
     const emailBody = message || defaultMessage;
 
@@ -467,12 +679,13 @@ info@pandaexteriors.com`;
     .invoice-box { background: #f5f5f5; border-radius: 8px; padding: 15px; margin: 15px 0; }
     .amount { font-size: 24px; color: #667eea; font-weight: bold; }
     .pay-button { display: inline-block; background: #667eea; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin: 15px 0; }
+    .portal-button { display: inline-block; background: #0f766e; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin: 10px 0 15px; }
     .footer { border-top: 1px solid #eee; padding-top: 15px; margin-top: 20px; font-size: 12px; color: #666; }
   </style>
 </head>
 <body>
   <div class="header">
-    <h1 style="margin:0;">Panda Exteriors</h1>
+    <h1 style="margin:0;">${companyInfo.name}</h1>
     <p style="margin:5px 0 0 0;">Invoice ${invoice.invoiceNumber}</p>
   </div>
   <div class="content">
@@ -488,12 +701,16 @@ info@pandaexteriors.com`;
     <p>Click the button below to pay securely online:</p>
     <a href="${paymentLink}" class="pay-button">Pay Now</a>
     ` : ''}
+    ${showCustomerPortalButton ? `
+    <p>You can also review this invoice in your Customer Portal:</p>
+    <a href="${resolvedCustomerPortalUrl}" class="portal-button">Open Customer Portal</a>
+    ` : ''}
     ${pdfResult ? `<p><em>Invoice PDF is attached to this email.</em></p>` : ''}
     <p>Thank you for your business!</p>
     <div class="footer">
-      <p><strong>Panda Exteriors</strong><br>
-      8825 Stanford Blvd Suite 201, Columbia, MD 21045<br>
-      (240) 801-6665 | info@pandaexteriors.com</p>
+      <p><strong>${companyInfo.name}</strong><br>
+      ${companyInfo.fullAddress}<br>
+      ${companyInfo.phone} | ${companyInfo.email}</p>
     </div>
   </div>
 </body>
@@ -585,21 +802,24 @@ ${Buffer.from(pdfResult.pdfBytes).toString('base64')}`;
     }
 
     // Step 4: Update invoice status
+    const nextInvoiceStatus = (invoice.status === 'DRAFT' || invoice.status === 'PENDING')
+      ? 'SENT'
+      : invoice.status;
+
     const updatedInvoice = await prisma.invoice.update({
       where: { id },
       data: {
-        status: 'SENT',
+        status: nextInvoiceStatus,
         // Store payment link for reference
         ...(paymentLink && { stripePaymentLinkUrl: paymentLink }),
         ...(pdfResult && {
-          pdfUrl: pdfResult.downloadUrl,
-          pdfKey: pdfResult.key,
+          pdf_url: pdfResult.downloadUrl,
+          pdf_key: pdfResult.key,
         }),
       },
       include: {
         account: { select: { id: true, name: true, email: true } },
         lineItems: true,
-        opportunity: { select: { id: true, name: true } },
       },
     });
 
@@ -668,13 +888,7 @@ async function generateInvoicePdfInternal(invoice) {
   const { v4: uuidv4 } = await import('uuid');
   const { PutObjectCommand } = await import('@aws-sdk/client-s3');
 
-  const COMPANY_INFO = {
-    name: 'Panda Exteriors',
-    address: '8825 Stanford Blvd Suite 201',
-    cityStateZip: 'Columbia, MD 21045',
-    phone: '(240) 801-6665',
-    email: 'info@pandaexteriors.com',
-  };
+  const COMPANY_INFO = getInvoiceCompanyInfo();
 
   const COLORS = {
     primary: rgb(0.4, 0.49, 0.92),
@@ -881,7 +1095,7 @@ export async function generateInvoicePdf(req, res, next) {
         account: true,
         lineItems: true,
         payments: {
-          where: { status: 'COMPLETED' },
+          where: { status: 'SETTLED' },
           orderBy: { paymentDate: 'desc' },
         },
       },
@@ -898,8 +1112,8 @@ export async function generateInvoicePdf(req, res, next) {
     await prisma.invoice.update({
       where: { id },
       data: {
-        pdfUrl: pdfResult.downloadUrl,
-        pdfKey: pdfResult.key,
+        pdf_url: pdfResult.downloadUrl,
+        pdf_key: pdfResult.key,
       },
     });
 
@@ -926,7 +1140,7 @@ export async function getInvoicePdf(req, res, next) {
         account: true,
         lineItems: true,
         payments: {
-          where: { status: 'COMPLETED' },
+          where: { status: 'SETTLED' },
           orderBy: { paymentDate: 'desc' },
         },
       },
@@ -936,13 +1150,32 @@ export async function getInvoicePdf(req, res, next) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
 
-    // Return existing PDF URL if available and not regenerating
-    if (invoice.pdfUrl && regenerate !== 'true') {
+    // Return a fresh signed URL for existing generated PDF if available.
+    if (invoice.pdf_key && regenerate !== 'true') {
+      const freshPdfUrl = await getFreshInvoicePdfUrl(invoice.pdf_key);
+
+      // Keep stored URL fresh for consumers that still read pdf_url directly.
+      await prisma.invoice.update({
+        where: { id },
+        data: { pdf_url: freshPdfUrl },
+      });
+
       return res.json({
         invoiceNumber: invoice.invoiceNumber,
-        pdfUrl: invoice.pdfUrl,
-        pdfKey: invoice.pdfKey,
+        pdfUrl: freshPdfUrl,
+        pdfKey: invoice.pdf_key,
         cached: true,
+      });
+    }
+
+    // Legacy fallback if key is missing but URL exists.
+    if (invoice.pdf_url && regenerate !== 'true') {
+      return res.json({
+        invoiceNumber: invoice.invoiceNumber,
+        pdfUrl: invoice.pdf_url,
+        pdfKey: invoice.pdf_key,
+        cached: true,
+        warning: 'Using legacy PDF URL without key refresh',
       });
     }
 
@@ -953,8 +1186,8 @@ export async function getInvoicePdf(req, res, next) {
     await prisma.invoice.update({
       where: { id },
       data: {
-        pdfUrl: pdfResult.downloadUrl,
-        pdfKey: pdfResult.key,
+        pdf_url: pdfResult.downloadUrl,
+        pdf_key: pdfResult.key,
       },
     });
 

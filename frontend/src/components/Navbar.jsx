@@ -161,6 +161,7 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
   const [showViewAsMenu, setShowViewAsMenu] = useState(false);
   const [viewAsSearch, setViewAsSearch] = useState('');
   const [viewAsUsers, setViewAsUsers] = useState([]);
+  const [viewAsRemoteUsers, setViewAsRemoteUsers] = useState([]);
   const [viewAsLoading, setViewAsLoading] = useState(false);
   const [recentLeads, setRecentLeads] = useState([]);
   const [recentJobs, setRecentJobs] = useState([]);
@@ -278,9 +279,9 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
 
   // Load users for View As dropdown when opened
   useEffect(() => {
-    if (showViewAsMenu && canImpersonate && viewAsUsers.length === 0) {
+    if (showViewAsMenu && canImpersonate) {
       setViewAsLoading(true);
-      usersApi.getUsersForDropdown({ limit: 100 })
+      usersApi.getUsersForDropdown({ limit: 1000, isActive: true })
         .then(response => {
           // Response is { success: true, data: [...users...] }
           const users = response?.data || response || [];
@@ -293,16 +294,60 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
           setViewAsLoading(false);
         });
     }
-  }, [showViewAsMenu, canImpersonate, viewAsUsers.length]);
+  }, [showViewAsMenu, canImpersonate]);
+
+  // Live-search users for View As to avoid stale cached dropdown lists
+  useEffect(() => {
+    if (!showViewAsMenu || !canImpersonate) return;
+    const query = viewAsSearch.trim();
+    if (query.length < 2) {
+      setViewAsRemoteUsers([]);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setViewAsLoading(true);
+      usersApi.searchUsers({ query, limit: 25 })
+        .then((users) => {
+          setViewAsRemoteUsers(Array.isArray(users) ? users : []);
+        })
+        .catch((err) => {
+          console.error('Failed to live-search users for View As:', err);
+          setViewAsRemoteUsers([]);
+        })
+        .finally(() => {
+          setViewAsLoading(false);
+        });
+    }, 200);
+
+    return () => clearTimeout(timer);
+  }, [showViewAsMenu, canImpersonate, viewAsSearch]);
 
   // Filter users based on search
   const filteredViewAsUsers = viewAsUsers.filter(u => {
     if (!viewAsSearch) return true;
     const search = viewAsSearch.toLowerCase();
     const name = `${u.firstName || ''} ${u.lastName || ''}`.toLowerCase();
+    const fullName = (u.fullName || '').toLowerCase();
     const email = (u.email || '').toLowerCase();
-    return name.includes(search) || email.includes(search);
+    const normalizedSearch = search.replace(/\s+/g, '');
+    const normalizedName = `${name}${fullName}`.replace(/\s+/g, '');
+    const normalizedEmail = email.replace(/\./g, '');
+    return (
+      name.includes(search) ||
+      fullName.includes(search) ||
+      email.includes(search) ||
+      normalizedName.includes(normalizedSearch) ||
+      normalizedEmail.includes(normalizedSearch.replace(/\./g, ''))
+    );
   });
+
+  const displayedViewAsUsers = viewAsSearch.trim().length >= 2
+    ? [...viewAsRemoteUsers, ...filteredViewAsUsers].reduce((acc, user) => {
+        if (!acc.some((u) => u.id === user.id)) acc.push(user);
+        return acc;
+      }, [])
+    : filteredViewAsUsers;
 
   // Handle selecting a user to impersonate
   const handleViewAsUser = async (targetUser) => {
@@ -753,7 +798,7 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
             <input
               type="text"
-              placeholder="Search accounts, contacts, opportunities..."
+              placeholder="Search leads, jobs, invoices, email, phone, address..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-9 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none transition-shadow bg-gray-50 focus:bg-white"
@@ -856,12 +901,12 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
                       <div className="px-4 py-3 text-sm text-gray-500 text-center">
                         Loading users...
                       </div>
-                    ) : filteredViewAsUsers.length === 0 ? (
+                    ) : displayedViewAsUsers.length === 0 ? (
                       <div className="px-4 py-3 text-sm text-gray-500 text-center">
                         {viewAsSearch ? 'No users found' : 'No users available'}
                       </div>
                     ) : (
-                      filteredViewAsUsers.slice(0, 20).map((u) => (
+                      displayedViewAsUsers.slice(0, 20).map((u) => (
                         <button
                           key={u.id}
                           onClick={() => handleViewAsUser(u)}
@@ -876,7 +921,9 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
                           </div>
                           <div className="flex-1 min-w-0 text-left">
                             <p className="font-medium text-gray-900 truncate">
-                              {u.firstName && u.lastName ? `${u.firstName} ${u.lastName}` : u.email}
+                              {u.firstName && u.lastName
+                                ? `${u.firstName} ${u.lastName}`
+                                : u.fullName || u.email}
                             </p>
                             <p className="text-xs text-gray-500 truncate">{u.role?.name || u.department || ''}</p>
                           </div>
@@ -888,7 +935,7 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
                         </button>
                       ))
                     )}
-                    {filteredViewAsUsers.length > 20 && (
+                    {displayedViewAsUsers.length > 20 && (
                       <div className="px-4 py-2 text-xs text-gray-500 text-center border-t border-gray-100">
                         Showing first 20 results. Type to search more.
                       </div>
@@ -1087,7 +1134,7 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
             <input
               type="text"
-              placeholder="Search accounts, contacts, opportunities..."
+              placeholder="Search leads, jobs, invoices, email, phone, address..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               autoFocus

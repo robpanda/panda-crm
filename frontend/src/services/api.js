@@ -56,6 +56,15 @@ api.interceptors.request.use(
       return config;
     }
 
+    if (typeof FormData !== 'undefined' && config.data instanceof FormData && config.headers) {
+      if (typeof config.headers.delete === 'function') {
+        config.headers.delete('Content-Type');
+      } else {
+        delete config.headers['Content-Type'];
+        delete config.headers['content-type'];
+      }
+    }
+
     const token = localStorage.getItem('accessToken');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
@@ -663,6 +672,24 @@ export const opportunitiesApi = {
     return response.data;
   },
 
+  async generatePortalLink(id, data = {}) {
+    try {
+      const response = await api.post(`/api/opportunities/${id}/portal-link`, data);
+      return response.data?.data || response.data;
+    } catch (error) {
+      if (error?.response?.status === 404) {
+        const fallback = await api.post(`/api/opportunities/${id}/portalLink`, data);
+        return fallback.data?.data || fallback.data;
+      }
+      throw error;
+    }
+  },
+
+  async getPortalMessages(id) {
+    const response = await api.get(`/api/opportunities/${id}/portal-messages`);
+    return response.data?.data || [];
+  },
+
   async getWorkOrders(id) {
     const response = await api.get(`/api/opportunities/${id}/work-orders`);
     return response.data.data;
@@ -703,7 +730,10 @@ export const opportunitiesApi = {
   // Get service appointments (via WorkOrders)
   async getAppointments(id) {
     const response = await api.get(`/api/opportunities/${id}/appointments`);
-    return response.data.data;
+    const payload = response.data.data;
+    if (Array.isArray(payload)) return payload;
+    if (Array.isArray(payload?.appointments)) return payload.appointments;
+    return [];
   },
 
   // Get service contract
@@ -851,8 +881,21 @@ export const opportunitiesApi = {
     return response.data.data;
   },
 
+  async transferOpportunity(opportunityId, newOwnerId, options = {}) {
+    const response = await api.post(`/api/opportunities/${opportunityId}/transfer`, {
+      newOwnerId,
+      ...options,
+    });
+    return response.data;
+  },
+
   // Bulk reassign multiple jobs to a new owner
   async bulkReassignJobs(opportunityIds, newOwnerId) {
+    const response = await api.post('/api/opportunities/bulk-reassign', { opportunityIds, newOwnerId });
+    return response.data;
+  },
+
+  async bulkReassign(opportunityIds, newOwnerId) {
     const response = await api.post('/api/opportunities/bulk-reassign', { opportunityIds, newOwnerId });
     return response.data;
   },
@@ -863,6 +906,11 @@ export const opportunitiesApi = {
   },
 
   async bulkDeleteOpportunities(opportunityIds) {
+    const response = await api.post('/api/opportunities/bulk-delete', { opportunityIds });
+    return response.data;
+  },
+
+  async bulkDelete(opportunityIds) {
     const response = await api.post('/api/opportunities/bulk-delete', { opportunityIds });
     return response.data;
   },

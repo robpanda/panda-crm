@@ -16,8 +16,53 @@ const THUMBNAIL_SIZE = 400;
 const JPEG_QUALITY = 85;
 const MAX_INLINE_BULK_EXPORT_ITEMS = 80;
 
+function parseUnknownPrismaFieldName(error) {
+  const message = error?.message || '';
+  const match = message.match(/column [^\"]*\"([^\"]+)\" does not exist/i)
+    || message.match(/Unknown (?:field|argument) `([^`]+)`/i);
+  return match?.[1] || null;
+}
+
+function canonicalPhotoField(fieldName = '') {
+  const value = String(fieldName || '').trim();
+  if (!value) return null;
+  if (value === 'checklist_item_id') return 'checklistItemId';
+  if (value === 'customer_visible') return 'customerVisible';
+  return value;
+}
+
+function isMissingPrismaObjectError(error) {
+  const code = String(error?.code || '');
+  const message = String(error?.message || '');
+  if (code === 'P2021' || code === 'P2022') return true;
+  if (/P2021|P2022/.test(message)) return true;
+  if (/does not exist|Unknown (?:field|argument)|table .* does not exist/i.test(message)) return true;
+  return false;
+}
+
 function shouldQueueBulkExport(photoCount) {
   return Number(photoCount || 0) > MAX_INLINE_BULK_EXPORT_ITEMS;
+}
+
+function normalizePhotoRecord(photo) {
+  if (!photo) return photo;
+  return {
+    ...photo,
+    filename: photo.fileName ?? photo.filename,
+    fileName: photo.fileName ?? photo.filename,
+    s3Key: photo.fileKey ?? photo.s3Key,
+    fileKey: photo.fileKey ?? photo.s3Key,
+    contentType: photo.mimeType ?? photo.contentType,
+    mimeType: photo.mimeType ?? photo.contentType,
+    size: photo.fileSize ?? photo.size,
+    fileSize: photo.fileSize ?? photo.size,
+    type: photo.photoType ?? photo.type,
+    photoType: photo.photoType ?? photo.type,
+    gpsLatitude: photo.latitude ?? photo.gpsLatitude,
+    gpsLongitude: photo.longitude ?? photo.gpsLongitude,
+    latitude: photo.latitude ?? photo.gpsLatitude,
+    longitude: photo.longitude ?? photo.gpsLongitude,
+  };
 }
 
 function sanitizeFilename(name, fallback = 'photo') {
@@ -39,9 +84,9 @@ async function buildBulkZipBuffer(photos) {
   const zip = new JSZip();
 
   for (const [index, photo] of photos.entries()) {
-    if (!photo.fileKey) continue;
     // eslint-disable-next-line no-await-in-loop
-    const content = await s3Service.getObjectBuffer(photo.fileKey);
+    const content = await fetchPhotoContentBuffer(photo);
+    if (!content) continue;
     const safeName = sanitizeFilename(photo.fileName, `photo-${index + 1}`);
     zip.file(`${String(index + 1).padStart(3, '0')}-${safeName}`, content);
   }
@@ -66,15 +111,14 @@ async function buildBulkPdfBuffer(photos, title = 'Photo Export') {
     });
     page.drawText(photo.fileName || photo.id, { x: 40, y: 722, size: 10, font, color: rgb(0.35, 0.35, 0.35) });
 
-    if (!photo.fileKey) {
-      page.drawText('Original file key unavailable for this photo.', { x: 40, y: 680, size: 11, font });
-      // eslint-disable-next-line no-continue
-      continue;
-    }
-
     try {
       // eslint-disable-next-line no-await-in-loop
-      const bytes = await s3Service.getObjectBuffer(photo.fileKey);
+      const bytes = await fetchPhotoContentBuffer(photo);
+      if (!bytes) {
+        page.drawText('Image source unavailable for this photo.', { x: 40, y: 680, size: 11, font });
+        // eslint-disable-next-line no-continue
+        continue;
+      }
       const format = detectImageFormat(bytes);
       let embedded = null;
       if (format === 'png') {
@@ -104,6 +148,71 @@ async function buildBulkPdfBuffer(photos, title = 'Photo Export') {
   }
 
   return Buffer.from(await pdfDoc.save());
+}
+
+async function fetchPhotoContentBuffer(photo) {
+  if (photo?.fileKey) {
+    try {
+      return await s3Service.getObjectBuffer(photo.fileKey);
+    } catch (error) {
+      logger.warn(`Bulk export could not read S3 key ${photo.fileKey}: ${error.message}`);
+    }
+  }
+
+  const sourceUrl = photo?.originalUrl || photo?.displayUrl || photo?.thumbnailUrl || null;
+  if (!sourceUrl) return null;
+
+  try {
+    const response = await fetch(sourceUrl);
+    if (!response.ok) {
+      logger.warn(`Bulk export URL fetch failed (${response.status}) for ${sourceUrl}`);
+      return null;
+    }
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  } catch (error) {
+    logger.warn(`Bulk export URL fetch error for ${sourceUrl}: ${error.message}`);
+    return null;
+  }
+}
+
+async function fetchPhotosForExport(photoIds) {
+  try {
+    const photos = await prisma.photo.findMany({
+      where: { id: { in: photoIds }, deletedAt: null },
+      select: {
+        id: true,
+        projectId: true,
+        fileKey: true,
+        originalUrl: true,
+        displayUrl: true,
+        thumbnailUrl: true,
+        fileName: true,
+        photoType: true,
+      },
+    });
+    return photos.map(normalizePhotoRecord);
+  } catch (error) {
+    if (!isMissingPrismaObjectError(error)) throw error;
+    logger.warn(`Photo export query fallback due to schema mismatch: ${error.message}`);
+
+    const fallback = await prisma.photo.findMany({
+      where: { id: { in: photoIds }, deletedAt: null },
+      select: {
+        id: true,
+        projectId: true,
+        originalUrl: true,
+        displayUrl: true,
+        thumbnailUrl: true,
+      },
+    });
+
+    return fallback.map((photo, index) => ({
+      ...normalizePhotoRecord(photo),
+      fileName: photo.fileName || `photo-${index + 1}.jpg`,
+      fileKey: photo.fileKey || null,
+    }));
+  }
 }
 
 /**
@@ -205,24 +314,21 @@ export async function uploadPhoto(projectId, file, options = {}, userId) {
       data: {
         id: photoId,
         projectId,
-        filename: file.originalname,
+        fileName: file.originalname,
         originalUrl: uploadResults.original?.url,
         displayUrl: uploadResults.display?.url,
         thumbnailUrl: uploadResults.thumbnail?.url,
-        s3Key: uploadResults.original?.key,
-        contentType: processed.original.contentType,
-        size: processed.metadata.size,
+        fileKey: uploadResults.original?.key,
+        mimeType: processed.original.contentType,
+        fileSize: processed.metadata.size,
         width: processed.metadata.width,
         height: processed.metadata.height,
-        type,
+        photoType: type,
         caption,
         tags,
-        exifData: processed.metadata.exif || {},
-        gpsLatitude: processed.metadata.gpsLatitude,
-        gpsLongitude: processed.metadata.gpsLongitude,
+        latitude: processed.metadata.gpsLatitude,
+        longitude: processed.metadata.gpsLongitude,
         capturedAt: processed.metadata.capturedAt,
-        cameraMake: processed.metadata.cameraMake,
-        cameraModel: processed.metadata.cameraModel,
         uploadedById: userId,
       },
       include: {
@@ -239,7 +345,7 @@ export async function uploadPhoto(projectId, file, options = {}, userId) {
       type,
     });
 
-    return photo;
+    return normalizePhotoRecord(photo);
   } catch (error) {
     logger.error('Upload photo error:', error);
     throw error;
@@ -290,7 +396,7 @@ export async function getPhotoById(photoId) {
       },
     });
 
-    return photo;
+    return normalizePhotoRecord(photo);
   } catch (error) {
     logger.error('Get photo error:', error);
     throw error;
@@ -311,14 +417,14 @@ export async function getProjectPhotos(projectId, filters = {}, pagination = {})
       deletedAt: null,
     };
 
-    if (type) where.type = type;
+    if (type) where.photoType = type;
     if (hasGps !== undefined) {
-      where.gpsLatitude = hasGps ? { not: null } : null;
+      where.latitude = hasGps ? { not: null } : null;
     }
     if (search) {
       where.OR = [
         { caption: { contains: search, mode: 'insensitive' } },
-        { filename: { contains: search, mode: 'insensitive' } },
+        { fileName: { contains: search, mode: 'insensitive' } },
         { tags: { has: search } },
       ];
     }
@@ -334,7 +440,28 @@ export async function getProjectPhotos(projectId, filters = {}, pagination = {})
         skip,
         take: limit,
         orderBy: { createdAt: 'desc' },
-        include: {
+        select: {
+          id: true,
+          projectId: true,
+          fileName: true,
+          originalUrl: true,
+          displayUrl: true,
+          thumbnailUrl: true,
+          fileKey: true,
+          mimeType: true,
+          fileSize: true,
+          width: true,
+          height: true,
+          photoType: true,
+          caption: true,
+          tags: true,
+          latitude: true,
+          longitude: true,
+          capturedAt: true,
+          uploadedById: true,
+          deletedAt: true,
+          createdAt: true,
+          updatedAt: true,
           uploadedBy: {
             select: { id: true, firstName: true, lastName: true },
           },
@@ -347,7 +474,7 @@ export async function getProjectPhotos(projectId, filters = {}, pagination = {})
     ]);
 
     return {
-      photos,
+      photos: photos.map(normalizePhotoRecord),
       pagination: {
         page,
         limit,
@@ -369,11 +496,12 @@ export async function updatePhoto(photoId, data, userId) {
     const photo = await prisma.photo.update({
       where: { id: photoId },
       data: {
-        type: data.type,
+        photoType: data.photoType || data.type,
         caption: data.caption,
         tags: data.tags,
         aiLabels: data.aiLabels,
-        aiDescription: data.aiDescription,
+        detectedText: data.detectedText,
+        aiAnalyzedAt: data.aiProcessedAt ? new Date(data.aiProcessedAt) : undefined,
       },
       include: {
         uploadedBy: {
@@ -387,7 +515,7 @@ export async function updatePhoto(photoId, data, userId) {
       changes: Object.keys(data),
     });
 
-    return photo;
+    return normalizePhotoRecord(photo);
   } catch (error) {
     logger.error('Update photo error:', error);
     throw error;
@@ -406,7 +534,7 @@ export async function deletePhoto(photoId, userId) {
 
     await projectService.createProjectActivity(photo.projectId, userId, 'PHOTO_DELETED', {
       photoId,
-      filename: photo.filename,
+      filename: photo.fileName,
     });
 
     return photo;
@@ -466,7 +594,7 @@ export async function getPhotoDownloadUrl(photoId, variant = 'original') {
         key = photo.thumbnailUrl?.replace(s3Service.CDN_URL + '/', '');
         break;
       default:
-        key = photo.s3Key;
+        key = photo.fileKey;
     }
 
     if (!key) {
@@ -489,13 +617,13 @@ export async function getPhotosByType(projectId, type) {
     const photos = await prisma.photo.findMany({
       where: {
         projectId,
-        type,
+        photoType: type,
         deletedAt: null,
       },
       orderBy: { createdAt: 'desc' },
     });
 
-    return photos;
+    return photos.map(normalizePhotoRecord);
   } catch (error) {
     logger.error('Get photos by type error:', error);
     throw error;
@@ -511,13 +639,12 @@ export async function updatePhotoAiData(photoId, aiData) {
       where: { id: photoId },
       data: {
         aiLabels: aiData.labels,
-        aiDescription: aiData.description,
         detectedText: aiData.detectedText,
-        aiProcessedAt: new Date(),
+        aiAnalyzedAt: new Date(),
       },
     });
 
-    return photo;
+    return normalizePhotoRecord(photo);
   } catch (error) {
     logger.error('Update AI data error:', error);
     throw error;
@@ -556,10 +683,33 @@ export async function updatePhotoMetadata(photoId, payload = {}, userId) {
     throw err;
   }
 
-  const updated = await prisma.photo.update({
-    where: { id: photoId },
-    data: allowed,
-  });
+  let updated;
+  let updateData = { ...allowed };
+  let lastError;
+  for (let attempt = 0; attempt <= Object.keys(allowed).length; attempt += 1) {
+    try {
+      updated = await prisma.photo.update({
+        where: { id: photoId },
+        data: updateData,
+      });
+      break;
+    } catch (error) {
+      lastError = error;
+      const unknownField = canonicalPhotoField(parseUnknownPrismaFieldName(error));
+      if (!unknownField || !Object.prototype.hasOwnProperty.call(updateData, unknownField)) {
+        throw error;
+      }
+      logger.warn(`Photo metadata update fallback: dropping unsupported field "${unknownField}"`);
+      delete updateData[unknownField];
+      if (!Object.keys(updateData).length) {
+        throw error;
+      }
+    }
+  }
+
+  if (!updated && lastError) {
+    throw lastError;
+  }
 
   if (updated?.projectId) {
     await projectService.createProjectActivity(updated.projectId, userId, 'PHOTO_METADATA_UPDATED', {
@@ -603,11 +753,20 @@ export async function bulkAssignPhotos(payload = {}, userId) {
   let assigned = 0;
 
   if (targetType === 'CHECKLIST_ITEM') {
-    const result = await prisma.photo.updateMany({
-      where: { id: { in: photoIds }, deletedAt: null },
-      data: { checklistItemId: targetId },
-    });
-    assigned = result.count;
+    try {
+      const result = await prisma.photo.updateMany({
+        where: { id: { in: photoIds }, deletedAt: null },
+        data: { checklistItemId: targetId },
+      });
+      assigned = result.count;
+    } catch (error) {
+      const unknownField = canonicalPhotoField(parseUnknownPrismaFieldName(error));
+      if (unknownField !== 'checklistItemId') {
+        throw error;
+      }
+      logger.warn('Photo bulk assign fallback: checklistItemId field unavailable, skipping assignment');
+      assigned = 0;
+    }
   }
 
   if (targetType === 'GALLERY') {
@@ -636,28 +795,75 @@ export async function bulkAssignPhotos(payload = {}, userId) {
   }
 
   if (targetType === 'REPORT') {
-    const existing = await prisma.photoReportItem.findMany({
-      where: { reportId: targetId, photoId: { in: photoIds } },
-      select: { photoId: true },
-    });
-    const existingIds = new Set(existing.map((row) => row.photoId));
-    const toInsert = photoIds.filter((id) => !existingIds.has(id));
+    try {
+      const existing = await prisma.photoReportItem.findMany({
+        where: { reportId: targetId, photoId: { in: photoIds } },
+        select: { photoId: true },
+      });
+      const existingIds = new Set(existing.map((row) => row.photoId));
+      const toInsert = photoIds.filter((id) => !existingIds.has(id));
 
-    if (toInsert.length) {
-      const maxSort = await prisma.photoReportItem.aggregate({
-        where: { reportId: targetId },
-        _max: { sortOrder: true },
+      if (toInsert.length) {
+        const maxSort = await prisma.photoReportItem.aggregate({
+          where: { reportId: targetId },
+          _max: { sortOrder: true },
+        });
+        let nextSort = (maxSort._max.sortOrder || 0) + 1;
+        await prisma.photoReportItem.createMany({
+          data: toInsert.map((photoId) => ({
+            reportId: targetId,
+            photoId,
+            sortOrder: nextSort++,
+          })),
+        });
+      }
+      assigned = toInsert.length;
+    } catch (error) {
+      if (!isMissingPrismaObjectError(error)) throw error;
+
+      logger.warn('Photo bulk assign fallback: photoReportItem table unavailable, storing selectedPhotoIds in reportConfig', {
+        reportId: targetId,
       });
-      let nextSort = (maxSort._max.sortOrder || 0) + 1;
-      await prisma.photoReportItem.createMany({
-        data: toInsert.map((photoId) => ({
-          reportId: targetId,
-          photoId,
-          sortOrder: nextSort++,
-        })),
+
+      let report = null;
+      try {
+        report = await prisma.photoReport.findUnique({
+          where: { id: targetId },
+          select: { id: true, reportConfig: true },
+        });
+      } catch (readError) {
+        if (!isMissingPrismaObjectError(readError)) throw readError;
+        const unavailable = new Error('Photo reports are not available until PhotoCam schema sync completes');
+        unavailable.statusCode = 409;
+        unavailable.code = 'FEATURE_UNAVAILABLE';
+        throw unavailable;
+      }
+      if (!report) {
+        const err = new Error('Target report not found');
+        err.statusCode = 404;
+        err.code = 'NOT_FOUND';
+        throw err;
+      }
+
+      const reportConfig = report.reportConfig && typeof report.reportConfig === 'object' && !Array.isArray(report.reportConfig)
+        ? report.reportConfig
+        : {};
+      const existingSelected = Array.isArray(reportConfig.selectedPhotoIds)
+        ? reportConfig.selectedPhotoIds
+        : [];
+      const merged = Array.from(new Set([...existingSelected, ...photoIds]));
+      await prisma.photoReport.update({
+        where: { id: targetId },
+        data: {
+          reportConfig: {
+            ...reportConfig,
+            selectedPhotoIds: merged,
+            selectedPhotoIdsUpdatedAt: new Date().toISOString(),
+          },
+        },
       });
+      assigned = photoIds.length;
     }
-    assigned = toInsert.length;
   }
 
   if (targetType === 'PROJECT_GROUP') {
@@ -687,54 +893,52 @@ export async function createBulkDownload(payload = {}, userId) {
     throw err;
   }
 
-  const photos = await prisma.photo.findMany({
-    where: { id: { in: photoIds }, deletedAt: null },
-    select: {
-      id: true,
-      projectId: true,
-      fileKey: true,
-      originalUrl: true,
-      fileName: true,
-      photoType: true,
-    },
-  });
+  const photos = await fetchPhotosForExport(photoIds);
 
   const projectId = payload.projectId || photos[0]?.projectId || null;
   const opportunityId = payload.opportunityId || null;
   const outputFormat = payload.outputFormat === 'pdf' ? 'pdf' : 'zip';
 
-  const exportJob = await prisma.photoExportJob.create({
-    data: {
-      projectId,
-      opportunityId,
-      outputFormat,
-      status: 'PROCESSING',
-      requestJson: {
-        photoIds,
-        outputFormat,
-      },
-      createdById: userId || null,
-    },
-  });
-
-  if (photos.length === 0) {
-    const updated = await prisma.photoExportJob.update({
-      where: { id: exportJob.id },
+  let exportJob = null;
+  try {
+    exportJob = await prisma.photoExportJob.create({
       data: {
-        status: 'FAILED',
-        errorMessage: 'No valid photos were found for export',
+        projectId,
+        opportunityId,
+        outputFormat,
+        status: 'PROCESSING',
+        requestJson: {
+          photoIds,
+          outputFormat,
+        },
+        createdById: userId || null,
       },
     });
+  } catch (error) {
+    if (!isMissingPrismaObjectError(error)) throw error;
+    logger.warn('Photo bulk download fallback: photoExportJob table unavailable, using inline export only');
+  }
+
+  if (photos.length === 0) {
+    if (exportJob?.id) {
+      await prisma.photoExportJob.update({
+        where: { id: exportJob.id },
+        data: {
+          status: 'FAILED',
+          errorMessage: 'No valid photos were found for export',
+        },
+      });
+    }
     return {
-      exportJobId: updated.id,
-      status: updated.status,
+      exportJobId: exportJob?.id || null,
+      status: 'FAILED',
       outputFormat,
       totalPhotos: 0,
       downloadUrl: null,
     };
   }
 
-  if (shouldQueueBulkExport(photos.length)) {
+  if (shouldQueueBulkExport(photos.length) && exportJob?.id) {
     return {
       exportJobId: exportJob.id,
       status: 'PENDING',
@@ -761,36 +965,40 @@ export async function createBulkDownload(payload = {}, userId) {
       outputFormat === 'pdf' ? 'application/pdf' : 'application/zip'
     );
 
-    const updated = await prisma.photoExportJob.update({
-      where: { id: exportJob.id },
-      data: {
-        status: 'READY',
-        fileKey: upload.key,
-        fileUrl: upload.url,
-        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-      },
-    });
+    if (exportJob?.id) {
+      await prisma.photoExportJob.update({
+        where: { id: exportJob.id },
+        data: {
+          status: 'READY',
+          fileKey: upload.key,
+          fileUrl: upload.url,
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        },
+      });
+    }
 
-    const downloadUrl = await s3Service.getPresignedDownloadUrl(updated.fileKey, 60 * 15);
+    const downloadUrl = await s3Service.getPresignedDownloadUrl(upload.key, 60 * 15);
     return {
-      exportJobId: updated.id,
-      status: updated.status,
+      exportJobId: exportJob?.id || null,
+      status: exportJob?.id ? 'READY' : 'INLINE_READY',
       outputFormat,
       totalPhotos: photos.length,
       downloadUrl,
     };
   } catch (error) {
-    const failed = await prisma.photoExportJob.update({
-      where: { id: exportJob.id },
-      data: {
-        status: 'FAILED',
-        errorMessage: error.message,
-      },
-    });
+    if (exportJob?.id) {
+      await prisma.photoExportJob.update({
+        where: { id: exportJob.id },
+        data: {
+          status: 'FAILED',
+          errorMessage: error.message,
+        },
+      });
+    }
 
     return {
-      exportJobId: failed.id,
-      status: failed.status,
+      exportJobId: exportJob?.id || null,
+      status: 'FAILED',
       outputFormat,
       totalPhotos: photos.length,
       error: error.message,
@@ -799,9 +1007,18 @@ export async function createBulkDownload(payload = {}, userId) {
 }
 
 export async function getBulkDownloadStatus(exportJobId) {
-  const job = await prisma.photoExportJob.findUnique({
-    where: { id: exportJobId },
-  });
+  let job = null;
+  try {
+    job = await prisma.photoExportJob.findUnique({
+      where: { id: exportJobId },
+    });
+  } catch (error) {
+    if (!isMissingPrismaObjectError(error)) throw error;
+    const err = new Error('Bulk download status polling is unavailable until export schema sync completes');
+    err.statusCode = 409;
+    err.code = 'FEATURE_UNAVAILABLE';
+    throw err;
+  }
 
   if (!job) {
     const err = new Error('Export job not found');

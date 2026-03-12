@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { opportunitiesApi, companyCamApi, scheduleApi, casesApi, emailsApi, notificationsApi, bamboogliApi, approvalsApi, measurementsApi, contactsApi, ringCentralApi, usersApi, quotesApi, invoicesApi, tasksApi, documentsApi } from '../services/api';
+import { opportunitiesApi, companyCamApi, scheduleApi, casesApi, emailsApi, notificationsApi, bamboogliApi, approvalsApi, measurementsApi, contactsApi, ringCentralApi, usersApi, quotesApi, invoicesApi, paymentsApi, tasksApi, documentsApi } from '../services/api';
 import { useRingCentral } from '../context/RingCentralContext';
 import { useAuth } from '../context/AuthContext';
 import { addRecentItem } from '../utils/recentItems';
@@ -26,6 +26,8 @@ import PhotoCamTab from '../components/photocam/PhotoCamTab';
 import useJobCategories from '../hooks/useJobCategories';
 import WorkflowSidebar from '../components/WorkflowSidebar';
 import NotesSidebar from '../components/NotesSidebar';
+import InternalNotesTabs from '../components/InternalNotesTabs';
+import InternalComments from '../components/InternalComments';
 import AddressAutocomplete from '../components/AddressAutocomplete';
 import ExpediterChecklist from '../components/ExpediterChecklist';
 import {
@@ -97,12 +99,142 @@ import {
   Send,
   ExternalLink,
   Download,
+  Trash2,
   ZoomIn,
   ChevronLeft,
   Grid,
   Zap,
   UserCircle,
 } from 'lucide-react';
+
+const getInvoiceTotalValue = (invoice) => Number(invoice?.total ?? invoice?.totalAmount ?? 0);
+
+const normalizeInvoiceTotals = (invoice) => {
+  if (!invoice || typeof invoice !== 'object') return invoice;
+  const total = getInvoiceTotalValue(invoice);
+  const amountPaid = Number(invoice.amountPaid ?? 0);
+  const balanceDue = invoice.balanceDue !== undefined && invoice.balanceDue !== null
+    ? Number(invoice.balanceDue)
+    : Math.max(total - amountPaid, 0);
+
+  return {
+    ...invoice,
+    total,
+    totalAmount: total,
+    amountPaid,
+    balanceDue,
+  };
+};
+
+const DOCUMENT_UPLOAD_CATEGORY_OPTIONS = [
+  { value: 'contract', label: 'Contract' },
+  { value: 'measurement', label: 'Measurement' },
+  { value: 'insurance', label: 'Insurance' },
+  { value: 'invoice', label: 'Invoice' },
+  { value: 'quote', label: 'Quote' },
+  { value: 'permit', label: 'Permit' },
+  { value: 'photo', label: 'Photo' },
+  { value: 'other', label: 'Other' },
+];
+
+const DOCUMENT_CATEGORY_LABELS = {
+  contract: 'Contract',
+  measurement: 'Measurement',
+  insurance: 'Insurance',
+  invoice: 'Invoice',
+  quote: 'Quote',
+  permit: 'Permit',
+  photo: 'Photo',
+  photos: 'Photo',
+  payment: 'Payment',
+  other: 'Other',
+};
+
+function normalizeDocumentCategory(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return DOCUMENT_CATEGORY_LABELS[normalized] ? normalized : 'other';
+}
+
+function getDocumentCategoryLabel(value) {
+  return DOCUMENT_CATEGORY_LABELS[normalizeDocumentCategory(value)] || 'Other';
+}
+
+function getDocumentCategoryBadgeClass(value) {
+  const normalized = normalizeDocumentCategory(value);
+  switch (normalized) {
+    case 'contract':
+      return 'bg-blue-100 text-blue-700';
+    case 'measurement':
+      return 'bg-purple-100 text-purple-700';
+    case 'insurance':
+      return 'bg-amber-100 text-amber-700';
+    case 'invoice':
+      return 'bg-green-100 text-green-700';
+    case 'quote':
+      return 'bg-cyan-100 text-cyan-700';
+    case 'permit':
+      return 'bg-indigo-100 text-indigo-700';
+    case 'photo':
+    case 'photos':
+      return 'bg-pink-100 text-pink-700';
+    case 'payment':
+      return 'bg-emerald-100 text-emerald-700';
+    default:
+      return 'bg-gray-100 text-gray-700';
+  }
+}
+
+function parseAdjusterOfficePhone(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return { phone: '', extension: '' };
+
+  const extMatch = raw.match(/^(.*?)(?:\s*(?:ext\.?|x|extension)\s*[:#-]?\s*([a-z0-9-]+))$/i);
+  if (!extMatch) return { phone: raw, extension: '' };
+
+  return {
+    phone: extMatch[1]?.trim() || '',
+    extension: extMatch[2]?.trim() || '',
+  };
+}
+
+function formatAdjusterOfficePhone(phone, extension) {
+  const normalizedPhone = String(phone || '').trim();
+  const normalizedExtension = String(extension || '').trim();
+
+  if (!normalizedPhone && !normalizedExtension) return null;
+  if (!normalizedExtension) return normalizedPhone || null;
+  return `${normalizedPhone} ext ${normalizedExtension}`.trim();
+}
+
+function toDateInputValue(value) {
+  if (!value) return '';
+  const raw = String(value);
+  const isoMatch = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (isoMatch?.[1]) return isoMatch[1];
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return '';
+  const year = parsed.getUTCFullYear();
+  const month = String(parsed.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(parsed.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function toSafeIsoDateTime(dateInput) {
+  if (!dateInput) return null;
+  const value = String(dateInput).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  return `${value}T12:00:00.000Z`;
+}
+
+function formatDateFromStoredValue(value) {
+  if (!value) return null;
+  const datePart = toDateInputValue(value);
+  if (!datePart) return null;
+  const [year, month, day] = datePart.split('-').map((n) => Number(n));
+  if (!year || !month || !day) return null;
+  const utcDate = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  return utcDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+}
 
 // SMS Modal Component with Canned Responses (same as LeadDetail)
 function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {} }) {
@@ -493,24 +625,26 @@ function EmailModal({ isOpen, onClose, email, recipientName, onSent, mergeData =
 }
 
 // Invoice Detail Modal Component - Shows invoice details with payment history
-function InvoiceDetailModal({ invoice, onClose }) {
+function InvoiceDetailModal({
+  invoice,
+  onClose,
+  onInvoiceUpdated,
+  onOpenSendInvoice,
+  onOpenPayInvoice,
+}) {
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    loadPayments();
-  }, [invoice.id]);
-
-  const loadPayments = async () => {
-    try {
-      const response = await paymentsApi.getPaymentsByInvoice(invoice.id);
-      setPayments(response.data || []);
-    } catch (err) {
-      console.error('Error loading payments:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [isEditing, setIsEditing] = useState(false);
+  const [editError, setEditError] = useState(null);
+  const [editSuccess, setEditSuccess] = useState(null);
+  const [form, setForm] = useState({
+    invoiceDate: '',
+    dueDate: '',
+    tax: 0,
+    notes: '',
+    lineItems: [],
+    additionalCharges: [],
+  });
 
   const formatDate = (date) => {
     if (!date) return '-';
@@ -526,7 +660,177 @@ function InvoiceDetailModal({ invoice, onClose }) {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: 'USD',
-    }).format(amount);
+    }).format(Number(amount) || 0);
+  };
+
+  const formatDateInput = (value) => {
+    if (!value) return '';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return '';
+    return parsed.toISOString().slice(0, 10);
+  };
+
+  const hydrateFormFromInvoice = useCallback((sourceInvoice) => ({
+    invoiceDate: formatDateInput(sourceInvoice?.invoiceDate),
+    dueDate: formatDateInput(sourceInvoice?.dueDate),
+    tax: Number(sourceInvoice?.tax || 0),
+    notes: sourceInvoice?.notes || '',
+    lineItems: (sourceInvoice?.lineItems || []).map((item) => ({
+      id: item.id || null,
+      description: item.description || item.name || '',
+      quantity: Number(item.quantity || 1),
+      unitPrice: Number(item.unitPrice || item.price || 0),
+    })),
+    additionalCharges: (sourceInvoice?.additionalCharges || []).map((charge) => ({
+      id: charge.id || null,
+      name: charge.name || 'Supplement',
+      amount: Number(charge.amount || charge.fixedAmount || 0),
+      notes: charge.notes || '',
+      chargeType: charge.chargeType || 'ADJUSTMENT',
+    })),
+  }), []);
+
+  useEffect(() => {
+    setForm(hydrateFormFromInvoice(invoice));
+    setIsEditing(false);
+    setEditError(null);
+    setEditSuccess(null);
+  }, [invoice, hydrateFormFromInvoice]);
+
+  useEffect(() => {
+    const loadPayments = async () => {
+      setLoading(true);
+      try {
+        const response = await paymentsApi.getPaymentsByInvoice(invoice.id);
+        const paymentList = Array.isArray(response?.payments)
+          ? response.payments
+          : (Array.isArray(response?.data) ? response.data : []);
+        setPayments(paymentList);
+      } catch (err) {
+        console.error('Error loading payments:', err);
+        setPayments([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadPayments();
+  }, [invoice.id]);
+
+  const lineItemsSubtotal = useMemo(
+    () => form.lineItems.reduce((sum, item) => sum + (Number(item.quantity) * Number(item.unitPrice)), 0),
+    [form.lineItems]
+  );
+  const supplementsTotal = useMemo(
+    () => form.additionalCharges.reduce((sum, charge) => sum + Number(charge.amount || 0), 0),
+    [form.additionalCharges]
+  );
+  const computedTotal = lineItemsSubtotal + Number(form.tax || 0) + supplementsTotal;
+  const invoiceAmountPaid = Number(invoice.amountPaid || 0);
+  const computedBalanceDue = Math.max(computedTotal - invoiceAmountPaid, 0);
+
+  const canSendOrResend = (invoice.status || 'DRAFT') !== 'VOID';
+  const sendLabel = ['SENT', 'OVERDUE', 'PARTIAL', 'PAID'].includes(invoice.status) ? 'Resend' : 'Send';
+  const canPay = invoice.status !== 'PAID' && Number(invoice.balanceDue || 0) > 0;
+
+  const updateInvoiceMutation = useMutation({
+    mutationFn: (payload) => invoicesApi.updateInvoice(invoice.id, payload),
+    onSuccess: (updated) => {
+      const updatedInvoice = normalizeInvoiceTotals(updated?.data || updated);
+      onInvoiceUpdated?.(updatedInvoice);
+      setEditSuccess('Invoice updated successfully');
+      setEditError(null);
+      setIsEditing(false);
+    },
+    onError: (error) => {
+      setEditError(error.message || 'Failed to update invoice');
+    },
+  });
+
+  const downloadInvoicePdfMutation = useMutation({
+    mutationFn: async () => {
+      let result = await invoicesApi.getInvoicePdf(invoice.id);
+      let pdfUrl = result?.pdfUrl || result?.data?.pdfUrl;
+      if (!pdfUrl) {
+        await invoicesApi.generateInvoicePdf(invoice.id);
+        result = await invoicesApi.getInvoicePdf(invoice.id);
+        pdfUrl = result?.pdfUrl || result?.data?.pdfUrl;
+      }
+      if (!pdfUrl) {
+        throw new Error('Invoice PDF is unavailable');
+      }
+      return pdfUrl;
+    },
+    onSuccess: (pdfUrl) => {
+      window.open(pdfUrl, '_blank', 'noopener,noreferrer');
+    },
+    onError: (error) => {
+      setEditError(error.message || 'Failed to download invoice PDF');
+    },
+  });
+
+  const handleLineItemChange = (index, key, value) => {
+    setForm((prev) => {
+      const updated = [...prev.lineItems];
+      updated[index] = {
+        ...updated[index],
+        [key]: key === 'quantity' || key === 'unitPrice' ? Number(value) : value,
+      };
+      return { ...prev, lineItems: updated };
+    });
+  };
+
+  const handleAdditionalChargeChange = (index, key, value) => {
+    setForm((prev) => {
+      const updated = [...prev.additionalCharges];
+      updated[index] = {
+        ...updated[index],
+        [key]: key === 'amount' ? Number(value) : value,
+      };
+      return { ...prev, additionalCharges: updated };
+    });
+  };
+
+  const handleSave = () => {
+    if (!form.lineItems.length) {
+      setEditError('At least one line item is required.');
+      return;
+    }
+    if (form.lineItems.some((item) => !item.description?.trim())) {
+      setEditError('All line items must have a description.');
+      return;
+    }
+
+    if (form.lineItems.some((item) => Number(item.quantity) <= 0)) {
+      setEditError('Line item quantity must be greater than 0.');
+      return;
+    }
+
+    if (form.lineItems.some((item) => Number(item.unitPrice) < 0)) {
+      setEditError('Line item price cannot be negative.');
+      return;
+    }
+
+    const payload = {
+      invoiceDate: form.invoiceDate ? new Date(`${form.invoiceDate}T00:00:00.000Z`).toISOString() : undefined,
+      dueDate: form.dueDate ? new Date(`${form.dueDate}T00:00:00.000Z`).toISOString() : undefined,
+      tax: Number(form.tax || 0),
+      notes: form.notes || '',
+      lineItems: form.lineItems.map((item) => ({
+        description: item.description.trim(),
+        quantity: Number(item.quantity || 1),
+        unitPrice: Number(item.unitPrice || 0),
+      })),
+      additionalCharges: form.additionalCharges
+        .filter((charge) => Number(charge.amount || 0) > 0)
+        .map((charge) => ({
+          name: charge.name?.trim() || 'Supplement',
+          amount: Number(charge.amount || 0),
+          notes: charge.notes || '',
+          chargeType: 'ADJUSTMENT',
+        })),
+    };
+
+    updateInvoiceMutation.mutate(payload);
   };
 
   return (
@@ -543,12 +847,58 @@ function InvoiceDetailModal({ invoice, onClose }) {
               <p className="text-sm text-gray-500">Invoice Details</p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-          >
-            <X className="w-5 h-5 text-gray-500" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => downloadInvoicePdfMutation.mutate()}
+              disabled={downloadInvoicePdfMutation.isPending}
+              className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+            >
+              {downloadInvoicePdfMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+              <span>Download</span>
+            </button>
+            {canSendOrResend && (
+              <button
+                onClick={() => onOpenSendInvoice?.(invoice)}
+                disabled={!onOpenSendInvoice}
+                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
+              >
+                <Mail className="h-4 w-4" />
+                <span>{sendLabel}</span>
+              </button>
+            )}
+            {canPay && (
+              <button
+                onClick={() => onOpenPayInvoice?.(invoice)}
+                className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700"
+              >
+                <CreditCard className="h-4 w-4" />
+                <span>Pay</span>
+              </button>
+            )}
+            {!isEditing ? (
+              <button
+                onClick={() => {
+                  setIsEditing(true);
+                  setEditError(null);
+                  setEditSuccess(null);
+                }}
+                className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+              >
+                <Edit className="h-4 w-4" />
+                <span>Edit</span>
+              </button>
+            ) : null}
+            <button
+              onClick={onClose}
+              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              <X className="w-5 h-5 text-gray-500" />
+            </button>
+          </div>
         </div>
 
         {/* Content */}
@@ -588,8 +938,197 @@ function InvoiceDetailModal({ invoice, onClose }) {
             </span>
           </div>
 
+          {isEditing && (
+            <div className="space-y-4 border border-blue-100 bg-blue-50/40 rounded-lg p-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Invoice Date</label>
+                  <input
+                    type="date"
+                    value={form.invoiceDate}
+                    onChange={(event) => setForm((prev) => ({ ...prev, invoiceDate: event.target.value }))}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Due Date</label>
+                  <input
+                    type="date"
+                    value={form.dueDate}
+                    onChange={(event) => setForm((prev) => ({ ...prev, dueDate: event.target.value }))}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Tax</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={form.tax}
+                    onChange={(event) => setForm((prev) => ({ ...prev, tax: Number(event.target.value || 0) }))}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-semibold text-gray-800">Line Items</h4>
+                  <button
+                    type="button"
+                    onClick={() => setForm((prev) => ({
+                      ...prev,
+                      lineItems: [...prev.lineItems, { description: '', quantity: 1, unitPrice: 0 }],
+                    }))}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-panda-primary bg-white border border-panda-primary/20 rounded-md hover:bg-panda-primary/5"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Add Item
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {form.lineItems.map((item, index) => (
+                    <div key={`line-item-${index}`} className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center bg-white border border-gray-200 rounded-lg p-2">
+                      <input
+                        type="text"
+                        value={item.description}
+                        onChange={(event) => handleLineItemChange(index, 'description', event.target.value)}
+                        placeholder="Description"
+                        className="sm:col-span-6 border border-gray-300 rounded px-2 py-1.5 text-sm"
+                      />
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={item.quantity}
+                        onChange={(event) => handleLineItemChange(index, 'quantity', event.target.value)}
+                        className="sm:col-span-2 border border-gray-300 rounded px-2 py-1.5 text-sm"
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={item.unitPrice}
+                        onChange={(event) => handleLineItemChange(index, 'unitPrice', event.target.value)}
+                        className="sm:col-span-3 border border-gray-300 rounded px-2 py-1.5 text-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setForm((prev) => ({
+                            ...prev,
+                            lineItems: prev.lineItems.filter((_, lineIndex) => lineIndex !== index),
+                          }))
+                        }
+                        className="sm:col-span-1 inline-flex items-center justify-center text-red-500 hover:text-red-700"
+                        title="Remove line item"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-semibold text-gray-800">Supplements / Additional Charges</h4>
+                  <button
+                    type="button"
+                    onClick={() => setForm((prev) => ({
+                      ...prev,
+                      additionalCharges: [
+                        ...prev.additionalCharges,
+                        { name: 'Supplement', amount: 0, notes: '', chargeType: 'ADJUSTMENT' },
+                      ],
+                    }))}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-panda-primary bg-white border border-panda-primary/20 rounded-md hover:bg-panda-primary/5"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Add Charge
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {form.additionalCharges.map((charge, index) => (
+                    <div key={`charge-${index}`} className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center bg-white border border-gray-200 rounded-lg p-2">
+                      <input
+                        type="text"
+                        value={charge.name}
+                        onChange={(event) => handleAdditionalChargeChange(index, 'name', event.target.value)}
+                        placeholder="Charge name"
+                        className="sm:col-span-4 border border-gray-300 rounded px-2 py-1.5 text-sm"
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={charge.amount}
+                        onChange={(event) => handleAdditionalChargeChange(index, 'amount', event.target.value)}
+                        className="sm:col-span-3 border border-gray-300 rounded px-2 py-1.5 text-sm"
+                      />
+                      <input
+                        type="text"
+                        value={charge.notes}
+                        onChange={(event) => handleAdditionalChargeChange(index, 'notes', event.target.value)}
+                        placeholder="Notes"
+                        className="sm:col-span-4 border border-gray-300 rounded px-2 py-1.5 text-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setForm((prev) => ({
+                            ...prev,
+                            additionalCharges: prev.additionalCharges.filter((_, chargeIndex) => chargeIndex !== index),
+                          }))
+                        }
+                        className="sm:col-span-1 inline-flex items-center justify-center text-red-500 hover:text-red-700"
+                        title="Remove charge"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Notes</label>
+                <textarea
+                  rows={3}
+                  value={form.notes}
+                  onChange={(event) => setForm((prev) => ({ ...prev, notes: event.target.value }))}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                />
+              </div>
+
+              <div className="bg-white border border-gray-200 rounded-lg p-3 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-600">Line Items Subtotal</span>
+                  <span className="font-medium">{formatCurrency(lineItemsSubtotal)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-600">Supplements / Charges</span>
+                  <span className="font-medium">{formatCurrency(supplementsTotal)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-600">Tax</span>
+                  <span className="font-medium">{formatCurrency(form.tax)}</span>
+                </div>
+                <div className="mt-2 pt-2 border-t border-gray-100 flex items-center justify-between">
+                  <span className="font-semibold text-gray-800">Total</span>
+                  <span className="font-semibold text-gray-900">{formatCurrency(computedTotal)}</span>
+                </div>
+                <div className="mt-1 flex items-center justify-between">
+                  <span className="text-gray-600">Balance Due</span>
+                  <span className="font-medium text-red-600">{formatCurrency(computedBalanceDue)}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Line Items */}
-          {invoice.lineItems && invoice.lineItems.length > 0 && (
+          {!isEditing && invoice.lineItems && invoice.lineItems.length > 0 && (
             <div>
               <h3 className="text-sm font-medium text-gray-900 mb-2">Line Items</h3>
               <div className="border rounded-lg overflow-hidden">
@@ -618,7 +1157,8 @@ function InvoiceDetailModal({ invoice, onClose }) {
           )}
 
           {/* Payment History */}
-          <div>
+          {!isEditing && (
+            <div>
             <h3 className="text-sm font-medium text-gray-900 mb-2">Payment History</h3>
             {loading ? (
               <div className="flex items-center justify-center py-4">
@@ -644,17 +1184,41 @@ function InvoiceDetailModal({ invoice, onClose }) {
             ) : (
               <p className="text-sm text-gray-500 py-2">No payments recorded for this invoice.</p>
             )}
-          </div>
+            </div>
+          )}
         </div>
 
         {/* Footer */}
-        <div className="border-t p-4">
-          <button
-            onClick={onClose}
-            className="w-full py-2 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition-colors"
-          >
-            Close
-          </button>
+        <div className="border-t p-4 flex items-center gap-2">
+          {isEditing ? (
+            <>
+              <button
+                onClick={() => {
+                  setForm(hydrateFormFromInvoice(invoice));
+                  setIsEditing(false);
+                  setEditError(null);
+                  setEditSuccess(null);
+                }}
+                className="flex-1 py-2 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={updateInvoiceMutation.isPending}
+                className="flex-1 py-2 px-4 bg-panda-primary hover:bg-panda-dark text-white rounded-lg font-medium transition-colors disabled:opacity-60"
+              >
+                {updateInvoiceMutation.isPending ? 'Saving...' : 'Save Changes'}
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={onClose}
+              className="w-full py-2 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition-colors"
+            >
+              Close
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -1602,8 +2166,12 @@ function ActivityTimelineTab({ activities = [], onActivityClick }) {
 }
 
 export default function OpportunityDetail() {
+  const resultAppointmentWizardEnabled =
+    import.meta.env.VITE_FEATURE_RESULT_APPOINTMENT_WIZARD !== 'false';
+
   const { id } = useParams();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const { loadWidget, initiateCall, rcLoggedIn } = useRingCentral();
   const { user: currentUser } = useAuth();
@@ -1664,6 +2232,26 @@ export default function OpportunityDetail() {
   const [showActionsMenu, setShowActionsMenu] = useState(false);
   const actionsMenuRef = useRef(null);
 
+  const openCustomerPortalLink = useCallback(async () => {
+    try {
+      const portalResponse = await opportunitiesApi.generatePortalLink(id);
+      const portalUrl = portalResponse?.portalUrl
+        || portalResponse?.url
+        || portalResponse?.link
+        || portalResponse?.customerPortalUrl
+        || null;
+
+      if (!portalUrl) {
+        throw new Error('Customer portal link is unavailable');
+      }
+
+      window.open(portalUrl, '_blank', 'noopener,noreferrer');
+      setActionSuccess('Customer portal opened in a new tab');
+    } catch (error) {
+      setActionError(error?.message || 'Failed to open customer portal');
+    }
+  }, [id]);
+
   // SMS and Email modal states
   const [showSmsModal, setShowSmsModal] = useState(false);
   const [showEmailModal, setShowEmailModal] = useState(false);
@@ -1671,6 +2259,12 @@ export default function OpportunityDetail() {
   // Document gallery state
   const [showDocumentGallery, setShowDocumentGallery] = useState(false);
   const [selectedDocumentIndex, setSelectedDocumentIndex] = useState(0);
+  const [showRepositoryFileGallery, setShowRepositoryFileGallery] = useState(false);
+  const [selectedRepositoryFileIndex, setSelectedRepositoryFileIndex] = useState(0);
+  const [documentUploadCategory, setDocumentUploadCategory] = useState('');
+  const [showDocumentUploadTypeModal, setShowDocumentUploadTypeModal] = useState(false);
+  const [isUploadingRepositoryFile, setIsUploadingRepositoryFile] = useState(false);
+  const repositoryUploadInputRef = useRef(null);
 
   // Contract signing modal state
   const [showContractSigningModal, setShowContractSigningModal] = useState(false);
@@ -1689,6 +2283,15 @@ export default function OpportunityDetail() {
   // Result appointment wizard state
   const [showResultAppointmentWizard, setShowResultAppointmentWizard] = useState(false);
 
+  useEffect(() => {
+    if (!resultAppointmentWizardEnabled) return;
+    if (searchParams.get('openResultAppointment') !== '1') return;
+    setShowResultAppointmentWizard(true);
+    const next = new URLSearchParams(searchParams);
+    next.delete('openResultAppointment');
+    setSearchParams(next, { replace: true });
+  }, [resultAppointmentWizardEnabled, searchParams, setSearchParams]);
+
   // Create insurance invoice modal state
   const [showCreateInsuranceInvoiceModal, setShowCreateInsuranceInvoiceModal] = useState(false);
 
@@ -1700,6 +2303,14 @@ export default function OpportunityDetail() {
 
   // Details sub-tab state (status vs measurements)
   const [detailsSubTab, setDetailsSubTab] = useState('status');
+  const [showTransferOwnerModal, setShowTransferOwnerModal] = useState(false);
+  const [selectedTransferOwnerId, setSelectedTransferOwnerId] = useState('');
+  const [transferOwnerSearchTerm, setTransferOwnerSearchTerm] = useState('');
+  const [transferRelatedItems, setTransferRelatedItems] = useState(true);
+  const [transferOwnerError, setTransferOwnerError] = useState('');
+  const [projectManagerSearchTerm, setProjectManagerSearchTerm] = useState('');
+  const [selectedProjectManagerId, setSelectedProjectManagerId] = useState('');
+  const [crewSearchTerm, setCrewSearchTerm] = useState('');
 
   // Close actions menu when clicking outside
   useEffect(() => {
@@ -1720,6 +2331,11 @@ export default function OpportunityDetail() {
     dateOfLoss: '',
     claimFiledDate: '',
     damageLocation: '',
+    adjusterName: '',
+    adjusterEmail: '',
+    adjusterOfficePhone: '',
+    adjusterOfficeExtension: '',
+    fieldAdjusterMobile: '',
   });
 
   // Inline edit mode for job details
@@ -1820,7 +2436,9 @@ export default function OpportunityDetail() {
     queryFn: () => paymentsApi.getPayments({ opportunityId: id }),
     enabled: !!id,
   });
-  const payments = paymentsData?.data?.payments || paymentsData?.payments || [];
+  const payments = Array.isArray(paymentsData?.data)
+    ? paymentsData.data
+    : (paymentsData?.payments || []);
 
   const { data: commissionsData } = useQuery({
     queryKey: ['opportunityCommissions', id],
@@ -1847,6 +2465,12 @@ export default function OpportunityDetail() {
   });
   const users = usersForDropdown || [];
 
+  const { data: assignableOwners = [] } = useQuery({
+    queryKey: ['opportunityAssignableOwners'],
+    queryFn: () => opportunitiesApi.getAssignableUsers(),
+    staleTime: 5 * 60 * 1000,
+  });
+
   const { data: activityData } = useQuery({
     queryKey: ['opportunityActivity', id],
     queryFn: () => opportunitiesApi.getActivity(id),
@@ -1866,6 +2490,170 @@ export default function OpportunityDetail() {
     enabled: !!id,
   });
 
+  const repositoryFileList = useMemo(() => {
+    if (Array.isArray(repositoryFiles)) return repositoryFiles;
+    if (Array.isArray(repositoryFiles?.data)) return repositoryFiles.data;
+    if (Array.isArray(repositoryFiles?.documents)) return repositoryFiles.documents;
+    if (Array.isArray(repositoryFiles?.data?.documents)) return repositoryFiles.data.documents;
+    return [];
+  }, [repositoryFiles]);
+
+  const selectedRepositoryFile = useMemo(
+    () => repositoryFileList[selectedRepositoryFileIndex] || null,
+    [repositoryFileList, selectedRepositoryFileIndex]
+  );
+
+  const getRepositoryFileUrl = useCallback(
+    (file) => file?.downloadUrl || file?.signedContentUrl || file?.contentUrl || file?.url || null,
+    []
+  );
+
+  const getRepositoryFileExtension = useCallback((file) => {
+    const normalizedExplicitType = (file?.fileType || file?.fileExtension || '')
+      .toString()
+      .toLowerCase()
+      .replace(/^\./, '');
+    if (normalizedExplicitType) return normalizedExplicitType;
+
+    const fileName = (file?.fileName || file?.title || '').toString().toLowerCase();
+    const extensionIndex = fileName.lastIndexOf('.');
+    return extensionIndex > -1 ? fileName.slice(extensionIndex + 1) : '';
+  }, []);
+
+  const isRepositoryImageFile = useCallback(
+    (file) => ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'svg'].includes(getRepositoryFileExtension(file)),
+    [getRepositoryFileExtension]
+  );
+
+  const isRepositoryPdfFile = useCallback(
+    (file) => getRepositoryFileExtension(file) === 'pdf',
+    [getRepositoryFileExtension]
+  );
+
+  const downloadRemoteFile = useCallback(async (url, preferredFileName) => {
+    if (!url) return;
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Download failed with status ${response.status}`);
+    }
+
+    const blob = await response.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = blobUrl;
+    anchor.download = preferredFileName || 'document';
+    document.body.appendChild(anchor);
+    anchor.click();
+    document.body.removeChild(anchor);
+    URL.revokeObjectURL(blobUrl);
+  }, []);
+
+  const handleDownloadRepositoryFile = useCallback(async (file) => {
+    const fileUrl = getRepositoryFileUrl(file);
+    if (!fileUrl) {
+      setActionError('No file URL available');
+      return;
+    }
+
+    try {
+      await downloadRemoteFile(fileUrl, file?.fileName || file?.title || 'document');
+      setActionSuccess('Download started');
+      setTimeout(() => setActionSuccess(null), 1500);
+    } catch (error) {
+      setActionError(error.message || 'Failed to download file');
+    }
+  }, [downloadRemoteFile, getRepositoryFileUrl]);
+
+  const handleDeleteRepositoryFile = useCallback(async (file) => {
+    if (!file?.id) {
+      setActionError('Unable to delete this file.');
+      return;
+    }
+
+    const confirmed = window.confirm(`Delete "${file.title || file.fileName || 'this file'}"?`);
+    if (!confirmed) return;
+
+    try {
+      await documentsApi.deleteRepositoryDocument(file.id);
+      await queryClient.invalidateQueries({ queryKey: ['opportunityRepositoryFiles', id] });
+      setShowRepositoryFileGallery(false);
+      setSelectedRepositoryFileIndex(0);
+      setActionSuccess('File deleted successfully');
+      setTimeout(() => setActionSuccess(null), 1500);
+    } catch (error) {
+      setActionError(error.message || 'Failed to delete file');
+    }
+  }, [id, queryClient]);
+
+  const handleDownloadCurrentAgreement = useCallback(async () => {
+    const currentDocument = documents?.documents?.[selectedDocumentIndex];
+    const downloadUrl = currentDocument?.downloadUrl || currentDocument?.signedDocumentUrl || currentDocument?.documentUrl;
+    if (!downloadUrl) {
+      setActionError('No document URL available');
+      return;
+    }
+
+    try {
+      await downloadRemoteFile(downloadUrl, currentDocument?.fileName || currentDocument?.name || 'agreement.pdf');
+      setActionSuccess('Download started');
+      setTimeout(() => setActionSuccess(null), 1500);
+    } catch (error) {
+      setActionError(error.message || 'Failed to download document');
+    }
+  }, [documents, selectedDocumentIndex, downloadRemoteFile]);
+
+  const openRepositoryUploadPicker = useCallback(() => {
+    if (!documentUploadCategory) {
+      setShowDocumentUploadTypeModal(true);
+      setActionError(null);
+      return;
+    }
+    repositoryUploadInputRef.current?.click();
+  }, [documentUploadCategory]);
+
+  const handleConfirmRepositoryUploadCategory = useCallback(() => {
+    if (!documentUploadCategory) {
+      setActionError('Select a document type before uploading.');
+      return;
+    }
+    setShowDocumentUploadTypeModal(false);
+    repositoryUploadInputRef.current?.click();
+  }, [documentUploadCategory]);
+
+  const handleRepositoryFileUpload = useCallback(async (event) => {
+    const input = event.target;
+    const file = input?.files?.[0];
+    if (!file) return;
+
+    if (!documentUploadCategory) {
+      setActionError('Select a document type before uploading.');
+      input.value = '';
+      return;
+    }
+
+    setIsUploadingRepositoryFile(true);
+    setActionError(null);
+
+    try {
+      await documentsApi.uploadDocument(file, {
+        title: file.name,
+        category: documentUploadCategory,
+        opportunityId: id,
+        accountId: opportunity?.accountId || opportunity?.account?.id || null,
+      });
+
+      await queryClient.invalidateQueries({ queryKey: ['opportunityRepositoryFiles', id] });
+      setDocumentsSubTab('files');
+      setActionSuccess(`${file.name} uploaded successfully`);
+      setTimeout(() => setActionSuccess(null), 1500);
+    } catch (error) {
+      setActionError(error.message || 'Failed to upload file');
+    } finally {
+      setIsUploadingRepositoryFile(false);
+      input.value = '';
+    }
+  }, [documentUploadCategory, id, opportunity?.accountId, opportunity?.account?.id, queryClient]);
   // Cases (linked via Account) - service not yet deployed, disable retries
   const { data: cases } = useQuery({
     queryKey: ['opportunityCases', id],
@@ -1902,6 +2690,29 @@ export default function OpportunityDetail() {
     staleTime: Infinity,
   });
 
+  const { data: portalMessages = [] } = useQuery({
+    queryKey: ['opportunityPortalMessages', id],
+    queryFn: () => opportunitiesApi.getPortalMessages(id),
+    enabled: !!id,
+    retry: false,
+    staleTime: Infinity,
+  });
+
+  const selectedConversationId = activeQuickAction?.type === 'viewConversation'
+    ? activeQuickAction?.conversation?.id
+    : null;
+
+  const {
+    data: selectedConversationMessagesData = [],
+    isLoading: selectedConversationMessagesLoading,
+  } = useQuery({
+    queryKey: ['opportunityConversationMessages', selectedConversationId],
+    queryFn: () => bamboogliApi.getMessagesByConversation(selectedConversationId, { limit: 200 }),
+    enabled: !!selectedConversationId,
+    retry: false,
+    staleTime: 30000,
+  });
+
   // CompanyCam photos - service not yet deployed, disable retries
   const { data: photos } = useQuery({
     queryKey: ['opportunityPhotos', id],
@@ -1920,6 +2731,23 @@ export default function OpportunityDetail() {
     staleTime: 30000, // Refresh every 30 seconds to check for pending report updates
   });
   const measurementReports = measurementReportsData?.data || [];
+  const selectedConversationMessages = Array.isArray(selectedConversationMessagesData)
+    ? selectedConversationMessagesData
+    : selectedConversationMessagesData?.data || [];
+  const portalConversationItems = useMemo(() => {
+    if (!Array.isArray(portalMessages) || portalMessages.length === 0) return [];
+
+    const latestMessage = portalMessages[portalMessages.length - 1];
+    return [{
+      id: `portal-${id}`,
+      itemType: 'portal',
+      sortDate: latestMessage?.createdAt || latestMessage?.updatedAt || new Date().toISOString(),
+      lastMessagePreview: latestMessage?.message || 'No portal messages yet',
+      lastSenderName: latestMessage?.senderName || 'Customer',
+      messageCount: portalMessages.length,
+      thread: portalMessages,
+    }];
+  }, [id, portalMessages]);
 
   // Update opportunity mutation
   const updateMutation = useMutation({
@@ -1934,15 +2762,57 @@ export default function OpportunityDetail() {
     },
   });
 
+  const transferOwnerMutation = useMutation({
+    mutationFn: ({ newOwnerId, transferRelated }) =>
+      opportunitiesApi.transferOpportunity(id, newOwnerId, {
+        transferRelatedItems: transferRelated,
+      }),
+    onSuccess: (result) => {
+      const payload = result?.data || {};
+      const relatedCounts = payload.relatedTransfer?.counts || {};
+      const movedCount = Object.values(relatedCounts).reduce((sum, count) => sum + (Number(count) || 0), 0);
+
+      queryClient.invalidateQueries(['opportunity', id]);
+      queryClient.invalidateQueries(['opportunityTasks', id]);
+      queryClient.invalidateQueries(['opportunityAppointments', id]);
+      queryClient.invalidateQueries(['opportunityCases', id]);
+      queryClient.invalidateQueries(['opportunityActivity', id]);
+
+      setShowTransferOwnerModal(false);
+      setSelectedTransferOwnerId('');
+      setTransferOwnerSearchTerm('');
+      setTransferRelatedItems(true);
+      setTransferOwnerError('');
+      setActionSuccess(
+        payload.relatedTransfer?.requested
+          ? `Job owner transferred successfully${movedCount > 0 ? ` (${movedCount} related assignment${movedCount === 1 ? '' : 's'} moved)` : ''}.`
+          : 'Job owner transferred successfully.'
+      );
+      setTimeout(() => setActionSuccess(null), 4000);
+    },
+    onError: (error) => {
+      setTransferOwnerError(error.message || 'Failed to transfer job owner');
+    },
+  });
+
+  useEffect(() => {
+    setSelectedProjectManagerId(opportunity?.projectManagerId || '');
+  }, [opportunity?.projectManagerId]);
   // Initialize claim form when opportunity data loads
   useEffect(() => {
     if (opportunity) {
+      const officePhoneParts = parseAdjusterOfficePhone(opportunity.adjusterOfficePhone || '');
       setClaimForm({
         insuranceCarrier: opportunity.insuranceCarrier || '',
         claimNumber: opportunity.claimNumber || '',
-        dateOfLoss: opportunity.dateOfLoss ? new Date(opportunity.dateOfLoss).toISOString().split('T')[0] : '',
-        claimFiledDate: opportunity.claimFiledDate ? new Date(opportunity.claimFiledDate).toISOString().split('T')[0] : '',
+        dateOfLoss: toDateInputValue(opportunity.dateOfLoss),
+        claimFiledDate: toDateInputValue(opportunity.claimFiledDate),
         damageLocation: opportunity.damageLocation || '',
+        adjusterName: opportunity.adjusterName || '',
+        adjusterEmail: opportunity.adjusterEmail || '',
+        adjusterOfficePhone: officePhoneParts.phone,
+        adjusterOfficeExtension: officePhoneParts.extension,
+        fieldAdjusterMobile: opportunity.fieldAdjusterMobile || '',
       });
     }
   }, [opportunity]);
@@ -2016,12 +2886,24 @@ export default function OpportunityDetail() {
     const updateData = {
       insuranceCarrier: claimForm.insuranceCarrier || null,
       claimNumber: claimForm.claimNumber || null,
-      dateOfLoss: claimForm.dateOfLoss ? new Date(claimForm.dateOfLoss).toISOString() : null,
-      claimFiledDate: claimForm.claimFiledDate ? new Date(claimForm.claimFiledDate).toISOString() : null,
+      dateOfLoss: toSafeIsoDateTime(claimForm.dateOfLoss),
+      claimFiledDate: toSafeIsoDateTime(claimForm.claimFiledDate),
       damageLocation: claimForm.damageLocation || null,
+      adjusterName: claimForm.adjusterName || null,
+      adjusterEmail: claimForm.adjusterEmail || null,
+      adjusterOfficePhone: formatAdjusterOfficePhone(
+        claimForm.adjusterOfficePhone,
+        claimForm.adjusterOfficeExtension
+      ),
+      fieldAdjusterMobile: claimForm.fieldAdjusterMobile || null,
     };
-    updateMutation.mutate(updateData);
-    setIsEditingClaim(false);
+    try {
+      await updateMutation.mutateAsync(updateData);
+      await queryClient.refetchQueries({ queryKey: ['opportunity', id] });
+      setIsEditingClaim(false);
+    } catch (error) {
+      // Mutation onError already sets a user-visible message; keep form open for correction.
+    }
   };
 
   // Work Order mutations
@@ -2161,7 +3043,7 @@ export default function OpportunityDetail() {
   const { data: crews = [] } = useQuery({
     queryKey: ['crews'],
     queryFn: () => scheduleApi.getResources({ resourceType: 'CREW' }),
-    enabled: showCrewModal,
+    enabled: showCrewModal || (activeTab === 'details' && detailsSubTab === 'jobTeam'),
   });
 
   // Assign crew mutation
@@ -2359,6 +3241,55 @@ export default function OpportunityDetail() {
     mobilePhone: '',
     isPrimary: false,
   });
+  const [showEditContactModal, setShowEditContactModal] = useState(false);
+  const [editingContactId, setEditingContactId] = useState(null);
+  const [editContactForm, setEditContactForm] = useState({
+    firstName: '',
+    lastName: '',
+    email: '',
+    phone: '',
+    mobilePhone: '',
+    title: '',
+    department: '',
+    mailingStreet: '',
+    mailingCity: '',
+    mailingState: '',
+    mailingPostalCode: '',
+    isPrimary: false,
+    smsOptOut: false,
+    emailOptOut: false,
+    doNotCall: false,
+  });
+
+  const openEditContactModal = useCallback((contact = null) => {
+    if (!contact?.id) return;
+
+    setEditingContactId(contact.id);
+    setEditContactForm({
+      firstName: contact.firstName || '',
+      lastName: contact.lastName || '',
+      email: contact.email || '',
+      phone: contact.phone || '',
+      mobilePhone: contact.mobilePhone || '',
+      title: contact.title || '',
+      department: contact.department || '',
+      mailingStreet: contact.mailingStreet || contact.street || '',
+      mailingCity: contact.mailingCity || contact.city || '',
+      mailingState: contact.mailingState || contact.state || '',
+      mailingPostalCode: contact.mailingPostalCode || contact.postalCode || '',
+      isPrimary: Boolean(contact.isPrimary || contact.isPrimaryContact),
+      smsOptOut: Boolean(contact.smsOptOut),
+      emailOptOut: Boolean(contact.emailOptOut),
+      doNotCall: Boolean(contact.doNotCall),
+    });
+    setShowEditContactModal(true);
+    setActionError(null);
+  }, []);
+
+  const closeEditContactModal = useCallback(() => {
+    setShowEditContactModal(false);
+    setEditingContactId(null);
+  }, []);
 
   // Contact mutation - add contact to account
   const addContactMutation = useMutation({
@@ -2376,6 +3307,19 @@ export default function OpportunityDetail() {
     },
     onError: (error) => {
       setActionError(error.message || 'Failed to add contact');
+    },
+  });
+
+  const updateContactMutation = useMutation({
+    mutationFn: ({ contactId, data }) => contactsApi.updateContact(contactId, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['opportunityContacts', id]);
+      setActionSuccess('Contact updated successfully');
+      closeEditContactModal();
+      setTimeout(() => setActionSuccess(null), 3000);
+    },
+    onError: (error) => {
+      setActionError(error.message || 'Failed to update contact');
     },
   });
 
@@ -2968,14 +3912,160 @@ export default function OpportunityDetail() {
   const totalConversationsCount = (conversations?.length || 0) + (emails?.length || 0);
   const totalUnread = unreadConversations + (emails?.filter(e => e.status === 'UNREAD')?.length || 0);
 
+  // Job Team fallback: opportunity payloads may include ownerId/ownerName without nested owner object.
+  const ownerDisplayName = useMemo(() => {
+    if (opportunity?.owner?.firstName || opportunity?.owner?.lastName) {
+      return `${opportunity.owner.firstName || ''} ${opportunity.owner.lastName || ''}`.trim();
+    }
+    if (opportunity?.ownerName && opportunity.ownerName !== 'Unassigned') {
+      return opportunity.ownerName;
+    }
+    return '';
+  }, [opportunity?.owner?.firstName, opportunity?.owner?.lastName, opportunity?.ownerName]);
+
+  const ownerDisplayId = opportunity?.owner?.id || opportunity?.ownerId || null;
+  const ownerDisplayEmail = opportunity?.owner?.email || null;
+  const ownerDisplayPhone = opportunity?.owner?.phone || null;
+  const hasOwnerTeamMember = Boolean(ownerDisplayId || ownerDisplayName);
+  const parsedAdjusterOfficePhone = useMemo(
+    () => parseAdjusterOfficePhone(opportunity?.adjusterOfficePhone || ''),
+    [opportunity?.adjusterOfficePhone]
+  );
+  const ownerInitials = ownerDisplayName
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part.charAt(0).toUpperCase())
+    .join('');
+  const availableTransferOwners = useMemo(
+    () => (assignableOwners || []).filter((teamUser) => {
+      if (!teamUser || teamUser.id === ownerDisplayId) return false;
+      if (teamUser.isActive === false) return false;
+      if (String(teamUser.status || '').toUpperCase() === 'INACTIVE') return false;
+      return true;
+    }),
+    [assignableOwners, ownerDisplayId]
+  );
+  const filteredTransferOwners = useMemo(() => {
+    const query = transferOwnerSearchTerm.trim().toLowerCase();
+    if (!query) return availableTransferOwners;
+    return availableTransferOwners.filter((teamUser) => {
+      const haystack = [
+        teamUser.name,
+        teamUser.email,
+        teamUser.role,
+        teamUser.firstName,
+        teamUser.lastName,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [availableTransferOwners, transferOwnerSearchTerm]);
+  const teamAssignableUsers = usersForDropdown?.data || usersForDropdown || [];
+  const activeTeamAssignableUsers = useMemo(
+    () => (teamAssignableUsers || []).filter((teamUser) => {
+      if (!teamUser) return false;
+      if (teamUser.isActive === false) return false;
+      if (String(teamUser.status || '').toUpperCase() === 'INACTIVE') return false;
+      return true;
+    }),
+    [teamAssignableUsers]
+  );
+  const filteredProjectManagerUsers = useMemo(() => {
+    const query = projectManagerSearchTerm.trim().toLowerCase();
+    if (!query) return activeTeamAssignableUsers;
+    return activeTeamAssignableUsers.filter((teamUser) => {
+      const haystack = [
+        teamUser.name,
+        teamUser.email,
+        teamUser.role,
+        teamUser.firstName,
+        teamUser.lastName,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [activeTeamAssignableUsers, projectManagerSearchTerm]);
+  const appointmentsForTeam = Array.isArray(appointments) ? appointments : [];
+  const primaryCrewMember = useMemo(() => {
+    for (const appointment of appointmentsForTeam) {
+      const crewList = Array.isArray(appointment?.crew) ? appointment.crew : [];
+      if (crewList.length > 0) {
+        const primary = crewList.find((resource) => resource?.isPrimary) || crewList[0];
+        if (primary?.id) return primary;
+      }
+    }
+    return null;
+  }, [appointmentsForTeam]);
+  const crewAssignmentAppointment = useMemo(() => {
+    const withIds = appointmentsForTeam.filter((appointment) => Boolean(appointment?.id));
+    if (withIds.length === 0) return null;
+    return withIds[0];
+  }, [appointmentsForTeam]);
+  const availableCrews = useMemo(
+    () => (crews?.data || crews || []).filter((crewOption) => {
+      if (!crewOption) return false;
+      if (crewOption.isActive === false) return false;
+      if (String(crewOption.status || '').toUpperCase() === 'INACTIVE') return false;
+      return true;
+    }),
+    [crews]
+  );
+  const filteredCrews = useMemo(() => {
+    const query = crewSearchTerm.trim().toLowerCase();
+    if (!query) return availableCrews;
+    return availableCrews.filter((crewOption) => {
+      const haystack = [
+        crewOption.name,
+        crewOption.territory?.name,
+        crewOption.resourceCode,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [availableCrews, crewSearchTerm]);
+  const showInsuranceClaimSection = useMemo(() => {
+    const disposition = String(opportunity?.currentDispositionCategory || '').toUpperCase();
+    const selectedInsurancePath = disposition === 'INSURANCE_CLAIM_FILED' || disposition === 'INSURANCE_NO_CLAIM';
+    const hasInsuranceData = Boolean(
+      opportunity?.insuranceCarrier
+      || opportunity?.claimNumber
+      || opportunity?.dateOfLoss
+      || opportunity?.claimFiledDate
+      || opportunity?.adjusterName
+      || opportunity?.adjusterEmail
+      || opportunity?.adjusterOfficePhone
+      || opportunity?.fieldAdjusterMobile
+    );
+    return selectedInsurancePath || hasInsuranceData || String(opportunity?.workType || '').toLowerCase().includes('insurance');
+  }, [
+    opportunity?.currentDispositionCategory,
+    opportunity?.insuranceCarrier,
+    opportunity?.claimNumber,
+    opportunity?.dateOfLoss,
+    opportunity?.claimFiledDate,
+    opportunity?.adjusterName,
+    opportunity?.adjusterEmail,
+    opportunity?.adjusterOfficePhone,
+    opportunity?.fieldAdjusterMobile,
+    opportunity?.workType,
+  ]);
   // Calculate badge counts for the new category tabs (must be before early returns)
+  const internalNotesCount = opportunity?.notes?.length || 0;
+  const internalCommentsCount = summary?.counts?.internalComments || 0;
   const categoryBadgeCounts = useMemo(() => ({
     schedule: (appointments?.length || 0) + (tasks?.filter(t => t.status !== 'COMPLETED')?.length || 0),
     financial: (invoices?.length || 0) + (commissions?.length || 0) + (quotes?.length || 0),
     documents: (documents?.documents?.length || 0) + (photos?.length || 0) + (activityData?.activities?.filter(a => a.sourceType !== 'ACCULYNX_IMPORT')?.length || 0),
     team: (contacts?.length || 0) + (workOrders?.length || 0) + (cases?.length || 0),
-    messages: totalUnread + unreadNotifications,
-  }), [appointments, tasks, invoices, commissions, quotes, documents, photos, activityData, contacts, workOrders, cases, totalUnread, unreadNotifications]);
+    messages: totalUnread + unreadNotifications + internalNotesCount + internalCommentsCount,
+  }), [appointments, tasks, invoices, commissions, quotes, documents, photos, activityData, contacts, workOrders, cases, totalUnread, unreadNotifications, internalNotesCount, internalCommentsCount]);
 
   // Calculate sub-tab counts for the current category (must be before early returns)
   const subTabCounts = useMemo(() => {
@@ -3007,13 +4097,15 @@ export default function OpportunityDetail() {
       case 'messages':
         return {
           conversations: totalUnread,
+          internalNotes: internalNotesCount,
+          internalComments: internalCommentsCount,
           communications: activityData?.activities?.filter(a => a.sourceType === 'ACCULYNX_IMPORT')?.length || 0,
           notifications: unreadNotifications,
         };
       default:
         return {};
     }
-  }, [activeCategory, appointments, tasks, invoices, commissions, quotes, documents, photos, activityData, contacts, workOrders, cases, totalUnread, unreadNotifications]);
+  }, [activeCategory, appointments, tasks, invoices, commissions, quotes, documents, photos, activityData, contacts, workOrders, cases, totalUnread, unreadNotifications, internalNotesCount, internalCommentsCount]);
 
   // Early returns (after all hooks)
   if (isLoading) {
@@ -3121,6 +4213,69 @@ export default function OpportunityDetail() {
   // Available trades options
   const trades = ['Roofing', 'Gutters', 'Siding', 'GAF Solar', 'Skylight', 'Trim & Capping', 'Interior Work', 'GAF TimberSteel'];
 
+  const primaryContact = contacts?.[0] || opportunity?.contact || null;
+  const headerDisplayName = (() => {
+    const first = primaryContact?.firstName || '';
+    const last = primaryContact?.lastName || '';
+    if (first || last) return `${first} ${last}`.trim();
+    return opportunity?.account?.name || opportunity?.name || 'Job';
+  })();
+  const headerInitials = (() => {
+    const source = headerDisplayName || '';
+    const initials = source
+      .split(' ')
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part.charAt(0).toUpperCase())
+      .join('');
+    return initials || 'J';
+  })();
+  const headerEmail = primaryContact?.email || opportunity?.account?.email || '';
+  const headerPhone = primaryContact?.mobilePhone || primaryContact?.phone || opportunity?.phone || '';
+  const headerAddress = [opportunity?.street, opportunity?.city, opportunity?.state, opportunity?.postalCode]
+    .filter(Boolean)
+    .join(', ');
+  const normalizedWorkType = (() => {
+    const rawWorkType = String(opportunity?.workType || '').trim();
+    if (!rawWorkType) return 'Unassigned';
+    const lowered = rawWorkType.toLowerCase();
+    if (lowered === 'unassigned work type' || lowered === 'unassigned' || lowered === 'not set') {
+      return 'Unassigned';
+    }
+    return rawWorkType;
+  })();
+  const headerPriorityLabel = String(opportunity?.priority || 'Normal').replace(/_/g, ' ');
+  const financialWorksheetTotals = (() => {
+    const buckets = {
+      insurance: { total: 0, paid: 0, due: 0 },
+      homeowner: { total: 0, paid: 0, due: 0 },
+      retail: { total: 0, paid: 0, due: 0 },
+    };
+
+    (invoices || []).forEach((invoice) => {
+      const categoryToken = String(
+        invoice?.invoiceType
+        || invoice?.type
+        || invoice?.category
+        || invoice?.paymentCategory
+        || ''
+      ).toUpperCase();
+      const isInsuranceInvoice = Boolean(invoice?.isInsuranceInvoice || invoice?.insuranceCarrier || categoryToken.includes('INSURANCE'));
+      const isRetailInvoice = categoryToken.includes('RETAIL');
+      const bucketKey = isInsuranceInvoice ? 'insurance' : isRetailInvoice ? 'retail' : 'homeowner';
+
+      const total = Number(invoice?.total ?? invoice?.totalAmount ?? 0) || 0;
+      const paid = Number(invoice?.amountPaid ?? 0) || 0;
+      const due = Number(invoice?.balanceDue ?? Math.max(total - paid, 0)) || 0;
+
+      buckets[bucketKey].total += total;
+      buckets[bucketKey].paid += paid;
+      buckets[bucketKey].due += due;
+    });
+
+    return buckets;
+  })();
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Success/Error Toast */}
@@ -3151,51 +4306,44 @@ export default function OpportunityDetail() {
         </button>
       </div>
 
-      {/* Compact Header with Gradient */}
+      {/* Job Header */}
       <div className="px-4 sm:px-6 pb-4">
-        <div className="bg-gradient-to-r from-slate-50 via-white to-blue-50 rounded-xl shadow-sm border border-gray-200">
-          {/* Top Bar - Name and Key Info */}
-          <div className="p-4 sm:p-5">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              {/* Left: Icon + Name + Badges */}
-              <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-gradient-to-br from-panda-primary to-panda-secondary flex items-center justify-center flex-shrink-0 shadow-sm">
-                  <Target className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
+        <div className="rounded-xl border border-gray-200 bg-gradient-to-r from-slate-50 via-white to-blue-50 shadow-sm">
+          <div className="p-5">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+              <div className="flex items-start gap-3 min-w-0">
+                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-panda-primary to-panda-secondary flex items-center justify-center flex-shrink-0">
+                  <span className="text-white font-semibold">{headerInitials}</span>
                 </div>
                 <div className="min-w-0">
-                  <h1 className="text-lg sm:text-xl font-bold text-gray-900 truncate">
-                    {opportunity.contact?.firstName && opportunity.contact?.lastName
-                      ? `${opportunity.contact.firstName} ${opportunity.contact.lastName}`
-                      : opportunity.name}
-                  </h1>
-                  <div className="flex items-center gap-2 mt-1 flex-wrap">
-                    <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-blue-100 text-blue-700">
-                      {opportunity.workType || 'Insurance'}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h1 className="text-2xl font-bold text-gray-900 truncate">{headerDisplayName}</h1>
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-700">
+                      PRIMARY
                     </span>
-                    <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-emerald-100 text-emerald-700">
-                      {opportunity.stage?.replace(/_/g, ' ') || 'Lead'}
-                    </span>
-                    {opportunity.isApproved ? (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-green-100 text-green-700">
-                        <CheckCircle className="w-3 h-3 mr-1" />
-                        Approved
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-amber-100 text-amber-700">
-                        <AlertTriangle className="w-3 h-3 mr-1" />
-                        Pending Approval
-                      </span>
-                    )}
                   </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-gray-600">
+                    {headerEmail && <span className="truncate">{headerEmail}</span>}
+                    {headerPhone && <span className="truncate">• {headerPhone}</span>}
+                  </div>
+                  {headerAddress && (
+                    <p className="mt-1 text-sm text-gray-500 truncate">{headerAddress}</p>
+                  )}
                 </div>
               </div>
 
-              {/* Right: Job # and Priority */}
-              <div className="flex items-center gap-4 sm:gap-5">
-                {/* Job Number */}
-                <div className="bg-white/80 backdrop-blur-sm rounded-lg px-3 py-2 border border-gray-100 shadow-sm">
-                  <div className="text-xs text-gray-500 font-medium">Job #</div>
-                  <div className="text-sm sm:text-base font-bold text-panda-primary">
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="inline-flex items-center px-3 py-1 rounded-md text-sm font-semibold bg-emerald-100 text-emerald-700">
+                  {normalizedWorkType}
+                </span>
+                <span className={`inline-flex items-center px-3 py-1 rounded-md text-sm font-semibold ${
+                  opportunity.isApproved ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+                }`}>
+                  {opportunity.isApproved ? 'Completed' : 'Pending'}
+                </span>
+                <div className="rounded-lg border border-gray-200 bg-white px-4 py-2">
+                  <p className="text-xs text-gray-500">Job #</p>
+                  <p className="text-2xl font-bold text-panda-primary leading-none">
                     {opportunity.jobId || (
                       <button
                         onClick={async () => {
@@ -3209,50 +4357,48 @@ export default function OpportunityDetail() {
                             setActionError('Failed to assign Job #');
                           }
                         }}
-                        className="text-xs text-gray-400 hover:text-panda-primary underline"
+                        className="text-sm text-gray-500 hover:text-panda-primary underline"
                       >
                         Assign
                       </button>
                     )}
-                  </div>
+                  </p>
                 </div>
-                {/* Priority */}
-                <div className="hidden sm:block">
+                <div className="min-w-[180px]">
                   <JobPriority opportunity={opportunity} />
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Metrics Bar - Compact single row (financials + key counts only) */}
-          <div className="px-4 sm:px-5 pb-4">
-            <div className="grid grid-cols-4 sm:grid-cols-6 gap-2 sm:gap-3">
-              {/* Financials with colors */}
-              <div className="col-span-2 sm:col-span-1 bg-emerald-50 rounded-lg p-2 sm:p-3 text-center border border-emerald-100">
-                <div className="text-[10px] sm:text-xs text-emerald-600 font-medium uppercase tracking-wide">Contract</div>
-                <div className="text-sm sm:text-base font-bold text-emerald-700">${(summary?.financials?.contractValue || opportunity.amount || 0).toLocaleString()}</div>
+          <div className="px-5 pb-5">
+            <div className="rounded-lg border border-gray-200 bg-white p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-sm font-semibold text-gray-700">Financial Worksheet</h2>
+                <span className="text-sm text-panda-primary font-medium">Edit Worksheet</span>
               </div>
-              <div className="bg-blue-50 rounded-lg p-2 sm:p-3 text-center border border-blue-100">
-                <div className="text-[10px] sm:text-xs text-blue-600 font-medium uppercase tracking-wide">Paid</div>
-                <div className="text-sm sm:text-base font-bold text-blue-700">${(summary?.financials?.totalPaid || 0).toLocaleString()}</div>
-              </div>
-              <div className="bg-amber-50 rounded-lg p-2 sm:p-3 text-center border border-amber-100">
-                <div className="text-[10px] sm:text-xs text-amber-600 font-medium uppercase tracking-wide">Due</div>
-                <div className="text-sm sm:text-base font-bold text-amber-700">${(summary?.financials?.balanceDue || 0).toLocaleString()}</div>
-              </div>
-
-              {/* Counts */}
-              <div className="hidden sm:block bg-white rounded-lg p-2 sm:p-3 text-center border border-gray-100">
-                <div className="text-[10px] sm:text-xs text-gray-500 font-medium uppercase tracking-wide">Quotes</div>
-                <div className="text-sm sm:text-base font-bold text-gray-700">{summary?.counts?.quotes || quotes?.length || 0}</div>
-              </div>
-              <div className="hidden sm:block bg-white rounded-lg p-2 sm:p-3 text-center border border-gray-100">
-                <div className="text-[10px] sm:text-xs text-gray-500 font-medium uppercase tracking-wide">Work Orders</div>
-                <div className="text-sm sm:text-base font-bold text-gray-700">{summary?.counts?.workOrders || workOrders?.length || 0}</div>
-              </div>
-              <div className="hidden sm:block bg-white rounded-lg p-2 sm:p-3 text-center border border-gray-100">
-                <div className="text-[10px] sm:text-xs text-gray-500 font-medium uppercase tracking-wide">Appts</div>
-                <div className="text-sm sm:text-base font-bold text-gray-700">{summary?.counts?.appointments || 0}</div>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-center">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Insurance Claim</p>
+                  <p className="mt-1 text-3xl font-bold text-emerald-800">${financialWorksheetTotals.insurance.total.toLocaleString()}</p>
+                  <p className="mt-1 text-sm text-emerald-700">
+                    Paid ${financialWorksheetTotals.insurance.paid.toLocaleString()} • Due ${financialWorksheetTotals.insurance.due.toLocaleString()}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-center">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">Homeowner</p>
+                  <p className="mt-1 text-3xl font-bold text-blue-800">${financialWorksheetTotals.homeowner.total.toLocaleString()}</p>
+                  <p className="mt-1 text-sm text-blue-700">
+                    Paid ${financialWorksheetTotals.homeowner.paid.toLocaleString()} • Due ${financialWorksheetTotals.homeowner.due.toLocaleString()}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-center">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-amber-700">Retail</p>
+                  <p className="mt-1 text-3xl font-bold text-amber-800">${financialWorksheetTotals.retail.total.toLocaleString()}</p>
+                  <p className="mt-1 text-sm text-amber-700">
+                    Paid ${financialWorksheetTotals.retail.paid.toLocaleString()} • Due ${financialWorksheetTotals.retail.due.toLocaleString()}
+                  </p>
+                </div>
               </div>
             </div>
           </div>
@@ -3269,7 +4415,7 @@ export default function OpportunityDetail() {
         <div className="flex flex-col lg:flex-row gap-6">
           {/* Left Sidebar - Compact actions and info */}
           <div className="w-full lg:w-80 xl:w-96 flex-shrink-0 order-2 lg:order-1">
-            <div className="lg:sticky lg:top-24 space-y-3 max-h-[calc(100vh-120px)] overflow-y-auto pb-4">
+            <div className="lg:sticky lg:top-24 space-y-3 pb-4">
               {/* Primary Actions Row */}
               <div className="flex gap-2">
                 {isEditMode ? (
@@ -3302,13 +4448,15 @@ export default function OpportunityDetail() {
                       <Edit className="w-4 h-4" />
                       <span>Edit Job</span>
                     </button>
-                    <button
-                      onClick={() => setShowResultAppointmentWizard(true)}
-                      className="flex-1 flex items-center justify-center space-x-2 px-4 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium"
-                    >
-                      <ClipboardCheck className="w-4 h-4" />
-                      <span>Result Appointment</span>
-                    </button>
+                    {resultAppointmentWizardEnabled && (
+                      <button
+                        onClick={() => setShowResultAppointmentWizard(true)}
+                        className="flex-1 flex items-center justify-center space-x-2 px-4 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium"
+                      >
+                        <ClipboardCheck className="w-4 h-4" />
+                        <span>Result Appointment</span>
+                      </button>
+                    )}
                   </>
                 )}
 
@@ -3355,17 +4503,6 @@ export default function OpportunityDetail() {
                       </button>
                       <button
                         onClick={() => {
-                          setActiveQuickAction('eagleviewMeasure');
-                          setShowQuickActionModal(true);
-                          setShowActionsMenu(false);
-                        }}
-                        className="w-full flex items-center space-x-3 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
-                      >
-                        <Eye className="w-4 h-4 text-orange-600" />
-                        <span>EagleView Measurements</span>
-                      </button>
-                      <button
-                        onClick={() => {
                           setActiveQuickAction('hoverCapture');
                           setShowQuickActionModal(true);
                           setShowActionsMenu(false);
@@ -3404,6 +4541,16 @@ export default function OpportunityDetail() {
                       </button>
                       <button
                         onClick={() => {
+                          setShowActionsMenu(false);
+                          openCustomerPortalLink();
+                        }}
+                        className="w-full flex items-center space-x-3 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+                      >
+                        <ExternalLink className="w-4 h-4 text-blue-600" />
+                        <span>Customer Portal</span>
+                      </button>
+                      <button
+                        onClick={() => {
                           setActiveQuickAction('updateMeetingOutcome');
                           setShowQuickActionModal(true);
                           setShowActionsMenu(false);
@@ -3414,7 +4561,7 @@ export default function OpportunityDetail() {
                         <span>Update Meeting Outcome</span>
                       </button>
                       {/* Prepare Specs - Only show for insurance opportunities after claim approved */}
-                      {(opportunity.type === 'INSURANCE' || opportunity.workType?.toLowerCase().includes('insurance')) && (
+                      {showInsuranceClaimSection && (
                         <button
                           onClick={() => {
                             setShowSpecsPreparation(true);
@@ -3698,7 +4845,7 @@ export default function OpportunityDetail() {
                               <option value="Interior">Interior</option>
                             </select>
                           ) : (
-                            <p className="font-medium text-gray-900">{opportunity.workType || 'Insurance Roofing'}</p>
+                            <p className="font-medium text-gray-900">{normalizedWorkType}</p>
                           )}
                         </div>
                         <div className={`bg-gray-50 p-4 rounded-lg border-l-4 border-blue-400 ${isEditMode ? 'ring-2 ring-blue-200' : ''}`}>
@@ -4700,9 +5847,13 @@ export default function OpportunityDetail() {
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center space-x-2">
-                                <Link to={`/contacts/${contact.id}`} className="font-medium text-gray-900 hover:text-panda-primary">
+                                <button
+                                  type="button"
+                                  onClick={() => openEditContactModal(contact)}
+                                  className="font-medium text-gray-900 hover:text-panda-primary"
+                                >
                                   {contact.firstName} {contact.lastName}
-                                </Link>
+                                </button>
                                 {isPrimary && (
                                   <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-medium rounded-full">Primary</span>
                                 )}
@@ -4739,13 +5890,14 @@ export default function OpportunityDetail() {
                               )}
                             </div>
                             {/* Edit button */}
-                            <Link
-                              to={`/contacts/${contact.id}`}
+                            <button
+                              type="button"
+                              onClick={() => openEditContactModal(contact)}
                               className="p-2 text-gray-400 hover:text-panda-primary hover:bg-gray-100 rounded-lg transition-colors flex-shrink-0"
                               title="Edit Contact"
                             >
                               <Edit className="w-4 h-4" />
-                            </Link>
+                            </button>
                           </div>
                         </div>
                       );
@@ -4778,37 +5930,66 @@ export default function OpportunityDetail() {
                     {/* Team Members */}
                     <div className="space-y-3">
                       {/* Sales Rep / Owner */}
-                      {opportunity?.owner && (
-                        <div className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-panda-primary transition-colors">
+                      <div className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-panda-primary transition-colors">
                           <div className="flex items-center space-x-3">
                             <div className="w-10 h-10 rounded-full bg-gradient-to-br from-green-500 to-emerald-500 flex items-center justify-center">
                               <span className="text-white text-sm font-medium">
-                                {opportunity.owner.firstName?.charAt(0)}{opportunity.owner.lastName?.charAt(0)}
+                                {ownerInitials || 'U'}
                               </span>
                             </div>
                             <div>
-                              <Link
-                                to={`/users/${opportunity.owner.id}`}
-                                className="font-medium text-gray-900 hover:text-panda-primary"
-                              >
-                                {opportunity.owner.firstName} {opportunity.owner.lastName}
-                              </Link>
-                              <p className="text-sm text-gray-500">Sales Rep</p>
+                              {ownerDisplayId ? (
+                                <Link
+                                  to={`/users/${ownerDisplayId}`}
+                                  className="font-medium text-gray-900 hover:text-panda-primary"
+                                >
+                                  {ownerDisplayName || 'Unassigned'}
+                                </Link>
+                              ) : (
+                                <p className="font-medium text-gray-900">{ownerDisplayName || 'Unassigned'}</p>
+                              )}
+                              <p className="text-sm text-gray-500">Owner</p>
                             </div>
                           </div>
                           <div className="flex items-center space-x-2">
-                            {opportunity.owner.phone && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedTransferOwnerId('');
+                                setTransferOwnerSearchTerm('');
+                                setTransferRelatedItems(false);
+                                setTransferOwnerError('');
+                                setShowTransferOwnerModal(true);
+                              }}
+                              className="inline-flex items-center px-2.5 py-1 text-xs font-medium text-panda-primary bg-panda-primary/10 rounded hover:bg-panda-primary/20"
+                            >
+                              Assign
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedTransferOwnerId('');
+                                setTransferOwnerSearchTerm('');
+                                setTransferRelatedItems(true);
+                                setTransferOwnerError('');
+                                setShowTransferOwnerModal(true);
+                              }}
+                              className="inline-flex items-center px-2.5 py-1 text-xs font-medium text-panda-primary bg-panda-primary/10 rounded hover:bg-panda-primary/20"
+                            >
+                              Transfer
+                            </button>
+                            {ownerDisplayPhone && (
                               <a
-                                href={`tel:${opportunity.owner.phone}`}
+                                href={`tel:${ownerDisplayPhone}`}
                                 className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
                                 title="Call"
                               >
                                 <Phone className="w-4 h-4" />
                               </a>
                             )}
-                            {opportunity.owner.email && (
+                            {ownerDisplayEmail && (
                               <a
-                                href={`mailto:${opportunity.owner.email}`}
+                                href={`mailto:${ownerDisplayEmail}`}
                                 className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                                 title="Email"
                               >
@@ -4817,49 +5998,173 @@ export default function OpportunityDetail() {
                             )}
                           </div>
                         </div>
-                      )}
 
                       {/* Project Manager */}
-                      {opportunity?.projectManager && (
-                        <div className="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:border-panda-primary transition-colors">
+                      <div className="p-4 border border-gray-200 rounded-lg hover:border-panda-primary transition-colors space-y-3">
+                        <div className="flex items-center justify-between">
                           <div className="flex items-center space-x-3">
                             <div className="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-violet-500 flex items-center justify-center">
                               <span className="text-white text-sm font-medium">
-                                {opportunity.projectManager.firstName?.charAt(0)}{opportunity.projectManager.lastName?.charAt(0)}
+                                {opportunity?.projectManager?.firstName?.charAt(0) || 'P'}
+                                {opportunity?.projectManager?.lastName?.charAt(0) || 'M'}
                               </span>
                             </div>
                             <div>
-                              <Link
-                                to={`/users/${opportunity.projectManager.id}`}
-                                className="font-medium text-gray-900 hover:text-panda-primary"
-                              >
-                                {opportunity.projectManager.firstName} {opportunity.projectManager.lastName}
-                              </Link>
+                              {opportunity?.projectManager?.id ? (
+                                <Link
+                                  to={`/users/${opportunity.projectManager.id}`}
+                                  className="font-medium text-gray-900 hover:text-panda-primary"
+                                >
+                                  {opportunity.projectManager.firstName} {opportunity.projectManager.lastName}
+                                </Link>
+                              ) : (
+                                <p className="font-medium text-gray-900">Not assigned</p>
+                              )}
                               <p className="text-sm text-gray-500">Project Manager</p>
                             </div>
                           </div>
-                          <div className="flex items-center space-x-2">
-                            {opportunity.projectManager.phone && (
-                              <a
-                                href={`tel:${opportunity.projectManager.phone}`}
-                                className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
-                                title="Call"
-                              >
-                                <Phone className="w-4 h-4" />
-                              </a>
-                            )}
-                            {opportunity.projectManager.email && (
-                              <a
-                                href={`mailto:${opportunity.projectManager.email}`}
-                                className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                                title="Email"
-                              >
-                                <Mail className="w-4 h-4" />
-                              </a>
+                        </div>
+                        <div className="space-y-2">
+                          <input
+                            type="text"
+                            value={projectManagerSearchTerm}
+                            onChange={(event) => setProjectManagerSearchTerm(event.target.value)}
+                            placeholder="Search active users for PM assignment"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary"
+                          />
+                          <div className="max-h-36 overflow-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+                            {filteredProjectManagerUsers.slice(0, 12).map((teamUser) => {
+                              const isSelected = selectedProjectManagerId === teamUser.id;
+                              const displayName = (teamUser.name || `${teamUser.firstName || ''} ${teamUser.lastName || ''}`.trim() || teamUser.email);
+                              return (
+                                <button
+                                  key={teamUser.id}
+                                  type="button"
+                                  onClick={() => setSelectedProjectManagerId(teamUser.id)}
+                                  className={`w-full px-3 py-2 text-left text-sm hover:bg-panda-primary/5 ${isSelected ? 'bg-panda-primary/10 text-panda-primary font-medium' : 'text-gray-700'}`}
+                                >
+                                  <div className="truncate">{displayName}</div>
+                                  {teamUser.role && <div className="text-xs text-gray-500 truncate">{teamUser.role}</div>}
+                                </button>
+                              );
+                            })}
+                            {filteredProjectManagerUsers.length === 0 && (
+                              <p className="px-3 py-2 text-xs text-gray-500">No active users match your search.</p>
                             )}
                           </div>
+                          <div className="flex items-center justify-between">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedProjectManagerId('')}
+                              className="text-xs text-gray-500 hover:text-gray-700"
+                            >
+                              Clear selection
+                            </button>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  await updateMutation.mutateAsync({ projectManagerId: selectedProjectManagerId || null });
+                                }}
+                                disabled={updateMutation.isPending}
+                                className="inline-flex items-center justify-center px-2.5 py-1.5 text-xs font-medium text-white bg-panda-primary rounded hover:bg-panda-dark disabled:opacity-50"
+                              >
+                                {updateMutation.isPending ? 'Saving…' : 'Assign PM'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  await updateMutation.mutateAsync({ projectManagerId: selectedProjectManagerId || null });
+                                }}
+                                disabled={updateMutation.isPending}
+                                className="inline-flex items-center justify-center px-2.5 py-1.5 text-xs font-medium text-panda-primary bg-panda-primary/10 rounded hover:bg-panda-primary/20 disabled:opacity-50"
+                              >
+                                Transfer PM
+                              </button>
+                            </div>
+                          </div>
                         </div>
-                      )}
+                      </div>
+
+                      {/* Crew */}
+                      <div className="p-4 border border-gray-200 rounded-lg hover:border-panda-primary transition-colors space-y-3">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-3">
+                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-amber-500 to-orange-500 flex items-center justify-center">
+                              <Users className="w-5 h-5 text-white" />
+                            </div>
+                            <div>
+                              <p className="font-medium text-gray-900">{primaryCrewMember?.name || 'Not assigned'}</p>
+                              <p className="text-sm text-gray-500">Crew</p>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex flex-col gap-2">
+                          <input
+                            type="text"
+                            value={crewSearchTerm}
+                            onChange={(event) => setCrewSearchTerm(event.target.value)}
+                            placeholder="Search active crews"
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary"
+                          />
+                          <div className="max-h-36 overflow-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+                            {filteredCrews.slice(0, 12).map((crewOption) => {
+                              const isSelected = selectedCrewId === crewOption.id;
+                              return (
+                                <button
+                                  key={crewOption.id}
+                                  type="button"
+                                  onClick={() => setSelectedCrewId(crewOption.id)}
+                                  className={`w-full px-3 py-2 text-left text-sm hover:bg-panda-primary/5 ${isSelected ? 'bg-panda-primary/10 text-panda-primary font-medium' : 'text-gray-700'}`}
+                                >
+                                  <div className="truncate">{crewOption.name}</div>
+                                  {crewOption.territory?.name && (
+                                    <div className="text-xs text-gray-500 truncate">{crewOption.territory.name}</div>
+                                  )}
+                                </button>
+                              );
+                            })}
+                            {filteredCrews.length === 0 && (
+                              <p className="px-3 py-2 text-xs text-gray-500">No active crews match your search.</p>
+                            )}
+                          </div>
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!crewAssignmentAppointment?.id || !selectedCrewId) return;
+                                assignCrewMutation.mutate({
+                                  appointmentId: crewAssignmentAppointment.id,
+                                  resourceId: selectedCrewId,
+                                });
+                              }}
+                              disabled={!selectedCrewId || !crewAssignmentAppointment?.id || assignCrewMutation.isPending}
+                              className="inline-flex items-center justify-center px-2.5 py-1.5 text-xs font-medium text-white bg-panda-primary rounded hover:bg-panda-dark disabled:opacity-50"
+                            >
+                              {assignCrewMutation.isPending ? 'Assigning…' : 'Assign Crew'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!crewAssignmentAppointment?.id || !selectedCrewId) return;
+                                assignCrewMutation.mutate({
+                                  appointmentId: crewAssignmentAppointment.id,
+                                  resourceId: selectedCrewId,
+                                });
+                              }}
+                              disabled={!selectedCrewId || !crewAssignmentAppointment?.id || assignCrewMutation.isPending}
+                              className="inline-flex items-center justify-center px-2.5 py-1.5 text-xs font-medium text-panda-primary bg-panda-primary/10 rounded hover:bg-panda-primary/20 disabled:opacity-50"
+                            >
+                              Transfer Crew
+                            </button>
+                          </div>
+                        </div>
+                        {!crewAssignmentAppointment?.id && (
+                          <p className="text-xs text-amber-600">
+                            Schedule at least one appointment before assigning a crew.
+                          </p>
+                        )}
+                      </div>
 
                       {/* Onboarded By */}
                       {opportunity?.onboardedBy && (
@@ -4946,7 +6251,7 @@ export default function OpportunityDetail() {
                       )}
 
                       {/* Empty State */}
-                      {!opportunity?.owner && !opportunity?.projectManager && !opportunity?.onboardedBy && !opportunity?.approvedBy && (
+                      {!hasOwnerTeamMember && !opportunity?.projectManager && !opportunity?.onboardedBy && !opportunity?.approvedBy && !primaryCrewMember && (
                         <div className="text-center py-8 text-gray-500">
                           <UserCircle className="w-12 h-12 mx-auto text-gray-300 mb-2" />
                           <p>No team members assigned</p>
@@ -5143,9 +6448,8 @@ export default function OpportunityDetail() {
                     </div>
 
                     {contacts && contacts.length > 0 ? contacts.map((contact) => (
-                      <Link
+                      <div
                         key={contact.id}
-                        to={`/contacts/${contact.id}`}
                         className="block border border-gray-200 rounded-lg p-4 hover:border-panda-primary transition-colors"
                       >
                         <div className="flex items-center space-x-3">
@@ -5154,14 +6458,20 @@ export default function OpportunityDetail() {
                               {contact.firstName?.charAt(0)}{contact.lastName?.charAt(0)}
                             </span>
                           </div>
-                          <div className="flex-1">
+                          <div className="flex-1 min-w-0">
                             <div className="flex items-center space-x-2">
-                              <h4 className="font-medium text-gray-900">{contact.firstName} {contact.lastName}</h4>
+                              <button
+                                type="button"
+                                onClick={() => openEditContactModal(contact)}
+                                className="font-medium text-gray-900 hover:text-panda-primary"
+                              >
+                                {contact.firstName} {contact.lastName}
+                              </button>
                               {contact.isPrimary && (
                                 <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-medium rounded-full">Primary</span>
                               )}
                             </div>
-                            <div className="flex items-center space-x-4 text-sm text-gray-500">
+                            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-500">
                               {contact.email && (
                                 <span className="flex items-center">
                                   <Mail className="w-3 h-3 mr-1" />
@@ -5176,8 +6486,16 @@ export default function OpportunityDetail() {
                               )}
                             </div>
                           </div>
+                          <button
+                            type="button"
+                            onClick={() => openEditContactModal(contact)}
+                            className="p-2 text-gray-400 hover:text-panda-primary hover:bg-gray-100 rounded-lg transition-colors flex-shrink-0"
+                            title="Edit Contact"
+                          >
+                            <Edit className="w-4 h-4" />
+                          </button>
                         </div>
-                      </Link>
+                      </div>
                     )) : (
                       <div className="text-center py-8 text-gray-500">
                         <Users className="w-12 h-12 mx-auto text-gray-300 mb-2" />
@@ -5581,7 +6899,7 @@ export default function OpportunityDetail() {
                         itemType: 'email',
                         sortDate: e.sentAt || e.createdAt,
                       }));
-                      const allItems = [...smsItems, ...emailItems].sort((a, b) =>
+                      const allItems = [...portalConversationItems, ...smsItems, ...emailItems].sort((a, b) =>
                         new Date(b.sortDate) - new Date(a.sortDate)
                       );
 
@@ -5646,6 +6964,47 @@ export default function OpportunityDetail() {
                                   <button
                                     onClick={() => {
                                       setActiveQuickAction({ type: 'viewConversation', conversation: item });
+                                      setShowQuickActionModal(true);
+                                    }}
+                                    className="text-xs text-panda-primary hover:text-panda-dark hover:bg-panda-light px-2 py-1 rounded"
+                                  >
+                                    View Thread
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        } else if (item.itemType === 'portal') {
+                          return (
+                            <div key={item.id} className="border border-gray-200 rounded-lg overflow-hidden hover:border-violet-400 transition-colors">
+                              <div className="p-4">
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center space-x-3">
+                                    <div className="p-2 rounded-lg bg-violet-100">
+                                      <Globe className="w-5 h-5 text-violet-600" />
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <div className="flex items-center space-x-2">
+                                        <h4 className="font-medium text-gray-900 truncate">Customer Portal</h4>
+                                        <span className="px-2 py-0.5 bg-violet-100 text-violet-700 text-xs font-medium rounded-full">Portal</span>
+                                      </div>
+                                      <p className="text-sm text-gray-600 line-clamp-1">
+                                        {item.lastSenderName}: {item.lastMessagePreview}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <span className="px-2 py-1 bg-violet-50 text-violet-700 rounded-full text-xs font-medium">
+                                    {item.messageCount} {item.messageCount === 1 ? 'message' : 'messages'}
+                                  </span>
+                                </div>
+                                <div className="mt-3 flex items-center justify-between">
+                                  <span className="flex items-center text-xs text-gray-500">
+                                    <Clock className="w-3 h-3 mr-1" />
+                                    {item.sortDate ? new Date(item.sortDate).toLocaleString() : 'No date'}
+                                  </span>
+                                  <button
+                                    onClick={() => {
+                                      setActiveQuickAction({ type: 'viewPortalThread', portalThread: item.thread });
                                       setShowQuickActionModal(true);
                                     }}
                                     className="text-xs text-panda-primary hover:text-panda-dark hover:bg-panda-light px-2 py-1 rounded"
@@ -5996,6 +7355,14 @@ export default function OpportunityDetail() {
                   </div>
                 )}
 
+                {activeTab === 'internalNotes' && (
+                  <InternalNotesTabs entityType="opportunity" entityId={id} />
+                )}
+
+                {activeTab === 'internalComments' && (
+                  <InternalComments entityType="opportunity" entityId={id} />
+                )}
+
                 {activeTab === 'approvals' && (
                   <div className="space-y-6">
                     {/* Approval Stats */}
@@ -6143,7 +7510,7 @@ export default function OpportunityDetail() {
                                 <div className="flex justify-between">
                                   <span className="text-sm text-gray-500">Date of Loss</span>
                                   <span className="text-sm font-medium text-gray-900">
-                                    {opportunity.dateOfLoss ? new Date(opportunity.dateOfLoss).toLocaleDateString() : '-'}
+                                    {formatDateFromStoredValue(opportunity.dateOfLoss) || '-'}
                                   </span>
                                 </div>
                                 <div className="flex justify-between">
@@ -6327,7 +7694,7 @@ export default function OpportunityDetail() {
                               <div className="flex justify-between">
                                 <span className="text-gray-500">Total Invoiced</span>
                                 <span className="font-medium">
-                                  ${invoices.reduce((sum, inv) => sum + (parseFloat(inv.totalAmount) || 0), 0).toLocaleString()}
+                                  ${invoices.reduce((sum, inv) => sum + (parseFloat(inv.total ?? inv.totalAmount) || 0), 0).toLocaleString()}
                                 </span>
                               </div>
                               <div className="flex justify-between">
@@ -6438,7 +7805,7 @@ export default function OpportunityDetail() {
                             type: 'invoice',
                             date: inv.createdAt,
                             label: `Invoice ${inv.invoiceNumber || `#${inv.id?.slice(-6)}`}`,
-                            amount: inv.totalAmount,
+                            amount: inv.total ?? inv.totalAmount,
                             status: inv.status,
                           })),
                           ...(commissions || []).filter(c => c.status === 'PAID').map(comm => ({
@@ -6521,53 +7888,58 @@ export default function OpportunityDetail() {
                       {invoices && invoices.length > 0 ? invoices.map((invoice) => (
                         <div
                           key={invoice.id}
-                          onClick={() => { setSelectedInvoice(invoice); setShowInvoiceDetailModal(true); }}
-                          className="border border-gray-200 rounded-lg p-4 hover:border-panda-primary hover:shadow-md transition-all cursor-pointer"
+                          onClick={() => { setSelectedInvoice(normalizeInvoiceTotals(invoice)); setShowInvoiceDetailModal(true); }}
+                          className="border border-indigo-200 rounded-xl p-4 hover:border-panda-primary hover:shadow-md transition-all cursor-pointer bg-white"
                         >
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center space-x-3">
-                              <Receipt className="w-5 h-5 text-gray-400" />
-                              <div>
-                                <h4 className="font-medium text-gray-900">{invoice.invoiceNumber || `INV-${invoice.id.slice(-6)}`}</h4>
-                                <p className="text-sm text-gray-500">
-                                  {invoice.createdAt ? new Date(invoice.createdAt).toLocaleDateString() : '-'}
-                                </p>
+                          <div className="flex flex-col gap-3">
+                            <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
+                              <div className="flex items-start gap-3">
+                                <Receipt className="w-5 h-5 text-gray-400 mt-1" />
+                                <div>
+                                  <h4 className="text-xl font-bold text-gray-900 leading-none">{invoice.invoiceNumber || `INV-${invoice.id.slice(-6)}`}</h4>
+                                  <p className="text-sm text-gray-600 mt-1">
+                                    Date: {invoice.createdAt ? new Date(invoice.createdAt).toLocaleDateString() : 'N/A'}
+                                  </p>
+                                  <div className="flex flex-wrap items-center gap-2 mt-2">
+                                    {(invoice?.isInsuranceInvoice || invoice?.insuranceCarrier) && (
+                                      <span className="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-700">INSURANCE</span>
+                                    )}
+                                    <span className="px-2 py-0.5 rounded text-xs font-semibold bg-blue-100 text-blue-700">HOMEOWNER</span>
+                                    {String(invoice?.invoiceType || invoice?.type || '').toUpperCase().includes('RETAIL') && (
+                                      <span className="px-2 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-700">RETAIL</span>
+                                    )}
+                                    <span className={`px-2 py-0.5 rounded text-xs font-semibold ${
+                                      invoice.status === 'PAID' ? 'bg-green-100 text-green-800' :
+                                      invoice.status === 'OVERDUE' ? 'bg-red-100 text-red-800' :
+                                      invoice.status === 'SENT' ? 'bg-yellow-100 text-yellow-800' :
+                                      'bg-gray-100 text-gray-600'
+                                    }`}>
+                                      {invoice.status || 'Draft'}
+                                    </span>
+                                  </div>
+                                </div>
                               </div>
-                            </div>
-                            <div className="flex items-center gap-4">
-                              <div className="text-right">
-                                <p className="font-semibold text-gray-900">${(invoice.totalAmount || 0).toLocaleString()}</p>
-                                <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                                  invoice.status === 'PAID' ? 'bg-green-100 text-green-800' :
-                                  invoice.status === 'OVERDUE' ? 'bg-red-100 text-red-800' :
-                                  invoice.status === 'SENT' ? 'bg-yellow-100 text-yellow-800' :
-                                  'bg-gray-100 text-gray-600'
-                                }`}>
-                                  {invoice.status || 'Draft'}
-                                </span>
-                              </div>
-                              {/* Invoice Action Buttons */}
-                              <div className="flex items-center gap-2">
-                                {/* Send Invoice Button - show if not already sent or paid */}
-                                {invoice.status !== 'PAID' && invoice.status !== 'SENT' && (
+
+                              <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setInvoiceToSend(invoice);
+                                    setShowSendInvoiceModal(true);
+                                  }}
+                                  className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 transition-colors"
+                                >
+                                  <Mail className="w-4 h-4" />
+                                  {invoice.status === 'SENT' || invoice.status === 'PAID' ? 'Resend' : 'Send'}
+                                </button>
+                                {invoice.status !== 'PAID' && (
+                                  (parseFloat(invoice.balanceDue) > 0) ||
+                                  (parseFloat(invoice.total ?? invoice.totalAmount) > parseFloat(invoice.amountPaid || 0))
+                                ) && (
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      setInvoiceToSend(invoice);
-                                      setShowSendInvoiceModal(true);
-                                    }}
-                                    className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
-                                  >
-                                    <Mail className="w-4 h-4" />
-                                    Send
-                                  </button>
-                                )}
-                                {/* Pay Invoice Button - only show if not fully paid */}
-                                {invoice.status !== 'PAID' && (parseFloat(invoice.balanceDue) > 0 || parseFloat(invoice.totalAmount) > parseFloat(invoice.amountPaid || 0)) && (
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setSelectedInvoice(invoice);
+                                      setSelectedInvoice(normalizeInvoiceTotals(invoice));
                                       setShowPayInvoiceModal(true);
                                     }}
                                     className="flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 transition-colors"
@@ -6576,20 +7948,40 @@ export default function OpportunityDetail() {
                                     Pay
                                   </button>
                                 )}
-                                {/* View indicator */}
-                                <ExternalLink className="w-4 h-4 text-gray-400" />
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedInvoice(normalizeInvoiceTotals(invoice));
+                                    setShowInvoiceDetailModal(true);
+                                  }}
+                                  className="inline-flex items-center justify-center px-2.5 py-1.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50"
+                                  title="Open invoice"
+                                >
+                                  <ExternalLink className="w-4 h-4" />
+                                </button>
                               </div>
                             </div>
                           </div>
-                          {/* Balance info */}
-                          {invoice.status !== 'PAID' && (
-                            <div className="mt-3 pt-3 border-t border-gray-100 flex justify-between text-sm">
-                              <span className="text-gray-500">Balance Due:</span>
-                              <span className="font-medium text-red-600">
-                                ${parseFloat(invoice.balanceDue || (invoice.totalAmount - (invoice.amountPaid || 0)) || 0).toLocaleString()}
-                              </span>
+                          <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-3 border-t border-gray-100 pt-3">
+                            <div>
+                              <p className="text-sm text-gray-500">Owed</p>
+                              <p className="text-2xl font-bold text-gray-900">
+                                ${Number(invoice.total ?? invoice.totalAmount ?? 0).toLocaleString()}
+                              </p>
                             </div>
-                          )}
+                            <div>
+                              <p className="text-sm text-gray-500">Paid</p>
+                              <p className="text-2xl font-bold text-blue-700">
+                                ${Number(invoice.amountPaid || 0).toLocaleString()}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-sm text-gray-500">Balance Due</p>
+                              <p className="text-2xl font-bold text-red-600">
+                                ${parseFloat(invoice.balanceDue || ((invoice.total ?? invoice.totalAmount) - (invoice.amountPaid || 0)) || 0).toLocaleString()}
+                              </p>
+                            </div>
+                          </div>
                         </div>
                       )) : (
                         <div className="text-center py-8 text-gray-500">
@@ -6719,8 +8111,8 @@ export default function OpportunityDetail() {
 
                 {activeTab === 'documents' && (
                   <div className="space-y-4">
-                    {/* Sub-tab navigation for Contracts and Photos */}
-                    <div className="flex items-center justify-between border-b border-gray-200 pb-3">
+                    {/* Sub-tab navigation + shared actions */}
+                    <div className="flex flex-col gap-3 border-b border-gray-200 pb-3">
                       <div className="flex space-x-1 bg-gray-100 rounded-lg p-1">
                         <button
                           onClick={() => setDocumentsSubTab('contracts')}
@@ -6755,25 +8147,58 @@ export default function OpportunityDetail() {
                           )}
                         </button>
                       </div>
-                      {/* Contract Action Buttons - only show on contracts sub-tab */}
-                      {documentsSubTab === 'contracts' && (
-                        <div className="flex items-center space-x-2">
-                          <button
-                            onClick={() => setShowChangeOrderModal(true)}
-                            className="inline-flex items-center px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 shadow-sm"
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="flex items-center gap-2 min-w-[220px]">
+                          <Tag className="w-4 h-4 text-gray-500" />
+                          <select
+                            value={documentUploadCategory}
+                            onChange={(event) => setDocumentUploadCategory(event.target.value)}
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
                           >
-                            <Edit className="w-4 h-4 mr-2" />
-                            Change Order
-                          </button>
-                          <button
-                            onClick={() => setShowContractSigningModal(true)}
-                            className="inline-flex items-center px-4 py-2 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg hover:opacity-90 shadow-sm"
-                          >
-                            <Send className="w-4 h-4 mr-2" />
-                            Send Contract
-                          </button>
+                            <option value="">Select file type</option>
+                            {DOCUMENT_UPLOAD_CATEGORY_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
                         </div>
-                      )}
+                        <button
+                          type="button"
+                          onClick={() => setShowChangeOrderModal(true)}
+                          className="inline-flex items-center px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 shadow-sm"
+                        >
+                          <Edit className="w-4 h-4 mr-2" />
+                          Change Order
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowContractSigningModal(true)}
+                          className="inline-flex items-center px-4 py-2 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg hover:opacity-90 shadow-sm"
+                        >
+                          <Send className="w-4 h-4 mr-2" />
+                          Send Contract
+                        </button>
+                        <button
+                          type="button"
+                          onClick={openRepositoryUploadPicker}
+                          disabled={isUploadingRepositoryFile}
+                          className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
+                        >
+                          {isUploadingRepositoryFile ? (
+                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          ) : (
+                            <Upload className="w-4 h-4 mr-2" />
+                          )}
+                          {isUploadingRepositoryFile ? 'Uploading...' : 'Upload'}
+                        </button>
+                        <input
+                          ref={repositoryUploadInputRef}
+                          type="file"
+                          className="hidden"
+                          onChange={handleRepositoryFileUpload}
+                        />
+                      </div>
                     </div>
 
                     {/* Contracts Sub-tab Content */}
@@ -6990,7 +8415,7 @@ export default function OpportunityDetail() {
                     {documentsSubTab === 'files' && (
                       <div className="space-y-4">
                         {(() => {
-                          const files = repositoryFiles?.data || repositoryFiles || [];
+                          const files = repositoryFileList;
                           if (files.length === 0) {
                             return (
                               <div className="text-center py-12">
@@ -7003,47 +8428,103 @@ export default function OpportunityDetail() {
                           return (
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                               {files.map((file) => (
-                                <div
-                                  key={file.id}
-                                  className="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow"
-                                >
-                                  <div className="flex items-start space-x-3">
-                                    <div className="flex-shrink-0">
-                                      <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center">
-                                        <FileText className="w-5 h-5 text-gray-500" />
-                                      </div>
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                      <p className="text-sm font-medium text-gray-900 truncate" title={file.title || file.fileName || 'Untitled'}>
-                                        {file.title || file.fileName || 'Untitled'}
-                                      </p>
-                                      <p className="text-xs text-gray-500 mt-1">
-                                        {file.fileType || file.fileExtension || 'File'}
-                                        {file.contentSize && ` • ${(file.contentSize / 1024).toFixed(1)} KB`}
-                                      </p>
-                                      <p className="text-xs text-gray-400 mt-1">
-                                        {file.createdAt && new Date(file.createdAt).toLocaleDateString()}
-                                      </p>
-                                    </div>
-                                  </div>
-                                  <div className="mt-3 flex space-x-2">
-                                    {file.contentUrl ? (
-                                      <a
-                                        href={file.contentUrl}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="flex-1 inline-flex items-center justify-center px-3 py-1.5 bg-panda-primary/10 text-panda-primary text-xs font-medium rounded-md hover:bg-panda-primary/20 transition-colors"
-                                      >
-                                        <Download className="w-3 h-3 mr-1" />
-                                        Download
-                                      </a>
-                                    ) : (
-                                      <span className="flex-1 inline-flex items-center justify-center px-3 py-1.5 bg-gray-100 text-gray-400 text-xs font-medium rounded-md">
-                                        <FileText className="w-3 h-3 mr-1" />
-                                        {file.category || 'Salesforce'}
-                                      </span>
-                                    )}
-                                  </div>
+                                <div key={file.id} className="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+                                  {(() => {
+                                    const fileUrl = getRepositoryFileUrl(file);
+                                    const isImageFile = isRepositoryImageFile(file);
+                                    const fileCategoryLabel = getDocumentCategoryLabel(file.category);
+
+                                    return (
+                                      <>
+                                        <div className="mb-3">
+                                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold ${getDocumentCategoryBadgeClass(file.category)}`}>
+                                            {fileCategoryLabel}
+                                          </span>
+                                        </div>
+                                        <div className="flex items-start space-x-3">
+                                          <div className="flex-shrink-0">
+                                            {isImageFile ? (
+                                              <button
+                                                type="button"
+                                                className="block w-10 h-10 rounded-lg overflow-hidden border border-gray-200 bg-gray-50"
+                                                onClick={() => {
+                                                  const index = files.findIndex((item) => item.id === file.id);
+                                                  if (index >= 0) {
+                                                    setSelectedRepositoryFileIndex(index);
+                                                    setShowRepositoryFileGallery(true);
+                                                  }
+                                                }}
+                                              >
+                                                <img
+                                                  src={fileUrl}
+                                                  alt={file.title || file.fileName || 'File preview'}
+                                                  className="w-full h-full object-cover"
+                                                  loading="lazy"
+                                                />
+                                              </button>
+                                            ) : (
+                                              <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center">
+                                                <FileText className="w-5 h-5 text-gray-500" />
+                                              </div>
+                                            )}
+                                          </div>
+                                          <div className="flex-1 min-w-0">
+                                            <p className="text-sm font-medium text-gray-900 truncate" title={file.title || file.fileName || 'Untitled'}>
+                                              {file.title || file.fileName || 'Untitled'}
+                                            </p>
+                                            <p className="text-xs text-gray-500 mt-1">
+                                              {file.fileType || file.fileExtension || 'File'}
+                                              {file.contentSize && ` • ${(file.contentSize / 1024).toFixed(1)} KB`}
+                                            </p>
+                                            <p className="text-xs text-gray-400 mt-1">
+                                              {file.createdAt && new Date(file.createdAt).toLocaleDateString()}
+                                            </p>
+                                          </div>
+                                        </div>
+                                        <div className="mt-3 flex space-x-2">
+                                          {fileUrl ? (
+                                            <>
+                                              <button
+                                                type="button"
+                                                className="flex-1 inline-flex items-center justify-center px-3 py-1.5 bg-panda-primary/10 text-panda-primary text-xs font-medium rounded-md hover:bg-panda-primary/20 transition-colors"
+                                                onClick={() => {
+                                                  const index = files.findIndex((item) => item.id === file.id);
+                                                  if (index >= 0) {
+                                                    setSelectedRepositoryFileIndex(index);
+                                                    setShowRepositoryFileGallery(true);
+                                                  }
+                                                }}
+                                              >
+                                                <ZoomIn className="w-3 h-3 mr-1" />
+                                                Preview
+                                              </button>
+                                              <button
+                                                type="button"
+                                                className="flex-1 inline-flex items-center justify-center px-3 py-1.5 bg-panda-secondary/10 text-panda-secondary text-xs font-medium rounded-md hover:bg-panda-secondary/20 transition-colors"
+                                                onClick={() => handleDownloadRepositoryFile(file)}
+                                              >
+                                                <Download className="w-3 h-3 mr-1" />
+                                                Download
+                                              </button>
+                                              <button
+                                                type="button"
+                                                className="inline-flex items-center justify-center px-2.5 py-1.5 bg-red-50 text-red-600 text-xs font-medium rounded-md hover:bg-red-100 transition-colors"
+                                                onClick={() => handleDeleteRepositoryFile(file)}
+                                                title="Delete file"
+                                              >
+                                                <Trash2 className="w-3 h-3" />
+                                              </button>
+                                            </>
+                                          ) : (
+                                            <span className="flex-1 inline-flex items-center justify-center px-3 py-1.5 bg-gray-100 text-gray-400 text-xs font-medium rounded-md">
+                                              <FileText className="w-3 h-3 mr-1" />
+                                              {file.category || 'Salesforce'}
+                                            </span>
+                                          )}
+                                        </div>
+                                      </>
+                                    );
+                                  })()}
                                 </div>
                               ))}
                             </div>
@@ -7052,6 +8533,155 @@ export default function OpportunityDetail() {
                       </div>
                     )}
 
+                    {/* Repository File Gallery Modal */}
+                    {showRepositoryFileGallery && selectedRepositoryFile && (
+                      <div className="fixed inset-0 z-50 bg-black/90 flex flex-col">
+                        <div className="flex items-center justify-between p-4 bg-black/50">
+                          <div className="flex items-center space-x-4">
+                            <button
+                              type="button"
+                              onClick={() => setShowRepositoryFileGallery(false)}
+                              className="p-2 text-white hover:bg-white/10 rounded-lg"
+                            >
+                              <X className="w-6 h-6" />
+                            </button>
+                            <div className="text-white">
+                              <h3 className="font-medium">
+                                {selectedRepositoryFile.title || selectedRepositoryFile.fileName || 'Document'}
+                              </h3>
+                              <p className="text-sm text-gray-300">
+                                {selectedRepositoryFileIndex + 1} of {repositoryFileList.length}
+                              </p>
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold mt-1 ${getDocumentCategoryBadgeClass(selectedRepositoryFile.category)}`}>
+                                {getDocumentCategoryLabel(selectedRepositoryFile.category)}
+                              </span>
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleDownloadRepositoryFile(selectedRepositoryFile)}
+                            className="flex items-center space-x-2 px-4 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90"
+                          >
+                            <Download className="w-4 h-4" />
+                            <span>Download</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteRepositoryFile(selectedRepositoryFile)}
+                            className="flex items-center space-x-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                            <span>Delete</span>
+                          </button>
+                        </div>
+
+                        <div className="flex-1 flex items-center justify-center p-4 overflow-hidden">
+                          {(() => {
+                            const fileUrl = getRepositoryFileUrl(selectedRepositoryFile);
+                            if (!fileUrl) {
+                              return (
+                                <div className="text-center text-white">
+                                  <FileText className="w-24 h-24 mx-auto mb-4 text-gray-400" />
+                                  <p className="text-xl">No preview available</p>
+                                </div>
+                              );
+                            }
+
+                            if (isRepositoryImageFile(selectedRepositoryFile)) {
+                              return (
+                                <img
+                                  src={fileUrl}
+                                  alt={selectedRepositoryFile.title || selectedRepositoryFile.fileName || 'Document preview'}
+                                  className="max-w-full max-h-full rounded-lg bg-white object-contain"
+                                />
+                              );
+                            }
+
+                            if (isRepositoryPdfFile(selectedRepositoryFile)) {
+                              return (
+                                <iframe
+                                  src={fileUrl}
+                                  title={selectedRepositoryFile.title || selectedRepositoryFile.fileName || 'Document preview'}
+                                  className="w-full max-w-4xl h-full rounded-lg bg-white"
+                                />
+                              );
+                            }
+
+                            return (
+                              <div className="text-center text-white max-w-md">
+                                <FileText className="w-24 h-24 mx-auto mb-4 text-gray-400" />
+                                <p className="text-xl mb-2">Preview not available for this file type</p>
+                                <p className="text-sm text-gray-300">Use Download to open this file locally.</p>
+                              </div>
+                            );
+                          })()}
+                        </div>
+
+                        {repositoryFileList.length > 1 && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedRepositoryFileIndex((prev) => (prev === 0 ? repositoryFileList.length - 1 : prev - 1))}
+                              className="absolute left-4 top-1/2 -translate-y-1/2 p-3 bg-black/50 text-white rounded-full hover:bg-black/70"
+                            >
+                              <ChevronLeft className="w-6 h-6" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedRepositoryFileIndex((prev) => (prev === repositoryFileList.length - 1 ? 0 : prev + 1))}
+                              className="absolute right-4 top-1/2 -translate-y-1/2 p-3 bg-black/50 text-white rounded-full hover:bg-black/70"
+                            >
+                              <ChevronRight className="w-6 h-6" />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
+
+                    {showDocumentUploadTypeModal && (
+                      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+                        <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+                          <h3 className="text-lg font-semibold text-gray-900">Select File Type</h3>
+                          <p className="mt-1 text-sm text-gray-600">
+                            Choose how this file should be tagged before uploading.
+                          </p>
+                          <div className="mt-4">
+                            <label className="mb-1 block text-sm font-medium text-gray-700">File Type</label>
+                            <select
+                              value={documentUploadCategory}
+                              onChange={(event) => {
+                                setDocumentUploadCategory(event.target.value);
+                                setActionError(null);
+                              }}
+                              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-panda-primary focus:outline-none focus:ring-2 focus:ring-panda-primary/20"
+                            >
+                              <option value="">Select type...</option>
+                              {DOCUMENT_UPLOAD_CATEGORY_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="mt-6 flex items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setShowDocumentUploadTypeModal(false)}
+                              className="rounded-lg px-4 py-2 text-sm text-gray-600 hover:text-gray-900"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleConfirmRepositoryUploadCategory}
+                              className="rounded-lg bg-panda-primary px-4 py-2 text-sm font-medium text-white hover:bg-panda-primary/90"
+                            >
+                              Continue
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -7330,7 +8960,7 @@ export default function OpportunityDetail() {
                 <div className="grid grid-cols-2 gap-x-8 gap-y-4">
                   <div>
                     <label className="text-sm text-gray-500">Work Type</label>
-                    <p className="font-medium text-gray-900">{opportunity.workType || 'Insurance Roofing'}</p>
+                    <p className="font-medium text-gray-900">{normalizedWorkType}</p>
                   </div>
                   <div>
                     <label className="text-sm text-gray-500">Lead Source</label>
@@ -7361,7 +8991,7 @@ export default function OpportunityDetail() {
             </div>
 
             {/* Claim Information Card - Only show for Insurance opportunities */}
-            {(opportunity.type === 'INSURANCE' || opportunity.workType?.toLowerCase().includes('insurance')) && (
+            {showInsuranceClaimSection && (
               <div className="bg-white rounded-xl shadow-sm border border-gray-200">
                 <div className="p-5 border-b border-gray-100 flex items-center justify-between">
                   <h2 className="text-lg font-semibold text-gray-900">Claim Information</h2>
@@ -7375,7 +9005,7 @@ export default function OpportunityDetail() {
                 <div className="p-5">
                   {isEditingClaim ? (
                     <form onSubmit={handleClaimSave} className="space-y-4">
-                      <div className="grid grid-cols-2 gap-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
                           <label className="block text-sm text-gray-500 mb-1">Insurance Company</label>
                           <input
@@ -7414,7 +9044,57 @@ export default function OpportunityDetail() {
                             className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
                           />
                         </div>
-                        <div className="col-span-2">
+                        <div>
+                          <label className="block text-sm text-gray-500 mb-1">Adjuster Name</label>
+                          <input
+                            type="text"
+                            value={claimForm.adjusterName}
+                            onChange={(e) => setClaimForm({ ...claimForm, adjusterName: e.target.value })}
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                            placeholder="Enter adjuster name"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm text-gray-500 mb-1">Adjuster Email</label>
+                          <input
+                            type="email"
+                            value={claimForm.adjusterEmail}
+                            onChange={(e) => setClaimForm({ ...claimForm, adjusterEmail: e.target.value })}
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                            placeholder="adjuster@insurance.com"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm text-gray-500 mb-1">Adjuster Office Phone</label>
+                          <input
+                            type="tel"
+                            value={claimForm.adjusterOfficePhone}
+                            onChange={(e) => setClaimForm({ ...claimForm, adjusterOfficePhone: e.target.value })}
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                            placeholder="(555) 123-4567"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm text-gray-500 mb-1">Extension</label>
+                          <input
+                            type="text"
+                            value={claimForm.adjusterOfficeExtension}
+                            onChange={(e) => setClaimForm({ ...claimForm, adjusterOfficeExtension: e.target.value })}
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                            placeholder="Ext"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm text-gray-500 mb-1">Field Adjuster Mobile</label>
+                          <input
+                            type="tel"
+                            value={claimForm.fieldAdjusterMobile}
+                            onChange={(e) => setClaimForm({ ...claimForm, fieldAdjusterMobile: e.target.value })}
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                            placeholder="(555) 987-6543"
+                          />
+                        </div>
+                        <div className="md:col-span-2">
                           <label className="block text-sm text-gray-500 mb-1">Damage Location</label>
                           <input
                             type="text"
@@ -7442,7 +9122,7 @@ export default function OpportunityDetail() {
                       </div>
                     </form>
                   ) : (
-                    <div className="grid grid-cols-2 gap-x-8 gap-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4">
                       <div>
                         <label className="text-sm text-gray-500">Insurance Company</label>
                         <p className={`font-medium ${opportunity.insuranceCarrier ? 'text-gray-900' : 'text-gray-500 italic'}`}>
@@ -7458,20 +9138,46 @@ export default function OpportunityDetail() {
                       <div>
                         <label className="text-sm text-gray-500">Date of Loss</label>
                         <p className={`font-medium ${opportunity.dateOfLoss ? 'text-gray-900' : 'text-gray-500 italic'}`}>
-                          {opportunity.dateOfLoss
-                            ? new Date(opportunity.dateOfLoss).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-                            : 'Not set'}
+                          {formatDateFromStoredValue(opportunity.dateOfLoss) || 'Not set'}
                         </p>
                       </div>
                       <div>
                         <label className="text-sm text-gray-500">Claim Filed Date</label>
                         <p className={`font-medium ${opportunity.claimFiledDate ? 'text-gray-900' : 'text-gray-500 italic'}`}>
-                          {opportunity.claimFiledDate
-                            ? new Date(opportunity.claimFiledDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-                            : 'Not set'}
+                          {formatDateFromStoredValue(opportunity.claimFiledDate) || 'Not set'}
                         </p>
                       </div>
-                      <div className="col-span-2">
+                      <div>
+                        <label className="text-sm text-gray-500">Adjuster Name</label>
+                        <p className={`font-medium ${opportunity.adjusterName ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                          {opportunity.adjusterName || 'Not set'}
+                        </p>
+                      </div>
+                      <div>
+                        <label className="text-sm text-gray-500">Adjuster Email</label>
+                        <p className={`font-medium ${opportunity.adjusterEmail ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                          {opportunity.adjusterEmail || 'Not set'}
+                        </p>
+                      </div>
+                      <div>
+                        <label className="text-sm text-gray-500">Adjuster Office Phone</label>
+                        <p className={`font-medium ${parsedAdjusterOfficePhone.phone ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                          {parsedAdjusterOfficePhone.phone || 'Not set'}
+                        </p>
+                      </div>
+                      <div>
+                        <label className="text-sm text-gray-500">Extension</label>
+                        <p className={`font-medium ${parsedAdjusterOfficePhone.extension ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                          {parsedAdjusterOfficePhone.extension || 'Not set'}
+                        </p>
+                      </div>
+                      <div>
+                        <label className="text-sm text-gray-500">Field Adjuster Mobile</label>
+                        <p className={`font-medium ${opportunity.fieldAdjusterMobile ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                          {opportunity.fieldAdjusterMobile || 'Not set'}
+                        </p>
+                      </div>
+                      <div className="md:col-span-2">
                         <label className="text-sm text-gray-500">Damage Location</label>
                         <p className={`font-medium ${opportunity.damageLocation ? 'text-gray-900' : 'text-gray-500 italic'}`}>
                           {opportunity.damageLocation || 'Not set'}
@@ -7539,6 +9245,336 @@ export default function OpportunityDetail() {
         </div>
       </div>
 
+      {showEditContactModal && editingContactId && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between p-5 border-b border-gray-100">
+              <h2 className="text-lg font-semibold text-gray-900">Edit Contact</h2>
+              <button
+                type="button"
+                onClick={closeEditContactModal}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form
+              className="flex-1 overflow-y-auto p-5 space-y-4"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!editContactForm.firstName.trim() || !editContactForm.lastName.trim()) {
+                  setActionError('First and last name are required');
+                  return;
+                }
+
+                updateContactMutation.mutate({
+                  contactId: editingContactId,
+                  data: {
+                    ...editContactForm,
+                    accountId: opportunity?.accountId || null,
+                  },
+                });
+              }}
+            >
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">First Name *</label>
+                  <input
+                    type="text"
+                    value={editContactForm.firstName}
+                    onChange={(e) => setEditContactForm((prev) => ({ ...prev, firstName: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Last Name *</label>
+                  <input
+                    type="text"
+                    value={editContactForm.lastName}
+                    onChange={(e) => setEditContactForm((prev) => ({ ...prev, lastName: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                  <input
+                    type="email"
+                    value={editContactForm.email}
+                    onChange={(e) => setEditContactForm((prev) => ({ ...prev, email: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
+                  <input
+                    type="tel"
+                    value={editContactForm.phone}
+                    onChange={(e) => setEditContactForm((prev) => ({ ...prev, phone: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Mobile Phone</label>
+                  <input
+                    type="tel"
+                    value={editContactForm.mobilePhone}
+                    onChange={(e) => setEditContactForm((prev) => ({ ...prev, mobilePhone: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Title</label>
+                  <input
+                    type="text"
+                    value={editContactForm.title}
+                    onChange={(e) => setEditContactForm((prev) => ({ ...prev, title: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="border-t border-gray-100 pt-4">
+                <h3 className="text-sm font-semibold text-gray-900 mb-3">Mailing Address</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="md:col-span-2">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Street</label>
+                    <AddressAutocomplete
+                      value={editContactForm.mailingStreet}
+                      onChange={(mailingStreet) => setEditContactForm((prev) => ({ ...prev, mailingStreet }))}
+                      onAddressSelect={(address) => {
+                        setEditContactForm((prev) => ({
+                          ...prev,
+                          mailingStreet: address.street || prev.mailingStreet,
+                          mailingCity: address.city || prev.mailingCity,
+                          mailingState: address.state || prev.mailingState,
+                          mailingPostalCode: address.postalCode || prev.mailingPostalCode,
+                        }));
+                      }}
+                      placeholder="Start typing an address..."
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">City</label>
+                    <input
+                      type="text"
+                      value={editContactForm.mailingCity}
+                      onChange={(e) => setEditContactForm((prev) => ({ ...prev, mailingCity: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">State</label>
+                    <input
+                      type="text"
+                      value={editContactForm.mailingState}
+                      onChange={(e) => setEditContactForm((prev) => ({ ...prev, mailingState: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Postal Code</label>
+                    <input
+                      type="text"
+                      value={editContactForm.mailingPostalCode}
+                      onChange={(e) => setEditContactForm((prev) => ({ ...prev, mailingPostalCode: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="border-t border-gray-100 pt-4 space-y-2">
+                <label className="flex items-center space-x-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={editContactForm.isPrimary}
+                    onChange={(e) => setEditContactForm((prev) => ({ ...prev, isPrimary: e.target.checked }))}
+                    className="w-4 h-4 text-panda-primary border-gray-300 rounded focus:ring-panda-primary/30"
+                  />
+                  <span>Primary Contact</span>
+                </label>
+                <label className="flex items-center space-x-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={editContactForm.smsOptOut}
+                    onChange={(e) => setEditContactForm((prev) => ({ ...prev, smsOptOut: e.target.checked }))}
+                    className="w-4 h-4 text-panda-primary border-gray-300 rounded focus:ring-panda-primary/30"
+                  />
+                  <span>SMS Opt-Out</span>
+                </label>
+                <label className="flex items-center space-x-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={editContactForm.emailOptOut}
+                    onChange={(e) => setEditContactForm((prev) => ({ ...prev, emailOptOut: e.target.checked }))}
+                    className="w-4 h-4 text-panda-primary border-gray-300 rounded focus:ring-panda-primary/30"
+                  />
+                  <span>Email Opt-Out</span>
+                </label>
+                <label className="flex items-center space-x-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={editContactForm.doNotCall}
+                    onChange={(e) => setEditContactForm((prev) => ({ ...prev, doNotCall: e.target.checked }))}
+                    className="w-4 h-4 text-panda-primary border-gray-300 rounded focus:ring-panda-primary/30"
+                  />
+                  <span>Do Not Call</span>
+                </label>
+              </div>
+
+              <div className="flex items-center justify-end space-x-3 pt-4 border-t border-gray-100">
+                <button
+                  type="button"
+                  onClick={closeEditContactModal}
+                  className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={updateContactMutation.isPending}
+                  className="px-4 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-dark disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
+                >
+                  {updateContactMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+                  <span>Save Contact</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {showTransferOwnerModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg">
+            <div className="flex items-center justify-between p-5 border-b border-gray-100">
+              <h2 className="text-lg font-semibold text-gray-900">Transfer Job Owner</h2>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowTransferOwnerModal(false);
+                  setTransferOwnerSearchTerm('');
+                  setTransferOwnerError('');
+                }}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="p-3 rounded-lg bg-gray-50 border border-gray-100">
+                <p className="text-xs uppercase tracking-wide text-gray-500 font-medium">Current Owner</p>
+                <p className="mt-1 text-sm font-medium text-gray-900">
+                  {ownerDisplayName || 'Unassigned'}
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Search Owner</label>
+                <input
+                  type="text"
+                  value={transferOwnerSearchTerm}
+                  onChange={(event) => setTransferOwnerSearchTerm(event.target.value)}
+                  placeholder="Search by name, email, or role"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none mb-3"
+                />
+
+                <label className="block text-sm font-medium text-gray-700 mb-1">New Owner</label>
+                <div className="max-h-52 overflow-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+                  {filteredTransferOwners.map((teamUser) => {
+                    const displayName = teamUser.name || `${teamUser.firstName || ''} ${teamUser.lastName || ''}`.trim() || teamUser.email;
+                    const isSelected = selectedTransferOwnerId === teamUser.id;
+                    return (
+                      <button
+                        key={teamUser.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedTransferOwnerId(teamUser.id);
+                          setTransferOwnerError('');
+                        }}
+                        className={`w-full px-3 py-2 text-left text-sm hover:bg-panda-primary/5 ${isSelected ? 'bg-panda-primary/10 text-panda-primary font-medium' : 'text-gray-700'}`}
+                      >
+                        <div className="truncate">{displayName}</div>
+                        <div className="text-xs text-gray-500 truncate">
+                          {[teamUser.email, teamUser.role].filter(Boolean).join(' • ')}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+                {availableTransferOwners.length === 0 && (
+                  <p className="mt-2 text-xs text-gray-500">No alternate owners available.</p>
+                )}
+                {availableTransferOwners.length > 0 && filteredTransferOwners.length === 0 && (
+                  <p className="mt-2 text-xs text-gray-500">No owners match your search.</p>
+                )}
+              </div>
+
+              <label className="flex items-start gap-3 p-3 border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50">
+                <input
+                  type="checkbox"
+                  checked={transferRelatedItems}
+                  onChange={(e) => setTransferRelatedItems(e.target.checked)}
+                  className="mt-0.5 rounded border-gray-300 text-panda-primary focus:ring-panda-primary/30"
+                />
+                <div>
+                  <p className="text-sm font-medium text-gray-900">Transfer all related assignments</p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Moves linked tasks, appointments/resources, commissions, service contracts, and related attention items to the new owner when applicable.
+                  </p>
+                </div>
+              </label>
+
+              {transferOwnerError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                  <span>{transferOwnerError}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-3 p-5 border-t border-gray-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowTransferOwnerModal(false);
+                  setTransferOwnerSearchTerm('');
+                  setTransferOwnerError('');
+                }}
+                className="px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!selectedTransferOwnerId) {
+                    setTransferOwnerError('Please select a new owner');
+                    return;
+                  }
+
+                  transferOwnerMutation.mutate({
+                    newOwnerId: selectedTransferOwnerId,
+                    transferRelated: transferRelatedItems,
+                  });
+                }}
+                disabled={!selectedTransferOwnerId || transferOwnerMutation.isPending}
+                className="px-4 py-2 text-sm font-medium text-white bg-panda-primary rounded-lg hover:bg-panda-dark disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
+              >
+                {transferOwnerMutation.isPending && (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                )}
+                <span>Transfer Owner</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Quick Action Modal */}
       {showQuickActionModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -7564,6 +9600,8 @@ export default function OpportunityDetail() {
                 {activeQuickAction === 'composeEmail' && 'Compose Email'}
                 {activeQuickAction === 'sendMessage' && 'Send Message'}
                 {activeQuickAction === 'addContact' && 'Add Contact'}
+                {activeQuickAction?.type === 'viewConversation' && 'SMS Conversation'}
+                {activeQuickAction?.type === 'viewPortalThread' && 'Portal Messages'}
                 {!activeQuickAction?.type && !['createWorkOrder', 'gafQuickMeasure', 'eagleviewMeasure', 'hoverCapture', 'instantMeasure', 'requestEstimate', 'updateMeetingOutcome', 'createCase', 'composeEmail', 'sendMessage', 'addContact'].includes(activeQuickAction) && 'Quick Action'}
               </h2>
               <button
@@ -9607,6 +11645,162 @@ export default function OpportunityDetail() {
                 </form>
               )}
 
+              {/* View Portal Thread */}
+              {activeQuickAction?.type === 'viewPortalThread' && (
+                <div className="space-y-4">
+                  <div className="rounded-lg border border-violet-100 bg-violet-50 px-4 py-3 text-sm text-violet-800">
+                    Customer portal messages are shown here as a read-only thread so the job team can see what the customer submitted.
+                  </div>
+
+                  <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
+                    {(activeQuickAction.portalThread || []).length > 0 ? (
+                      activeQuickAction.portalThread.map((message) => (
+                        <div key={message.id} className="rounded-lg border border-gray-200 bg-white p-4">
+                          <div className="flex flex-wrap items-start justify-between gap-2">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-medium text-gray-900">{message.senderName || 'Customer'}</span>
+                                <span className="px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 text-xs font-medium">
+                                  Portal
+                                </span>
+                              </div>
+                              {message.senderPhone && (
+                                <p className="text-xs text-gray-500 mt-1">{message.senderPhone}</p>
+                              )}
+                            </div>
+                            <span className="text-xs text-gray-500">
+                              {message.createdAt ? new Date(message.createdAt).toLocaleString() : 'No date'}
+                            </span>
+                          </div>
+
+                          <div className="mt-3 whitespace-pre-wrap text-sm text-gray-700">
+                            {message.message || message.rawBody || 'No message body'}
+                          </div>
+
+                          {message.author?.name && (
+                            <div className="mt-3 text-xs text-gray-500">
+                              Stored on job by {message.author.name}
+                            </div>
+                          )}
+                        </div>
+                      ))
+                    ) : (
+                      <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-4 py-6 text-center text-sm text-gray-500">
+                        No customer portal messages found for this job yet.
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-end pt-4 border-t border-gray-200">
+                    <button
+                      type="button"
+                      onClick={() => setShowQuickActionModal(false)}
+                      className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* View SMS Conversation */}
+              {activeQuickAction?.type === 'viewConversation' && (
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-green-100 bg-green-50 px-4 py-3">
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-900">
+                        {activeQuickAction.conversation?.phoneNumber || 'SMS Conversation'}
+                      </h3>
+                      <p className="text-xs text-gray-600 mt-1">
+                        {activeQuickAction.conversation?.lastMessagePreview || 'Open the thread to review message history.'}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowQuickActionModal(false);
+                          setShowSmsModal(true);
+                        }}
+                        className="px-3 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700"
+                      >
+                        Reply by SMS
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const phoneNumber = activeQuickAction.conversation?.phoneNumber;
+                          if (!phoneNumber) return;
+                          if (rcLoggedIn) {
+                            initiateCall(phoneNumber);
+                          } else {
+                            loadWidget();
+                            setActionSuccess('RingCentral widget loaded. Click on the phone number to call.');
+                            setTimeout(() => setActionSuccess(null), 3000);
+                          }
+                        }}
+                        disabled={!activeQuickAction.conversation?.phoneNumber}
+                        className="px-3 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Call
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3 max-h-[60vh] overflow-y-auto pr-1">
+                    {selectedConversationMessagesLoading ? (
+                      <div className="rounded-lg border border-gray-200 bg-white px-4 py-6 text-center text-sm text-gray-500">
+                        Loading conversation...
+                      </div>
+                    ) : selectedConversationMessages.length > 0 ? (
+                      selectedConversationMessages.map((message) => {
+                        const isOutbound = String(message.direction || '').toUpperCase() === 'OUTBOUND';
+                        const timestamp = message.sentAt || message.createdAt || message.updatedAt;
+
+                        return (
+                          <div
+                            key={message.id}
+                            className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}
+                          >
+                            <div
+                              className={`max-w-[85%] rounded-2xl px-4 py-3 shadow-sm ${
+                                isOutbound
+                                  ? 'bg-purple-600 text-white'
+                                  : 'bg-gray-100 text-gray-900'
+                              }`}
+                            >
+                              <p className="whitespace-pre-wrap text-sm">{message.body || 'No message body'}</p>
+                              <div
+                                className={`mt-2 flex items-center justify-between gap-3 text-[11px] ${
+                                  isOutbound ? 'text-purple-100' : 'text-gray-500'
+                                }`}
+                              >
+                                <span>{timestamp ? new Date(timestamp).toLocaleString() : 'No date'}</span>
+                                <span>{isOutbound ? 'Sent' : 'Received'}</span>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-4 py-6 text-center text-sm text-gray-500">
+                        No SMS messages found in this thread yet.
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-end pt-4 border-t border-gray-200">
+                    <button
+                      type="button"
+                      onClick={() => setShowQuickActionModal(false)}
+                      className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* View Email */}
               {activeQuickAction?.type === 'viewEmail' && (
                 <div className="space-y-4">
@@ -10420,6 +12614,23 @@ export default function OpportunityDetail() {
       {showInvoiceDetailModal && selectedInvoice && (
         <InvoiceDetailModal
           invoice={selectedInvoice}
+          onInvoiceUpdated={(updatedInvoice) => {
+            const normalizedInvoice = normalizeInvoiceTotals(updatedInvoice);
+            queryClient.invalidateQueries({ queryKey: ['opportunityInvoices', id] });
+            setSelectedInvoice((prev) => normalizeInvoiceTotals({
+              ...prev,
+              ...(normalizedInvoice || {}),
+            }));
+          }}
+          onOpenSendInvoice={(invoiceRecord) => {
+            setInvoiceToSend(normalizeInvoiceTotals(invoiceRecord));
+            setShowSendInvoiceModal(true);
+          }}
+          onOpenPayInvoice={(invoiceRecord) => {
+            setSelectedInvoice(normalizeInvoiceTotals(invoiceRecord));
+            setShowInvoiceDetailModal(false);
+            setShowPayInvoiceModal(true);
+          }}
           onClose={() => {
             setShowInvoiceDetailModal(false);
             setSelectedInvoice(null);
@@ -10440,17 +12651,19 @@ export default function OpportunityDetail() {
       />
 
       {/* Result Appointment Wizard */}
-      <ResultAppointmentWizard
-        isOpen={showResultAppointmentWizard}
-        onClose={() => setShowResultAppointmentWizard(false)}
-        opportunityId={id}
-        appointmentId={appointments?.[0]?.id || null}
-        opportunity={opportunity}
-        onCompleted={() => {
-          setActionSuccess('Appointment result saved');
-          setTimeout(() => setActionSuccess(null), 4000);
-        }}
-      />
+      {resultAppointmentWizardEnabled && (
+        <ResultAppointmentWizard
+          isOpen={showResultAppointmentWizard}
+          onClose={() => setShowResultAppointmentWizard(false)}
+          opportunityId={id}
+          appointmentId={appointments?.[0]?.id || null}
+          opportunity={opportunity}
+          onCompleted={() => {
+            setActionSuccess('Appointment result saved');
+            setTimeout(() => setActionSuccess(null), 4000);
+          }}
+        />
+      )}
 
       {/* Create Insurance Invoice Modal */}
       {showCreateInsuranceInvoiceModal && (
@@ -10598,7 +12811,7 @@ export default function OpportunityDetail() {
         phone={opportunity?.contact?.phone || opportunity?.phone || ''}
         recipientName={opportunity?.contact?.firstName ? `${opportunity.contact.firstName} ${opportunity.contact.lastName || ''}`.trim() : opportunity?.name || 'Customer'}
         onSent={() => {
-          queryClient.invalidateQueries({ queryKey: ['opportunity', id, 'conversations'] });
+          queryClient.invalidateQueries({ queryKey: ['opportunityConversations', id] });
           setActionSuccess('SMS sent successfully');
           setTimeout(() => setActionSuccess(null), 3000);
         }}
@@ -10620,7 +12833,7 @@ export default function OpportunityDetail() {
         email={opportunity?.contact?.email || ''}
         recipientName={opportunity?.contact?.firstName ? `${opportunity.contact.firstName} ${opportunity.contact.lastName || ''}`.trim() : opportunity?.name || 'Customer'}
         onSent={() => {
-          queryClient.invalidateQueries({ queryKey: ['opportunity', id, 'emails'] });
+          queryClient.invalidateQueries({ queryKey: ['opportunityEmails', id] });
           setActionSuccess('Email sent successfully');
           setTimeout(() => setActionSuccess(null), 3000);
         }}

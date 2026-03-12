@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { invoicesApi } from '../services/api';
+import { invoicesApi, opportunitiesApi } from '../services/api';
 import {
   X,
   Mail,
@@ -32,6 +32,10 @@ export default function SendInvoiceModal({ isOpen, onClose, invoice, opportunity
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
   const [includePaymentLink, setIncludePaymentLink] = useState(true);
+  const [portalUrl, setPortalUrl] = useState('');
+  const [loadingPortalUrl, setLoadingPortalUrl] = useState(false);
+  const [portalUrlError, setPortalUrlError] = useState('');
+  const [isMessageEdited, setIsMessageEdited] = useState(false);
 
   // Calculate balance
   const balanceDue = parseFloat(invoice?.balanceDue || invoice?.totalAmount || 0);
@@ -43,9 +47,23 @@ export default function SendInvoiceModal({ isOpen, onClose, invoice, opportunity
   const claimNumber = opportunity?.claimNumber || '';
 
   // Generate message based on recipient type
-  const generateMessage = (type) => {
+  const getPortalUrlFromResponse = (result) => {
+    if (!result || typeof result !== 'object') return '';
+    return result.portalUrl
+      || result.portalLink
+      || result.url
+      || result.link
+      || result.customerPortalUrl
+      || result.publicUrl
+      || '';
+  };
+
+  const generateMessage = (type, options = {}) => {
     const customerName = contact?.firstName || opportunity?.contact?.firstName || 'Customer';
     const propertyAddress = opportunity?.address || invoice?.account?.billingAddress || '';
+    const portalLine = options.portalUrl
+      ? `\nCustomer Portal: ${options.portalUrl}\n`
+      : '\n';
 
     if (type === 'insurance') {
       return (
@@ -67,6 +85,7 @@ export default function SendInvoiceModal({ isOpen, onClose, invoice, opportunity
         `Dear ${customerName},\n\n` +
         `Please find attached invoice ${invoiceNumber} for your project with Panda Exteriors.\n\n` +
         `Invoice Amount: $${balanceDue.toLocaleString()}\n\n` +
+        `${portalLine}` +
         `If you have any questions about this invoice, please don't hesitate to contact us.\n\n` +
         `Thank you for your business!\n\n` +
         `Best regards,\nPanda Exteriors`
@@ -85,6 +104,7 @@ export default function SendInvoiceModal({ isOpen, onClose, invoice, opportunity
   // Handle recipient type change
   const handleRecipientTypeChange = (type) => {
     setRecipientType(type);
+    setIsMessageEdited(false);
 
     if (type === 'insurance') {
       // Clear email for manual entry (insurance emails vary by carrier/adjuster)
@@ -98,7 +118,7 @@ export default function SendInvoiceModal({ isOpen, onClose, invoice, opportunity
     }
 
     setSubject(generateSubject(type));
-    setMessage(generateMessage(type));
+    setMessage(generateMessage(type, { portalUrl: type === 'homeowner' ? portalUrl : '' }));
   };
 
   // Initialize form when modal opens
@@ -122,8 +142,48 @@ export default function SendInvoiceModal({ isOpen, onClose, invoice, opportunity
       setStep(1);
       setError(null);
       setSendResult(null);
+      setPortalUrl('');
+      setPortalUrlError('');
+      setLoadingPortalUrl(false);
+      setIsMessageEdited(false);
     }
   }, [isOpen, invoice, contact, opportunity, invoiceNumber, balanceDue, claimNumber]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadPortalUrl = async () => {
+      if (!isOpen || !opportunity?.id || recipientType !== 'homeowner') return;
+      setLoadingPortalUrl(true);
+      setPortalUrlError('');
+      try {
+        const result = await opportunitiesApi.generatePortalLink(opportunity.id);
+        const url = getPortalUrlFromResponse(result);
+        if (!cancelled && url) {
+          setPortalUrl(url);
+          if (!isMessageEdited) {
+            setMessage((prev) => {
+              if (prev && prev.includes(url)) return prev;
+              return generateMessage('homeowner', { portalUrl: url });
+            });
+          }
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setPortalUrlError(err?.response?.data?.error?.message || 'Unable to load customer portal link');
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingPortalUrl(false);
+        }
+      }
+    };
+
+    loadPortalUrl();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, opportunity?.id, recipientType, isMessageEdited]);
 
   // Send invoice mutation
   const sendInvoiceMutation = useMutation({
@@ -164,11 +224,16 @@ export default function SendInvoiceModal({ isOpen, onClose, invoice, opportunity
     setError(null);
     setStep(2);
 
+    let finalMessage = message;
+    if (recipientType === 'homeowner' && portalUrl && !finalMessage.includes(portalUrl)) {
+      finalMessage = `${finalMessage.trim()}\n\nCustomer Portal: ${portalUrl}`;
+    }
+
     sendInvoiceMutation.mutate({
       recipientEmail,
       ccEmails: ccEmails.length > 0 ? ccEmails : undefined,
       subject,
-      message,
+      message: finalMessage,
       includePaymentLink,
     });
   };
@@ -352,10 +417,28 @@ export default function SendInvoiceModal({ isOpen, onClose, invoice, opportunity
                   </label>
                   <textarea
                     value={message}
-                    onChange={(e) => setMessage(e.target.value)}
+                    onChange={(e) => {
+                      setMessage(e.target.value);
+                      setIsMessageEdited(true);
+                    }}
                     rows={8}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent resize-none"
                   />
+                  {recipientType === 'homeowner' && (
+                    <div className="mt-2 space-y-1">
+                      {loadingPortalUrl && (
+                        <p className="text-xs text-gray-500">Loading customer portal link...</p>
+                      )}
+                      {!loadingPortalUrl && portalUrl && (
+                        <p className="text-xs text-gray-600 break-all">
+                          Customer portal link: <a href={portalUrl} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">{portalUrl}</a>
+                        </p>
+                      )}
+                      {!loadingPortalUrl && !portalUrl && portalUrlError && (
+                        <p className="text-xs text-amber-600">{portalUrlError}</p>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Options */}
@@ -372,9 +455,9 @@ export default function SendInvoiceModal({ isOpen, onClose, invoice, opportunity
                       <div>
                         <div className="flex items-center gap-2">
                           <Link className="w-4 h-4 text-green-600" />
-                          <span className="font-medium text-gray-900">Include Payment Link</span>
+                          <span className="font-medium text-gray-900">Include Payment Link (Customer Portal)</span>
                         </div>
-                        <p className="text-sm text-gray-500">Add a Stripe payment link for online payment</p>
+                        <p className="text-sm text-gray-500">Adds secure online payment access for the customer</p>
                       </div>
                     </div>
                   </label>

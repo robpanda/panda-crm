@@ -15,7 +15,15 @@ const safeParse = (value) => {
 export const getRecentItems = (baseKey, userId) => {
   if (typeof window === 'undefined') return [];
   const storageKey = buildKey(baseKey, userId);
-  return safeParse(window.localStorage.getItem(storageKey));
+  const parsed = safeParse(window.localStorage.getItem(storageKey));
+  return parsed
+    .filter((item) => item?.id)
+    .map((item) => ({
+      ...item,
+      label: item.label || item.title || 'Untitled',
+      meta: item.meta || item.subtitle || '',
+      path: item.path || item.url || '',
+    }));
 };
 
 export const addRecentItem = (baseKey, userId, item, limit = DEFAULT_LIMIT) => {

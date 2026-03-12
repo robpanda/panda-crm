@@ -49,6 +49,97 @@ function resolvePandaPhotoConfig(reportConfig = {}) {
   };
 }
 
+function normalizeReportConfig(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value;
+  }
+  return {};
+}
+
+function extractSelectedPhotoIds(reportConfig = {}) {
+  const config = normalizeReportConfig(reportConfig);
+  const selected = Array.isArray(config.selectedPhotoIds) ? config.selectedPhotoIds : [];
+  return selected.filter(Boolean);
+}
+
+async function hydrateReportItemsFromConfig(report) {
+  const selectedPhotoIds = extractSelectedPhotoIds(report?.reportConfig);
+  if (!selectedPhotoIds.length) return [];
+
+  let photos = [];
+  try {
+    photos = await prisma.photo.findMany({
+      where: { id: { in: selectedPhotoIds }, deletedAt: null },
+      select: {
+        id: true,
+        fileName: true,
+        fileKey: true,
+        originalUrl: true,
+        displayUrl: true,
+        thumbnailUrl: true,
+        photoType: true,
+        caption: true,
+      },
+    });
+  } catch (error) {
+    if (!isPrismaMissingColumnError(error)) throw error;
+    logger.warn(`Photo report hydration fallback due to schema mismatch: ${error.message}`);
+    photos = await prisma.photo.findMany({
+      where: { id: { in: selectedPhotoIds }, deletedAt: null },
+      select: {
+        id: true,
+        originalUrl: true,
+        displayUrl: true,
+        thumbnailUrl: true,
+        caption: true,
+      },
+    });
+  }
+  const byId = new Map(photos.map((photo) => [photo.id, photo]));
+
+  return selectedPhotoIds
+    .map((photoId, index) => ({
+      id: `fallback-${photoId}`,
+      reportId: report.id,
+      photoId,
+      sortOrder: index,
+      photo: byId.get(photoId) || null,
+    }))
+    .filter((item) => item.photo);
+}
+
+async function fetchReportPhotoBuffer(photo) {
+  if (photo?.fileKey) {
+    try {
+      return await s3Service.getObjectBuffer(photo.fileKey);
+    } catch (error) {
+      logger.warn(`Report generation could not read S3 key ${photo.fileKey}: ${error.message}`);
+    }
+  }
+
+  const sourceUrl = photo?.originalUrl || photo?.displayUrl || photo?.thumbnailUrl || null;
+  if (!sourceUrl) return null;
+
+  try {
+    const response = await fetch(sourceUrl);
+    if (!response.ok) return null;
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  } catch (error) {
+    logger.warn(`Report generation URL fetch error for ${sourceUrl}: ${error.message}`);
+    return null;
+  }
+}
+
+function isPrismaMissingColumnError(error) {
+  const code = String(error?.code || '');
+  const message = String(error?.message || '');
+  if (code === 'P2022' || code === 'P2021') return true;
+  if (/P2022|P2021/.test(message)) return true;
+  if (/does not exist|Unknown (?:field|argument)|column .* does not exist/i.test(message)) return true;
+  return false;
+}
+
 async function validatePandaPhotoForReport(report) {
   const cfg = resolvePandaPhotoConfig(report?.reportConfig || {});
 
@@ -160,15 +251,14 @@ async function buildReportPdfBuffer(report, items) {
       color: rgb(0.32, 0.32, 0.32),
     });
 
-    if (!item.photo?.fileKey) {
-      page.drawText('Image not available for embedding.', { x: 40, y: 700, size: 11, font });
-      // eslint-disable-next-line no-continue
-      continue;
-    }
-
     try {
       // eslint-disable-next-line no-await-in-loop
-      const bytes = await s3Service.getObjectBuffer(item.photo.fileKey);
+      const bytes = await fetchReportPhotoBuffer(item.photo);
+      if (!bytes) {
+        page.drawText('Image not available for embedding.', { x: 40, y: 700, size: 11, font });
+        // eslint-disable-next-line no-continue
+        continue;
+      }
       const format = detectImageFormat(bytes);
       let embeddedImage = null;
       if (format === 'png') {
@@ -217,18 +307,28 @@ export async function createReport(payload, userId) {
     throw err;
   }
 
-  const created = await prisma.photoReport.create({
-    data: {
-      name: payload.name,
-      templateId: payload.templateId || null,
-      projectId: payload.projectId || null,
-      opportunityId: payload.opportunityId || null,
-      reportConfig: payload.reportConfig || {},
-      createdById: userId || null,
-    },
-  });
+  try {
+    const created = await prisma.photoReport.create({
+      data: {
+        name: payload.name,
+        templateId: payload.templateId || null,
+        projectId: payload.projectId || null,
+        opportunityId: payload.opportunityId || null,
+        status: 'QUEUED',
+        reportConfig: payload.reportConfig || {},
+        createdById: userId || null,
+      },
+    });
 
-  return created;
+    return created;
+  } catch (error) {
+    if (!isPrismaMissingColumnError(error)) throw error;
+    logger.warn(`Photo report create fallback due to schema mismatch: ${error.message}`);
+    const err = new Error('Photo reports are temporarily unavailable until schema sync completes');
+    err.statusCode = 409;
+    err.code = 'FEATURE_UNAVAILABLE';
+    throw err;
+  }
 }
 
 export async function listReports(params = {}) {
@@ -241,18 +341,48 @@ export async function listReports(params = {}) {
   if (params.opportunityId) where.opportunityId = params.opportunityId;
   if (params.status) where.status = params.status;
 
-  const [data, total] = await Promise.all([
-    prisma.photoReport.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-      skip,
-      take: limit,
-    }),
-    prisma.photoReport.count({ where }),
-  ]);
+  let data = [];
+  let total = 0;
+  try {
+    [data, total] = await Promise.all([
+      prisma.photoReport.findMany({
+        where,
+        select: {
+          id: true,
+          name: true,
+          templateId: true,
+          projectId: true,
+          opportunityId: true,
+          status: true,
+          reportConfig: true,
+          fileKey: true,
+          fileUrl: true,
+          generatedAt: true,
+          errorMessage: true,
+          createdById: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      prisma.photoReport.count({ where }),
+    ]);
+  } catch (error) {
+    if (!isPrismaMissingColumnError(error)) throw error;
+    logger.warn(`Photo reports list fallback due to schema mismatch: ${error.message}`);
+    data = [];
+    total = 0;
+  }
+
+  const normalized = data.map((item) => ({
+    ...item,
+    name: item.name || `Report ${String(item.id || '').slice(0, 8)}`,
+  }));
 
   return {
-    data,
+    data: normalized,
     pagination: {
       page,
       limit,
@@ -263,49 +393,79 @@ export async function listReports(params = {}) {
 }
 
 export async function getReportById(id) {
-  return prisma.photoReport.findUnique({
-    where: { id },
-    include: {
-      items: {
-        orderBy: { sortOrder: 'asc' },
-        include: {
-          photo: {
-            select: {
-              id: true,
-              fileName: true,
-              fileKey: true,
-              originalUrl: true,
-              displayUrl: true,
-              thumbnailUrl: true,
-              photoType: true,
-              caption: true,
+  try {
+    return await prisma.photoReport.findUnique({
+      where: { id },
+      include: {
+        items: {
+          orderBy: { sortOrder: 'asc' },
+          include: {
+            photo: {
+              select: {
+                id: true,
+                fileName: true,
+                fileKey: true,
+                originalUrl: true,
+                displayUrl: true,
+                thumbnailUrl: true,
+                photoType: true,
+                caption: true,
+              },
             },
           },
         },
       },
-    },
-  });
+    });
+  } catch (error) {
+    if (!isPrismaMissingColumnError(error)) throw error;
+    logger.warn(`Photo report read fallback due to schema mismatch: ${error.message}`);
+    const baseReport = await prisma.photoReport.findUnique({
+      where: { id },
+    });
+    if (!baseReport) return null;
+    const items = await hydrateReportItemsFromConfig(baseReport);
+    return {
+      ...baseReport,
+      items,
+    };
+  }
 }
 
 export async function generateReport(reportId, userId) {
-  const report = await prisma.photoReport.findUnique({
-    where: { id: reportId },
-    include: {
-      items: {
-        orderBy: { sortOrder: 'asc' },
-        include: {
-          photo: {
-            select: {
-              id: true,
-              fileName: true,
-              fileKey: true,
-              caption: true,
+  let report;
+  try {
+    report = await prisma.photoReport.findUnique({
+      where: { id: reportId },
+      include: {
+        items: {
+          orderBy: { sortOrder: 'asc' },
+          include: {
+            photo: {
+              select: {
+                id: true,
+                fileName: true,
+                fileKey: true,
+                caption: true,
+              },
             },
           },
         },
       },
-    },
-  });
+    });
+  } catch (error) {
+    if (!isPrismaMissingColumnError(error)) throw error;
+    logger.warn(`Photo report generate fallback due to schema mismatch: ${error.message}`);
+    const baseReport = await prisma.photoReport.findUnique({
+      where: { id: reportId },
+    });
+    if (baseReport) {
+      const fallbackItems = await hydrateReportItemsFromConfig(baseReport);
+      report = {
+        ...baseReport,
+        items: fallbackItems,
+      };
+    }
+  }
   if (!report) {
     const err = new Error('Report not found');
     err.statusCode = 404;
@@ -334,21 +494,27 @@ export async function generateReport(reportId, userId) {
     },
   });
 
-  const exportJob = await prisma.photoExportJob.create({
-    data: {
-      projectId: report.projectId,
-      opportunityId: report.opportunityId,
-      outputFormat: 'pdf',
-      requestJson: {
-        reportId,
-        templateId: report.templateId,
-        reportConfig: report.reportConfig || {},
-        requestedBy: userId || null,
+  let exportJob = null;
+  try {
+    exportJob = await prisma.photoExportJob.create({
+      data: {
+        projectId: report.projectId,
+        opportunityId: report.opportunityId,
+        outputFormat: 'pdf',
+        requestJson: {
+          reportId,
+          templateId: report.templateId,
+          reportConfig: report.reportConfig || {},
+          requestedBy: userId || null,
+        },
+        status: 'PROCESSING',
+        createdById: userId || null,
       },
-      status: 'PROCESSING',
-      createdById: userId || null,
-    },
-  });
+    });
+  } catch (error) {
+    if (!isPrismaMissingColumnError(error)) throw error;
+    logger.warn(`Photo report generate: export job table unavailable, continuing without async job tracking: ${error.message}`);
+  }
 
   try {
     const pdfBuffer = await buildReportPdfBuffer(report, report.items || []);
@@ -360,26 +526,31 @@ export async function generateReport(reportId, userId) {
       { reportId: report.id, type: 'photocam-report-pdf' }
     );
 
-    const [updatedReport] = await prisma.$transaction([
+    const transactionOps = [
       prisma.photoReport.update({
         where: { id: reportId },
         data: {
-          status: 'GENERATED',
+          status: 'READY',
           fileKey: key,
           fileUrl: upload.url,
           generatedAt: new Date(),
         },
       }),
-      prisma.photoExportJob.update({
-        where: { id: exportJob.id },
-        data: {
-          status: 'READY',
-          fileKey: key,
-          fileUrl: upload.url,
-          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-        },
-      }),
-    ]);
+    ];
+    if (exportJob?.id) {
+      transactionOps.push(
+        prisma.photoExportJob.update({
+          where: { id: exportJob.id },
+          data: {
+            status: 'READY',
+            fileKey: key,
+            fileUrl: upload.url,
+            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+          },
+        })
+      );
+    }
+    const [updatedReport] = await prisma.$transaction(transactionOps);
 
     return {
       ...updatedReport,
@@ -388,7 +559,7 @@ export async function generateReport(reportId, userId) {
   } catch (error) {
     logger.error('Failed to generate report pdf', { reportId, error: error.message });
 
-    await prisma.$transaction([
+    const failedOps = [
       prisma.photoReport.update({
         where: { id: reportId },
         data: {
@@ -396,21 +567,39 @@ export async function generateReport(reportId, userId) {
           errorMessage: error.message,
         },
       }),
-      prisma.photoExportJob.update({
-        where: { id: exportJob.id },
-        data: {
-          status: 'FAILED',
-          errorMessage: error.message,
-        },
-      }),
-    ]);
+    ];
+    if (exportJob?.id) {
+      failedOps.push(
+        prisma.photoExportJob.update({
+          where: { id: exportJob.id },
+          data: {
+            status: 'FAILED',
+            errorMessage: error.message,
+          },
+        })
+      );
+    }
+    await prisma.$transaction(failedOps);
 
     throw error;
   }
 }
 
 export async function getReportDownload(reportId) {
-  const report = await prisma.photoReport.findUnique({ where: { id: reportId } });
+  let report;
+  try {
+    report = await prisma.photoReport.findUnique({
+      where: { id: reportId },
+      select: { id: true, fileKey: true, status: true, generatedAt: true },
+    });
+  } catch (error) {
+    if (!isPrismaMissingColumnError(error)) throw error;
+    logger.warn(`Photo report download fallback due to schema mismatch: ${error.message}`);
+    const err = new Error('Report download is unavailable until report schema is synced');
+    err.statusCode = 409;
+    err.code = 'REPORT_NOT_READY';
+    throw err;
+  }
   if (!report) {
     const err = new Error('Report not found');
     err.statusCode = 404;
@@ -431,27 +620,58 @@ export async function getReportDownload(reportId) {
 
 export async function upsertReportItems(reportId, items = []) {
   const normalized = Array.isArray(items) ? items : [];
-  await prisma.photoReportItem.deleteMany({ where: { reportId } });
+  try {
+    await prisma.photoReportItem.deleteMany({ where: { reportId } });
 
-  if (!normalized.length) {
-    return [];
+    if (!normalized.length) {
+      return [];
+    }
+
+    await prisma.photoReportItem.createMany({
+      data: normalized.map((item, index) => ({
+        id: uuidv4(),
+        reportId,
+        photoId: item.photoId || null,
+        checklistItemId: item.checklistItemId || null,
+        sectionKey: item.sectionKey || null,
+        sortOrder: item.sortOrder ?? index,
+      })),
+    });
+
+    return prisma.photoReportItem.findMany({
+      where: { reportId },
+      orderBy: { sortOrder: 'asc' },
+    });
+  } catch (error) {
+    if (!isPrismaMissingColumnError(error)) throw error;
+    logger.warn(`Photo report items fallback due to schema mismatch: ${error.message}`);
+    const report = await prisma.photoReport.findUnique({
+      where: { id: reportId },
+      select: { id: true, reportConfig: true },
+    });
+    if (!report) {
+      const err = new Error('Report not found');
+      err.statusCode = 404;
+      err.code = 'NOT_FOUND';
+      throw err;
+    }
+
+    const config = normalizeReportConfig(report.reportConfig);
+    const selectedPhotoIds = normalized
+      .map((item) => item.photoId)
+      .filter(Boolean);
+    await prisma.photoReport.update({
+      where: { id: reportId },
+      data: {
+        reportConfig: {
+          ...config,
+          selectedPhotoIds: Array.from(new Set(selectedPhotoIds)),
+          selectedPhotoIdsUpdatedAt: new Date().toISOString(),
+        },
+      },
+    });
+    return hydrateReportItemsFromConfig({ ...report, reportConfig: { ...config, selectedPhotoIds } });
   }
-
-  await prisma.photoReportItem.createMany({
-    data: normalized.map((item, index) => ({
-      id: uuidv4(),
-      reportId,
-      photoId: item.photoId || null,
-      checklistItemId: item.checklistItemId || null,
-      sectionKey: item.sectionKey || null,
-      sortOrder: item.sortOrder ?? index,
-    })),
-  });
-
-  return prisma.photoReportItem.findMany({
-    where: { reportId },
-    orderBy: { sortOrder: 'asc' },
-  });
 }
 
 export const reportService = {

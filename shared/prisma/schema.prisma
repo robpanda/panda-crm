@@ -322,6 +322,10 @@ model Opportunity {
   serviceNotes             String?                 @map("service_notes")
   projectManagerId         String?                 @map("project_manager_id")
   jobId                    String?                 @unique @map("job_id")
+  adjusterName             String?                 @map("adjuster_name")
+  adjusterEmail            String?                 @map("adjuster_email")
+  adjusterOfficePhone      String?                 @map("adjuster_office_phone")
+  fieldAdjusterMobile      String?                 @map("field_adjuster_mobile")
   damageLocation           String?                 @map("damage_location")
   dateOfLoss               DateTime?               @map("date_of_loss")
   priority                 Priority                @default(NORMAL)
@@ -4588,7 +4592,9 @@ enum DiscountType {
 }
 
 enum AttentionType {
+  APPOINTMENT_TODAY
   FOLLOW_UP
+  MENTION
   CALLBACK_REQUEST
   OVERDUE_TASK
   OVERDUE_INVOICE
@@ -5068,9 +5074,9 @@ enum PhotoTemplateType {
 }
 
 enum PhotoReportStatus {
-  PENDING
+  QUEUED
   PROCESSING
-  GENERATED
+  READY
   FAILED
 }
 
@@ -5597,7 +5603,7 @@ model PhotoReport {
   templateId      String?           @map("template_id")
   projectId       String?           @map("project_id")
   opportunityId   String?           @map("opportunity_id")
-  status          PhotoReportStatus @default(PENDING)
+  status          PhotoReportStatus @default(QUEUED)
   reportConfig    Json?             @map("report_config")
   fileKey         String?           @map("file_key")
   fileUrl         String?           @map("file_url")

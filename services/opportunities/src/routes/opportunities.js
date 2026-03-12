@@ -39,6 +39,41 @@ const validatePagination = [
   query('invoiceStatus').optional().isIn(['all', 'NOT_READY', 'READY', 'INVOICED', 'FOLLOW_UP_SCHEDULED', 'PAID']),
 ];
 
+const internalCommentDepartments = [
+  { value: 'general', label: 'General' },
+  { value: 'sales', label: 'Sales' },
+  { value: 'production', label: 'Production' },
+  { value: 'admin', label: 'Admin' },
+  { value: 'finance', label: 'Finance' },
+];
+
+const resolveOpportunityIdFromRequest = (req) => (
+  req.params?.id
+  || req.query?.opportunityId
+  || req.query?.id
+  || req.body?.opportunityId
+  || req.body?.id
+);
+
+const resolveEntityId = (value) => {
+  if (value == null) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed || null;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? String(value) : null;
+  }
+  if (typeof value === 'object') {
+    const candidates = [value.id, value.userId, value.ownerId, value.newOwnerId, value.value, value.key];
+    for (const candidate of candidates) {
+      const resolved = resolveEntityId(candidate);
+      if (resolved) return resolved;
+    }
+  }
+  return null;
+};
+
 // ============================================================================
 // STATIC ROUTES - Must come BEFORE /:id routes
 // ============================================================================
@@ -97,6 +132,91 @@ router.get('/counts', async (req, res, next) => {
     }
     const counts = await opportunityService.getStageCounts(req.user?.id, req.query.ownerFilter, ownerIds);
     res.json({ success: true, data: counts });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/comment-departments', (req, res) => {
+  res.json({
+    success: true,
+    data: internalCommentDepartments,
+  });
+});
+
+// Backward-compatible alias for clients that include opportunity id in path
+router.get('/:id/comment-departments', (req, res) => {
+  res.json({
+    success: true,
+    data: internalCommentDepartments,
+  });
+});
+
+// Backward-compatible aliases for clients that call /internal-comments without /:id
+router.get('/internal-comments', async (req, res, next) => {
+  try {
+    const opportunityId = resolveOpportunityIdFromRequest(req);
+    if (!opportunityId) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'opportunityId is required' },
+      });
+    }
+    const comments = await opportunityService.getOpportunityInternalComments(opportunityId);
+    res.json({ success: true, data: comments });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/internal-comments', async (req, res, next) => {
+  try {
+    const opportunityId = resolveOpportunityIdFromRequest(req);
+    if (!opportunityId) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'opportunityId is required' },
+      });
+    }
+    const comment = await opportunityService.createOpportunityInternalComment(opportunityId, req.body, req.user);
+    res.status(201).json({ success: true, data: comment });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/internal-comments/:commentId', async (req, res, next) => {
+  try {
+    const opportunityId = resolveOpportunityIdFromRequest(req);
+    if (!opportunityId) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'opportunityId is required' },
+      });
+    }
+    const comment = await opportunityService.updateOpportunityInternalComment(
+      opportunityId,
+      req.params.commentId,
+      req.body,
+      req.user
+    );
+    res.json({ success: true, data: comment });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete('/internal-comments/:commentId', async (req, res, next) => {
+  try {
+    const opportunityId = resolveOpportunityIdFromRequest(req);
+    if (!opportunityId) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'opportunityId is required' },
+      });
+    }
+    const result = await opportunityService.deleteOpportunityInternalComment(opportunityId, req.params.commentId);
+    res.json({ success: true, data: result });
   } catch (error) {
     next(error);
   }
@@ -492,6 +612,67 @@ router.get('/:id/contacts', async (req, res, next) => {
   }
 });
 
+// Generate customer portal link
+const handleGeneratePortalLink = async (req, res, next) => {
+  try {
+    const result = await opportunityService.generatePortalLink(req.params.id, {
+      expiresInDays: req.body?.expiresInDays,
+    });
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+};
+
+router.post('/:id/portal-link', handleGeneratePortalLink);
+router.post('/:id/portal', handleGeneratePortalLink);
+router.post('/:id/portalLink', handleGeneratePortalLink);
+
+// Transfer an opportunity/job to another owner
+router.post('/:id/transfer', async (req, res, next) => {
+  try {
+    const newOwnerId = resolveEntityId(
+      req.body?.newOwnerId
+      ?? req.body?.ownerId
+      ?? req.body?.toOwnerId
+      ?? req.body?.assignedToId
+      ?? req.body?.userId
+    );
+
+    if (!newOwnerId) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'newOwnerId is required',
+        },
+      });
+    }
+
+    const transferRelatedItemsRaw = req.body?.transferRelatedItems
+      ?? req.body?.transferRelated
+      ?? req.body?.transferAllAssociated
+      ?? req.body?.transferAssociatedRecords;
+    const transferRelatedItems = transferRelatedItemsRaw === true
+      || transferRelatedItemsRaw === 'true'
+      || transferRelatedItemsRaw === 1
+      || transferRelatedItemsRaw === '1';
+
+    const result = await opportunityService.transferOpportunity(req.params.id, newOwnerId, {
+      transferRelatedItems,
+    }, {
+      userId: req.user?.id,
+      userEmail: req.user?.email,
+      ipAddress: req.ip || req.headers['x-forwarded-for']?.split(',')[0],
+      userAgent: req.headers['user-agent'],
+    });
+
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ============================================================================
 // OPPORTUNITY HUB ENDPOINTS
 // These endpoints power the Opportunity Hub view - the central project dashboard
@@ -561,6 +742,16 @@ router.get('/:id/activity', async (req, res, next) => {
   }
 });
 
+// Get customer portal-originated messages for Customer Comms visibility
+router.get('/:id/portal-messages', async (req, res, next) => {
+  try {
+    const messages = await opportunityService.getOpportunityPortalMessages(req.params.id);
+    res.json({ success: true, data: messages });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Generate AI summary for activity/message content
 router.post('/:id/activity/summarize', async (req, res, next) => {
   try {
@@ -598,6 +789,51 @@ router.post('/:id/replies', async (req, res, next) => {
       req.user
     );
     res.json({ success: true, data: reply });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Get internal comments for an opportunity
+router.get('/:id/internal-comments', async (req, res, next) => {
+  try {
+    const comments = await opportunityService.getOpportunityInternalComments(req.params.id);
+    res.json({ success: true, data: comments });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Create internal comment for an opportunity
+router.post('/:id/internal-comments', async (req, res, next) => {
+  try {
+    const comment = await opportunityService.createOpportunityInternalComment(req.params.id, req.body, req.user);
+    res.status(201).json({ success: true, data: comment });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Update internal comment for an opportunity
+router.put('/:id/internal-comments/:commentId', async (req, res, next) => {
+  try {
+    const comment = await opportunityService.updateOpportunityInternalComment(
+      req.params.id,
+      req.params.commentId,
+      req.body,
+      req.user
+    );
+    res.json({ success: true, data: comment });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Delete internal comment for an opportunity
+router.delete('/:id/internal-comments/:commentId', async (req, res, next) => {
+  try {
+    const result = await opportunityService.deleteOpportunityInternalComment(req.params.id, req.params.commentId);
+    res.json({ success: true, data: result });
   } catch (error) {
     next(error);
   }
