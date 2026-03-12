@@ -47,6 +47,31 @@ const SUPPORT_USER_SELECT = {
   },
 };
 
+const SUPPORT_TICKET_LIST_INCLUDE = {
+  user: {
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      email: true,
+    },
+  },
+  assigned_to: {
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      email: true,
+    },
+  },
+  _count: {
+    select: {
+      messages: true,
+      attachments: true,
+    },
+  },
+};
+
 function normalizeRoleString(value) {
   return String(value || '').trim().toLowerCase();
 }
@@ -342,14 +367,7 @@ router.get('/tickets', authMiddleware, async (req, res) => {
 
     const tickets = await prisma.support_tickets.findMany({
       where: context.canManageAll ? {} : { user_id: context.userId },
-      include: {
-        _count: {
-          select: {
-            messages: true,
-            attachments: true,
-          },
-        },
-      },
+      include: SUPPORT_TICKET_LIST_INCLUDE,
       orderBy: { created_at: 'desc' },
     });
 
@@ -588,34 +606,8 @@ router.get('/admin/tickets', authMiddleware, async (req, res) => {
     }
 
     const tickets = await prisma.support_tickets.findMany({
-      include: {
-        user: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            email: true,
-          },
-        },
-        assigned_to: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-          },
-        },
-        _count: {
-          select: {
-            messages: true,
-            attachments: true,
-          },
-        },
-      },
-      orderBy: [
-        { status: 'asc' },
-        { priority: 'desc' },
-        { created_at: 'desc' },
-      ],
+      include: SUPPORT_TICKET_LIST_INCLUDE,
+      orderBy: { created_at: 'desc' },
     });
 
     res.json({ tickets });

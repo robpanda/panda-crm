@@ -1644,6 +1644,8 @@ function CommunicationsTab({
   phone,
   email,
   contactName,
+  conversations = [],
+  emails = [],
   archivedActivities = [],
   onActivityClick,
   opportunityId,
@@ -1666,6 +1668,12 @@ function CommunicationsTab({
   const [selectedMentions, setSelectedMentions] = useState([]);
   const [mentionCursorPos, setMentionCursorPos] = useState(0);
   const replyInputRef = useRef(null);
+  const conversationIds = useMemo(
+    () => (Array.isArray(conversations) ? conversations : [])
+      .map((conversation) => conversation?.id)
+      .filter(Boolean),
+    [conversations]
+  );
 
   // Fetch users for @mention autocomplete
   const { data: mentionUsers } = useQuery({
@@ -1678,32 +1686,48 @@ function CommunicationsTab({
     enabled: showMentionDropdown && mentionSearch.length >= 1,
   });
 
-  // Fetch SMS/Email conversation by phone or email
-  const { data: conversation, isLoading: conversationLoading } = useQuery({
-    queryKey: ['opp-conversation', phone, email],
+  // Fetch SMS/Email messages for all opportunity-linked conversations.
+  // Fall back to the identifier lookup only when no linked conversations exist yet.
+  const { data: messagesData, isLoading: messagesLoading } = useQuery({
+    queryKey: ['opp-messages', opportunityId, conversationIds.join(','), phone, email],
     queryFn: async () => {
       try {
+        if (conversationIds.length > 0) {
+          const results = await Promise.allSettled(
+            conversationIds.map((conversationId) =>
+              bamboogliApi.getMessagesByConversation(conversationId, { limit: 100 })
+            )
+          );
+
+          const dedupedMessages = new Map();
+          results.forEach((result) => {
+            if (result.status !== 'fulfilled') return;
+            const payload = Array.isArray(result.value) ? result.value : result.value?.data || [];
+            payload.forEach((message) => {
+              const key = message?.id || `${message?.conversationId || 'conversation'}-${message?.createdAt || message?.timestamp || Math.random()}`;
+              if (!dedupedMessages.has(key)) {
+                dedupedMessages.set(key, message);
+              }
+            });
+          });
+
+          return { data: Array.from(dedupedMessages.values()) };
+        }
+
         const identifier = phone || email;
-        if (!identifier) return null;
-        const data = await bamboogliApi.getConversationByIdentifier(identifier);
-        return data;
+        if (!identifier) return { data: [] };
+        const fallbackConversation = await bamboogliApi.getConversationByIdentifier(identifier);
+        if (!fallbackConversation?.id) return { data: [] };
+        const fallbackMessages = await bamboogliApi.getMessagesByConversation(fallbackConversation.id, { limit: 100 });
+        return {
+          data: Array.isArray(fallbackMessages) ? fallbackMessages : fallbackMessages?.data || [],
+        };
       } catch (err) {
-        console.error('Failed to fetch conversation:', err);
-        return null;
+        console.error('Failed to fetch customer communications:', err);
+        return { data: [] };
       }
     },
-    enabled: !!(phone || email),
-  });
-
-  // Fetch messages for the conversation
-  const { data: messagesData, isLoading: messagesLoading } = useQuery({
-    queryKey: ['opp-messages', conversation?.id],
-    queryFn: async () => {
-      if (!conversation?.id) return { data: [] };
-      const data = await bamboogliApi.getMessagesByConversation(conversation.id, { limit: 100 });
-      return data;
-    },
-    enabled: !!conversation?.id,
+    enabled: conversationIds.length > 0 || Boolean(phone || email),
   });
 
   // Fetch RingCentral call logs for this phone number
@@ -1722,13 +1746,32 @@ function CommunicationsTab({
     enabled: !!phone,
   });
 
-  const isLoading = conversationLoading || messagesLoading || callsLoading;
+  const isLoading = messagesLoading || callsLoading;
   const messages = messagesData?.data || messagesData || [];
   const callLogs = callLogsData?.data || callLogsData || [];
 
   // Separate messages by type
   const smsMessages = Array.isArray(messages) ? messages.filter(m => m.type === 'sms' || m.channel === 'sms') : [];
-  const emailMessages = Array.isArray(messages) ? messages.filter(m => m.type === 'email' || m.channel === 'email') : [];
+  const threadedEmailMessages = Array.isArray(messages) ? messages.filter(m => m.type === 'email' || m.channel === 'email') : [];
+  const directEmailMessages = Array.isArray(emails)
+    ? emails.map((message) => ({
+        ...message,
+        activityType: 'email',
+        timestamp: new Date(message.sentAt || message.createdAt || message.updatedAt || Date.now()),
+        displayDate: new Date(message.sentAt || message.createdAt || message.updatedAt || Date.now()).toLocaleString(),
+        body: message.body || message.htmlBody || message.textBody || '',
+        subject: message.subject || 'Email',
+        direction: message.direction || 'sent',
+      }))
+    : [];
+  const emailMessages = Array.from(
+    new Map(
+      [...threadedEmailMessages, ...directEmailMessages].map((message) => [
+        message?.id || `${message?.subject || 'email'}-${message?.timestamp || message?.createdAt || Date.now()}`,
+        message,
+      ])
+    ).values()
+  );
 
   // Combine all activity into a unified timeline
   const allActivity = [
@@ -1741,8 +1784,8 @@ function CommunicationsTab({
     ...emailMessages.map(m => ({
       ...m,
       activityType: 'email',
-      timestamp: new Date(m.createdAt || m.timestamp),
-      displayDate: new Date(m.createdAt || m.timestamp).toLocaleString(),
+      timestamp: new Date(m.createdAt || m.sentAt || m.timestamp),
+      displayDate: new Date(m.createdAt || m.sentAt || m.timestamp).toLocaleString(),
     })),
     ...(Array.isArray(callLogs) ? callLogs : []).map(c => ({
       ...c,
@@ -9207,6 +9250,8 @@ export default function OpportunityDetail() {
                     phone={opportunity?.contact?.phone || opportunity?.contact?.mobilePhone || opportunity?.phone}
                     email={opportunity?.contact?.email}
                     contactName={opportunity?.contact?.name || `${opportunity?.contact?.firstName || ''} ${opportunity?.contact?.lastName || ''}`}
+                    conversations={conversations || []}
+                    emails={emails || []}
                     archivedActivities={activityData?.activities?.filter(a => a.sourceType === 'ACCULYNX_IMPORT') || []}
                     onActivityClick={(item) => {
                       setSelectedActivity(item);

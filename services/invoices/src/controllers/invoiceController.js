@@ -122,6 +122,79 @@ function stripInvoiceActivityMeta(notes) {
   return notes.replace(/^\[\[actor:[^\]]+\]\]\s*/i, '').trim();
 }
 
+function extractInvoiceActivityActor(notes) {
+  if (typeof notes !== 'string') return null;
+  const match = notes.match(/^\[\[actor:([^\]]+)\]\]/i);
+  return match?.[1]?.trim() || null;
+}
+
+function buildInvoiceActivityNotes(notes, actorName) {
+  const normalizedNotes = stripInvoiceActivityMeta(notes);
+  const normalizedActor = String(actorName || '').trim();
+  if (!normalizedActor) return normalizedNotes || null;
+  return `[[actor:${normalizedActor}]] ${normalizedNotes}`.trim();
+}
+
+function decodeJwtPayload(token) {
+  try {
+    const [, payloadSegment] = String(token || '').split('.');
+    if (!payloadSegment) return null;
+    const normalized = payloadSegment.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+    return JSON.parse(Buffer.from(padded, 'base64').toString('utf8'));
+  } catch {
+    return null;
+  }
+}
+
+async function resolveRequestActorName(req) {
+  const rawAuthorization = req.headers?.authorization || req.headers?.Authorization || '';
+  const bearerToken = rawAuthorization.startsWith('Bearer ') ? rawAuthorization.slice(7).trim() : null;
+  const tokenPayload = bearerToken ? decodeJwtPayload(bearerToken) : null;
+
+  const identityCandidates = Array.from(new Set([
+    req.headers?.['x-user-id'],
+    req.headers?.['x-user-email'],
+    tokenPayload?.sub,
+    tokenPayload?.username,
+    tokenPayload?.cognitoId,
+  ].map((value) => (value ? String(value).trim() : '')).filter(Boolean)));
+
+  if (identityCandidates.length > 0) {
+    const matchedUser = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { id: { in: identityCandidates } },
+          { cognitoId: { in: identityCandidates } },
+          {
+            email: {
+              in: identityCandidates.filter((value) => value.includes('@')),
+            },
+          },
+        ],
+      },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        fullName: true,
+      },
+    });
+
+    if (matchedUser) {
+      return matchedUser.fullName
+        || `${matchedUser.firstName || ''} ${matchedUser.lastName || ''}`.trim()
+        || matchedUser.email
+        || null;
+    }
+  }
+
+  return tokenPayload?.name
+    || tokenPayload?.email
+    || null;
+}
+
 async function getFreshInvoicePdfUrl(pdfKey, expiresIn = 3600 * 24 * 7) {
   if (!pdfKey) return null;
 
@@ -405,6 +478,7 @@ export async function updateInvoice(req, res, next) {
   try {
     const { id } = req.params;
     const data = updateInvoiceSchema.parse(req.body);
+    const actorName = await resolveRequestActorName(req);
 
     const existing = await prisma.invoice.findUnique({
       where: { id },
@@ -486,13 +560,22 @@ export async function updateInvoice(req, res, next) {
         const normalizedCharges = data.additionalCharges
           .filter((charge) => Number(charge.amount || 0) !== 0)
           .map((charge) => ({
+            constHasActorMeta: Boolean(extractInvoiceActivityActor(charge.notes)),
+            sourceNotes: charge.notes,
             invoiceId: id,
             name: charge.name || 'Supplement',
             amount: Number(charge.amount || 0),
             fixedAmount: Number(charge.amount || 0),
             chargeType: charge.chargeType || 'ADJUSTMENT',
-            notes: charge.notes || null,
+            notes: buildInvoiceActivityNotes(charge.notes, actorName),
             percentageOfTotal: charge.percentageOfTotal ?? null,
+          }))
+          .map(({ constHasActorMeta, sourceNotes, ...charge }) => ({
+            invoiceId: id,
+            ...charge,
+            notes: constHasActorMeta
+              ? sourceNotes || null
+              : charge.notes || null,
           }));
         if (normalizedCharges.length > 0) {
           await tx.invoiceAdditionalCharge.createMany({ data: normalizedCharges });

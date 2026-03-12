@@ -4,6 +4,37 @@
 import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
+const ATTENTION_USER_SELECT = {
+  id: true,
+  firstName: true,
+  lastName: true,
+  fullName: true,
+  email: true,
+};
+
+function formatAttentionUser(user) {
+  if (!user) return user;
+  const derivedName = user.fullName
+    || `${user.firstName || ''} ${user.lastName || ''}`.trim()
+    || user.email
+    || null;
+
+  return {
+    ...user,
+    name: user.name || derivedName,
+  };
+}
+
+function normalizeAttentionItemUsers(item) {
+  if (!item) return item;
+  return {
+    ...item,
+    assignedTo: formatAttentionUser(item.assignedTo),
+    dismissedBy: formatAttentionUser(item.dismissedBy),
+    actionCompletedBy: formatAttentionUser(item.actionCompletedBy),
+    requester: formatAttentionUser(item.requester),
+  };
+}
 
 export const attentionService = {
   // ============================================================================
@@ -123,7 +154,7 @@ export const attentionService = {
             select: { id: true, subject: true, status: true, type: true },
           },
           assignedTo: {
-            select: { id: true, name: true, email: true },
+            select: ATTENTION_USER_SELECT,
           },
         },
         orderBy,
@@ -150,7 +181,7 @@ export const attentionService = {
     }
 
     return {
-      items,
+      items: items.map(normalizeAttentionItemUsers),
       pagination: {
         page,
         limit,
@@ -164,7 +195,7 @@ export const attentionService = {
    * Get attention item by ID
    */
   async getAttentionItemById(id) {
-    return prisma.attentionItem.findUnique({
+    const item = await prisma.attentionItem.findUnique({
       where: { id },
       include: {
         opportunity: true,
@@ -180,6 +211,8 @@ export const attentionService = {
         dismissedBy: true,
       },
     });
+
+    return normalizeAttentionItemUsers(item);
   },
 
   /**
@@ -193,7 +226,7 @@ export const attentionService = {
       daysOverdue = Math.floor(diff / (1000 * 60 * 60 * 24));
     }
 
-    return prisma.attentionItem.create({
+    const item = await prisma.attentionItem.create({
       data: {
         ...data,
         daysOverdue,
@@ -201,24 +234,28 @@ export const attentionService = {
       include: {
         opportunity: { select: { id: true, name: true } },
         account: { select: { id: true, name: true } },
-        assignedTo: { select: { id: true, name: true } },
+        assignedTo: { select: ATTENTION_USER_SELECT },
       },
     });
+
+    return normalizeAttentionItemUsers(item);
   },
 
   /**
    * Update an attention item
    */
   async updateAttentionItem(id, data) {
-    return prisma.attentionItem.update({
+    const item = await prisma.attentionItem.update({
       where: { id },
       data,
       include: {
         opportunity: { select: { id: true, name: true } },
         account: { select: { id: true, name: true } },
-        assignedTo: { select: { id: true, name: true } },
+        assignedTo: { select: ATTENTION_USER_SELECT },
       },
     });
+
+    return normalizeAttentionItemUsers(item);
   },
 
   /**
@@ -512,7 +549,7 @@ export const attentionService = {
       },
       include: {
         opportunity: { select: { id: true, name: true } },
-        requester: { select: { id: true, name: true } },
+        requester: { select: ATTENTION_USER_SELECT },
       },
     });
 
@@ -529,7 +566,7 @@ export const attentionService = {
       if (!existing) {
         const item = await this.createAttentionItem({
           title: `Approval Needed: ${approval.subject}`,
-          description: `${approval.type} approval requested by ${approval.requester?.name}`,
+          description: `${approval.type} approval requested by ${formatAttentionUser(approval.requester)?.name || 'Unknown user'}`,
           type: 'APPROVAL_NEEDED',
           category: 'APPROVAL',
           urgency: approval.priority === 'HIGH' ? 'HIGH' : 'MEDIUM',
