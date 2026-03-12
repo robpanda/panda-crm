@@ -38,6 +38,7 @@ import AddressAutocomplete from '../components/AddressAutocomplete';
 import MentionTextarea from '../components/MentionTextarea';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { isValidPhoneFormat, isValidEmailFormat } from '../utils/formatters';
+import { WIZARD_LEAD_SOURCES } from '../constants/leadOptions';
 
 const US_STATES = [
   { value: 'AL', label: 'Alabama' }, { value: 'AK', label: 'Alaska' },
@@ -186,26 +187,7 @@ const RETAIL_DISPOSITIONS_BY_STATUS = {
   ],
 };
 
-const LEAD_SOURCES = [
-  { value: 'Bath Lead', label: 'Bath Lead' },
-  { value: 'Company Vehicle', label: 'Company Vehicle' },
-  { value: 'Customer Referral', label: 'Customer Referral' },
-  { value: 'Digital Marketing', label: 'Digital Marketing' },
-  { value: 'Employee Referral', label: 'Employee Referral' },
-  { value: 'Flyer', label: 'Flyer' },
-  { value: 'Insurance Marketing', label: 'Insurance Marketing' },
-  { value: 'Insurance Program', label: 'Insurance Program' },
-  { value: 'Lead Aggregator', label: 'Lead Aggregator' },
-  { value: 'Radio', label: 'Radio' },
-  { value: 'Retail Marketing', label: 'Retail Marketing' },
-  { value: 'Roof DRP', label: 'Roof DRP' },
-  { value: 'Self-Gen', label: 'Self-Gen' },
-  { value: 'Solar Marketing', label: 'Solar Marketing' },
-  { value: 'Telemarketing', label: 'Telemarketing' },
-  { value: 'Trade Show', label: 'Trade Show' },
-  { value: 'Vendor Referral', label: 'Vendor Referral' },
-  { value: 'Yard Sign', label: 'Yard Sign' },
-];
+const LEAD_SOURCES = WIZARD_LEAD_SOURCES;
 
 const PROPERTY_TYPES = [
   { value: 'Commercial', label: 'Commercial' },
@@ -248,12 +230,16 @@ export default function LeadWizard() {
 
   const roleName = (user?.role?.name || user?.role || '').toString().toLowerCase();
   const roleType = (user?.roleType || '').toString().toLowerCase();
+  const userTitle = (user?.title || user?.jobTitle || '').toString().toLowerCase();
+  const hasSalesInRoleOrTitle = [roleName, roleType, userTitle].some((value) => value.includes('sales'));
 
   // Determine if user is call center based on role or department
   const isCallCenter = roleName.includes('call center') ||
                        roleName.includes('call_center') ||
                        roleType.includes('call_center') ||
-                       user?.department?.toLowerCase() === 'call center';
+                       user?.department?.toLowerCase() === 'call center' ||
+                       userTitle.includes('call center') ||
+                       userTitle.includes('call_center');
 
   const disableGuidedFlow = true;
 
@@ -276,8 +262,8 @@ export default function LeadWizard() {
 
   // Call center users only see Inspection, others see all work types
   const WORK_TYPES = isCallCenter ? CALL_CENTER_WORK_TYPES : ALL_WORK_TYPES;
-  const totalSteps = isCallCenter ? 3 : steps.length;
-  const visibleSteps = isCallCenter ? steps.slice(0, 3) : steps;
+  const totalSteps = 3;
+  const visibleSteps = steps.slice(0, 3);
   const useLeadPromptFlow = true;
   const isSelfGenLeadSource = (value) => {
     if (!value) return false;
@@ -366,11 +352,35 @@ export default function LeadWizard() {
     return resolveLeadId(savedLeadId);
   };
 
-  const formatDateForInput = (date) => {
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const d = String(date.getDate()).padStart(2, '0');
+  const formatDateForInput = (value) => {
+    if (!value) return '';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return typeof value === 'string' ? value.slice(0, 10) : '';
+    }
+    const y = parsed.getFullYear();
+    const m = String(parsed.getMonth() + 1).padStart(2, '0');
+    const d = String(parsed.getDate()).padStart(2, '0');
     return `${y}-${m}-${d}`;
+  };
+
+  const formatDateForDisplay = (value) => {
+    if (!value) return '';
+    const datePart = value.toString().split('T')[0];
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(datePart)) return value;
+    const [year, month, day] = datePart.split('-');
+    return `${month}/${day}/${year}`;
+  };
+
+  const formatTimeForDisplay = (value) => {
+    if (!value) return '';
+    const match = value.toString().trim().match(/^(\d{1,2}):(\d{2})/);
+    if (!match) return value;
+    let hour = parseInt(match[1], 10);
+    const minute = match[2];
+    const suffix = hour >= 12 ? 'PM' : 'AM';
+    hour = hour % 12 || 12;
+    return `${hour}:${minute} ${suffix}`;
   };
 
   const isAppointmentWithinWindow = (dateValue, timeValue) => {
@@ -403,6 +413,26 @@ export default function LeadWizard() {
     }
 
     return null;
+  };
+
+  const buildPreferredAppointmentSuggestion = (preferredDateTime) => {
+    if (!preferredDateTime) return null;
+    const preferred = new Date(preferredDateTime);
+    if (Number.isNaN(preferred.getTime())) return null;
+
+    const appointmentDate = formatDateForInput(preferred);
+    const appointmentTime = `${String(preferred.getHours()).padStart(2, '0')}:${String(preferred.getMinutes()).padStart(2, '0')}`;
+
+    if (!isAppointmentWithinWindow(appointmentDate, appointmentTime)) {
+      return null;
+    }
+
+    return {
+      found: true,
+      appointmentDate,
+      appointmentTime,
+      reason: 'PREFERRED_SLOT_ACCEPTED_LOCAL_FALLBACK',
+    };
   };
 
   const applyAppointmentSuggestionToForm = (suggestion) => {
@@ -560,8 +590,10 @@ export default function LeadWizard() {
     setIsSuggestingAppointment(true);
     try {
       let suggestion = null;
+      let backendSuggestionUnavailable = false;
+      const hasBackendSuggestionApi = typeof leadsApi.suggestInspectionAppointment === 'function';
 
-      if (leadId) {
+      if (leadId && hasBackendSuggestionApi) {
         try {
           suggestion = await leadsApi.suggestInspectionAppointment(leadId, {
             workType: formData.workType || 'Inspection',
@@ -572,7 +604,10 @@ export default function LeadWizard() {
           });
         } catch (suggestionError) {
           console.error('Failed to fetch backend appointment suggestion:', suggestionError);
+          backendSuggestionUnavailable = true;
         }
+      } else if (leadId) {
+        backendSuggestionUnavailable = true;
       }
 
       if (!suggestion?.found && allowFallback) {
@@ -582,6 +617,15 @@ export default function LeadWizard() {
             found: true,
             ...localSuggestion,
           };
+        }
+      }
+
+      // If backend suggestion is unavailable, still allow explicitly requested
+      // slots that are within the accepted scheduling window.
+      if (!suggestion?.found && preferredDateTime && backendSuggestionUnavailable) {
+        const preferredSuggestion = buildPreferredAppointmentSuggestion(preferredDateTime);
+        if (preferredSuggestion) {
+          suggestion = preferredSuggestion;
         }
       }
 
@@ -608,7 +652,10 @@ export default function LeadWizard() {
             }
 
             const updatePayload = {
-              tentativeAppointmentDate: suggestion.appointmentDate,
+              tentativeAppointmentDate: buildAppointmentDateTimeIso(
+                suggestion.appointmentDate,
+                suggestion.appointmentTime || '09:00'
+              ),
               tentativeAppointmentTime: suggestion.appointmentTime,
             };
 
@@ -747,18 +794,77 @@ export default function LeadWizard() {
     }
   };
 
+  const formatTimeForInput = (value) => {
+    if (!value) return '';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return '';
+    const hours = String(parsed.getHours()).padStart(2, '0');
+    const minutes = String(parsed.getMinutes()).padStart(2, '0');
+    return `${hours}:${minutes}`;
+  };
+
+  const buildAppointmentDateTimeIso = (dateValue, timeValue = '00:00') => {
+    if (!dateValue) return null;
+    const normalizedTime = /^\d{2}:\d{2}$/.test(String(timeValue || '').trim())
+      ? String(timeValue).trim()
+      : '00:00';
+    const parsed = new Date(`${dateValue}T${normalizedTime}:00`);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed.toISOString();
+  };
+
   const buildPreferredDateTime = () => {
     if (!formData.tentativeAppointmentDate || !formData.tentativeAppointmentTime) return null;
-    const candidate = new Date(`${formData.tentativeAppointmentDate}T${formData.tentativeAppointmentTime}:00`);
-    if (Number.isNaN(candidate.getTime())) return null;
-    return `${formData.tentativeAppointmentDate}T${formData.tentativeAppointmentTime}:00`;
+    return buildAppointmentDateTimeIso(
+      formData.tentativeAppointmentDate,
+      formData.tentativeAppointmentTime
+    );
   };
 
   const buildPreferredDateTimeFromSlot = (slot) => {
     if (!slot?.appointmentDate || !slot?.appointmentTime) return null;
-    const candidate = new Date(`${slot.appointmentDate}T${slot.appointmentTime}:00`);
-    if (Number.isNaN(candidate.getTime())) return null;
-    return `${slot.appointmentDate}T${slot.appointmentTime}:00`;
+    return buildAppointmentDateTimeIso(slot.appointmentDate, slot.appointmentTime);
+  };
+
+  const persistSelectedAppointmentChoice = async () => {
+    setAppointmentPromptError('');
+    setAppointmentPromptInfo('');
+
+    const preferredDateTime = buildPreferredDateTime();
+    if (!preferredDateTime) {
+      setAppointmentPromptError('Select a valid date and time before confirming.');
+      return { ready: false };
+    }
+
+    let leadId = resolveLeadId();
+    if (!leadId) {
+      leadId = await handleSave();
+    }
+    if (!leadId) {
+      setAppointmentPromptError('Please complete required lead fields before scheduling.');
+      return { ready: false };
+    }
+
+    try {
+      await leadsApi.updateLead(leadId, {
+        tentativeAppointmentDate: formData.tentativeAppointmentDate,
+        tentativeAppointmentTime: formData.tentativeAppointmentTime,
+      });
+
+      setHasManualAppointmentChange(false);
+      setPendingSuggestedSlot(null);
+      setLastSuggestedSlot({
+        appointmentDate: formData.tentativeAppointmentDate,
+        appointmentTime: formData.tentativeAppointmentTime,
+      });
+      setAppointmentPromptInfo('Appointment time confirmed.');
+
+      return { ready: true };
+    } catch (error) {
+      console.error('Failed to save selected appointment slot:', error);
+      setAppointmentPromptError(error?.message || 'Unable to save appointment time. Please try again.');
+      return { ready: false };
+    }
   };
 
   // Fetch SMS templates
@@ -880,7 +986,7 @@ export default function LeadWizard() {
     state: '',
     postalCode: '',
     status: 'New',
-    leadSource: '',
+    leadSource: hasSalesInRoleOrTitle ? 'Self-Gen' : '',
     rating: '',
     description: '',
     // Lead Details fields
@@ -902,6 +1008,15 @@ export default function LeadWizard() {
     // Sales Rep workflow fields
     stage: isCallCenter ? '' : 'Prospect',
   });
+
+  useEffect(() => {
+    if (!isNewLead || !hasSalesInRoleOrTitle) return;
+    setFormData((prev) => (
+      prev.leadSource
+        ? prev
+        : { ...prev, leadSource: 'Self-Gen' }
+    ));
+  }, [isNewLead, hasSalesInRoleOrTitle]);
 
   const leadSetByIdForManager = formData.leadSetById || null;
   const { data: leadSetByUserData } = useQuery({
@@ -1138,8 +1253,8 @@ export default function LeadWizard() {
         leadNotes: leadData.leadNotes || '',
         jobNotes: leadData.jobNotes || '',
         // Call Center ONLY fields - preserve defaults
-        tentativeAppointmentDate: leadData.tentativeAppointmentDate || '',
-        tentativeAppointmentTime: leadData.tentativeAppointmentTime || '',
+        tentativeAppointmentDate: formatDateForInput(leadData.tentativeAppointmentDate),
+        tentativeAppointmentTime: leadData.tentativeAppointmentTime || formatTimeForInput(leadData.tentativeAppointmentDate),
         leadSetById: leadData.leadSetById || '',
         leadSetByName: leadData.leadSetBy ? `${leadData.leadSetBy.firstName || ''} ${leadData.leadSetBy.lastName || ''}`.trim() : '',
         leadDisposition: leadData.leadDisposition || '',
@@ -1200,6 +1315,11 @@ export default function LeadWizard() {
   const handleSave = async () => {
     setIsSaving(true);
     try {
+      const tentativeAppointmentDateTime = buildAppointmentDateTimeIso(
+        formData.tentativeAppointmentDate,
+        formData.tentativeAppointmentTime || '00:00'
+      );
+
       const saveData = {
         firstName: formData.firstName,
         lastName: formData.lastName,
@@ -1226,7 +1346,7 @@ export default function LeadWizard() {
         jobNotes: formData.jobNotes,
         // Call Center tracking - who entered/set this lead
         leadSetById: formData.leadSetById,
-        tentativeAppointmentDate: formData.tentativeAppointmentDate || null,
+        tentativeAppointmentDate: tentativeAppointmentDateTime,
         tentativeAppointmentTime: formData.tentativeAppointmentTime || null,
         disposition: formData.leadDisposition || null,
       };
@@ -1264,14 +1384,20 @@ export default function LeadWizard() {
       throw new Error('Lead ID is missing. Please save the lead and try again.');
     }
 
-    // Build tentative appointment datetime if both date and time are set
+    // Build timezone-safe appointment datetime for conversion
     let tentativeAppointmentDateTime = null;
     if (effectiveTentativeAppointmentDate) {
       if (effectiveTentativeAppointmentTime) {
-        tentativeAppointmentDateTime = `${effectiveTentativeAppointmentDate}T${effectiveTentativeAppointmentTime}:00`;
+        tentativeAppointmentDateTime = buildAppointmentDateTimeIso(
+          effectiveTentativeAppointmentDate,
+          effectiveTentativeAppointmentTime
+        );
       } else {
         // Default to 9:00 AM if no time specified
-        tentativeAppointmentDateTime = `${effectiveTentativeAppointmentDate}T09:00:00`;
+        tentativeAppointmentDateTime = buildAppointmentDateTimeIso(
+          effectiveTentativeAppointmentDate,
+          '09:00'
+        );
       }
     }
 
@@ -1283,6 +1409,7 @@ export default function LeadWizard() {
       // Pass work type and appointment for Service Appointment creation
       workType: effectiveWorkType,
       tentativeAppointmentDate: tentativeAppointmentDateTime,
+      tentativeAppointmentTime: effectiveTentativeAppointmentTime || null,
       createServiceAppointment: !!tentativeAppointmentDateTime,
       leadSetById: formData.leadSetById,
       leadStatus: effectiveLeadStatus,
@@ -1290,15 +1417,22 @@ export default function LeadWizard() {
     };
 
     const result = await leadsApi.convertLead(targetLeadId, conversionData);
+    const opportunityId = result?.opportunity?.id;
 
     setConversionResult({
       accountId: result.account?.id,
       accountName: result.account?.name,
       contactId: result.contact?.id,
       contactName: result.contact ? `${result.contact.firstName} ${result.contact.lastName}` : '',
-      opportunityId: result.opportunity?.id,
+      opportunityId,
       opportunityName: result.opportunity?.name,
     });
+
+    if (opportunityId) {
+      navigate(`/jobs/${opportunityId}?openResultAppointment=1`);
+    }
+
+    return result;
   };
 
   const openGuidedFlowModal = (leadIdOverride, options = {}) => {
@@ -1675,21 +1809,11 @@ export default function LeadWizard() {
       const currentGatingState = gatingStateResponse?.data || gatingStateResponse;
       setGatingState(currentGatingState);
 
-      // Decision gate is only required for INSPECTED leads that do not yet have a sales path.
-      if (currentGatingState?.funnelStatus === 'INSPECTED' && !currentGatingState?.salesPath) {
-        setWasInspected(null);
-        setSelectedOpportunityType(null);
-        setShowInspectionModal(true);
-        return;
-      }
-
-      // When sales path is already set (or lead is not at decision gate), convert directly.
+      // Convert directly; job type/workflow routing is handled in Result Appointment wizard.
       const resolvedOpportunityType = currentGatingState?.salesPath === 'RETAIL'
         ? 'RETAIL'
         : currentGatingState?.salesPath === 'INSURANCE'
           ? 'INSURANCE'
-        : formData.workType === 'Retail'
-          ? 'RETAIL'
           : 'INSURANCE';
       await convertLeadWithOpportunityType(resolvedOpportunityType, {
         leadId,
@@ -1718,6 +1842,11 @@ export default function LeadWizard() {
         const leadId = await handleSave();
         if (!leadId) return;
 
+        if (isNewLead && !hasSalesInRoleOrTitle && formData.leadSource) {
+          navigate(`/leads/${leadId}`);
+          return;
+        }
+
         if (!hasCallCenterAppointment) {
           setShowAppointmentPrompt(true);
           return;
@@ -1741,11 +1870,10 @@ export default function LeadWizard() {
           }
         }
 
-        if (isCallCenter) {
-          alert('Call Center Process Complete! The Sales Rep will take the lead from here.');
-          setCurrentStep(3);
-          return;
-        }
+                if (isCallCenter) {
+                  await handleOpenLeadRecord();
+                  return;
+                }
 
         openGuidedFlowModal(leadId);
         return;
@@ -1753,7 +1881,7 @@ export default function LeadWizard() {
         console.error('[LeadWizard] Gating check failed:', err);
         alert('Unable to validate lead gating rules. Please try again.');
       }
-    } else if (currentStep < 4) {
+    } else if (currentStep < totalSteps) {
       setCurrentStep(currentStep + 1);
     }
   };
@@ -1762,6 +1890,15 @@ export default function LeadWizard() {
     if (currentStep > 1) {
       setCurrentStep(currentStep - 1);
     }
+  };
+
+  const handleOpenLeadRecord = async () => {
+    const targetLeadId = await ensureLeadId();
+    if (!targetLeadId) {
+      alert('Please save the lead before opening the record.');
+      return;
+    }
+    navigate(`/leads/${targetLeadId}`);
   };
 
   // Calculate completion score
@@ -1840,7 +1977,7 @@ export default function LeadWizard() {
   }
 
   return (
-    <div className="space-y-6 pb-28 sm:pb-32">
+    <div className="space-y-6 pb-32 sm:pb-36">
       {/* Header */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
         <div className="flex items-center justify-between">
@@ -2771,7 +2908,7 @@ export default function LeadWizard() {
                 </div>
 
                 <button
-                  onClick={() => navigate(`/jobs/${conversionResult.opportunityId}`)}
+                  onClick={() => navigate(`/jobs/${conversionResult.opportunityId}?openResultAppointment=1`)}
                   className="mt-6 px-6 py-3 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg font-medium hover:opacity-90 inline-flex items-center"
                 >
                   Go to Job
@@ -2990,42 +3127,124 @@ export default function LeadWizard() {
 
       {/* Navigation Buttons */}
       {!conversionResult && (
-        <div className="fixed inset-x-0 bottom-0 z-50 px-3 pb-3 sm:px-6 sm:pb-4">
+        <div className="fixed inset-x-0 bottom-0 z-50 px-2 pb-2 sm:px-4 sm:pb-3">
           <div className="mx-auto max-w-screen-2xl">
-            <div className="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-white/95 p-3 shadow-lg backdrop-blur sm:p-4">
+            <div className="flex items-center justify-between gap-2 rounded-lg border border-gray-200 bg-white/95 p-2 shadow-lg backdrop-blur sm:gap-3 sm:p-2.5">
               <button
                 onClick={handlePrevious}
                 disabled={currentStep === 1}
-                className={`inline-flex items-center px-4 py-2 rounded-lg transition-colors ${
+                className={`inline-flex items-center rounded-lg px-3 py-1.5 text-sm transition-colors ${
                   currentStep === 1
                     ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
                     : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                 }`}
               >
-                <ChevronLeft className="w-5 h-5 mr-1" />
+                <ChevronLeft className="mr-1 h-4 w-4" />
                 Previous
               </button>
 
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                {/* Call Button - RingCentral Integration */}
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const phoneNumber = formData.phone || formData.mobilePhone;
+                    if (phoneNumber) {
+                      if (!isRingCentralReady) {
+                        await loadWidget();
+                      }
+                      setRingCentralVisible(true);
+                      clickToCall(phoneNumber);
+                    }
+                  }}
+                  disabled={!formData.phone && !formData.mobilePhone}
+                  className={`inline-flex items-center space-x-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-all sm:text-sm ${
+                    (formData.phone || formData.mobilePhone)
+                      ? currentCall
+                        ? 'bg-red-500 text-white hover:bg-red-600'
+                        : 'bg-green-500 text-white hover:bg-green-600'
+                      : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                  }`}
+                >
+                  {currentCall ? <PhoneCall className="w-4 h-4" /> : <Phone className="w-4 h-4" />}
+                  <span>{currentCall ? 'On Call' : 'Call'}</span>
+                </button>
+
+                {/* SMS Button */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSmsPhoneNumber(formData.mobilePhone || formData.phone || '');
+                    setShowSmsPanel(true);
+                  }}
+                  disabled={!formData.phone && !formData.mobilePhone}
+                  className={`inline-flex items-center space-x-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-all sm:text-sm ${
+                    formData.phone || formData.mobilePhone
+                      ? 'bg-blue-500 text-white hover:bg-blue-600'
+                      : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                  }`}
+                >
+                  <MessageSquare className="w-4 h-4" />
+                  <span>SMS</span>
+                </button>
+
+                {/* Email Button */}
+                <button
+                  type="button"
+                  onClick={() => setShowEmailPanel(true)}
+                  disabled={!formData.email}
+                  className={`inline-flex items-center space-x-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-all sm:text-sm ${
+                    formData.email
+                      ? 'bg-indigo-500 text-white hover:bg-indigo-600'
+                      : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                  }`}
+                >
+                  <Mail className="w-4 h-4" />
+                  <span>Email</span>
+                </button>
+              </div>
               <div className="flex items-center space-x-2 sm:space-x-3">
                 <button
                   onClick={() => navigate(-1)}
-                  className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
+                  className="px-3 py-1.5 text-sm text-gray-600 transition-colors hover:text-gray-800"
                 >
                   Cancel
                 </button>
                 {currentStep < totalSteps ? (
                   <button
                     onClick={handleNext}
-                    className="inline-flex items-center px-6 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90 transition-colors"
+                    className="inline-flex items-center rounded-lg bg-panda-primary px-4 py-1.5 text-sm text-white transition-colors hover:bg-panda-primary/90"
                   >
                     Next
-                    <ChevronRight className="w-5 h-5 ml-1" />
+                    <ChevronRight className="ml-1 h-4 w-4" />
+                  </button>
+                ) : isCallCenter ? (
+                  <button
+                    onClick={handleOpenLeadRecord}
+                    disabled={isSaving || !formData.leadSource}
+                    className={`inline-flex items-center rounded-lg px-4 py-1.5 text-sm transition-colors ${
+                      isSaving || !formData.leadSource
+                        ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                        : 'bg-panda-primary text-white hover:bg-panda-primary/90'
+                    }`}
+                  >
+                    {isSaving ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Saving...
+                      </>
+                    ) : (
+                      <>
+                        {isNewLead ? 'Create & Open Lead' : 'Open Lead Record'}
+                        <ArrowRight className="ml-1 h-4 w-4" />
+                      </>
+                    )}
                   </button>
                 ) : isNewLead ? (
                   <button
                     onClick={handleSave}
                     disabled={isSaving || !hasRequiredFields}
-                    className={`inline-flex items-center px-6 py-2 rounded-lg transition-colors ${
+                    className={`inline-flex items-center rounded-lg px-4 py-1.5 text-sm transition-colors ${
                       isSaving || !hasRequiredFields
                         ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                         : 'bg-green-500 text-white hover:bg-green-600'
@@ -3033,17 +3252,39 @@ export default function LeadWizard() {
                   >
                     {isSaving ? (
                       <>
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                         Creating...
                       </>
                     ) : (
                       <>
-                        <CheckCircle className="w-5 h-5 mr-2" />
+                        <CheckCircle className="mr-2 h-4 w-4" />
                         Create Lead
                       </>
                     )}
                   </button>
-                ) : null}
+                ) : (
+                  <button
+                    onClick={handleConvert}
+                    disabled={!canConvert || isConverting}
+                    className={`inline-flex items-center rounded-lg px-4 py-1.5 text-sm transition-colors ${
+                      !canConvert || isConverting
+                        ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                        : 'bg-panda-primary text-white hover:bg-panda-primary/90'
+                    }`}
+                  >
+                    {isConverting ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Converting...
+                      </>
+                    ) : (
+                      <>
+                        Convert to Job
+                        <ArrowRight className="ml-1 h-4 w-4" />
+                      </>
+                    )}
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -3262,7 +3503,7 @@ export default function LeadWizard() {
             {pendingSuggestedSlot?.appointmentDate && pendingSuggestedSlot?.appointmentTime && (
               <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 flex flex-wrap items-center justify-between gap-2">
                 <span>
-                  Suggested slot: {pendingSuggestedSlot.appointmentDate} at {pendingSuggestedSlot.appointmentTime}
+                  Suggested slot: {formatDateForDisplay(pendingSuggestedSlot.appointmentDate)} at {formatTimeForDisplay(pendingSuggestedSlot.appointmentTime)}
                 </span>
                 <button
                   type="button"
@@ -3312,12 +3553,7 @@ export default function LeadWizard() {
               <button
                 type="button"
                 onClick={async () => {
-                  const preferredDateTime = buildPreferredDateTime();
-                  if (!preferredDateTime) {
-                    setAppointmentPromptError('Select a valid date and time before confirming.');
-                    return;
-                  }
-                  const result = await requestAppointmentSuggestion({ preferredDateTime, allowFallback: false });
+                  const result = await persistSelectedAppointmentChoice();
                   if (result?.ready) {
                     setShowAppointmentPrompt(false);
                     if (!formData.leadSource) {
@@ -3718,7 +3954,7 @@ export default function LeadWizard() {
       )}
 
       {/* Add padding at bottom to account for fixed Quick Actions bar */}
-      <div className="h-20" />
+      <div className="h-16" />
     </div>
   );
 }

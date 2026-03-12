@@ -14,7 +14,7 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 // Configure multer for file uploads
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB limit for screenshots/docs in replies
 });
 
 // S3 configuration
@@ -27,6 +27,29 @@ function generateTicketNumber() {
   const timestamp = Date.now().toString().slice(-8);
   const random = Math.random().toString(36).substring(2, 6).toUpperCase();
   return `${prefix}-${timestamp}-${random}`;
+}
+
+function isSupportAdmin(user = {}) {
+  const roleType = String(user?.roleType || '').toLowerCase();
+  const roleName = String(user?.role?.name || user?.role || '').toLowerCase();
+  const groups = Array.isArray(user?.groups)
+    ? user.groups.map((group) => String(group).toLowerCase())
+    : [];
+
+  return roleType.includes('admin')
+    || roleName.includes('admin')
+    || roleType.includes('system_admin')
+    || roleName.includes('system_admin')
+    || groups.some((group) => group.includes('admin') || group.includes('support'));
+}
+
+function buildTicketIdentifierWhere(rawTicketId) {
+  return {
+    OR: [
+      { id: rawTicketId },
+      { ticket_number: rawTicketId },
+    ],
+  };
 }
 
 // Helper to upload to S3
@@ -84,10 +107,11 @@ router.get('/tickets', authMiddleware, async (req, res) => {
 // Get single ticket
 router.get('/tickets/:id', authMiddleware, async (req, res) => {
   try {
+    const canViewAllTickets = isSupportAdmin(req.user);
     const ticket = await prisma.support_tickets.findFirst({
       where: {
-        id: req.params.id,
-        user_id: req.user.id, // Users can only see their own tickets
+        ...buildTicketIdentifierWhere(req.params.id),
+        ...(canViewAllTickets ? {} : { user_id: req.user.id }),
       },
       include: {
         user: {
@@ -122,7 +146,7 @@ router.get('/tickets/:id', authMiddleware, async (req, res) => {
 
     // Get messages
     const messages = await prisma.support_ticket_messages.findMany({
-      where: { ticket_id: req.params.id },
+      where: { ticket_id: ticket.id },
       include: {
         user: {
           select: {
@@ -206,15 +230,25 @@ router.post('/tickets', authMiddleware, upload.fields([
 router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
   try {
     const { message, attachments } = req.body;
+    const normalizedMessage = typeof message === 'string' ? message.trim() : '';
+    const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+    if (!normalizedMessage && !hasAttachments) {
+      return res.status(400).json({ error: 'Message or attachment is required' });
+    }
 
     // Verify ticket belongs to user or user is admin
+    const canViewAllTickets = isSupportAdmin(req.user);
     const ticket = await prisma.support_tickets.findFirst({
       where: {
-        id: req.params.id,
-        OR: [
-          { user_id: req.user.id },
-          { assigned_to_id: req.user.id },
-        ],
+        ...buildTicketIdentifierWhere(req.params.id),
+        ...(canViewAllTickets
+          ? {}
+          : {
+              OR: [
+                { user_id: req.user.id },
+                { assigned_to_id: req.user.id },
+              ],
+            }),
       },
     });
 
@@ -225,12 +259,31 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
     // Create message
     const newMessage = await prisma.support_ticket_messages.create({
       data: {
-        ticket_id: req.params.id,
+        ticket_id: ticket.id,
         user_id: req.user.id,
-        message,
+        message: normalizedMessage || 'Attachment(s) uploaded',
         is_internal: false,
       },
     });
+
+    if (hasAttachments) {
+      for (const attachment of attachments) {
+        const fileUrl = attachment.file_url || attachment.url;
+        if (!fileUrl) continue;
+
+        await prisma.support_ticket_attachments.create({
+          data: {
+            ticket_id: ticket.id,
+            message_id: newMessage.id,
+            file_name: attachment.file_name || attachment.name || 'attachment',
+            file_url: fileUrl,
+            file_size: attachment.file_size || attachment.size || null,
+            file_type: attachment.file_type || attachment.type || null,
+            uploaded_by_id: req.user.id,
+          },
+        });
+      }
+    }
 
     // Update ticket timestamps
     const isUserMessage = req.user.id === ticket.user_id;
@@ -251,7 +304,7 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
     }
 
     await prisma.support_tickets.update({
-      where: { id: req.params.id },
+      where: { id: ticket.id },
       data: updateData,
     });
 
@@ -265,10 +318,7 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
 // Admin: Get all tickets
 router.get('/admin/tickets', authMiddleware, async (req, res) => {
   try {
-    // Check if user is admin
-    const isAdmin = req.user.roleType?.toLowerCase() === 'admin' ||
-                    req.user.role?.name?.toLowerCase()?.includes('admin');
-    if (!isAdmin) {
+    if (!isSupportAdmin(req.user)) {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
@@ -313,9 +363,7 @@ router.get('/admin/tickets', authMiddleware, async (req, res) => {
 // Admin: Get stats
 router.get('/admin/stats', authMiddleware, async (req, res) => {
   try {
-    const isAdmin = req.user.roleType?.toLowerCase() === 'admin' ||
-                    req.user.role?.name?.toLowerCase()?.includes('admin');
-    if (!isAdmin) {
+    if (!isSupportAdmin(req.user)) {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
@@ -358,9 +406,7 @@ router.get('/admin/stats', authMiddleware, async (req, res) => {
 // Admin: Export tickets
 router.get('/admin/export', authMiddleware, async (req, res) => {
   try {
-    const isAdmin = req.user.roleType?.toLowerCase() === 'admin' ||
-                    req.user.role?.name?.toLowerCase()?.includes('admin');
-    if (!isAdmin) {
+    if (!isSupportAdmin(req.user)) {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
@@ -635,13 +681,18 @@ router.get('/tickets/similar', authMiddleware, async (req, res) => {
 // Admin: Update ticket status/priority/assignment
 router.patch('/admin/tickets/:id', authMiddleware, async (req, res) => {
   try {
-    const isAdmin = req.user.roleType?.toLowerCase() === 'admin' ||
-                    req.user.role?.name?.toLowerCase()?.includes('admin');
-    if (!isAdmin) {
+    if (!isSupportAdmin(req.user)) {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
     const { status, priority, assigned_to_id } = req.body;
+    const existingTicket = await prisma.support_tickets.findFirst({
+      where: buildTicketIdentifierWhere(req.params.id),
+    });
+    if (!existingTicket) {
+      return res.status(404).json({ error: 'Ticket not found' });
+    }
+
     const updateData = {};
 
     if (status) updateData.status = status;
@@ -650,21 +701,17 @@ router.patch('/admin/tickets/:id', authMiddleware, async (req, res) => {
 
     // If resolving, record resolution time
     if (status === 'RESOLVED' || status === 'CLOSED') {
-      const ticket = await prisma.support_tickets.findUnique({
-        where: { id: req.params.id },
-      });
-
-      if (ticket && !ticket.resolved_at) {
+      if (!existingTicket.resolved_at) {
         updateData.resolved_at = new Date();
         updateData.resolved_by_id = req.user.id;
 
-        const diffMs = new Date() - new Date(ticket.created_at);
+        const diffMs = new Date() - new Date(existingTicket.created_at);
         updateData.resolution_time_mins = Math.floor(diffMs / 60000);
       }
     }
 
     const ticket = await prisma.support_tickets.update({
-      where: { id: req.params.id },
+      where: { id: existingTicket.id },
       data: updateData,
     });
 

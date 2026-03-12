@@ -40,6 +40,27 @@ const tabs = [
   { id: 'preferences', label: 'Preferences', icon: Palette },
 ];
 
+function deriveProfileFromUser(user) {
+  const fullName = user?.fullName || user?.name || '';
+  let firstName = user?.firstName || '';
+  let lastName = user?.lastName || '';
+
+  if (!firstName && fullName) {
+    const nameParts = String(fullName).trim().split(/\s+/);
+    firstName = nameParts[0] || '';
+    lastName = nameParts.slice(1).join(' ');
+  }
+
+  return {
+    firstName,
+    lastName,
+    email: user?.email || '',
+    phone: user?.phone || user?.mobilePhone || '',
+    department: user?.department || '',
+    title: user?.jobTitle || user?.title || '',
+  };
+}
+
 export default function Settings() {
   const { user } = useAuth();
   const { isLoggedIn: rcLoggedIn, loadWidget, logout: rcLogout } = useRingCentral();
@@ -106,14 +127,26 @@ export default function Settings() {
   }, [user?.id]);
 
   // Profile state
-  const [profile, setProfile] = useState({
-    firstName: user?.name?.split(' ')[0] || '',
-    lastName: user?.name?.split(' ').slice(1).join(' ') || '',
-    email: user?.email || '',
-    phone: '',
-    department: user?.department || '',
-    title: '',
-  });
+  const [profile, setProfile] = useState(() => deriveProfileFromUser(user));
+
+  useEffect(() => {
+    setProfile((prev) => ({
+      ...prev,
+      ...deriveProfileFromUser(user),
+    }));
+  }, [
+    user?.id,
+    user?.email,
+    user?.firstName,
+    user?.lastName,
+    user?.fullName,
+    user?.name,
+    user?.phone,
+    user?.mobilePhone,
+    user?.department,
+    user?.jobTitle,
+    user?.title,
+  ]);
 
   // Notification preferences
   const [notifications, setNotifications] = useState({

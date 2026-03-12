@@ -26,6 +26,22 @@ import {
 import api from '../../services/api';
 import AdminLayout from '../../components/AdminLayout';
 
+const PANDA_EMPLOYEE_EMAIL_DOMAINS = new Set(['pandaexteriors.com', 'panda-exteriors.com']);
+
+function normalizePandaEmployeeEmail(email) {
+  if (typeof email !== 'string') return email || '';
+  const trimmed = email.trim();
+  if (!trimmed) return '';
+
+  const atIndex = trimmed.lastIndexOf('@');
+  if (atIndex <= 0 || atIndex === trimmed.length - 1) return trimmed;
+
+  const localPart = trimmed.slice(0, atIndex);
+  const domainPart = trimmed.slice(atIndex + 1).toLowerCase();
+  if (!PANDA_EMPLOYEE_EMAIL_DOMAINS.has(domainPart)) return trimmed;
+  return `${localPart.replace(/\./g, '').toLowerCase()}@${domainPart}`;
+}
+
 export default function GoogleCalendar() {
   const navigate = useNavigate();
   const fileInputRef = useRef(null);
@@ -77,7 +93,7 @@ export default function GoogleCalendar() {
 
   const handleEditStart = (user) => {
     setEditingUserId(user.id);
-    setEditEmail(user.googleCalendarEmail || '');
+    setEditEmail(normalizePandaEmployeeEmail(user.googleCalendarEmail || user.email || ''));
   };
 
   const handleEditCancel = () => {
@@ -89,7 +105,7 @@ export default function GoogleCalendar() {
     try {
       setSavingUser(userId);
       await api.post(`/api/integrations/google/users/${userId}/link`, {
-        googleCalendarEmail: editEmail,
+        googleCalendarEmail: normalizePandaEmployeeEmail(editEmail),
         enableSync: true,
       });
       setEditingUserId(null);
@@ -139,7 +155,7 @@ export default function GoogleCalendar() {
   const handleAutoLinkAll = async () => {
     const unlinkedUsers = users.filter(u =>
       !u.googleCalendarEmail &&
-      u.email?.endsWith('@pandaexteriors.com')
+      normalizePandaEmployeeEmail(u.email || '').endsWith('@pandaexteriors.com')
     );
 
     if (unlinkedUsers.length === 0) {
@@ -157,13 +173,13 @@ export default function GoogleCalendar() {
     for (const user of unlinkedUsers) {
       try {
         await api.post(`/api/integrations/google/users/${user.id}/link`, {
-          googleCalendarEmail: user.email,
+          googleCalendarEmail: normalizePandaEmployeeEmail(user.email),
           enableSync: true,
         });
         results.success++;
       } catch (error) {
         results.failed++;
-        results.errors.push(`${user.email}: ${error.response?.data?.error?.message || error.message}`);
+        results.errors.push(`${normalizePandaEmployeeEmail(user.email)}: ${error.response?.data?.error?.message || error.message}`);
       }
     }
 
@@ -230,7 +246,7 @@ export default function GoogleCalendar() {
       // Match with existing users by email
       const preview = data.map(row => {
         const matchedUser = users.find(u =>
-          u.email?.toLowerCase() === row.userEmail.toLowerCase()
+          normalizePandaEmployeeEmail(u.email || '').toLowerCase() === normalizePandaEmployeeEmail(row.userEmail || '').toLowerCase()
         );
         return {
           ...row,
@@ -264,7 +280,7 @@ export default function GoogleCalendar() {
     for (const row of toImport) {
       try {
         await api.post(`/api/integrations/google/users/${row.userId}/link`, {
-          googleCalendarEmail: row.googleEmail,
+          googleCalendarEmail: normalizePandaEmployeeEmail(row.googleEmail),
           enableSync: true,
         });
         results.success++;
@@ -281,7 +297,7 @@ export default function GoogleCalendar() {
 
   const handleExportTemplate = () => {
     const csvContent = 'email,google_email\n' +
-      users.map(u => `${u.email || ''},${u.googleCalendarEmail || ''}`).join('\n');
+      users.map(u => `${normalizePandaEmployeeEmail(u.email || '')},${normalizePandaEmployeeEmail(u.googleCalendarEmail || '')}`).join('\n');
 
     const blob = new Blob([csvContent], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
@@ -294,8 +310,8 @@ export default function GoogleCalendar() {
 
   const filteredUsers = users.filter(u =>
     `${u.firstName} ${u.lastName}`.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    u.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    u.googleCalendarEmail?.toLowerCase().includes(searchTerm.toLowerCase())
+    normalizePandaEmployeeEmail(u.email || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+    normalizePandaEmployeeEmail(u.googleCalendarEmail || '').toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   const linkedCount = users.filter(u => u.googleCalendarEmail).length;
@@ -557,7 +573,7 @@ export default function GoogleCalendar() {
                       </div>
                       <div className="text-sm text-gray-500">{user.title || user.department || ''}</div>
                     </td>
-                    <td className="py-3 px-4 text-gray-600">{user.email}</td>
+                    <td className="py-3 px-4 text-gray-600">{normalizePandaEmployeeEmail(user.email)}</td>
                     <td className="py-3 px-4">
                       {editingUserId === user.id ? (
                         <input
@@ -570,7 +586,7 @@ export default function GoogleCalendar() {
                         />
                       ) : (
                         <span className={user.googleCalendarEmail ? 'text-gray-900' : 'text-gray-400 italic'}>
-                          {user.googleCalendarEmail || 'Not linked'}
+                          {normalizePandaEmployeeEmail(user.googleCalendarEmail) || 'Not linked'}
                         </span>
                       )}
                     </td>

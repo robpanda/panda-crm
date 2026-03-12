@@ -12,6 +12,7 @@ import leadRoutes from './routes/leads.js';
 import leadAssignmentRoutes from './routes/leadAssignment.js';
 import callCenterRoutes from './routes/callCenter.js';
 import callListRoutes from './routes/callLists.js';
+import salesRabbitWebhookRoutes from './routes/salesRabbitWebhook.js';
 
 const prisma = new PrismaClient();
 
@@ -36,6 +37,9 @@ app.use(morgan('combined', { stream: { write: (message) => logger.info(message.t
 app.get('/health', (req, res) => {
   res.json({ status: 'healthy', service: 'leads', timestamp: new Date().toISOString(), buildSha: process.env.BUILD_SHA || process.env.GITHUB_SHA || 'unknown', buildTime: process.env.BUILD_TIME || process.env.GITHUB_RUN_ID || null });
 });
+
+// SalesRabbit webhook routes are authenticated by shared secret (no Cognito auth header required)
+app.use('/api/leads/salesrabbit', salesRabbitWebhookRoutes);
 
 // Apply auth middleware to all routes below
 app.use(authMiddleware);
@@ -162,12 +166,12 @@ const initializeLeadScoring = async () => {
 // Score existing unscored leads on startup (batched to avoid overload)
 const scoreUnscoredLeadsOnStartup = async () => {
   try {
-    // Find unscored leads (where score is 0 or null and scored_at is null)
+    // Find unscored leads (where score is 0 or null and scoredAt is null)
     const unscoredLeads = await prisma.lead.findMany({
       where: {
         OR: [
-          { scored_at: null },
-          { lead_score: null },
+          { scoredAt: null },
+          { leadScore: null },
           { score: 0 },
         ],
         isConverted: false,
@@ -263,11 +267,11 @@ const scoreLeadSimple = async (leadId) => {
     where: { id: leadId },
     data: {
       score: score,
-      lead_score: score,
-      lead_rank: rank,
-      score_factors: factors,
-      scored_at: new Date(),
-      score_version: 1,
+      leadScore: score,
+      leadRank: rank,
+      scoreFactors: factors,
+      scoredAt: new Date(),
+      scoreVersion: 1,
     },
   });
 };

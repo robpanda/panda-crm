@@ -57,8 +57,8 @@ const createInvoiceSchema = z.object({
   lineItems: z.array(lineItemSchema),
   // Insurance invoice fields
   isInsuranceInvoice: z.boolean().optional(),
-  insuranceCarrier: z.string().optional(),
-  claimNumber: z.string().optional(),
+  insuranceCarrier: z.string().nullable().optional(),
+  claimNumber: z.string().nullable().optional(),
   notes: z.string().optional(),
 });
 

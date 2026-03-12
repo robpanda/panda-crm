@@ -3,6 +3,55 @@ import { PrismaClient } from '@prisma/client';
 import { logger } from '../middleware/logger.js';
 
 const prisma = new PrismaClient();
+const PANDA_EMPLOYEE_EMAIL_DOMAINS = new Set(['pandaexteriors.com', 'panda-exteriors.com']);
+
+const buildEmailLookupCandidates = (email) => {
+  if (typeof email !== 'string') return [];
+
+  const trimmed = email.trim();
+  if (!trimmed) return [];
+
+  const candidates = [];
+  const seen = new Set();
+
+  const addCandidate = (value) => {
+    const candidate = String(value || '').trim();
+    if (!candidate) return;
+    const key = candidate.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push(candidate);
+  };
+
+  const lowerEmail = trimmed.toLowerCase();
+  addCandidate(trimmed);
+  addCandidate(lowerEmail);
+
+  const atIndex = lowerEmail.lastIndexOf('@');
+  if (atIndex <= 0 || atIndex === lowerEmail.length - 1) {
+    return candidates;
+  }
+
+  const localPart = lowerEmail.slice(0, atIndex);
+  const domainPart = lowerEmail.slice(atIndex + 1);
+  addCandidate(`${localPart}@${domainPart}`);
+
+  if (PANDA_EMPLOYEE_EMAIL_DOMAINS.has(domainPart)) {
+    const dotlessLocalPart = localPart.replace(/\./g, '');
+    for (const domain of PANDA_EMPLOYEE_EMAIL_DOMAINS) {
+      addCandidate(`${localPart}@${domain}`);
+      addCandidate(`${dotlessLocalPart}@${domain}`);
+    }
+  }
+
+  return candidates;
+};
+
+const getEmailMatchRank = (email, rankedCandidates) => {
+  const normalized = String(email || '').toLowerCase();
+  const rank = rankedCandidates.indexOf(normalized);
+  return rank === -1 ? Number.MAX_SAFE_INTEGER : rank;
+};
 
 export const userService = {
   /**
@@ -169,8 +218,23 @@ export const userService = {
    * Get user by email with role and team information
    */
   async getUserByEmail(email) {
-    const user = await prisma.user.findUnique({
-      where: { email },
+    const emailCandidates = buildEmailLookupCandidates(email);
+    if (!emailCandidates.length) {
+      const error = new Error('User not found');
+      error.code = 'NOT_FOUND';
+      throw error;
+    }
+
+    const rankedCandidates = emailCandidates.map((candidate) => candidate.toLowerCase());
+    const users = await prisma.user.findMany({
+      where: {
+        OR: emailCandidates.map((candidate) => ({
+          email: {
+            equals: candidate,
+            mode: 'insensitive',
+          },
+        })),
+      },
       include: {
         role: {
           select: { id: true, name: true, roleType: true, permissionsJson: true },
@@ -186,6 +250,17 @@ export const userService = {
         },
       },
     });
+
+    const user = users.sort((a, b) => {
+      const rankA = getEmailMatchRank(a.email, rankedCandidates);
+      const rankB = getEmailMatchRank(b.email, rankedCandidates);
+      if (rankA !== rankB) return rankA - rankB;
+      if (a.isActive !== b.isActive) return Number(b.isActive) - Number(a.isActive);
+
+      const updatedAtA = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+      const updatedAtB = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+      return updatedAtB - updatedAtA;
+    })[0];
 
     if (!user) {
       const error = new Error('User not found');

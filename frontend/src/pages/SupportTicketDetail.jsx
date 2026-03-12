@@ -52,6 +52,9 @@ export default function SupportTicketDetail() {
   const [newMessage, setNewMessage] = useState('');
   const [attachments, setAttachments] = useState([]);
   const [uploading, setUploading] = useState(false);
+  const [adminStatus, setAdminStatus] = useState('');
+  const [adminPriority, setAdminPriority] = useState('');
+  const [updatingTicket, setUpdatingTicket] = useState(false);
 
   useEffect(() => {
     loadTicketDetail();
@@ -67,6 +70,8 @@ export default function SupportTicketDetail() {
       const response = await api.get(`/api/support/tickets/${id}`);
       setTicket(response.data.ticket);
       setMessages(response.data.messages || []);
+      setAdminStatus(response.data.ticket?.status || '');
+      setAdminPriority(response.data.ticket?.priority || '');
     } catch (error) {
       console.error('Failed to load ticket:', error);
     } finally {
@@ -163,6 +168,23 @@ export default function SupportTicketDetail() {
 
   const isAdmin = user?.roleType?.toLowerCase() === 'admin' ||
                   user?.role?.name?.toLowerCase()?.includes('admin');
+
+  const handleAdminUpdate = async () => {
+    if (!ticket?.id) return;
+    try {
+      setUpdatingTicket(true);
+      await api.patch(`/api/support/admin/tickets/${ticket.id}`, {
+        status: adminStatus || ticket.status,
+        priority: adminPriority || ticket.priority,
+      });
+      await loadTicketDetail();
+    } catch (error) {
+      console.error('Failed to update ticket:', error);
+      alert(error.response?.data?.error || 'Failed to update ticket');
+    } finally {
+      setUpdatingTicket(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -528,6 +550,41 @@ export default function SupportTicketDetail() {
           {/* Quick Actions (Admin Only) */}
           {isAdmin && (
             <div className="bg-white rounded-xl border border-gray-100 p-6">
+              <h3 className="font-semibold text-gray-900 mb-4">Admin Ticket Controls</h3>
+              <div className="space-y-3 mb-6">
+                <div>
+                  <label className="block text-sm text-gray-500 mb-1">Status</label>
+                  <select
+                    value={adminStatus}
+                    onChange={(e) => setAdminStatus(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                  >
+                    {Object.entries(STATUS_CONFIG).map(([value, config]) => (
+                      <option key={value} value={value}>{config.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-500 mb-1">Priority</label>
+                  <select
+                    value={adminPriority}
+                    onChange={(e) => setAdminPriority(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                  >
+                    {Object.entries(PRIORITY_CONFIG).map(([value, config]) => (
+                      <option key={value} value={value}>{config.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  onClick={handleAdminUpdate}
+                  disabled={updatingTicket}
+                  className="w-full px-4 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90 transition-colors disabled:opacity-50"
+                >
+                  {updatingTicket ? 'Saving...' : 'Save Ticket Updates'}
+                </button>
+              </div>
+
               <h3 className="font-semibold text-gray-900 mb-4">Admin Actions</h3>
               <div className="space-y-2">
                 <button

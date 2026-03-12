@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useContext } from 'react';
+import { useState, useEffect, useContext } from 'react';
 import { useParams, Link, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { leadsApi, bamboogliApi, usersApi } from '../services/api';
@@ -18,6 +18,7 @@ import InternalNotesTabs from '../components/InternalNotesTabs';
 import InternalComments from '../components/InternalComments';
 import CommunicationsTab from '../components/CommunicationsTab';
 import UserSearchDropdown from '../components/UserSearchDropdown';
+import { WIZARD_LEAD_SOURCES } from '../constants/leadOptions';
 
 // SMS Modal Component with Canned Responses
 function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {} }) {
@@ -425,6 +426,7 @@ function ActivityTab({ phone, email, leadName }) {
 const LEAD_STATUSES = [
   { value: 'NEW', label: 'New' },
   { value: 'CONTACTED', label: 'Contacted' },
+  { value: 'SCHEDULED', label: 'Confirmed' },
   { value: 'QUALIFIED', label: 'Qualified' },
   { value: 'UNQUALIFIED', label: 'Unqualified' },
   { value: 'CONVERTED', label: 'Converted' },
@@ -441,18 +443,7 @@ const LEAD_DISPOSITIONS = [
   { value: 'DO_NOT_CALL', label: 'Do Not Call' },
 ];
 
-const LEAD_SOURCES = [
-  { value: 'Website', label: 'Website' },
-  { value: 'Referral', label: 'Referral' },
-  { value: 'Door Knock', label: 'Door Knock' },
-  { value: 'Canvassing', label: 'Canvassing' },
-  { value: 'Self-Gen', label: 'Self-Gen' },
-  { value: 'RingCentral', label: 'RingCentral' },
-  { value: 'Marketing', label: 'Marketing' },
-  { value: 'Trade Show', label: 'Trade Show' },
-  { value: 'Partner', label: 'Partner' },
-  { value: 'Other', label: 'Other' },
-];
+const LEAD_SOURCES = WIZARD_LEAD_SOURCES;
 
 const PROPERTY_TYPES = [
   { value: 'Single Family', label: 'Single Family' },
@@ -490,6 +481,52 @@ const US_STATES = [
   { value: 'FL', label: 'Florida' },
 ];
 
+const normalizeLeadStatusForForm = (status) => {
+  if (!status) return 'NEW';
+  const normalized = String(status).trim().toUpperCase().replace(/\s+/g, '_');
+  if (normalized === 'CONFIRMED') return 'SCHEDULED';
+  return normalized;
+};
+
+const formatAppointmentDateDisplay = (value) => {
+  if (!value) return '-';
+  const raw = String(value).trim();
+  const isoMatch = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw);
+  if (isoMatch) {
+    const [, year, month, day] = isoMatch;
+    return `${month}/${day}/${year}`;
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '-';
+
+  const month = String(parsed.getMonth() + 1).padStart(2, '0');
+  const day = String(parsed.getDate()).padStart(2, '0');
+  const year = String(parsed.getFullYear());
+  return `${month}/${day}/${year}`;
+};
+
+const formatAppointmentTimeDisplay = (value) => {
+  if (!value) return '-';
+  const raw = String(value).trim();
+  const timeMatch = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(raw);
+
+  if (timeMatch) {
+    const hour = Number(timeMatch[1]);
+    const minute = timeMatch[2];
+    if (!Number.isFinite(hour) || hour < 0 || hour > 23) return raw;
+    const meridiem = hour >= 12 ? 'PM' : 'AM';
+    const hour12 = hour % 12 || 12;
+    return `${hour12}:${minute} ${meridiem}`;
+  }
+
+  const parsed = new Date(value);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  }
+
+  return raw;
+};
 export default function LeadDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -514,7 +551,6 @@ export default function LeadDetail() {
   const [leadActionStep, setLeadActionStep] = useState(null);
   const [noInspectionSuggestion, setNoInspectionSuggestion] = useState(null);
   const [isSuggestingInspectionSlot, setIsSuggestingInspectionSlot] = useState(false);
-  const hasShownLeadPromptRef = useRef(false);
 
   const { data: lead, isLoading } = useQuery({
     queryKey: ['lead', id],
@@ -557,6 +593,10 @@ export default function LeadDetail() {
       setActiveTab('internalComments');
       return;
     }
+    if (tabParam === 'messages' || tabParam === 'internal-comments') {
+      setActiveTab('internalComments');
+      return;
+    }
     if (tabParam === 'notes') {
       setActiveTab('internal');
       return;
@@ -579,26 +619,7 @@ export default function LeadDetail() {
     });
   }, [lead?.id, user?.id]);
 
-  const isSelfGenSource = (value) => {
-    if (!value) return false;
-    return value.toString().toLowerCase().replace(/[^a-z]/g, '') === 'selfgen';
-  };
-
   const isOwner = Boolean(user?.id && (lead?.ownerId === user.id || lead?.owner?.id === user.id));
-  const isLeadReadyForOwnerAction = Boolean(
-    lead &&
-    !lead.isConverted &&
-    (lead.source || lead.leadSource) &&
-    (lead.tentativeAppointmentDate || lead.tentativeAppointmentTime || isSelfGenSource(lead.source))
-  );
-
-  useEffect(() => {
-    if (!lead || !isLeadReadyForOwnerAction || !isOwner) return;
-    if (hasShownLeadPromptRef.current) return;
-    setLeadActionStep('action');
-    hasShownLeadPromptRef.current = true;
-  }, [lead, isLeadReadyForOwnerAction, isOwner]);
-
   useEffect(() => {
     if (!lead || leadActionStep !== 'noInspection') return;
     if (isSuggestingInspectionSlot) return;
@@ -631,7 +652,7 @@ export default function LeadDetail() {
         city: lead.city || '',
         state: lead.state || '',
         postalCode: lead.postalCode || '',
-        status: lead.status || 'NEW',
+        status: normalizeLeadStatusForForm(lead.status),
         leadSource: lead.source || lead.leadSource || '',
         rating: lead.rating || '',
         description: lead.description || '',
@@ -664,12 +685,6 @@ export default function LeadDetail() {
 
   const convertMutation = useMutation({
     mutationFn: async (conversionOverrides = {}) => {
-      // Sales Path Gating: validate before conversion
-      const gatingResult = await leadsApi.validatePreConversion(id);
-      if (!gatingResult?.success || gatingResult?.data?.blocked) {
-        const messages = gatingResult?.data?.messages || ['Lead cannot be converted. Please check all gating requirements.'];
-        throw new Error(messages.join('\n'));
-      }
       const conversionData = { ...conversionOverrides };
       // Pass tentative date/time so backend creates a ServiceAppointment
       if (lead?.tentativeAppointmentDate) {
@@ -692,7 +707,7 @@ export default function LeadDetail() {
         result?.job?.id ||
         result?.jobId;
       if (opportunityId) {
-        navigate(`/jobs/${opportunityId}`);
+        navigate(`/jobs/${opportunityId}?openResultAppointment=1`);
       }
     },
     onError: (error) => {
@@ -743,6 +758,12 @@ export default function LeadDetail() {
         cleanedData[key] = null;
       }
     });
+
+    if (Object.prototype.hasOwnProperty.call(cleanedData, 'leadSource')) {
+      cleanedData.source = cleanedData.leadSource;
+      delete cleanedData.leadSource;
+    }
+
     updateMutation.mutate(cleanedData);
   };
 
@@ -758,7 +779,7 @@ export default function LeadDetail() {
       city: lead.city || '',
       state: lead.state || '',
       postalCode: lead.postalCode || '',
-      status: lead.status || 'NEW',
+      status: normalizeLeadStatusForForm(lead.status),
       leadSource: lead.source || lead.leadSource || '',
       rating: lead.rating || '',
       description: lead.description || '',
@@ -790,7 +811,7 @@ export default function LeadDetail() {
       city: lead.city || '',
       state: lead.state || '',
       postalCode: lead.postalCode || '',
-      status: lead.status || 'NEW',
+      status: normalizeLeadStatusForForm(lead.status),
       leadSource: lead.source || lead.leadSource || '',
       rating: lead.rating || '',
       description: lead.description || '',
@@ -1008,7 +1029,7 @@ export default function LeadDetail() {
               {/* Convert to Job Button */}
               {lead.status !== 'CONVERTED' && !lead.isConverted && (
                 <button
-                  onClick={() => setLeadActionStep('inspection')}
+                  onClick={() => handleConvert()}
                   disabled={convertMutation.isPending || !isOwner}
                   className={`flex items-center space-x-2 px-4 py-2 rounded-lg ${
                     convertMutation.isPending || !isOwner
@@ -1467,6 +1488,18 @@ export default function LeadDetail() {
                 <span className="text-gray-500">Lead Source</span>
                 <span className="text-gray-900">{lead.source || lead.leadSource || '-'}</span>
               </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Lead Set By</span>
+                <span className="text-gray-900">
+                  {lead.leadSetBy
+                    ? `${lead.leadSetBy.firstName} ${lead.leadSetBy.lastName}`
+                    : lead.leadSetByName || '-'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Manager</span>
+                <span className="text-gray-900">{leadSetByManagerName || '-'}</span>
+              </div>
               {lead.isChampionReferral && (
                 <div className="mt-3 p-3 bg-amber-50 rounded-lg border border-amber-200">
                   <div className="flex items-center gap-2 text-amber-800 font-medium mb-2">
@@ -1574,18 +1607,6 @@ export default function LeadDetail() {
                     ? `${lead.owner.firstName} ${lead.owner.lastName}`
                     : lead.ownerName || 'Unassigned'}
                 </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Lead Set By</span>
-                <span className="text-gray-900">
-                  {lead.leadSetBy
-                    ? `${lead.leadSetBy.firstName} ${lead.leadSetBy.lastName}`
-                    : lead.leadSetByName || '-'}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Manager</span>
-                <span className="text-gray-900">{leadSetByManagerName || '-'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">Tentative Date</span>
@@ -1717,7 +1738,7 @@ export default function LeadDetail() {
               </button>
               <button
                 type="button"
-                onClick={() => setLeadActionStep('inspection')}
+                onClick={() => handleConvert()}
                 disabled={!isOwner}
                 className={`w-full px-4 py-2 rounded-lg ${
                   isOwner

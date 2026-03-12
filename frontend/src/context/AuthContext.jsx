@@ -19,6 +19,8 @@ export const ROLE_TYPES = {
   VIEWER: 'viewer',
 };
 
+const PANDA_EMPLOYEE_EMAIL_DOMAINS = new Set(['pandaexteriors.com', 'panda-exteriors.com']);
+
 // Map Cognito role names to role types
 function getRoleType(roleInput) {
   if (!roleInput) return ROLE_TYPES.SALES_REP;
@@ -37,6 +39,48 @@ function getRoleType(roleInput) {
   return ROLE_TYPES.SALES_REP;
 }
 
+function buildEmailLookupCandidates(email) {
+  if (typeof email !== 'string') return [];
+
+  const trimmed = email.trim();
+  if (!trimmed) return [];
+
+  const candidates = [];
+  const seen = new Set();
+
+  const addCandidate = (value) => {
+    const candidate = String(value || '').trim();
+    if (!candidate) return;
+    const key = candidate.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push(candidate);
+  };
+
+  const lowerEmail = trimmed.toLowerCase();
+  addCandidate(trimmed);
+  addCandidate(lowerEmail);
+
+  const atIndex = lowerEmail.lastIndexOf('@');
+  if (atIndex <= 0 || atIndex === lowerEmail.length - 1) {
+    return candidates;
+  }
+
+  const localPart = lowerEmail.slice(0, atIndex);
+  const domainPart = lowerEmail.slice(atIndex + 1);
+  addCandidate(`${localPart}@${domainPart}`);
+
+  if (PANDA_EMPLOYEE_EMAIL_DOMAINS.has(domainPart)) {
+    const dotlessLocalPart = localPart.replace(/\./g, '');
+    for (const domain of PANDA_EMPLOYEE_EMAIL_DOMAINS) {
+      addCandidate(`${localPart}@${domain}`);
+      addCandidate(`${dotlessLocalPart}@${domain}`);
+    }
+  }
+
+  return candidates;
+}
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -47,12 +91,14 @@ export function AuthProvider({ children }) {
   // Fetch extended user data from database
   const fetchExtendedUserData = async (cognitoUser) => {
     try {
-      // Look up user by email from Cognito - this is the reliable identifier
+      let dbUser = null;
       if (cognitoUser.email) {
-        const dbUser = await usersApi.getUserByEmail(cognitoUser.email).catch((err) => {
-          console.warn('Could not find user in database by email:', cognitoUser.email, err);
-          return null;
-        });
+        const emailCandidates = buildEmailLookupCandidates(cognitoUser.email);
+        for (const candidate of emailCandidates) {
+          // eslint-disable-next-line no-await-in-loop
+          dbUser = await usersApi.getUserByEmail(candidate).catch(() => null);
+          if (dbUser) break;
+        }
 
         if (dbUser) {
           // Get roleType from the role relation (set during migration)
@@ -60,10 +106,17 @@ export function AuthProvider({ children }) {
 
           // directReports are included in the getUserByEmail response
           const teamMembers = dbUser.directReports || [];
+          const firstName = dbUser.firstName || cognitoUser.firstName || '';
+          const lastName = dbUser.lastName || cognitoUser.lastName || '';
+          const fullName = dbUser.fullName || cognitoUser.name || `${firstName} ${lastName}`.trim() || null;
 
           return {
             ...cognitoUser,
             ...dbUser,
+            firstName,
+            lastName,
+            fullName,
+            name: fullName,
             roleType,
             teamMembers,
             isManager: teamMembers.length > 0,
@@ -71,13 +124,18 @@ export function AuthProvider({ children }) {
             officeAssignment: dbUser.officeAssignment,
           };
         }
+
+        console.warn('Could not find user in database by email candidates:', emailCandidates);
       }
     } catch (error) {
       console.error('Error fetching extended user data:', error);
     }
     // Return basic user with computed role type
+    const fallbackName = cognitoUser.name || [cognitoUser.firstName, cognitoUser.lastName].filter(Boolean).join(' ') || null;
     return {
       ...cognitoUser,
+      name: fallbackName,
+      fullName: fallbackName,
       roleType: getRoleType(cognitoUser.role),
       teamMembers: [],
       isManager: false,

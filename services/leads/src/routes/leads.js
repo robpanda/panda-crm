@@ -6,6 +6,13 @@ import { leadScoringService } from '../services/leadScoringService.js';
 
 const router = Router();
 
+const getAuditContext = (req) => ({
+  userId: req.user?.id,
+  userEmail: req.user?.email,
+  ipAddress: req.ip || req.headers['x-forwarded-for']?.split(',')[0],
+  userAgent: req.headers['user-agent'],
+});
+
 // Validation error handler
 const handleValidation = async (req, res, next) => {
   const { validationResult } = await import('express-validator');
@@ -23,7 +30,20 @@ const handleValidation = async (req, res, next) => {
 const validateCreate = [
   body('firstName').trim().notEmpty().withMessage('First name is required'),
   body('lastName').trim().notEmpty().withMessage('Last name is required'),
-  body('email').optional().isEmail().withMessage('Invalid email format'),
+  body('email')
+    .customSanitizer((value) => (typeof value === 'string' ? value.trim() : value))
+    .optional({ checkFalsy: true })
+    .isEmail()
+    .withMessage('Invalid email format'),
+  body('phone').custom((value, { req }) => {
+    const email = (req.body.email || '').trim();
+    const phone = (value || '').trim();
+    const mobilePhone = (req.body.mobilePhone || '').trim();
+    if (!email && !phone && !mobilePhone) {
+      throw new Error('Email or phone is required');
+    }
+    return true;
+  }),
 ];
 
 const validatePagination = [
@@ -64,6 +84,112 @@ router.get('/statuses', (req, res) => {
 // Get lead sources
 router.get('/sources', (req, res) => {
   res.json({ success: true, data: leadService.getLeadSources() });
+});
+
+// Internal comment departments (static list until dedicated comment service is wired)
+const internalCommentDepartments = [
+  { value: 'general', label: 'General' },
+  { value: 'sales', label: 'Sales' },
+  { value: 'production', label: 'Production' },
+  { value: 'admin', label: 'Admin' },
+  { value: 'finance', label: 'Finance' },
+];
+
+router.get('/comment-departments', (req, res) => {
+  res.json({
+    success: true,
+    data: internalCommentDepartments,
+  });
+});
+
+// Backward-compatible alias for clients that include lead id in the path
+router.get('/:id/comment-departments', (req, res) => {
+  res.json({
+    success: true,
+    data: internalCommentDepartments,
+  });
+});
+
+const resolveLeadIdFromRequest = (req) => (
+  req.params?.id
+  || req.query?.leadId
+  || req.query?.id
+  || req.body?.leadId
+  || req.body?.id
+);
+
+// Backward-compatible aliases for clients that call /internal-comments without /:id
+router.get('/internal-comments', async (req, res, next) => {
+  try {
+    const leadId = resolveLeadIdFromRequest(req);
+    if (!leadId) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'leadId is required' },
+      });
+    }
+    const comments = await leadService.getLeadInternalComments(leadId);
+    res.json({ success: true, data: comments });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/internal-comments', async (req, res, next) => {
+  try {
+    const leadId = resolveLeadIdFromRequest(req);
+    if (!leadId) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'leadId is required' },
+      });
+    }
+    const correlationId = req.headers['x-correlation-id'] || req.headers['x-request-id'] || null;
+    const payload = { ...req.body, correlationId };
+    const comment = await leadService.createLeadInternalComment(leadId, payload, req.user);
+    res.status(201).json({ success: true, data: comment });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/internal-comments/:commentId', async (req, res, next) => {
+  try {
+    const leadId = resolveLeadIdFromRequest(req);
+    if (!leadId) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'leadId is required' },
+      });
+    }
+    const correlationId = req.headers['x-correlation-id'] || req.headers['x-request-id'] || null;
+    const payload = { ...req.body, correlationId };
+    const comment = await leadService.updateLeadInternalComment(
+      leadId,
+      req.params.commentId,
+      payload,
+      req.user
+    );
+    res.json({ success: true, data: comment });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete('/internal-comments/:commentId', async (req, res, next) => {
+  try {
+    const leadId = resolveLeadIdFromRequest(req);
+    if (!leadId) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'leadId is required' },
+      });
+    }
+    const result = await leadService.deleteLeadInternalComment(leadId, req.params.commentId);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
 });
 
 // Get lead counts
@@ -512,6 +638,69 @@ router.post('/', validateCreate, handleValidation, async (req, res, next) => {
 // DYNAMIC :id ROUTES - Must come AFTER static routes
 // ============================================================================
 
+// Get lead gating state (sales path decision state + conversion blockers)
+router.get('/:id/gating/state', async (req, res, next) => {
+  try {
+    const state = await leadService.getGatingState(req.params.id);
+    res.json({ success: true, data: state });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Validate lead pre-conversion gating rules
+const handleValidatePreConversion = async (req, res, next) => {
+  try {
+    const result = await leadService.validatePreConversion(req.params.id);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+};
+router.post('/:id/gating/validate-pre-conversion', handleValidatePreConversion);
+router.get('/:id/gating/validate-pre-conversion', handleValidatePreConversion);
+
+// Select sales path (RETAIL/INSURANCE) for inspected leads
+router.post('/:id/gating/select-sales-path', async (req, res, next) => {
+  try {
+    const salesPath = req.body?.salesPath || req.body?.path || req.body?.opportunityType;
+    const result = await leadService.selectSalesPath(req.params.id, salesPath, getAuditContext(req));
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Apply gating transition (e.g. NO_INSPECTION, INSPECTED)
+const handleGatingTransition = async (req, res, next) => {
+  try {
+    const transition = req.body?.transition || req.body?.action || req.body?.target;
+    const result = await leadService.applyGatingTransition(req.params.id, transition, getAuditContext(req));
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+};
+router.post('/:id/gating/apply-transition', handleGatingTransition);
+router.post('/:id/gating/transition', handleGatingTransition);
+
+// Suggest an inspection appointment slot for the lead wizard
+router.post('/:id/appointment/suggest', async (req, res, next) => {
+  try {
+    const suggestion = await leadService.suggestInspectionAppointment(req.params.id, {
+      workType: req.body?.workType,
+      daysToSearch: req.body?.daysToSearch,
+      durationMinutes: req.body?.durationMinutes,
+      preferredDateTime: req.body?.preferredDateTime,
+      allowFallback: req.body?.allowFallback,
+      slotTimes: req.body?.slotTimes,
+    });
+    res.json({ success: true, data: suggestion });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Get lead by ID
 router.get('/:id', async (req, res, next) => {
   try {
@@ -527,12 +716,7 @@ router.put('/:id', async (req, res, next) => {
   try {
     const lead = await leadService.updateLead(req.params.id, {
       ...req.body,
-      _auditContext: {
-        userId: req.user?.id,
-        userEmail: req.user?.email,
-        ipAddress: req.ip || req.headers['x-forwarded-for']?.split(',')[0],
-        userAgent: req.headers['user-agent'],
-      },
+      _auditContext: getAuditContext(req),
     });
     res.json({ success: true, data: lead });
   } catch (error) {
@@ -544,12 +728,7 @@ router.patch('/:id', async (req, res, next) => {
   try {
     const lead = await leadService.updateLead(req.params.id, {
       ...req.body,
-      _auditContext: {
-        userId: req.user?.id,
-        userEmail: req.user?.email,
-        ipAddress: req.ip || req.headers['x-forwarded-for']?.split(',')[0],
-        userAgent: req.headers['user-agent'],
-      },
+      _auditContext: getAuditContext(req),
     });
     res.json({ success: true, data: lead });
   } catch (error) {
@@ -566,6 +745,13 @@ router.post('/:id/convert', async (req, res, next) => {
       opportunityType: req.body.opportunityType,
       closeDate: req.body.closeDate,
       createOpportunity: req.body.createOpportunity !== false,
+      workType: req.body.workType,
+      tentativeAppointmentDate: req.body.tentativeAppointmentDate,
+      tentativeAppointmentTime: req.body.tentativeAppointmentTime,
+      createServiceAppointment: req.body.createServiceAppointment !== false,
+      leadSetById: req.body.leadSetById,
+      leadStatus: req.body.leadStatus,
+      leadDisposition: req.body.leadDisposition,
     });
     res.json({ success: true, data: result });
   } catch (error) {
@@ -596,9 +782,10 @@ router.get('/:id/notes', async (req, res, next) => {
 // Add a note to a lead
 router.post('/:id/notes', async (req, res, next) => {
   try {
-    const { body, title, isPinned } = req.body;
+    const { body, title, isPinned, mentions } = req.body;
     // Support both 'body' and 'note' field names for compatibility
     const noteBody = body || req.body.note;
+    const correlationId = req.headers['x-correlation-id'] || req.headers['x-request-id'] || null;
 
     if (!noteBody || !noteBody.trim()) {
       return res.status(400).json({
@@ -611,9 +798,23 @@ router.post('/:id/notes', async (req, res, next) => {
       note: noteBody,
       title,
       isPinned,
+      mentions: Array.isArray(mentions) ? mentions : [],
       createdBy: req.user?.id,
+      correlationId,
     });
     res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Add a reply to a lead note
+router.post('/:id/notes/:noteId/replies', async (req, res, next) => {
+  try {
+    const correlationId = req.headers['x-correlation-id'] || req.headers['x-request-id'] || null;
+    const payload = { ...req.body, correlationId };
+    const result = await leadService.addLeadNoteReply(req.params.id, req.params.noteId, payload, req.user);
+    res.status(201).json({ success: true, data: result });
   } catch (error) {
     next(error);
   }
@@ -622,12 +823,15 @@ router.post('/:id/notes', async (req, res, next) => {
 // Update a note
 router.put('/:id/notes/:noteId', async (req, res, next) => {
   try {
-    const { title, body, isPinned } = req.body;
+    const { title, body, isPinned, mentions } = req.body;
+    const correlationId = req.headers['x-correlation-id'] || req.headers['x-request-id'] || null;
     const result = await leadService.updateLeadNote(req.params.id, req.params.noteId, {
       title,
       body,
       isPinned,
-    });
+      mentions: Array.isArray(mentions) ? mentions : [],
+      correlationId,
+    }, req.user);
     res.json({ success: true, data: result });
   } catch (error) {
     next(error);
@@ -644,10 +848,69 @@ router.delete('/:id/notes/:noteId', async (req, res, next) => {
   }
 });
 
+// Delete a reply from a lead note
+router.delete('/:id/notes/:noteId/replies/:replyId', async (req, res, next) => {
+  try {
+    const result = await leadService.deleteLeadNoteReply(req.params.id, req.params.noteId, req.params.replyId);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Toggle pin status of a note
 router.post('/:id/notes/:noteId/pin', async (req, res, next) => {
   try {
     const result = await leadService.toggleLeadNotePin(req.params.id, req.params.noteId);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Get internal comments for a lead
+router.get('/:id/internal-comments', async (req, res, next) => {
+  try {
+    const comments = await leadService.getLeadInternalComments(req.params.id);
+    res.json({ success: true, data: comments });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Create internal comment for a lead
+router.post('/:id/internal-comments', async (req, res, next) => {
+  try {
+    const correlationId = req.headers['x-correlation-id'] || req.headers['x-request-id'] || null;
+    const payload = { ...req.body, correlationId };
+    const comment = await leadService.createLeadInternalComment(req.params.id, payload, req.user);
+    res.status(201).json({ success: true, data: comment });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Update internal comment for a lead
+router.put('/:id/internal-comments/:commentId', async (req, res, next) => {
+  try {
+    const correlationId = req.headers['x-correlation-id'] || req.headers['x-request-id'] || null;
+    const payload = { ...req.body, correlationId };
+    const comment = await leadService.updateLeadInternalComment(
+      req.params.id,
+      req.params.commentId,
+      payload,
+      req.user
+    );
+    res.json({ success: true, data: comment });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Delete internal comment for a lead
+router.delete('/:id/internal-comments/:commentId', async (req, res, next) => {
+  try {
+    const result = await leadService.deleteLeadInternalComment(req.params.id, req.params.commentId);
     res.json({ success: true, data: result });
   } catch (error) {
     next(error);

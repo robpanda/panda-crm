@@ -9,6 +9,175 @@ const lambdaClient = new LambdaClient({ region: 'us-east-2' });
 
 // Job ID starting number (first job ID will be YYYY-1000)
 const JOB_ID_STARTING_NUMBER = 999;
+const INTERNAL_COMMENT_TITLE_PREFIX = 'INTERNAL_COMMENT|';
+const INTERNAL_COMMENT_REPLY_TITLE_PREFIX = 'INTERNAL_COMMENT_REPLY|';
+const LEGACY_INTERNAL_COMMENT_JSON_PREFIX = '__internal_comment__:';
+const NOTIFICATION_SERVICE_URL = process.env.NOTIFICATION_SERVICE_URL || 'http://localhost:3011';
+const MENTION_DISPATCH_ENDPOINT = `${NOTIFICATION_SERVICE_URL}/api/notifications/mentions/dispatch`;
+
+function normalizeDepartmentTag(value) {
+  const normalized = String(value || 'general')
+    .trim()
+    .toLowerCase()
+    .replace(/\|/g, '')
+    .replace(/\s+/g, '_');
+  return normalized || 'general';
+}
+
+function toInternalCommentTitle(departmentTag = 'general', isResolved = false) {
+  return `${INTERNAL_COMMENT_TITLE_PREFIX}${normalizeDepartmentTag(departmentTag)}|${isResolved ? '1' : '0'}`;
+}
+
+function toInternalCommentReplyTitle(parentCommentId, departmentTag = 'general', isResolved = false) {
+  return `${INTERNAL_COMMENT_REPLY_TITLE_PREFIX}${parentCommentId}|${normalizeDepartmentTag(departmentTag)}|${isResolved ? '1' : '0'}`;
+}
+
+function parseInternalCommentTitle(title) {
+  if (typeof title !== 'string' || !title.startsWith(INTERNAL_COMMENT_TITLE_PREFIX)) {
+    return null;
+  }
+
+  const remainder = title.slice(INTERNAL_COMMENT_TITLE_PREFIX.length);
+  const [departmentTagRaw = 'general', resolvedRaw = '0'] = remainder.split('|');
+  return {
+    departmentTag: normalizeDepartmentTag(departmentTagRaw),
+    isResolved: resolvedRaw === '1' || String(resolvedRaw).toLowerCase() === 'true',
+  };
+}
+
+function parseInternalCommentReplyTitle(title) {
+  if (typeof title !== 'string' || !title.startsWith(INTERNAL_COMMENT_REPLY_TITLE_PREFIX)) {
+    return null;
+  }
+
+  const remainder = title.slice(INTERNAL_COMMENT_REPLY_TITLE_PREFIX.length);
+  const [parentCommentId = '', departmentTagRaw = 'general', resolvedRaw = '0'] = remainder.split('|');
+  if (!parentCommentId) return null;
+  return {
+    parentCommentId,
+    departmentTag: normalizeDepartmentTag(departmentTagRaw),
+    isResolved: resolvedRaw === '1' || String(resolvedRaw).toLowerCase() === 'true',
+  };
+}
+
+function parseLegacyReplyTitle(title) {
+  if (typeof title !== 'string' || !title.startsWith('REPLY|')) {
+    return null;
+  }
+  const parentCommentId = title.slice('REPLY|'.length).split('|')[0];
+  if (!parentCommentId) return null;
+  return { parentCommentId };
+}
+
+function parseLegacyInternalCommentJsonTitle(title) {
+  if (typeof title !== 'string') return null;
+  const trimmed = title.trim();
+  if (!trimmed.toLowerCase().startsWith(LEGACY_INTERNAL_COMMENT_JSON_PREFIX)) {
+    return null;
+  }
+
+  const rawPayload = trimmed.slice(LEGACY_INTERNAL_COMMENT_JSON_PREFIX.length);
+  if (!rawPayload) {
+    return {
+      departmentTag: 'general',
+      isResolved: false,
+      parentCommentId: null,
+    };
+  }
+
+  try {
+    const payload = JSON.parse(rawPayload);
+    return {
+      departmentTag: normalizeDepartmentTag(payload.departmentTag || payload.department || 'general'),
+      isResolved: Boolean(payload.isResolved ?? payload.resolved ?? false),
+      parentCommentId: payload.parentCommentId || payload.parentId || null,
+    };
+  } catch (error) {
+    logger.warn(`Failed to parse legacy internal comment title "${trimmed}": ${error.message}`);
+    return {
+      departmentTag: 'general',
+      isResolved: false,
+      parentCommentId: null,
+    };
+  }
+}
+
+function isLegacyInternalCommentTitle(title) {
+  if (typeof title !== 'string') return false;
+  const normalized = title.trim().toUpperCase().replace(/\s+/g, '_');
+  return normalized === 'INTERNAL_COMMENT' || normalized === 'INTERNAL_COMMENTS';
+}
+
+function parseInternalCommentMeta(title) {
+  const replyMeta = parseInternalCommentReplyTitle(title);
+  if (replyMeta) {
+    return {
+      ...replyMeta,
+      isReply: true,
+      isInternal: true,
+    };
+  }
+
+  const internalMeta = parseInternalCommentTitle(title);
+  if (internalMeta) {
+    return {
+      ...internalMeta,
+      parentCommentId: null,
+      isReply: false,
+      isInternal: true,
+    };
+  }
+
+  const legacyJsonMeta = parseLegacyInternalCommentJsonTitle(title);
+  if (legacyJsonMeta) {
+    return {
+      ...legacyJsonMeta,
+      isReply: Boolean(legacyJsonMeta.parentCommentId),
+      isInternal: true,
+    };
+  }
+
+  if (isLegacyInternalCommentTitle(title)) {
+    return {
+      departmentTag: 'general',
+      isResolved: false,
+      parentCommentId: null,
+      isReply: false,
+      isInternal: true,
+    };
+  }
+
+  return {
+    departmentTag: 'general',
+    isResolved: false,
+    parentCommentId: null,
+    isReply: false,
+    isInternal: false,
+  };
+}
+
+function sortInternalCommentTree(nodes, root = false) {
+  nodes.sort((a, b) => {
+    const aTime = new Date(a.createdAt).getTime();
+    const bTime = new Date(b.createdAt).getTime();
+    return root ? bTime - aTime : aTime - bTime;
+  });
+  nodes.forEach((node) => {
+    if (node.replies?.length) {
+      sortInternalCommentTree(node.replies, false);
+    }
+  });
+}
+
+function extractMentionUserId(mention) {
+  if (!mention) return null;
+  if (typeof mention === 'string') return mention;
+  return mention.userId || mention.id || null;
+}
+
+function buildCorrelationId(prefix, entityId) {
+  return `${prefix}-${entityId}-${Date.now()}`;
+}
 
 // Audit logging helper
 const logAudit = async ({ tableName, recordId, action, oldValues, newValues, userId, userEmail, source = 'api' }) => {
@@ -79,6 +248,285 @@ class LeadService {
     const upper = rating.toUpperCase();
     if (['HOT', 'WARM', 'COLD'].includes(upper)) return upper;
     return null;
+  }
+
+  /**
+   * Normalize optional text field to trimmed string or null
+   */
+  normalizeOptionalText(value) {
+    if (value === undefined || value === null) return null;
+    const trimmed = String(value).trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  resolveLeadCustomerName(lead = {}) {
+    const firstName = this.normalizeOptionalText(lead.firstName);
+    const lastName = this.normalizeOptionalText(lead.lastName);
+    const fullName = [firstName, lastName].filter(Boolean).join(' ').trim();
+    const companyName = this.normalizeOptionalText(lead.company);
+    return fullName || companyName || null;
+  }
+
+  buildConvertedOpportunityName(lead = {}) {
+    return this.resolveLeadCustomerName(lead) || 'Customer';
+  }
+
+  buildConvertedAccountName(lead = {}, jobId = null) {
+    const customerName = this.resolveLeadCustomerName(lead) || 'Customer';
+    return jobId ? `${jobId} ${customerName}` : customerName;
+  }
+
+  /**
+   * Scheduling timezone used when date/time payloads arrive without an explicit timezone offset.
+   */
+  getSchedulingTimeZone() {
+    return process.env.APPOINTMENT_TIMEZONE || process.env.BUSINESS_TIMEZONE || 'America/New_York';
+  }
+
+  /**
+   * Build a UTC Date that represents a wall-clock time in a target IANA timezone.
+   */
+  buildZonedDate({ year, month, day, hour = 0, minute = 0, second = 0, timeZone = this.getSchedulingTimeZone() }) {
+    const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hour12: false,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+    const parts = formatter.formatToParts(utcGuess).reduce((acc, part) => {
+      if (part.type !== 'literal') acc[part.type] = part.value;
+      return acc;
+    }, {});
+
+    const asUtc = Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      Number(parts.hour),
+      Number(parts.minute),
+      Number(parts.second)
+    );
+    const offsetMs = asUtc - utcGuess.getTime();
+
+    return new Date(Date.UTC(year, month - 1, day, hour, minute, second) - offsetMs);
+  }
+
+  formatDateForTimeZone(date, timeZone = this.getSchedulingTimeZone()) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(date).reduce((acc, part) => {
+      if (part.type !== 'literal') acc[part.type] = part.value;
+      return acc;
+    }, {});
+    return `${parts.year}-${parts.month}-${parts.day}`;
+  }
+
+  formatTimeForTimeZone(date, timeZone = this.getSchedulingTimeZone()) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+    }).formatToParts(date).reduce((acc, part) => {
+      if (part.type !== 'literal') acc[part.type] = part.value;
+      return acc;
+    }, {});
+    return `${parts.hour}:${parts.minute}`;
+  }
+
+  async generateWorkOrderNumber(tx = prisma) {
+    const lastWorkOrder = await tx.workOrder.findFirst({
+      orderBy: { createdAt: 'desc' },
+      select: { workOrderNumber: true },
+    });
+
+    const lastNumber = lastWorkOrder?.workOrderNumber
+      ? Number((String(lastWorkOrder.workOrderNumber).match(/WO-(\d+)/i) || [])[1] || 0)
+      : 0;
+
+    const nextNumber = Number.isFinite(lastNumber) ? lastNumber + 1 : 1;
+    return `WO-${String(nextNumber).padStart(6, '0')}`;
+  }
+
+  async generateAppointmentNumber(tx = prisma) {
+    const lastAppointment = await tx.serviceAppointment.findFirst({
+      orderBy: { createdAt: 'desc' },
+      select: { appointmentNumber: true },
+    });
+
+    const lastNumber = lastAppointment?.appointmentNumber
+      ? Number((String(lastAppointment.appointmentNumber).match(/SA-(\d+)/i) || [])[1] || 0)
+      : 0;
+
+    const nextNumber = Number.isFinite(lastNumber) ? lastNumber + 1 : 1;
+    return `SA-${String(nextNumber).padStart(6, '0')}`;
+  }
+
+  async generateJobId(tx = prisma) {
+    const currentYear = new Date().getFullYear();
+
+    const sequences = await tx.$queryRaw`
+      SELECT id, year, last_number
+      FROM job_id_sequences
+      WHERE year = ${currentYear}
+      FOR UPDATE
+    `;
+
+    let nextNumber;
+    if (!sequences || sequences.length === 0) {
+      const newSequenceId = `job-seq-${currentYear}`;
+      await tx.$executeRaw`
+        INSERT INTO job_id_sequences (id, year, last_number, created_at, updated_at)
+        VALUES (${newSequenceId}, ${currentYear}, ${JOB_ID_STARTING_NUMBER + 1}, NOW(), NOW())
+      `;
+      nextNumber = JOB_ID_STARTING_NUMBER + 1;
+    } else {
+      nextNumber = Number(sequences[0].last_number) + 1;
+      await tx.$executeRaw`
+        UPDATE job_id_sequences
+        SET last_number = ${nextNumber}, updated_at = NOW()
+        WHERE year = ${currentYear}
+      `;
+    }
+
+    return `${currentYear}-${nextNumber}`;
+  }
+
+  /**
+   * Parse tentative appointment date/time into a stable Date.
+   * Accepts full ISO strings (preferred) and date-only + time fallback.
+   */
+  parseTentativeAppointmentDate(dateValue, timeValue = null) {
+    if (!dateValue) return null;
+
+    if (dateValue instanceof Date) {
+      if (Number.isNaN(dateValue.getTime())) return null;
+      return new Date(dateValue.getTime());
+    }
+
+    let raw = String(dateValue).trim();
+    if (!raw) return null;
+
+    const hasTimezone = /(?:Z|[+-]\d{2}:\d{2})$/i.test(raw);
+    if (hasTimezone) {
+      const parsedWithTimezone = new Date(raw);
+      return Number.isNaN(parsedWithTimezone.getTime()) ? null : parsedWithTimezone;
+    }
+
+    const [datePart, rawTimePart] = raw.split('T');
+    const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(datePart);
+    if (!dateMatch) return null;
+
+    let timePart = rawTimePart || '';
+    if (!timePart && typeof timeValue === 'string' && /^\d{2}:\d{2}$/.test(timeValue.trim())) {
+      timePart = `${timeValue.trim()}:00`;
+    }
+
+    const timeMatch = /^(\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d{1,3})?$/.exec(timePart || '00:00:00');
+    if (!timeMatch) return null;
+
+    const [, y, m, d] = dateMatch;
+    const [, hh, mm, ss = '00'] = timeMatch;
+
+    const zonedDate = this.buildZonedDate({
+      year: Number(y),
+      month: Number(m),
+      day: Number(d),
+      hour: Number(hh),
+      minute: Number(mm),
+      second: Number(ss),
+    });
+
+    return Number.isNaN(zonedDate.getTime()) ? null : zonedDate;
+  }
+
+  async suggestInspectionAppointment(id, options = {}) {
+    const lead = await prisma.lead.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        ownerId: true,
+        leadSetById: true,
+        owner: { select: { id: true, firstName: true, lastName: true } },
+        leadSetBy: { select: { id: true, firstName: true, lastName: true } },
+      },
+    });
+
+    if (!lead) {
+      const error = new Error(`Lead not found: ${id}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const daysToSearchInput = Number.parseInt(options.daysToSearch, 10);
+    const daysToSearch = Number.isFinite(daysToSearchInput)
+      ? Math.min(Math.max(daysToSearchInput, 1), 30)
+      : 14;
+    const allowFallback = options.allowFallback !== false;
+    const slotTimes = Array.isArray(options.slotTimes) && options.slotTimes.length > 0
+      ? options.slotTimes.filter(slot => /^\d{2}:\d{2}$/.test(String(slot)))
+      : ['09:00', '11:00', '13:00', '15:00'];
+
+    const now = new Date();
+    const minLeadTime = new Date(now.getTime() + (30 * 60 * 1000));
+    const windowEnd = new Date(now.getTime() + (daysToSearch * 24 * 60 * 60 * 1000));
+    const schedulingTimeZone = this.getSchedulingTimeZone();
+
+    const preferredDate = options.preferredDateTime
+      ? this.parseTentativeAppointmentDate(options.preferredDateTime)
+      : null;
+
+    if (preferredDate && preferredDate >= minLeadTime && preferredDate <= windowEnd) {
+      return {
+        found: true,
+        appointmentDate: this.formatDateForTimeZone(preferredDate, schedulingTimeZone),
+        appointmentTime: this.formatTimeForTimeZone(preferredDate, schedulingTimeZone),
+        ownerId: lead.owner?.id || lead.ownerId || lead.leadSetBy?.id || lead.leadSetById || null,
+        ownerName: lead.owner
+          ? `${lead.owner.firstName || ''} ${lead.owner.lastName || ''}`.trim()
+          : (lead.leadSetBy ? `${lead.leadSetBy.firstName || ''} ${lead.leadSetBy.lastName || ''}`.trim() : ''),
+      };
+    }
+
+    if (preferredDate && !allowFallback) {
+      return {
+        found: false,
+        reason: 'PREFERRED_SLOT_UNAVAILABLE',
+      };
+    }
+
+    for (let dayOffset = 0; dayOffset < daysToSearch; dayOffset += 1) {
+      const day = new Date(now.getTime() + (dayOffset * 24 * 60 * 60 * 1000));
+      const dateString = this.formatDateForTimeZone(day, schedulingTimeZone);
+
+      for (const slot of slotTimes) {
+        const candidate = this.parseTentativeAppointmentDate(dateString, slot);
+        if (!candidate || candidate < minLeadTime || candidate > windowEnd) continue;
+
+        return {
+          found: true,
+          appointmentDate: dateString,
+          appointmentTime: slot,
+          ownerId: lead.owner?.id || lead.ownerId || lead.leadSetBy?.id || lead.leadSetById || null,
+          ownerName: lead.owner
+            ? `${lead.owner.firstName || ''} ${lead.owner.lastName || ''}`.trim()
+            : (lead.leadSetBy ? `${lead.leadSetBy.firstName || ''} ${lead.leadSetBy.lastName || ''}`.trim() : ''),
+        };
+      }
+    }
+
+    return {
+      found: false,
+      reason: preferredDate ? 'PREFERRED_SLOT_UNAVAILABLE' : 'NO_AVAILABLE_SLOTS_IN_2_WEEKS',
+    };
   }
 
   /**
@@ -253,15 +701,24 @@ class LeadService {
     }
 
     // By status (with owner filter if specified)
-    const statusCounts = await prisma.lead.groupBy({
-      by: ['status'],
-      where: { isConverted: false, deleted_at: null, ...ownerWhere },
-      _count: { id: true },
-    });
+    // Use raw SQL here so legacy/non-enum status values do not crash Prisma enum decoding.
+    let statusQueryWhere = Prisma.sql`WHERE is_converted = false AND deleted_at IS NULL`;
+    if (ownerIds && ownerIds.length > 0) {
+      statusQueryWhere = Prisma.sql`${statusQueryWhere} AND owner_id IN (${Prisma.join(ownerIds)})`;
+    } else if (ownerId) {
+      statusQueryWhere = Prisma.sql`${statusQueryWhere} AND owner_id = ${ownerId}`;
+    }
+
+    const statusCounts = await prisma.$queryRaw`
+      SELECT status::text AS status, COUNT(*)::int AS count
+      FROM leads
+      ${statusQueryWhere}
+      GROUP BY status
+    `;
 
     for (const item of statusCounts) {
       if (item.status) {
-        counts[item.status] = item._count.id;
+        counts[item.status] = item.count;
       }
     }
 
@@ -311,6 +768,17 @@ class LeadService {
       include: {
         owner: {
           select: { id: true, firstName: true, lastName: true, email: true },
+        },
+        leadSetBy: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            managerId: true,
+            manager: {
+              select: { id: true, firstName: true, lastName: true },
+            },
+          },
         },
         notes: {
           orderBy: { createdAt: 'desc' },
@@ -375,9 +843,10 @@ class LeadService {
     // Map frontend fields to schema fields
     // creatorId -> ownerId (the person who created/owns the lead)
     // leadSetById -> assignedById (the person who assigned/set the lead)
+    const auditUserId = data._auditContext?.userId || null;
     const rawOwnerId = data.ownerId || data.creatorId || null;
     const rawAssignedById = data.leadSetById || data.assignedById || null;
-    const rawLeadSetById = data.leadSetById || null;
+    const rawLeadSetById = data.leadSetById || data.creatorId || auditUserId || null;
 
     // Resolve Cognito IDs to actual user IDs
     const ownerId = await this.resolveUserId(rawOwnerId);
@@ -388,9 +857,9 @@ class LeadService {
       data: {
         firstName: data.firstName,
         lastName: data.lastName,
-        email: data.email,
-        phone: data.phone,
-        mobilePhone: data.mobilePhone,
+        email: this.normalizeOptionalText(data.email),
+        phone: this.normalizeOptionalText(data.phone),
+        mobilePhone: this.normalizeOptionalText(data.mobilePhone),
         company: data.company,
         street: data.street,
         city: data.city,
@@ -413,8 +882,8 @@ class LeadService {
         selfGenRepId: data.selfGenRepId,
         salesforceId: data.salesforceId,
         // Call Center - Tentative Appointment fields (per Setting A Lead SOP)
-        tentativeAppointmentDate: data.tentativeAppointmentDate ? new Date(data.tentativeAppointmentDate) : null,
-        tentativeAppointmentTime: data.tentativeAppointmentTime,
+        tentativeAppointmentDate: this.parseTentativeAppointmentDate(data.tentativeAppointmentDate, data.tentativeAppointmentTime),
+        tentativeAppointmentTime: this.normalizeOptionalText(data.tentativeAppointmentTime),
         leadSetById: leadSetById,
         disposition: data.disposition,
       },
@@ -527,16 +996,15 @@ class LeadService {
       const rank = score >= 80 ? 'A' : score >= 60 ? 'B' : score >= 40 ? 'C' : score >= 20 ? 'D' : 'F';
 
       // Update lead with score
-      // Note: Using underscore field names from schema (lead_rank, lead_score, etc.)
       await prisma.lead.update({
         where: { id: leadId },
         data: {
           score: score,
-          lead_score: score,
-          lead_rank: rank,
-          score_factors: factors,
-          scored_at: new Date(),
-          score_version: 1,
+          leadScore: score,
+          leadRank: rank,
+          scoreFactors: factors,
+          scoredAt: new Date(),
+          scoreVersion: 1,
         },
       });
 
@@ -592,9 +1060,9 @@ class LeadService {
 
     if (data.firstName !== undefined) updateData.firstName = data.firstName;
     if (data.lastName !== undefined) updateData.lastName = data.lastName;
-    if (data.email !== undefined) updateData.email = data.email || null;
-    if (data.phone !== undefined) updateData.phone = data.phone || null;
-    if (data.mobilePhone !== undefined) updateData.mobilePhone = data.mobilePhone || null;
+    if (data.email !== undefined) updateData.email = this.normalizeOptionalText(data.email);
+    if (data.phone !== undefined) updateData.phone = this.normalizeOptionalText(data.phone);
+    if (data.mobilePhone !== undefined) updateData.mobilePhone = this.normalizeOptionalText(data.mobilePhone);
     if (data.company !== undefined) updateData.company = data.company || null;
     if (data.street !== undefined) updateData.street = data.street || null;
     if (data.city !== undefined) updateData.city = data.city || null;
@@ -614,9 +1082,12 @@ class LeadService {
     if (data.salesRabbitUser !== undefined) updateData.salesRabbitUser = data.salesRabbitUser || null;
     // Call Center - Tentative Appointment fields
     if (data.tentativeAppointmentDate !== undefined) {
-      updateData.tentativeAppointmentDate = data.tentativeAppointmentDate ? new Date(data.tentativeAppointmentDate) : null;
+      updateData.tentativeAppointmentDate = this.parseTentativeAppointmentDate(
+        data.tentativeAppointmentDate,
+        data.tentativeAppointmentTime
+      );
     }
-    if (data.tentativeAppointmentTime !== undefined) updateData.tentativeAppointmentTime = data.tentativeAppointmentTime || null;
+    if (data.tentativeAppointmentTime !== undefined) updateData.tentativeAppointmentTime = this.normalizeOptionalText(data.tentativeAppointmentTime);
     if (data.disposition !== undefined) updateData.disposition = data.disposition || null;
 
     const lead = await prisma.lead.update({
@@ -680,12 +1151,51 @@ class LeadService {
       throw error;
     }
 
+    const resolvedTentativeAppointmentTime =
+      options.tentativeAppointmentTime !== undefined
+        ? this.normalizeOptionalText(options.tentativeAppointmentTime)
+        : lead.tentativeAppointmentTime;
+
+    const tentativeAppointmentInput = options.tentativeAppointmentDate ?? lead.tentativeAppointmentDate;
+    const resolvedTentativeAppointmentDate = this.parseTentativeAppointmentDate(
+      tentativeAppointmentInput,
+      resolvedTentativeAppointmentTime
+    );
+
+    if (tentativeAppointmentInput && !resolvedTentativeAppointmentDate) {
+      const error = new Error('Invalid tentative appointment date/time');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const shouldCreateServiceAppointment = options.createServiceAppointment !== false && !!resolvedTentativeAppointmentDate;
+    const resolvedConversionOwnerId =
+      options.ownerId
+      || lead.ownerId
+      || options.leadSetById
+      || lead.leadSetById
+      || null;
+
     // Use transaction for conversion
     const result = await prisma.$transaction(async (tx) => {
+      let jobId = null;
+      if (options.createOpportunity !== false) {
+        try {
+          jobId = await this.generateJobId(tx);
+          logger.info(`Generated Job ID: ${jobId} for lead conversion`);
+        } catch (err) {
+          // Log error but don't fail the conversion - Job ID can be assigned later
+          logger.warn(`Failed to generate Job ID: ${err.message}`);
+        }
+      }
+
+      const defaultOpportunityName = this.buildConvertedOpportunityName(lead);
+      const defaultAccountName = this.buildConvertedAccountName(lead, jobId);
+
       // Create Account
       const account = await tx.account.create({
         data: {
-          name: options.accountName || lead.company || `${lead.firstName} ${lead.lastName}`,
+          name: defaultAccountName,
           billingStreet: lead.street,
           billingCity: lead.city,
           billingState: lead.state,
@@ -694,7 +1204,7 @@ class LeadService {
           email: lead.email,
           type: 'RESIDENTIAL',
           status: 'NEW',
-          ownerId: lead.ownerId,
+          ownerId: resolvedConversionOwnerId,
         },
       });
 
@@ -719,47 +1229,9 @@ class LeadService {
       // Create Opportunity if requested
       let opportunity = null;
       if (options.createOpportunity !== false) {
-        // Generate Job ID within transaction using row-level lock
-        const currentYear = new Date().getFullYear();
-        let jobId = null;
-
-        try {
-          // Try to get and lock the sequence row for this year
-          const sequences = await tx.$queryRaw`
-            SELECT id, year, last_number
-            FROM job_id_sequences
-            WHERE year = ${currentYear}
-            FOR UPDATE
-          `;
-
-          let nextNumber;
-          if (!sequences || sequences.length === 0) {
-            // First job of the year - create the sequence
-            await tx.jobIdSequence.create({
-              data: {
-                year: currentYear,
-                lastNumber: JOB_ID_STARTING_NUMBER + 1,
-              },
-            });
-            nextNumber = JOB_ID_STARTING_NUMBER + 1;
-          } else {
-            // Increment the sequence
-            nextNumber = Number(sequences[0].last_number) + 1;
-            await tx.jobIdSequence.update({
-              where: { year: currentYear },
-              data: { lastNumber: nextNumber },
-            });
-          }
-          jobId = `${currentYear}-${nextNumber}`;
-          logger.info(`Generated Job ID: ${jobId} for lead conversion`);
-        } catch (err) {
-          // Log error but don't fail the conversion - Job ID can be assigned later
-          logger.warn(`Failed to generate Job ID: ${err.message}`);
-        }
-
         opportunity = await tx.opportunity.create({
           data: {
-            name: options.opportunityName || `${lead.firstName} ${lead.lastName} - ${new Date().toLocaleDateString()}`,
+            name: defaultOpportunityName,
             job_id: jobId, // Auto-assigned Job ID (using underscore field name from schema)
             accountId: account.id,
             contactId: contact.id,
@@ -767,11 +1239,11 @@ class LeadService {
             type: options.opportunityType || 'INSURANCE',
             leadSource: lead.source,
             isSelfGen: lead.isSelfGen,
-            ownerId: lead.ownerId,
+            ownerId: resolvedConversionOwnerId,
             closeDate: options.closeDate ? new Date(options.closeDate) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
             // Store work type and appointment date on opportunity
             workType: options.workType,
-            appointmentDate: options.tentativeAppointmentDate ? new Date(options.tentativeAppointmentDate) : null,
+            appointmentDate: resolvedTentativeAppointmentDate,
           },
         });
       }
@@ -779,61 +1251,75 @@ class LeadService {
       // Create Service Appointment if tentative appointment date is provided
       let serviceAppointment = null;
       let assignedResource = null;
-      if (options.createServiceAppointment && options.tentativeAppointmentDate && opportunity) {
+      if (shouldCreateServiceAppointment && opportunity) {
+        const requestedWorkType = this.normalizeOptionalText(options.workType) || this.normalizeOptionalText(lead.workType);
+        const workTypeRecord = requestedWorkType
+          ? await tx.workType.findFirst({
+            where: { name: { contains: requestedWorkType, mode: 'insensitive' } },
+            select: { id: true, name: true },
+          })
+          : null;
+
         // First, find the best available resource based on territory and skills
         const bestResource = await this.findBestResource({
           state: lead.state,
           postalCode: lead.postalCode,
-          workType: options.workType || 'Inspection',
-          appointmentDate: new Date(options.tentativeAppointmentDate),
+          workType: requestedWorkType || 'Inspection',
+          appointmentDate: resolvedTentativeAppointmentDate,
         }, tx);
 
         // Find or create territory based on state
         let territory = null;
         if (lead.state) {
-          territory = await tx.territory.findFirst({
+          territory = await tx.serviceTerritory.findFirst({
             where: {
+              isActive: true,
               OR: [
-                { states: { has: lead.state } },
+                { state: { equals: lead.state, mode: 'insensitive' } },
                 { name: { contains: lead.state, mode: 'insensitive' } },
+                ...(lead.postalCode ? [{ postalCodes: { has: lead.postalCode } }] : []),
               ],
             },
           });
         }
 
+        const workOrderNumber = await this.generateWorkOrderNumber(tx);
+
         // Create WorkOrder with territory
         const workOrder = await tx.workOrder.create({
           data: {
-            subject: `${options.workType || 'Inspection'} - ${account.name}`,
+            workOrderNumber,
+            subject: `${requestedWorkType || 'Inspection'} - ${account.name}`,
             accountId: account.id,
-            contactId: contact.id,
             opportunityId: opportunity.id,
             status: 'NEW',
-            workType: options.workType || 'Inspection',
             priority: 'NORMAL',
             territoryId: territory?.id,
+            workTypeId: workTypeRecord?.id,
           },
         });
 
         // Then create the Service Appointment
-        const appointmentDate = new Date(options.tentativeAppointmentDate);
+        const appointmentDate = new Date(resolvedTentativeAppointmentDate.getTime());
         const endDate = new Date(appointmentDate);
         endDate.setHours(endDate.getHours() + 2); // Default 2 hour duration
+        const appointmentNumber = await this.generateAppointmentNumber(tx);
 
         serviceAppointment = await tx.serviceAppointment.create({
           data: {
-            subject: `${options.workType || 'Inspection'} - ${lead.firstName} ${lead.lastName}`,
+            appointmentNumber,
+            subject: `${requestedWorkType || 'Inspection'} - ${lead.firstName} ${lead.lastName}`,
             workOrderId: workOrder.id,
-            accountId: account.id,
-            contactId: contact.id,
             scheduledStart: appointmentDate,
             scheduledEnd: endDate,
             status: 'SCHEDULED',
-            appointmentType: options.workType || 'Inspection',
+            duration: 120,
+            dueDate: endDate,
             street: lead.street,
             city: lead.city,
             state: lead.state,
             postalCode: lead.postalCode,
+            work_type_id: workTypeRecord?.id,
           },
         });
 
@@ -863,6 +1349,8 @@ class LeadService {
           convertedAccountId: account.id,
           convertedContactId: contact.id,
           convertedOpportunityId: opportunity?.id,
+          tentativeAppointmentDate: resolvedTentativeAppointmentDate || lead.tentativeAppointmentDate,
+          tentativeAppointmentTime: resolvedTentativeAppointmentTime,
         },
       });
 
@@ -871,6 +1359,222 @@ class LeadService {
 
     logger.info(`Lead converted: ${id} -> Account: ${result.account.id}, Contact: ${result.contact.id}, Opportunity: ${result.opportunity?.id}${result.serviceAppointment ? `, ServiceAppointment: ${result.serviceAppointment.id}` : ''}${result.assignedResource ? `, AssignedResource: ${result.assignedResource.serviceResourceId}` : ''}`);
     return result;
+  }
+
+  // ============================================================================
+  // LEAD GATING / SALES PATH COMPATIBILITY
+  // ============================================================================
+
+  normalizeSalesPath(value) {
+    if (!value) return null;
+    const normalized = String(value).trim().toUpperCase().replace(/[\s-]+/g, '_');
+    if (normalized === 'RETAIL') return 'RETAIL';
+    if (normalized === 'INSURANCE') return 'INSURANCE';
+    return null;
+  }
+
+  deriveSalesPath(workType) {
+    if (!workType) return null;
+    const normalized = String(workType).trim().toUpperCase().replace(/[\s-]+/g, '_');
+    if (normalized.startsWith('RETAIL')) return 'RETAIL';
+    if (normalized.startsWith('INSURANCE')) return 'INSURANCE';
+    return null;
+  }
+
+  resolveGatingFunnelStatus(lead) {
+    if (!lead) return 'NEW';
+    if (lead.isConverted) return 'CONVERTED';
+
+    const disposition = lead.disposition ? String(lead.disposition).toUpperCase() : null;
+    const status = lead.status ? String(lead.status).toUpperCase() : null;
+
+    if (disposition === 'NO_INSPECTION' || status === 'NO_INSPECTION') return 'NO_INSPECTION';
+    if (disposition === 'INSPECTED' || status === 'INSPECTED') return 'INSPECTED';
+    return disposition || status || 'NEW';
+  }
+
+  mapSalesPathToWorkType(salesPath) {
+    if (salesPath === 'RETAIL') return 'Retail';
+    if (salesPath === 'INSURANCE') return 'Insurance';
+    return null;
+  }
+
+  async getGatingState(id) {
+    const lead = await prisma.lead.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        status: true,
+        disposition: true,
+        workType: true,
+        isConverted: true,
+        convertedOpportunityId: true,
+        updatedAt: true,
+      },
+    });
+
+    if (!lead) {
+      const error = new Error(`Lead not found: ${id}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const funnelStatus = this.resolveGatingFunnelStatus(lead);
+    const salesPath = this.deriveSalesPath(lead.workType);
+    const requiresSalesPath = funnelStatus === 'INSPECTED' && !salesPath;
+    const blocked = lead.isConverted || funnelStatus === 'NO_INSPECTION' || requiresSalesPath;
+
+    const blockers = [];
+    if (lead.isConverted) blockers.push('Lead has already been converted.');
+    if (funnelStatus === 'NO_INSPECTION') {
+      blockers.push('Lead is in No Inspection status and must be rescheduled or updated before conversion.');
+    }
+    if (requiresSalesPath) blockers.push('Sales path selection is required before conversion.');
+
+    return {
+      leadId: lead.id,
+      funnelStatus,
+      salesPath,
+      workType: lead.workType || null,
+      isConverted: lead.isConverted,
+      convertedOpportunityId: lead.convertedOpportunityId || null,
+      requiresSalesPath,
+      canConvert: !blocked,
+      blockers,
+      messages: blockers,
+      updatedAt: lead.updatedAt,
+    };
+  }
+
+  async validatePreConversion(id) {
+    const gatingState = await this.getGatingState(id);
+    const blockers = Array.isArray(gatingState.blockers) ? gatingState.blockers : [];
+
+    return {
+      leadId: id,
+      allowed: blockers.length === 0,
+      blocked: blockers.length > 0,
+      blockers,
+      messages: blockers,
+      funnelStatus: gatingState.funnelStatus,
+      salesPath: gatingState.salesPath,
+    };
+  }
+
+  async selectSalesPath(id, salesPath, auditContext = {}) {
+    const normalizedSalesPath = this.normalizeSalesPath(salesPath);
+    if (!normalizedSalesPath) {
+      const error = new Error('salesPath must be RETAIL or INSURANCE');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const lead = await prisma.lead.findUnique({
+      where: { id },
+      select: { id: true, isConverted: true, workType: true },
+    });
+
+    if (!lead) {
+      const error = new Error(`Lead not found: ${id}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    if (lead.isConverted) {
+      const error = new Error('Cannot select sales path for a converted lead');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const workType = this.mapSalesPathToWorkType(normalizedSalesPath);
+    const updatedLead = await prisma.lead.update({
+      where: { id },
+      data: { workType },
+      select: { id: true, workType: true, updatedAt: true },
+    });
+
+    await logAudit({
+      tableName: 'leads',
+      recordId: id,
+      action: 'UPDATE',
+      oldValues: { workType: lead.workType },
+      newValues: { workType: updatedLead.workType, salesPath: normalizedSalesPath },
+      userId: auditContext.userId,
+      userEmail: auditContext.userEmail,
+      source: 'web',
+    });
+
+    return {
+      success: true,
+      leadId: id,
+      salesPath: normalizedSalesPath,
+      workType: updatedLead.workType,
+      updatedAt: updatedLead.updatedAt,
+      state: await this.getGatingState(id),
+    };
+  }
+
+  async applyGatingTransition(id, transition, auditContext = {}) {
+    const normalizedTransition = String(transition || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
+    if (!normalizedTransition) {
+      const error = new Error('transition is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const lead = await prisma.lead.findUnique({
+      where: { id },
+      select: { id: true, status: true, disposition: true, isConverted: true },
+    });
+
+    if (!lead) {
+      const error = new Error(`Lead not found: ${id}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    if (lead.isConverted) {
+      const error = new Error('Cannot apply gating transition for a converted lead');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    let updateData = null;
+    if (normalizedTransition === 'NO_INSPECTION') {
+      updateData = { status: 'NO_INSPECTION', disposition: 'NO_INSPECTION' };
+    } else if (normalizedTransition === 'INSPECTED' || normalizedTransition === 'MARK_INSPECTED') {
+      updateData = { status: 'INSPECTED', disposition: 'INSPECTED' };
+    }
+
+    if (!updateData) {
+      const error = new Error(`Unsupported transition: ${transition}`);
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const updatedLead = await prisma.lead.update({
+      where: { id },
+      data: updateData,
+      select: { id: true, status: true, disposition: true, updatedAt: true },
+    });
+
+    await logAudit({
+      tableName: 'leads',
+      recordId: id,
+      action: 'UPDATE',
+      oldValues: { status: lead.status, disposition: lead.disposition },
+      newValues: { status: updatedLead.status, disposition: updatedLead.disposition, transition: normalizedTransition },
+      userId: auditContext.userId,
+      userEmail: auditContext.userEmail,
+      source: 'web',
+    });
+
+    return {
+      success: true,
+      leadId: id,
+      transition: normalizedTransition,
+      state: await this.getGatingState(id),
+    };
   }
 
   /**
@@ -929,17 +1633,32 @@ class LeadService {
       disposition: lead.disposition,
       leadSetById: lead.leadSetById,
       leadSetByName: lead.leadSetBy ? `${lead.leadSetBy.firstName} ${lead.leadSetBy.lastName}` : null,
-      // Lead Intelligence / Scoring fields (snake_case in DB)
-      leadScore: lead.lead_score,
-      leadRank: lead.lead_rank,
-      scoreFactors: lead.score_factors,
-      scoredAt: lead.scored_at,
-      // Demographic enrichment (snake_case in DB)
-      medianHouseholdIncome: lead.median_household_income,
-      medianHomeValue: lead.median_home_value,
-      homeownershipRate: lead.homeownership_rate,
-      medianAge: lead.median_age,
-      enrichedAt: lead.enriched_at,
+      leadSetBy: lead.leadSetBy
+        ? {
+          id: lead.leadSetBy.id,
+          firstName: lead.leadSetBy.firstName,
+          lastName: lead.leadSetBy.lastName,
+          managerId: lead.leadSetBy.managerId || null,
+          manager: lead.leadSetBy.manager
+            ? {
+              id: lead.leadSetBy.manager.id,
+              firstName: lead.leadSetBy.manager.firstName,
+              lastName: lead.leadSetBy.manager.lastName,
+            }
+            : null,
+        }
+        : null,
+      // Lead Intelligence / Scoring fields
+      leadScore: lead.leadScore,
+      leadRank: lead.leadRank,
+      scoreFactors: lead.scoreFactors,
+      scoredAt: lead.scoredAt,
+      // Demographic enrichment
+      medianHouseholdIncome: lead.medianHouseholdIncome,
+      medianHomeValue: lead.medianHomeValue,
+      homeownershipRate: lead.homeownershipRate,
+      medianAge: lead.medianAge,
+      enrichedAt: lead.enrichedAt,
       // Champion Referral fields
       isChampionReferral: lead.isChampionReferral || false,
       championReferralId: lead.championReferralId,
@@ -1016,14 +1735,20 @@ class LeadService {
     try {
       // Step 1: Find territory by state
       let territory = null;
-      if (state) {
-        territory = await tx.territory.findFirst({
+      if (state || postalCode) {
+        const territoryOr = [];
+        if (state) {
+          territoryOr.push({ state: { equals: state, mode: 'insensitive' } });
+          territoryOr.push({ name: { contains: state, mode: 'insensitive' } });
+        }
+        if (postalCode) {
+          territoryOr.push({ postalCodes: { has: postalCode } });
+        }
+
+        territory = await tx.serviceTerritory.findFirst({
           where: {
             isActive: true,
-            OR: [
-              { states: { has: state } },
-              { name: { contains: state, mode: 'insensitive' } },
-            ],
+            OR: territoryOr,
           },
         });
       }
@@ -1057,15 +1782,12 @@ class LeadService {
           absences: {
             where: {
               // Check for absences on the appointment date
-              startTime: { lte: appointmentDate },
-              endTime: { gte: appointmentDate },
+              start: { lte: appointmentDate },
+              end: { gte: appointmentDate },
             },
           },
         },
-        orderBy: [
-          { lastAppointmentAssignedAt: 'asc' }, // Prefer resources who haven't been assigned recently
-          { name: 'asc' },
-        ],
+        orderBy: { name: 'asc' },
       });
 
       if (resources.length === 0) {
@@ -1074,9 +1796,6 @@ class LeadService {
       }
 
       // Step 4: Filter and score resources
-      const appointmentDay = appointmentDate.getDay();
-      const isWeekend = appointmentDay === 0 || appointmentDay === 6;
-
       const scoredResources = resources
         .filter(resource => {
           // Exclude resources with absences on the appointment date
@@ -1099,21 +1818,6 @@ class LeadService {
             score += 30;
           }
 
-          // Score: Not assigned recently (+20 points for each day since last assignment)
-          if (resource.lastAppointmentAssignedAt) {
-            const daysSinceAssigned = Math.floor(
-              (Date.now() - new Date(resource.lastAppointmentAssignedAt).getTime()) / (1000 * 60 * 60 * 24)
-            );
-            score += Math.min(daysSinceAssigned * 5, 20);
-          } else {
-            score += 20; // Never assigned = high priority
-          }
-
-          // Score: Prefers weekend work (if applicable) (+10 points)
-          if (isWeekend && resource.worksWeekends) {
-            score += 10;
-          }
-
           return { resource, score };
         })
         .sort((a, b) => b.score - a.score); // Sort by score descending
@@ -1125,12 +1829,6 @@ class LeadService {
 
       const bestResource = scoredResources[0].resource;
       logger.info(`Best resource found: ${bestResource.name} (score: ${scoredResources[0].score}) for ${workType} in ${territory?.name || state}`);
-
-      // Update last assigned timestamp
-      await tx.serviceResource.update({
-        where: { id: bestResource.id },
-        data: { lastAppointmentAssignedAt: new Date() },
-      });
 
       return bestResource;
     } catch (error) {
@@ -1554,7 +2252,13 @@ class LeadService {
     }
 
     const notes = await prisma.note.findMany({
-      where: { leadId: leadId },
+      where: {
+        leadId,
+        NOT: [
+          { title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } },
+          { title: { startsWith: 'REPLY|' } },
+        ],
+      },
       orderBy: { createdAt: 'desc' },
       include: {
         createdBy: {
@@ -1585,7 +2289,7 @@ class LeadService {
    * Used by: Call Center to document calls and status updates
    */
   async addLeadNote(leadId, data) {
-    const { note, title, createdBy, isPinned } = data;
+    const { note, title, createdBy, mentions = [], correlationId = null } = data;
 
     // Verify lead exists
     const lead = await prisma.lead.findUnique({
@@ -1599,14 +2303,6 @@ class LeadService {
       throw error;
     }
 
-    // If this note will be pinned, unpin any existing pinned notes
-    if (isPinned) {
-      await prisma.note.updateMany({
-        where: { leadId: leadId, isPinned: true },
-        data: { isPinned: false, pinnedAt: null },
-      });
-    }
-
     // Create the note
     const newNote = await prisma.note.create({
       data: {
@@ -1614,8 +2310,6 @@ class LeadService {
         body: note,
         leadId: leadId,
         createdById: createdBy,
-        isPinned: isPinned || false,
-        pinnedAt: isPinned ? new Date() : null,
       },
       include: {
         createdBy: {
@@ -1624,17 +2318,496 @@ class LeadService {
       },
     });
 
+    const resolvedCorrelationId = correlationId || buildCorrelationId('lead-note', leadId);
+    const leadName = `${lead.firstName || ''} ${lead.lastName || ''}`.trim();
+    let mentionsNotified = 0;
+    try {
+      mentionsNotified = await this.notifyLeadMentions({
+        leadId,
+        content: note,
+        mentions,
+        actor: newNote.createdBy || (createdBy ? { id: createdBy } : null),
+        leadName,
+        noteId: newNote.id,
+        correlationId: resolvedCorrelationId,
+      });
+    } catch (error) {
+      logger.warn(`[mentions.dispatch] lead note mention dispatch failed correlationId=${resolvedCorrelationId}: ${error.message}`);
+    }
+
     logger.info(`Note added to lead ${leadId}`);
 
     return {
       id: newNote.id,
       title: newNote.title,
       body: newNote.body,
-      isPinned: newNote.isPinned || false,
+      isPinned: false,
       createdAt: newNote.createdAt,
       updatedAt: newNote.updatedAt,
       createdBy: newNote.createdBy,
+      mentionsNotified,
     };
+  }
+
+  async notifyLeadMentions({ leadId, content, mentions = [], actor = null, leadName = null, noteId = null, commentId = null, correlationId = null }) {
+    const mentionUserIds = [...new Set((mentions || [])
+      .map(extractMentionUserId)
+      .filter(Boolean))];
+
+    if (mentionUserIds.length === 0) {
+      return 0;
+    }
+
+    const actorName = `${actor?.firstName || ''} ${actor?.lastName || ''}`.trim() || actor?.email || 'Someone';
+    const preview = (content || '').substring(0, 100);
+    const targetName = leadName || 'a lead';
+
+    const resolvedCorrelationId = correlationId || buildCorrelationId('lead-mention', leadId);
+    const payload = {
+      actorId: actor?.id || null,
+      actorName,
+      recipients: mentionUserIds.map((userId) => ({ userId })),
+      entityType: 'lead',
+      entityId: leadId,
+      noteId,
+      commentId,
+      bodyPreview: content || '',
+      snippet: preview,
+      actionPath: `/leads/${leadId}`,
+      actionLabel: 'View Lead',
+      context: targetName,
+      sourceType: 'LEAD',
+      sourceId: leadId,
+      leadId,
+      correlationId: resolvedCorrelationId,
+    };
+
+    try {
+      const response = await fetch(MENTION_DISPATCH_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        logger.warn(
+          `[mentions.dispatch] leadId=${leadId} correlationId=${resolvedCorrelationId} status=${response.status} body=${errorText}`
+        );
+        return 0;
+      }
+
+      const result = await response.json().catch(() => ({}));
+      return result?.data?.dispatched ?? 0;
+    } catch (error) {
+      logger.warn(
+        `[mentions.dispatch] leadId=${leadId} correlationId=${resolvedCorrelationId} failed: ${error.message}`
+      );
+      return 0;
+    }
+  }
+
+  async addLeadNoteReply(leadId, noteId, payload = {}, actor = null) {
+    const content = String(payload.body || payload.content || '').trim();
+    if (!content) {
+      const error = new Error('Reply body is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const [lead, parentNote] = await Promise.all([
+      prisma.lead.findUnique({
+        where: { id: leadId },
+        select: { id: true, firstName: true, lastName: true },
+      }),
+      prisma.note.findFirst({
+        where: { id: noteId, leadId },
+        select: { id: true, title: true },
+      }),
+    ]);
+
+    if (!lead) {
+      const error = new Error(`Lead not found: ${leadId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    if (!parentNote) {
+      const error = new Error(`Note not found: ${noteId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const reply = await prisma.note.create({
+      data: {
+        leadId,
+        title: `REPLY|${noteId}`,
+        body: content,
+        createdById: actor?.id,
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+    });
+
+    const correlationId = payload.correlationId || buildCorrelationId('lead-note-reply', leadId);
+    const mentionsNotified = await this.notifyLeadMentions({
+      leadId,
+      content,
+      mentions: payload.mentions || [],
+      actor,
+      leadName: `${lead.firstName || ''} ${lead.lastName || ''}`.trim(),
+      noteId: reply.id,
+      correlationId,
+    });
+
+    return {
+      id: reply.id,
+      noteId,
+      body: reply.body,
+      createdAt: reply.createdAt,
+      updatedAt: reply.updatedAt,
+      createdBy: reply.createdBy,
+      mentionsNotified,
+    };
+  }
+
+  async deleteLeadNoteReply(leadId, noteId, replyId) {
+    const reply = await prisma.note.findFirst({
+      where: { id: replyId, leadId, title: `REPLY|${noteId}` },
+      select: { id: true },
+    });
+
+    if (!reply) {
+      const error = new Error(`Reply not found: ${replyId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    await prisma.note.delete({ where: { id: replyId } });
+    return { success: true, deletedId: replyId };
+  }
+
+  async getLeadInternalComments(leadId) {
+    const comments = await prisma.note.findMany({
+      where: {
+        leadId,
+        OR: [
+          { title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } },
+          { title: { startsWith: INTERNAL_COMMENT_REPLY_TITLE_PREFIX } },
+          { title: { startsWith: LEGACY_INTERNAL_COMMENT_JSON_PREFIX } },
+          { title: { startsWith: 'REPLY|' } },
+          { title: { contains: 'INTERNAL_COMMENT', mode: 'insensitive' } },
+          { title: { equals: 'Internal Comment', mode: 'insensitive' } },
+          { title: { equals: 'Internal Comments', mode: 'insensitive' } },
+        ],
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    const normalized = comments.map((comment) => {
+      const meta = parseInternalCommentMeta(comment.title);
+      const legacyReply = parseLegacyReplyTitle(comment.title);
+      const parentCommentId = meta.parentCommentId || legacyReply?.parentCommentId || null;
+      return {
+        id: comment.id,
+        content: comment.body,
+        body: comment.body,
+        departmentTag: meta.departmentTag,
+        isResolved: meta.isResolved,
+        parentCommentId,
+        createdAt: comment.createdAt,
+        updatedAt: comment.updatedAt,
+        author: comment.createdBy
+          ? {
+              id: comment.createdBy.id,
+              firstName: comment.createdBy.firstName,
+              lastName: comment.createdBy.lastName,
+              email: comment.createdBy.email,
+            }
+          : null,
+        replies: [],
+        attachmentUrls: [],
+      };
+    });
+
+    const byId = new Map(normalized.map((item) => [item.id, item]));
+    const roots = [];
+    normalized.forEach((item) => {
+      if (item.parentCommentId && byId.has(item.parentCommentId)) {
+        byId.get(item.parentCommentId).replies.push(item);
+      } else {
+        roots.push(item);
+      }
+    });
+
+    sortInternalCommentTree(roots, true);
+    return roots;
+  }
+
+  async createLeadInternalComment(leadId, payload = {}, actor = null) {
+    const content = String(payload.content || payload.body || '').trim();
+    if (!content) {
+      const error = new Error('Comment content is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const lead = await prisma.lead.findUnique({
+      where: { id: leadId },
+      select: { id: true, firstName: true, lastName: true, ownerId: true, leadSetById: true },
+    });
+    if (!lead) {
+      const error = new Error(`Lead not found: ${leadId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const parentCommentId = payload.parentCommentId || payload.parentId || payload.replyToId || null;
+    let parentComment = null;
+    if (parentCommentId) {
+      parentComment = await prisma.note.findFirst({
+        where: {
+          id: parentCommentId,
+          leadId,
+          OR: [
+            { title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } },
+            { title: { startsWith: INTERNAL_COMMENT_REPLY_TITLE_PREFIX } },
+            { title: { startsWith: LEGACY_INTERNAL_COMMENT_JSON_PREFIX } },
+            { title: { startsWith: 'REPLY|' } },
+            { title: { contains: 'INTERNAL_COMMENT', mode: 'insensitive' } },
+            { title: { equals: 'Internal Comment', mode: 'insensitive' } },
+            { title: { equals: 'Internal Comments', mode: 'insensitive' } },
+          ],
+        },
+        select: { id: true, title: true },
+      });
+
+      if (!parentComment) {
+        const error = new Error(`Parent internal comment not found: ${parentCommentId}`);
+        error.name = 'ValidationError';
+        throw error;
+      }
+    }
+
+    const parentMeta = parentComment ? parseInternalCommentMeta(parentComment.title) : null;
+    const departmentTag = normalizeDepartmentTag(
+      payload.departmentTag || payload.department || parentMeta?.departmentTag || 'general'
+    );
+    const isResolved = Object.prototype.hasOwnProperty.call(payload, 'isResolved')
+      ? Boolean(payload.isResolved)
+      : (parentMeta?.isResolved || false);
+    let createdById = await this.resolveUserId(actor?.id || actor?.userId || actor?.cognitoId || actor?.sub || null);
+    if (!createdById && actor?.email) {
+      const actorUser = await prisma.user.findUnique({
+        where: { email: actor.email },
+        select: { id: true },
+      });
+      createdById = actorUser?.id || null;
+    }
+    if (!createdById) {
+      createdById = lead.ownerId || lead.leadSetById || null;
+    }
+    if (!createdById) {
+      const latestAuthor = await prisma.note.findFirst({
+        where: {
+          leadId,
+          createdById: { not: null },
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { createdById: true },
+      });
+      createdById = latestAuthor?.createdById || null;
+    }
+    if (!createdById) {
+      const error = new Error('Unable to resolve a valid author for this internal comment');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const comment = await prisma.note.create({
+      data: {
+        leadId,
+        title: parentComment
+          ? toInternalCommentReplyTitle(parentComment.id, departmentTag, isResolved)
+          : toInternalCommentTitle(departmentTag, isResolved),
+        body: content,
+        createdById,
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+    });
+
+    const correlationId = payload.correlationId || buildCorrelationId('lead-internal-comment', leadId);
+    const mentionsNotified = await this.notifyLeadMentions({
+      leadId,
+      content,
+      mentions: payload.mentions || [],
+      actor,
+      leadName: `${lead.firstName || ''} ${lead.lastName || ''}`.trim(),
+      commentId: comment.id,
+      correlationId,
+    });
+
+    return {
+      id: comment.id,
+      content: comment.body,
+      body: comment.body,
+      departmentTag,
+      isResolved,
+      parentCommentId: parentComment?.id || null,
+      createdAt: comment.createdAt,
+      updatedAt: comment.updatedAt,
+      author: comment.createdBy
+        ? {
+            id: comment.createdBy.id,
+            firstName: comment.createdBy.firstName,
+            lastName: comment.createdBy.lastName,
+            email: comment.createdBy.email,
+          }
+        : null,
+      replies: [],
+      attachmentUrls: [],
+      mentionsNotified,
+    };
+  }
+
+  async updateLeadInternalComment(leadId, commentId, payload = {}, actor = null) {
+    const existing = await prisma.note.findFirst({
+      where: {
+        id: commentId,
+        leadId,
+        OR: [
+          { title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } },
+          { title: { startsWith: INTERNAL_COMMENT_REPLY_TITLE_PREFIX } },
+          { title: { startsWith: LEGACY_INTERNAL_COMMENT_JSON_PREFIX } },
+          { title: { startsWith: 'REPLY|' } },
+          { title: { contains: 'INTERNAL_COMMENT', mode: 'insensitive' } },
+          { title: { equals: 'Internal Comment', mode: 'insensitive' } },
+          { title: { equals: 'Internal Comments', mode: 'insensitive' } },
+        ],
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+    });
+
+    if (!existing) {
+      const error = new Error(`Internal comment not found: ${commentId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const has = (key) => Object.prototype.hasOwnProperty.call(payload, key);
+    const meta = parseInternalCommentMeta(existing.title);
+    const legacyReply = parseLegacyReplyTitle(existing.title);
+    const effectiveParentCommentId = meta.parentCommentId || legacyReply?.parentCommentId || null;
+    const fallbackMeta = {
+      departmentTag: 'general',
+      isResolved: false,
+    };
+    const nextDepartment = has('departmentTag') || has('department')
+      ? normalizeDepartmentTag(payload.departmentTag || payload.department)
+      : (meta.departmentTag || fallbackMeta.departmentTag);
+    const nextResolved = has('isResolved')
+      ? Boolean(payload.isResolved)
+      : (meta.isResolved ?? fallbackMeta.isResolved);
+    const nextContent = has('content') || has('body')
+      ? String(payload.content || payload.body || '').trim()
+      : existing.body;
+
+    if (!nextContent) {
+      const error = new Error('Comment content is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const updated = await prisma.note.update({
+      where: { id: commentId },
+      data: {
+        title: effectiveParentCommentId
+          ? toInternalCommentReplyTitle(effectiveParentCommentId, nextDepartment, nextResolved)
+          : toInternalCommentTitle(nextDepartment, nextResolved),
+        body: nextContent,
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+    });
+
+    const correlationId = payload.correlationId || buildCorrelationId('lead-internal-comment-update', leadId);
+    const mentionsNotified = await this.notifyLeadMentions({
+      leadId,
+      content: nextContent,
+      mentions: payload.mentions || [],
+      actor,
+      commentId: updated.id,
+      correlationId,
+    });
+
+    return {
+      id: updated.id,
+      content: updated.body,
+      body: updated.body,
+      departmentTag: nextDepartment,
+      isResolved: nextResolved,
+      parentCommentId: effectiveParentCommentId,
+      createdAt: updated.createdAt,
+      updatedAt: updated.updatedAt,
+      author: updated.createdBy
+        ? {
+            id: updated.createdBy.id,
+            firstName: updated.createdBy.firstName,
+            lastName: updated.createdBy.lastName,
+            email: updated.createdBy.email,
+          }
+        : null,
+      replies: [],
+      attachmentUrls: [],
+      mentionsNotified,
+    };
+  }
+
+  async deleteLeadInternalComment(leadId, commentId) {
+    const existing = await prisma.note.findFirst({
+      where: {
+        id: commentId,
+        leadId,
+        OR: [
+          { title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } },
+          { title: { startsWith: INTERNAL_COMMENT_REPLY_TITLE_PREFIX } },
+          { title: { startsWith: LEGACY_INTERNAL_COMMENT_JSON_PREFIX } },
+          { title: { startsWith: 'REPLY|' } },
+          { title: { contains: 'INTERNAL_COMMENT', mode: 'insensitive' } },
+          { title: { equals: 'Internal Comment', mode: 'insensitive' } },
+          { title: { equals: 'Internal Comments', mode: 'insensitive' } },
+        ],
+      },
+      select: { id: true },
+    });
+
+    if (!existing) {
+      const error = new Error(`Internal comment not found: ${commentId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    await prisma.note.delete({ where: { id: commentId } });
+    return { success: true, deletedId: commentId };
   }
 
   /**
@@ -1643,7 +2816,7 @@ class LeadService {
    * @param {string} noteId - Note ID
    * @param {object} data - { title?, body?, isPinned? }
    */
-  async updateLeadNote(leadId, noteId, data) {
+  async updateLeadNote(leadId, noteId, data, actor = null) {
     // Verify lead exists
     const lead = await prisma.lead.findUnique({
       where: { id: leadId },
@@ -1670,10 +2843,6 @@ class LeadService {
     const updateData = {};
     if (data.title !== undefined) updateData.title = data.title;
     if (data.body !== undefined) updateData.body = data.body;
-    if (data.isPinned !== undefined) {
-      updateData.isPinned = data.isPinned;
-      updateData.pinnedAt = data.isPinned ? new Date() : null;
-    }
 
     const updatedNote = await prisma.note.update({
       where: { id: noteId },
@@ -1685,17 +2854,31 @@ class LeadService {
       },
     });
 
+    let mentionsNotified = 0;
+    if (Array.isArray(data.mentions) && data.mentions.length > 0) {
+      const correlationId = data.correlationId || buildCorrelationId('lead-note-update', leadId);
+      mentionsNotified = await this.notifyLeadMentions({
+        leadId,
+        content: updatedNote.body,
+        mentions: data.mentions,
+        actor,
+        noteId: updatedNote.id,
+        correlationId,
+      });
+    }
+
     logger.info(`Note ${noteId} updated for lead ${leadId}`);
 
     return {
       id: updatedNote.id,
       title: updatedNote.title,
       body: updatedNote.body,
-      isPinned: updatedNote.isPinned || false,
-      pinnedAt: updatedNote.pinnedAt,
+      isPinned: false,
+      pinnedAt: null,
       createdAt: updatedNote.createdAt,
       updatedAt: updatedNote.updatedAt,
       createdBy: updatedNote.createdBy,
+      mentionsNotified,
     };
   }
 
@@ -1720,6 +2903,11 @@ class LeadService {
     // Verify note exists and belongs to this lead
     const existingNote = await prisma.note.findFirst({
       where: { id: noteId, leadId: leadId },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
     });
 
     if (!existingNote) {
@@ -1766,41 +2954,17 @@ class LeadService {
       throw error;
     }
 
-    const newPinnedState = !existingNote.isPinned;
-
-    // If pinning, unpin any other pinned notes for this lead
-    if (newPinnedState) {
-      await prisma.note.updateMany({
-        where: { leadId: leadId, isPinned: true },
-        data: { isPinned: false, pinnedAt: null },
-      });
-    }
-
-    // Update the note
-    const updatedNote = await prisma.note.update({
-      where: { id: noteId },
-      data: {
-        isPinned: newPinnedState,
-        pinnedAt: newPinnedState ? new Date() : null,
-      },
-      include: {
-        createdBy: {
-          select: { id: true, firstName: true, lastName: true, email: true },
-        },
-      },
-    });
-
-    logger.info(`Note ${noteId} pin toggled to ${newPinnedState} for lead ${leadId}`);
+    logger.warn(`Pinning notes is not supported by current schema; returning unpinned note for lead ${leadId}`);
 
     return {
-      id: updatedNote.id,
-      title: updatedNote.title,
-      body: updatedNote.body,
-      isPinned: updatedNote.isPinned || false,
-      pinnedAt: updatedNote.pinnedAt,
-      createdAt: updatedNote.createdAt,
-      updatedAt: updatedNote.updatedAt,
-      createdBy: updatedNote.createdBy,
+      id: existingNote.id,
+      title: existingNote.title,
+      body: existingNote.body,
+      isPinned: false,
+      pinnedAt: null,
+      createdAt: existingNote.createdAt,
+      updatedAt: existingNote.updatedAt,
+      createdBy: existingNote.createdBy,
     };
   }
 

@@ -26,6 +26,22 @@ import {
 } from 'lucide-react';
 import AdminLayout from '../../components/AdminLayout';
 
+const PANDA_EMPLOYEE_EMAIL_DOMAINS = new Set(['pandaexteriors.com', 'panda-exteriors.com']);
+
+function normalizePandaEmployeeEmail(email) {
+  if (typeof email !== 'string') return email || '';
+  const trimmed = email.trim();
+  if (!trimmed) return '';
+
+  const atIndex = trimmed.lastIndexOf('@');
+  if (atIndex <= 0 || atIndex === trimmed.length - 1) return trimmed;
+
+  const localPart = trimmed.slice(0, atIndex);
+  const domainPart = trimmed.slice(atIndex + 1).toLowerCase();
+  if (!PANDA_EMPLOYEE_EMAIL_DOMAINS.has(domainPart)) return trimmed;
+  return `${localPart.replace(/\./g, '').toLowerCase()}@${domainPart}`;
+}
+
 const statusColors = {
   ACTIVE: 'bg-green-100 text-green-700',
   INACTIVE: 'bg-gray-100 text-gray-700',
@@ -314,7 +330,7 @@ export default function Users() {
                   <label className="block text-sm text-gray-500 mb-1">Email</label>
                   <div className="flex items-center">
                     <Mail className="w-4 h-4 text-gray-400 mr-2" />
-                    <span className="text-gray-900">{user.email}</span>
+                    <span className="text-gray-900">{normalizePandaEmployeeEmail(user.email)}</span>
                   </div>
                 </div>
                 <div>
@@ -903,7 +919,7 @@ export default function Users() {
                         </div>
                         <div className="ml-3">
                           <p className="font-medium text-gray-900">{user.fullName || `${user.firstName} ${user.lastName}`}</p>
-                          <p className="text-sm text-gray-500">{user.email}</p>
+                          <p className="text-sm text-gray-500">{normalizePandaEmployeeEmail(user.email)}</p>
                         </div>
                       </div>
                     </td>
@@ -1152,7 +1168,7 @@ export default function Users() {
                 </div>
               )}
               <p className="text-gray-600 mb-6">
-                Are you sure you want to delete <span className="font-semibold">{selectedUser.firstName} {selectedUser.lastName}</span> ({selectedUser.email})?
+                Are you sure you want to delete <span className="font-semibold">{selectedUser.firstName} {selectedUser.lastName}</span> ({normalizePandaEmployeeEmail(selectedUser.email)})?
               </p>
               <div className="flex justify-end gap-3">
                 <button

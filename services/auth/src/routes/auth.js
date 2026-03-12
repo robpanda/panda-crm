@@ -7,6 +7,173 @@ import { logger } from '../middleware/logger.js';
 const prisma = new PrismaClient();
 
 const router = Router();
+const PANDA_EMPLOYEE_EMAIL_DOMAINS = new Set(['pandaexteriors.com', 'panda-exteriors.com']);
+
+function normalizePandaEmployeeEmail(email) {
+  if (typeof email !== 'string') return email;
+  const trimmed = email.trim();
+  if (!trimmed) return trimmed;
+
+  const atIndex = trimmed.lastIndexOf('@');
+  if (atIndex <= 0 || atIndex === trimmed.length - 1) {
+    return trimmed;
+  }
+
+  const localPart = trimmed.slice(0, atIndex);
+  const domainPart = trimmed.slice(atIndex + 1).toLowerCase();
+  if (!PANDA_EMPLOYEE_EMAIL_DOMAINS.has(domainPart)) {
+    return trimmed;
+  }
+
+  return `${localPart.replace(/\./g, '').toLowerCase()}@${domainPart}`;
+}
+
+function buildEmailLookupCandidates(email) {
+  if (typeof email !== 'string') return [];
+
+  const trimmed = email.trim();
+  if (!trimmed) return [];
+
+  const candidates = [];
+  const seen = new Set();
+
+  const addCandidate = (value) => {
+    const candidate = String(value || '').trim();
+    if (!candidate) return;
+    const key = candidate.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push(candidate);
+  };
+
+  const lowerEmail = trimmed.toLowerCase();
+  addCandidate(trimmed);
+  addCandidate(lowerEmail);
+
+  const atIndex = lowerEmail.lastIndexOf('@');
+  if (atIndex <= 0 || atIndex === lowerEmail.length - 1) {
+    return candidates;
+  }
+
+  const localPart = lowerEmail.slice(0, atIndex);
+  const domainPart = lowerEmail.slice(atIndex + 1);
+  addCandidate(`${localPart}@${domainPart}`);
+
+  if (PANDA_EMPLOYEE_EMAIL_DOMAINS.has(domainPart)) {
+    const dotlessLocalPart = localPart.replace(/\./g, '');
+    for (const domain of PANDA_EMPLOYEE_EMAIL_DOMAINS) {
+      addCandidate(`${localPart}@${domain}`);
+      addCandidate(`${dotlessLocalPart}@${domain}`);
+    }
+  }
+
+  return candidates;
+}
+
+function pickBestEmailMatch(users, emailCandidates) {
+  if (!Array.isArray(users) || !users.length) return null;
+  const rankedCandidates = emailCandidates.map((candidate) => candidate.toLowerCase());
+
+  return [...users].sort((a, b) => {
+    const aEmail = String(a.email || '').toLowerCase();
+    const bEmail = String(b.email || '').toLowerCase();
+    const aRank = rankedCandidates.indexOf(aEmail);
+    const bRank = rankedCandidates.indexOf(bEmail);
+    const safeARank = aRank === -1 ? Number.MAX_SAFE_INTEGER : aRank;
+    const safeBRank = bRank === -1 ? Number.MAX_SAFE_INTEGER : bRank;
+
+    if (safeARank !== safeBRank) return safeARank - safeBRank;
+    if (a.isActive !== b.isActive) return Number(b.isActive) - Number(a.isActive);
+
+    const aUpdatedAt = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+    const bUpdatedAt = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+    return bUpdatedAt - aUpdatedAt;
+  })[0];
+}
+
+async function getDatabaseUserProfile(email) {
+  if (!email) {
+    logger.warn('Skipping DB user enrichment: Cognito user has no email attribute');
+    return { dbUser: null, isManager: false };
+  }
+
+  try {
+    const emailCandidates = buildEmailLookupCandidates(email);
+    if (!emailCandidates.length) {
+      return { dbUser: null, isManager: false };
+    }
+
+    const dbUsers = await prisma.user.findMany({
+      where: {
+        OR: emailCandidates.map((candidate) => ({
+          email: {
+            equals: candidate,
+            mode: 'insensitive',
+          },
+        })),
+      },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        fullName: true,
+        phone: true,
+        mobilePhone: true,
+        department: true,
+        division: true,
+        title: true,
+        officeAssignment: true,
+        managerId: true,
+        isActive: true,
+        createdAt: true,
+        updatedAt: true,
+        roleId: true,
+      },
+    });
+
+    const dbUser = pickBestEmailMatch(dbUsers, emailCandidates);
+    let isManager = false;
+    if (dbUser?.id) {
+      const teamCount = await prisma.user.count({
+        where: { managerId: dbUser.id, isActive: true },
+      });
+      isManager = teamCount > 0;
+    }
+
+    return { dbUser, isManager };
+  } catch (error) {
+    logger.warn(`Failed DB user enrichment for ${email}: ${error.message}`);
+    return { dbUser: null, isManager: false };
+  }
+}
+
+function buildUserResponse(cognitoUser, dbUser, isManager) {
+  const fullName = dbUser?.fullName
+    || cognitoUser.name
+    || `${dbUser?.firstName || cognitoUser.firstName || ''} ${dbUser?.lastName || cognitoUser.lastName || ''}`.trim()
+    || null;
+
+  return {
+    id: dbUser?.id || cognitoUser.username,
+    email: cognitoUser.email || dbUser?.email || null,
+    firstName: dbUser?.firstName || cognitoUser.firstName,
+    lastName: dbUser?.lastName || cognitoUser.lastName,
+    fullName,
+    name: fullName,
+    phone: dbUser?.phone || dbUser?.mobilePhone,
+    department: dbUser?.department || cognitoUser.department,
+    jobTitle: dbUser?.title,
+    officeName: dbUser?.officeAssignment,
+    division: dbUser?.division,
+    role: cognitoUser.role || 'SALES_REP',
+    managerId: dbUser?.managerId,
+    isManager,
+    isActive: dbUser?.isActive ?? true,
+    createdAt: dbUser?.createdAt,
+    updatedAt: dbUser?.updatedAt,
+  };
+}
 
 // Login
 router.post('/login', async (req, res, next) => {
@@ -32,58 +199,8 @@ router.post('/login', async (req, res, next) => {
     // This is needed for mobile apps that expect { user, accessToken, refreshToken }
     const cognitoUser = await authService.getCurrentUser(result.accessToken);
 
-    // Look up full user record from database by email
-    const dbUser = await prisma.user.findUnique({
-      where: { email: cognitoUser.email },
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        fullName: true,
-        phone: true,
-        mobilePhone: true,
-        department: true,
-        division: true,
-        title: true,
-        officeAssignment: true,
-        managerId: true,
-        isActive: true,
-        createdAt: true,
-        updatedAt: true,
-        // Include role info
-        roleId: true,
-      },
-    });
-
-    // Check if user has team members (is a manager)
-    let isManager = false;
-    if (dbUser?.id) {
-      const teamCount = await prisma.user.count({
-        where: { managerId: dbUser.id, isActive: true },
-      });
-      isManager = teamCount > 0;
-    }
-
-    // Merge Cognito attributes with database user
-    const user = {
-      id: dbUser?.id || cognitoUser.username,
-      email: cognitoUser.email,
-      firstName: dbUser?.firstName || cognitoUser.firstName,
-      lastName: dbUser?.lastName || cognitoUser.lastName,
-      fullName: dbUser?.fullName || cognitoUser.name,
-      phone: dbUser?.phone || dbUser?.mobilePhone,
-      department: dbUser?.department || cognitoUser.department,
-      jobTitle: dbUser?.title,
-      officeName: dbUser?.officeAssignment,
-      division: dbUser?.division,
-      role: cognitoUser.role || 'SALES_REP', // Default role
-      managerId: dbUser?.managerId,
-      isManager,
-      isActive: dbUser?.isActive ?? true,
-      createdAt: dbUser?.createdAt,
-      updatedAt: dbUser?.updatedAt,
-    };
+    const { dbUser, isManager } = await getDatabaseUserProfile(cognitoUser.email);
+    const user = buildUserResponse(cognitoUser, dbUser, isManager);
 
     logger.info(`User logged in: ${email}`);
     res.json({
@@ -242,57 +359,8 @@ router.get('/me', async (req, res, next) => {
     const accessToken = authHeader.split(' ')[1];
     const cognitoUser = await authService.getCurrentUser(accessToken);
 
-    // Look up full user record from database by email
-    const dbUser = await prisma.user.findUnique({
-      where: { email: cognitoUser.email },
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        fullName: true,
-        phone: true,
-        mobilePhone: true,
-        department: true,
-        division: true,
-        title: true,
-        officeAssignment: true,
-        managerId: true,
-        isActive: true,
-        createdAt: true,
-        updatedAt: true,
-        roleId: true,
-      },
-    });
-
-    // Check if user has team members (is a manager)
-    let isManager = false;
-    if (dbUser?.id) {
-      const teamCount = await prisma.user.count({
-        where: { managerId: dbUser.id, isActive: true },
-      });
-      isManager = teamCount > 0;
-    }
-
-    // Merge Cognito attributes with database user
-    const user = {
-      id: dbUser?.id || cognitoUser.username,
-      email: cognitoUser.email,
-      firstName: dbUser?.firstName || cognitoUser.firstName,
-      lastName: dbUser?.lastName || cognitoUser.lastName,
-      fullName: dbUser?.fullName || cognitoUser.name,
-      phone: dbUser?.phone || dbUser?.mobilePhone,
-      department: dbUser?.department || cognitoUser.department,
-      jobTitle: dbUser?.title,
-      officeName: dbUser?.officeAssignment,
-      division: dbUser?.division,
-      role: cognitoUser.role || 'SALES_REP',
-      managerId: dbUser?.managerId,
-      isManager,
-      isActive: dbUser?.isActive ?? true,
-      createdAt: dbUser?.createdAt,
-      updatedAt: dbUser?.updatedAt,
-    };
+    const { dbUser, isManager } = await getDatabaseUserProfile(cognitoUser.email);
+    const user = buildUserResponse(cognitoUser, dbUser, isManager);
 
     res.json({ success: true, data: user });
   } catch (error) {
@@ -336,20 +404,21 @@ const requireApiKey = (req, res, next) => {
 router.post('/admin/users', requireApiKey, async (req, res, next) => {
   try {
     const { email, name, temporaryPassword, role, department, salesforceId } = req.body;
+    const normalizedEmail = normalizePandaEmployeeEmail(email);
 
-    if (!email || !name || !temporaryPassword) {
+    if (!normalizedEmail || !name || !temporaryPassword) {
       return res.status(400).json({
         success: false,
         error: { code: 'VALIDATION_ERROR', message: 'Email, name, and temporaryPassword are required' },
       });
     }
 
-    const result = await authService.adminCreateUser(email, name, temporaryPassword, {
+    const result = await authService.adminCreateUser(normalizedEmail, name, temporaryPassword, {
       role,
       department,
       salesforceId,
     });
-    logger.info(`Admin created user: ${email}`);
+    logger.info(`Admin created user: ${normalizedEmail}`);
     res.json({ success: true, data: result });
   } catch (error) {
     next(error);
@@ -359,7 +428,7 @@ router.post('/admin/users', requireApiKey, async (req, res, next) => {
 // Admin: Get user
 router.get('/admin/users/:email', requireApiKey, async (req, res, next) => {
   try {
-    const user = await authService.adminGetUser(req.params.email);
+    const user = await authService.adminGetUser(normalizePandaEmployeeEmail(req.params.email));
     res.json({ success: true, data: user });
   } catch (error) {
     next(error);
@@ -369,8 +438,9 @@ router.get('/admin/users/:email', requireApiKey, async (req, res, next) => {
 // Admin: Update user attributes
 router.patch('/admin/users/:email', requireApiKey, async (req, res, next) => {
   try {
-    const result = await authService.adminUpdateUserAttributes(req.params.email, req.body);
-    logger.info(`Admin updated user: ${req.params.email}`);
+    const normalizedEmail = normalizePandaEmployeeEmail(req.params.email);
+    const result = await authService.adminUpdateUserAttributes(normalizedEmail, req.body);
+    logger.info(`Admin updated user: ${normalizedEmail}`);
     res.json({ success: true, data: result });
   } catch (error) {
     next(error);
@@ -380,7 +450,7 @@ router.patch('/admin/users/:email', requireApiKey, async (req, res, next) => {
 // Admin: Set user password
 router.post('/admin/users/:email/password', requireApiKey, async (req, res, next) => {
   try {
-    const { password } = req.body;
+    const password = req.body.password || req.body.newPassword;
 
     if (!password) {
       return res.status(400).json({
@@ -389,8 +459,9 @@ router.post('/admin/users/:email/password', requireApiKey, async (req, res, next
       });
     }
 
-    const result = await authService.adminSetPassword(req.params.email, password);
-    logger.info(`Admin set password for: ${req.params.email}`);
+    const normalizedEmail = normalizePandaEmployeeEmail(req.params.email);
+    const result = await authService.adminSetPassword(normalizedEmail, password);
+    logger.info(`Admin set password for: ${normalizedEmail}`);
     res.json({ success: true, data: result });
   } catch (error) {
     next(error);
