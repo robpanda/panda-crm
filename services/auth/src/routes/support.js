@@ -29,18 +29,142 @@ function generateTicketNumber() {
   return `${prefix}-${timestamp}-${random}`;
 }
 
-function isSupportAdmin(user = {}) {
-  const roleType = String(user?.roleType || '').toLowerCase();
-  const roleName = String(user?.role?.name || user?.role || '').toLowerCase();
-  const groups = Array.isArray(user?.groups)
-    ? user.groups.map((group) => String(group).toLowerCase())
+const SUPPORT_USER_SELECT = {
+  id: true,
+  email: true,
+  firstName: true,
+  lastName: true,
+  isActive: true,
+  role: {
+    select: {
+      id: true,
+      name: true,
+      roleType: true,
+      permissionsJson: true,
+    },
+  },
+};
+
+function normalizeRoleString(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function hasAdminIndicator(value) {
+  return normalizeRoleString(value).includes('admin');
+}
+
+function normalizePermissionsJson(permissionsJson) {
+  if (!permissionsJson) return {};
+  if (typeof permissionsJson === 'object') return permissionsJson;
+  if (typeof permissionsJson === 'string') {
+    try {
+      const parsed = JSON.parse(permissionsJson);
+      return typeof parsed === 'object' && parsed ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+function toActionSet(value) {
+  if (!value) return new Set();
+  if (Array.isArray(value)) {
+    return new Set(value.map((item) => normalizeRoleString(item)).filter(Boolean));
+  }
+  if (typeof value === 'string') {
+    const normalized = normalizeRoleString(value);
+    return normalized ? new Set([normalized]) : new Set();
+  }
+  if (typeof value === 'object') {
+    return new Set(
+      Object.entries(value)
+        .filter(([, allowed]) => allowed === true)
+        .map(([action]) => normalizeRoleString(action))
+        .filter(Boolean)
+    );
+  }
+  return new Set();
+}
+
+function hasAnyAction(actions, expected) {
+  for (const action of expected) {
+    if (actions.has(action)) return true;
+  }
+  return false;
+}
+
+function hasSupportAdminPermission(permissionsJson) {
+  const permissions = normalizePermissionsJson(permissionsJson);
+  const supportActions = toActionSet(
+    permissions.support ?? permissions.supportTickets ?? permissions.support_tickets
+  );
+
+  if (
+    hasAnyAction(supportActions, [
+      '*',
+      'admin',
+      'manage',
+      'viewall',
+      'view_all',
+      'assign',
+      'edit',
+      'resolve',
+    ])
+  ) {
+    return true;
+  }
+
+  const pages = permissions.pages && typeof permissions.pages === 'object' ? permissions.pages : {};
+  const pageKeys = [
+    'supportAdmin',
+    'support_admin',
+    'support',
+    'supportTickets',
+    'support_tickets',
+    'admin/support',
+    'admin/support/tickets',
+    '/admin/support',
+    '/admin/support/tickets',
+  ];
+
+  for (const key of pageKeys) {
+    const value = pages[key];
+    if (value === true) return true;
+    if (value && typeof value === 'object' && value.access === true) return true;
+  }
+
+  const packs = toActionSet(permissions.packs);
+  return hasAnyAction(packs, [
+    'can_manage_support',
+    'can_manage_support_tickets',
+    'can_view_support_admin',
+  ]);
+}
+
+function canManageAllSupportTickets(authUser, dbUser) {
+  if (authUser?.isSystem) return true;
+
+  const dbRoleName = normalizeRoleString(dbUser?.role?.name);
+  const dbRoleType = normalizeRoleString(dbUser?.role?.roleType);
+  const tokenRole = normalizeRoleString(
+    typeof authUser?.role === 'string' ? authUser.role : authUser?.role?.name
+  );
+  const groups = Array.isArray(authUser?.groups)
+    ? authUser.groups.map((group) => normalizeRoleString(group))
     : [];
 
-  return roleType.includes('admin')
-    || roleName.includes('admin')
-    || roleType.includes('system_admin')
-    || roleName.includes('system_admin')
-    || groups.some((group) => group.includes('admin') || group.includes('support'));
+  if (dbRoleType === 'admin' || dbRoleType === 'support_admin' || dbRoleType === 'system') return true;
+  if (
+    dbRoleName === 'support administrator'
+    || dbRoleName === 'support admin'
+    || (dbRoleName.includes('support') && hasAdminIndicator(dbRoleName))
+  ) {
+    return true;
+  }
+  if (hasAdminIndicator(tokenRole)) return true;
+  if (groups.some((group) => group.includes('support') && hasAdminIndicator(group))) return true;
+  return hasSupportAdminPermission(dbUser?.role?.permissionsJson);
 }
 
 function buildTicketIdentifierWhere(rawTicketId) {
@@ -49,6 +173,68 @@ function buildTicketIdentifierWhere(rawTicketId) {
       { id: rawTicketId },
       { ticket_number: rawTicketId },
     ],
+  };
+}
+
+async function resolveAuthenticatedUser(authUser) {
+  if (!authUser) return null;
+
+  const identityCandidates = Array.from(
+    new Set(
+      [authUser.id, authUser.userId, authUser.sub, authUser.cognitoId]
+        .map((value) => (value ? String(value).trim() : ''))
+        .filter(Boolean)
+    )
+  );
+
+  if (identityCandidates.length > 0) {
+    const byId = await prisma.user.findFirst({
+      where: {
+        id: { in: identityCandidates },
+        isActive: true,
+      },
+      select: SUPPORT_USER_SELECT,
+    });
+    if (byId) return byId;
+
+    const byCognitoId = await prisma.user.findFirst({
+      where: {
+        cognitoId: { in: identityCandidates },
+        isActive: true,
+      },
+      select: SUPPORT_USER_SELECT,
+    });
+    if (byCognitoId) return byCognitoId;
+  }
+
+  if (authUser.email) {
+    const byEmail = await prisma.user.findFirst({
+      where: {
+        isActive: true,
+        email: {
+          equals: String(authUser.email).trim(),
+          mode: 'insensitive',
+        },
+      },
+      select: SUPPORT_USER_SELECT,
+    });
+    if (byEmail) return byEmail;
+  }
+
+  return null;
+}
+
+async function getSupportContext(req, res) {
+  const authenticatedUser = await resolveAuthenticatedUser(req.user);
+  if (!authenticatedUser) {
+    res.status(401).json({ error: 'Unable to resolve authenticated user' });
+    return null;
+  }
+
+  return {
+    authenticatedUser,
+    userId: authenticatedUser.id,
+    canManageAll: canManageAllSupportTickets(req.user, authenticatedUser),
   };
 }
 
@@ -84,8 +270,11 @@ router.post('/upload', authMiddleware, upload.single('file'), async (req, res) =
 // Get user's tickets
 router.get('/tickets', authMiddleware, async (req, res) => {
   try {
+    const context = await getSupportContext(req, res);
+    if (!context) return;
+
     const tickets = await prisma.support_tickets.findMany({
-      where: { user_id: req.user.id },
+      where: context.canManageAll ? {} : { user_id: context.userId },
       include: {
         _count: {
           select: {
@@ -107,11 +296,13 @@ router.get('/tickets', authMiddleware, async (req, res) => {
 // Get single ticket
 router.get('/tickets/:id', authMiddleware, async (req, res) => {
   try {
-    const canViewAllTickets = isSupportAdmin(req.user);
+    const context = await getSupportContext(req, res);
+    if (!context) return;
+
     const ticket = await prisma.support_tickets.findFirst({
       where: {
         ...buildTicketIdentifierWhere(req.params.id),
-        ...(canViewAllTickets ? {} : { user_id: req.user.id }),
+        ...(context.canManageAll ? {} : { user_id: context.userId }),
       },
       include: {
         user: {
@@ -177,6 +368,9 @@ router.post('/tickets', authMiddleware, upload.fields([
   { name: 'attachments', maxCount: 5 }
 ]), async (req, res) => {
   try {
+    const context = await getSupportContext(req, res);
+    if (!context) return;
+
     const { subject, description, category, priority, pageUrl, browserInfo } = req.body;
 
     // Upload screenshot if provided
@@ -197,7 +391,7 @@ router.post('/tickets', authMiddleware, upload.fields([
         page_url: pageUrl || null,
         browser_info: browserInfo || null,
         screenshot_url: screenshotUrl,
-        user_id: req.user.id,
+        user_id: context.userId,
       },
     });
 
@@ -213,7 +407,7 @@ router.post('/tickets', authMiddleware, upload.fields([
             file_url: fileUrl,
             file_size: file.size,
             file_type: file.mimetype,
-            uploaded_by_id: req.user.id,
+            uploaded_by_id: context.userId,
           },
         });
       }
@@ -229,6 +423,9 @@ router.post('/tickets', authMiddleware, upload.fields([
 // Add message to ticket
 router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
   try {
+    const context = await getSupportContext(req, res);
+    if (!context) return;
+
     const { message, attachments } = req.body;
     const normalizedMessage = typeof message === 'string' ? message.trim() : '';
     const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
@@ -237,16 +434,15 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
     }
 
     // Verify ticket belongs to user or user is admin
-    const canViewAllTickets = isSupportAdmin(req.user);
     const ticket = await prisma.support_tickets.findFirst({
       where: {
         ...buildTicketIdentifierWhere(req.params.id),
-        ...(canViewAllTickets
+        ...(context.canManageAll
           ? {}
           : {
               OR: [
-                { user_id: req.user.id },
-                { assigned_to_id: req.user.id },
+                { user_id: context.userId },
+                { assigned_to_id: context.userId },
               ],
             }),
       },
@@ -260,7 +456,7 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
     const newMessage = await prisma.support_ticket_messages.create({
       data: {
         ticket_id: ticket.id,
-        user_id: req.user.id,
+        user_id: context.userId,
         message: normalizedMessage || 'Attachment(s) uploaded',
         is_internal: false,
       },
@@ -279,14 +475,14 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
             file_url: fileUrl,
             file_size: attachment.file_size || attachment.size || null,
             file_type: attachment.file_type || attachment.type || null,
-            uploaded_by_id: req.user.id,
+            uploaded_by_id: context.userId,
           },
         });
       }
     }
 
     // Update ticket timestamps
-    const isUserMessage = req.user.id === ticket.user_id;
+    const isUserMessage = context.userId === ticket.user_id;
     const updateData = {
       last_response_at: new Date(),
     };
@@ -318,7 +514,9 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
 // Admin: Get all tickets
 router.get('/admin/tickets', authMiddleware, async (req, res) => {
   try {
-    if (!isSupportAdmin(req.user)) {
+    const context = await getSupportContext(req, res);
+    if (!context) return;
+    if (!context.canManageAll) {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
@@ -363,7 +561,9 @@ router.get('/admin/tickets', authMiddleware, async (req, res) => {
 // Admin: Get stats
 router.get('/admin/stats', authMiddleware, async (req, res) => {
   try {
-    if (!isSupportAdmin(req.user)) {
+    const context = await getSupportContext(req, res);
+    if (!context) return;
+    if (!context.canManageAll) {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
@@ -406,7 +606,9 @@ router.get('/admin/stats', authMiddleware, async (req, res) => {
 // Admin: Export tickets
 router.get('/admin/export', authMiddleware, async (req, res) => {
   try {
-    if (!isSupportAdmin(req.user)) {
+    const context = await getSupportContext(req, res);
+    if (!context) return;
+    if (!context.canManageAll) {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
@@ -681,7 +883,9 @@ router.get('/tickets/similar', authMiddleware, async (req, res) => {
 // Admin: Update ticket status/priority/assignment
 router.patch('/admin/tickets/:id', authMiddleware, async (req, res) => {
   try {
-    if (!isSupportAdmin(req.user)) {
+    const context = await getSupportContext(req, res);
+    if (!context) return;
+    if (!context.canManageAll) {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
@@ -703,7 +907,7 @@ router.patch('/admin/tickets/:id', authMiddleware, async (req, res) => {
     if (status === 'RESOLVED' || status === 'CLOSED') {
       if (!existingTicket.resolved_at) {
         updateData.resolved_at = new Date();
-        updateData.resolved_by_id = req.user.id;
+        updateData.resolved_by_id = context.userId;
 
         const diffMs = new Date() - new Date(existingTicket.created_at);
         updateData.resolution_time_mins = Math.floor(diffMs / 60000);

@@ -1630,7 +1630,16 @@ export const usersApi = {
   },
 
   async createUser(data) {
-    const response = await api.post('/api/auth/admin/users', data);
+    const response = await api.post('/api/auth/admin/users', {
+      ...data,
+      name: data.name || `${data.firstName || ''} ${data.lastName || ''}`.trim(),
+      temporaryPassword: data.temporaryPassword || data.password,
+    });
+    return response.data.data;
+  },
+
+  async mergeUsers(data) {
+    const response = await api.post('/api/users/merge', data);
     return response.data.data;
   },
 
@@ -1640,7 +1649,10 @@ export const usersApi = {
   },
 
   async resetUserPassword(email, newPassword) {
-    const response = await api.post(`/api/auth/admin/users/${encodeURIComponent(email)}/password`, { newPassword });
+    const response = await api.post(`/api/auth/admin/users/${encodeURIComponent(email)}/password`, {
+      password: newPassword,
+      newPassword,
+    });
     return response.data.data;
   },
 };

@@ -530,7 +530,20 @@ Notes: ${appointment.notes || 'None'}
 
     logger.info(`Linked user ${userId} to Google Calendar: ${googleEmail}, sync enabled: ${enableSync}`);
 
-    return { linked: true, googleEmail, syncEnabled: enableSync, user };
+    return {
+      linked: true,
+      googleEmail,
+      google_calendar_email: googleEmail,
+      googleCalendarEmail: googleEmail,
+      syncEnabled: enableSync,
+      google_calendar_sync_enabled: enableSync,
+      googleCalendarSyncEnabled: enableSync,
+      user: {
+        ...user,
+        googleCalendarEmail: user.google_calendar_email,
+        googleCalendarSyncEnabled: Boolean(user.google_calendar_sync_enabled),
+      },
+    };
   },
 
   /**
@@ -545,7 +558,7 @@ Notes: ${appointment.notes || 'None'}
           email: true,
           google_calendar_email: true,
           google_calendar_sync_enabled: true,
-          googleCalendarLastSyncAt: true,
+          google_calendar_last_sync_at: true,
         },
       });
 
@@ -576,8 +589,12 @@ Notes: ${appointment.notes || 'None'}
       return {
         connected: isLinked,
         google_calendar_email: calendarEmail,
+        googleCalendarEmail: calendarEmail,
         syncEnabled: user.google_calendar_sync_enabled || false,
-        lastSyncAt: user.googleCalendarLastSyncAt,
+        google_calendar_sync_enabled: Boolean(user.google_calendar_sync_enabled),
+        googleCalendarSyncEnabled: Boolean(user.google_calendar_sync_enabled),
+        lastSyncAt: user.google_calendar_last_sync_at || null,
+        googleCalendarLastSyncAt: user.google_calendar_last_sync_at || null,
         isLinked,
         connectionVerified,
         error: connectionError,
@@ -587,8 +604,12 @@ Notes: ${appointment.notes || 'None'}
       return {
         connected: false,
         google_calendar_email: null,
+        googleCalendarEmail: null,
         syncEnabled: false,
+        google_calendar_sync_enabled: false,
+        googleCalendarSyncEnabled: false,
         lastSyncAt: null,
+        googleCalendarLastSyncAt: null,
         isLinked: false,
         connectionVerified: false,
         error: 'Failed to fetch calendar status',
@@ -606,7 +627,10 @@ Notes: ${appointment.notes || 'None'}
       lastName: user.lastName || null,
       email: user.email || null,
       google_calendar_email: user.google_calendar_email || null,
+      googleCalendarEmail: user.google_calendar_email || null,
       google_calendar_sync_enabled: Boolean(user.google_calendar_sync_enabled),
+      googleCalendarSyncEnabled: Boolean(user.google_calendar_sync_enabled),
+      google_calendar_last_sync_at: user.google_calendar_last_sync_at || null,
       googleCalendarLastSyncAt: user.google_calendar_last_sync_at || null,
     });
 

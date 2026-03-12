@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { usersApi, rolesApi } from '../../services/api';
@@ -23,6 +23,7 @@ import {
   Trash2,
   AlertTriangle,
   Settings,
+  GitMerge,
 } from 'lucide-react';
 import AdminLayout from '../../components/AdminLayout';
 
@@ -72,11 +73,27 @@ const roleTypeLabels = {
   viewer: 'Viewer',
 };
 
+const INITIAL_NEW_USER_FORM = {
+  email: '',
+  firstName: '',
+  lastName: '',
+  password: '',
+  roleId: '',
+  title: '',
+  department: '',
+  officeAssignment: '',
+  phone: '',
+  mobilePhone: '',
+  managerId: '',
+};
+
+const uniqueArray = (values = []) => [...new Set(values.filter(Boolean))];
+
 export default function Users() {
   const [search, setSearch] = useState('');
   const [departmentFilter, setDepartmentFilter] = useState('');
   const [officeFilter, setOfficeFilter] = useState('');
-  const [statusFilter, setStatusFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('true');
   const [sortBy, setSortBy] = useState('lastName');
   const [sortOrder, setSortOrder] = useState('asc');
   const [page, setPage] = useState(1);
@@ -87,9 +104,13 @@ export default function Users() {
   const [showAddUserModal, setShowAddUserModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
-  const [newUserForm, setNewUserForm] = useState({ email: '', firstName: '', lastName: '', password: '', roleId: '' });
+  const [showMergeModal, setShowMergeModal] = useState(false);
+  const [newUserForm, setNewUserForm] = useState(INITIAL_NEW_USER_FORM);
   const [passwordForm, setPasswordForm] = useState({ newPassword: '', confirmPassword: '' });
+  const [mergeForm, setMergeForm] = useState({ masterUserId: '', reason: '', search: '' });
+  const [selectedMergeUserIds, setSelectedMergeUserIds] = useState([]);
   const [actionError, setActionError] = useState('');
+  const [mergeError, setMergeError] = useState('');
 
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -99,7 +120,7 @@ export default function Users() {
     if (search) params.search = search;
     if (departmentFilter) params.department = departmentFilter;
     if (officeFilter) params.officeAssignment = officeFilter;
-    if (statusFilter) params.status = statusFilter;
+    if (statusFilter !== '') params.status = statusFilter;
     return params;
   }, [search, departmentFilter, officeFilter, statusFilter, sortBy, sortOrder, page]);
 
@@ -141,7 +162,7 @@ export default function Users() {
       queryClient.invalidateQueries(['users']);
       queryClient.invalidateQueries(['userStats']);
       setShowAddUserModal(false);
-      setNewUserForm({ email: '', firstName: '', lastName: '', password: '', roleId: '' });
+      setNewUserForm(INITIAL_NEW_USER_FORM);
       setActionError('');
     },
     onError: (error) => {
@@ -173,6 +194,22 @@ export default function Users() {
     },
     onError: (error) => {
       setActionError(error.response?.data?.error?.message || error.message || 'Failed to reset password');
+    },
+  });
+
+  const mergeUsersMutation = useMutation({
+    mutationFn: (payload) => usersApi.mergeUsers(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['users']);
+      queryClient.invalidateQueries(['userStats']);
+      setShowMergeModal(false);
+      setSelectedMergeUserIds([]);
+      setMergeForm({ masterUserId: '', reason: '', search: '' });
+      setMergeError('');
+      setActionError('');
+    },
+    onError: (error) => {
+      setMergeError(error.response?.data?.error?.message || error.message || 'Failed to merge users');
     },
   });
 
@@ -217,11 +254,55 @@ export default function Users() {
     setSearch('');
     setDepartmentFilter('');
     setOfficeFilter('');
-    setStatusFilter('');
+    setStatusFilter('true');
     setPage(1);
   };
 
-  const hasActiveFilters = search || departmentFilter || officeFilter || statusFilter;
+  const hasActiveFilters = search || departmentFilter || officeFilter || statusFilter !== 'true';
+
+  useEffect(() => {
+    const visibleIds = new Set(users.map((u) => u.id));
+    setSelectedMergeUserIds((prev) => prev.filter((id) => visibleIds.has(id)));
+  }, [users]);
+
+  const selectedMergeUsers = useMemo(
+    () => users.filter((u) => selectedMergeUserIds.includes(u.id)),
+    [users, selectedMergeUserIds]
+  );
+
+  const filteredMasterOptions = selectedMergeUsers.filter((u) => {
+    const q = mergeForm.search.trim().toLowerCase();
+    if (!q) return true;
+    const name = (u.fullName || `${u.firstName || ''} ${u.lastName || ''}`).toLowerCase();
+    return name.includes(q) || normalizePandaEmployeeEmail(u.email || '').includes(q);
+  });
+
+  const allVisibleSelected = users.length > 0 && users.every((u) => selectedMergeUserIds.includes(u.id));
+  const someVisibleSelected = users.some((u) => selectedMergeUserIds.includes(u.id));
+
+  const toggleUserForMerge = (userId, checked) => {
+    setSelectedMergeUserIds((prev) => {
+      if (checked) return uniqueArray([...prev, userId]);
+      return prev.filter((id) => id !== userId);
+    });
+    setMergeError('');
+  };
+
+  const toggleAllVisibleForMerge = (checked) => {
+    if (checked) {
+      setSelectedMergeUserIds((prev) => uniqueArray([...prev, ...users.map((u) => u.id)]));
+    } else {
+      const visibleIdSet = new Set(users.map((u) => u.id));
+      setSelectedMergeUserIds((prev) => prev.filter((id) => !visibleIdSet.has(id)));
+    }
+    setMergeError('');
+  };
+
+  const resetNewUserModal = () => {
+    setShowAddUserModal(false);
+    setNewUserForm(INITIAL_NEW_USER_FORM);
+    setActionError('');
+  };
 
   const startEditing = (user) => {
     setEditForm({
@@ -741,6 +822,23 @@ export default function Users() {
           </button>
           <button
             onClick={() => {
+              if (selectedMergeUserIds.length < 2) {
+                setMergeError('Select at least 2 users to merge.');
+                return;
+              }
+              setShowMergeModal(true);
+              setMergeForm({ masterUserId: selectedMergeUserIds[0] || '', reason: '', search: '' });
+              setMergeError('');
+              setActionError('');
+            }}
+            disabled={selectedMergeUserIds.length < 2}
+            className="inline-flex items-center justify-center px-4 py-2.5 bg-white border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <GitMerge className="w-5 h-5 mr-2" />
+            <span>Merge Selected{selectedMergeUserIds.length ? ` (${selectedMergeUserIds.length})` : ''}</span>
+          </button>
+          <button
+            onClick={() => {
               setShowAddUserModal(true);
               setActionError('');
             }}
@@ -856,6 +954,29 @@ export default function Users() {
 
       {/* User Table */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+        {(selectedMergeUserIds.length > 0 || mergeError) && (
+          <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <div className="text-sm text-gray-700">
+              {selectedMergeUserIds.length > 0
+                ? `${selectedMergeUserIds.length} user${selectedMergeUserIds.length === 1 ? '' : 's'} selected for merge.`
+                : 'No users selected.'}
+            </div>
+            {selectedMergeUserIds.length > 0 && (
+              <button
+                onClick={() => {
+                  setSelectedMergeUserIds([]);
+                  setMergeError('');
+                }}
+                className="text-sm text-gray-600 hover:text-gray-900"
+              >
+                Clear selection
+              </button>
+            )}
+            {mergeError && !showMergeModal && (
+              <div className="text-sm text-red-600">{mergeError}</div>
+            )}
+          </div>
+        )}
         {isLoading ? (
           <div className="flex items-center justify-center h-64">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-panda-primary"></div>
@@ -870,6 +991,15 @@ export default function Users() {
             <table className="w-full">
               <thead className="bg-gray-50 border-b border-gray-100">
                 <tr>
+                  <th className="px-4 py-3 text-left">
+                    <input
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      aria-checked={allVisibleSelected ? 'true' : someVisibleSelected ? 'mixed' : 'false'}
+                      onChange={(e) => toggleAllVisibleForMerge(e.target.checked)}
+                      className="w-4 h-4 text-panda-primary border-gray-300 rounded focus:ring-panda-primary"
+                    />
+                  </th>
                   <th
                     className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:bg-gray-100"
                     onClick={() => handleSort('lastName')}
@@ -912,6 +1042,14 @@ export default function Users() {
               <tbody className="divide-y divide-gray-100">
                 {users.map((user) => (
                   <tr key={user.id} className="hover:bg-gray-50">
+                    <td className="px-4 py-4">
+                      <input
+                        type="checkbox"
+                        checked={selectedMergeUserIds.includes(user.id)}
+                        onChange={(e) => toggleUserForMerge(user.id, e.target.checked)}
+                        className="w-4 h-4 text-panda-primary border-gray-300 rounded focus:ring-panda-primary"
+                      />
+                    </td>
                     <td className="px-4 py-4">
                       <div className="flex items-center">
                         <div className="w-10 h-10 rounded-full bg-gradient-to-r from-panda-primary to-panda-secondary flex items-center justify-center text-white text-sm font-medium flex-shrink-0">
@@ -1037,16 +1175,12 @@ export default function Users() {
       {/* Add User Modal */}
       {showAddUserModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl">
             <div className="p-6 border-b border-gray-100">
               <div className="flex items-center justify-between">
                 <h2 className="text-xl font-bold text-gray-900">Add New User</h2>
                 <button
-                  onClick={() => {
-                    setShowAddUserModal(false);
-                    setNewUserForm({ email: '', firstName: '', lastName: '', password: '', roleId: '' });
-                    setActionError('');
-                  }}
+                  onClick={resetNewUserModal}
                   className="p-2 hover:bg-gray-100 rounded-full"
                 >
                   <X className="w-5 h-5" />
@@ -1066,6 +1200,7 @@ export default function Users() {
                   type="email"
                   value={newUserForm.email}
                   onChange={(e) => setNewUserForm({ ...newUserForm, email: e.target.value })}
+                  onBlur={(e) => setNewUserForm((prev) => ({ ...prev, email: normalizePandaEmployeeEmail(e.target.value) }))}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
                   placeholder="user@pandaexteriors.com"
                 />
@@ -1087,6 +1222,75 @@ export default function Users() {
                     value={newUserForm.lastName}
                     onChange={(e) => setNewUserForm({ ...newUserForm, lastName: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Title</label>
+                  <input
+                    type="text"
+                    value={newUserForm.title}
+                    onChange={(e) => setNewUserForm({ ...newUserForm, title: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    placeholder="Project Consultant"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Department</label>
+                  <input
+                    type="text"
+                    value={newUserForm.department}
+                    onChange={(e) => setNewUserForm({ ...newUserForm, department: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    placeholder="Sales"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Office</label>
+                  <input
+                    type="text"
+                    value={newUserForm.officeAssignment}
+                    onChange={(e) => setNewUserForm({ ...newUserForm, officeAssignment: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    placeholder="MD"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Manager</label>
+                  <select
+                    value={newUserForm.managerId}
+                    onChange={(e) => setNewUserForm({ ...newUserForm, managerId: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                  >
+                    <option value="">Select a manager...</option>
+                    {userOptions.map((u) => (
+                      <option key={u.id} value={u.id}>{u.fullName}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
+                  <input
+                    type="tel"
+                    value={newUserForm.phone}
+                    onChange={(e) => setNewUserForm({ ...newUserForm, phone: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    placeholder="(555) 555-5555"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Mobile Phone</label>
+                  <input
+                    type="tel"
+                    value={newUserForm.mobilePhone}
+                    onChange={(e) => setNewUserForm({ ...newUserForm, mobilePhone: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    placeholder="(555) 555-5555"
                   />
                 </div>
               </div>
@@ -1116,11 +1320,7 @@ export default function Users() {
             </div>
             <div className="p-6 border-t border-gray-100 flex justify-end gap-3">
               <button
-                onClick={() => {
-                  setShowAddUserModal(false);
-                  setNewUserForm({ email: '', firstName: '', lastName: '', password: '', roleId: '' });
-                  setActionError('');
-                }}
+                onClick={resetNewUserModal}
                 className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
               >
                 Cancel
@@ -1135,12 +1335,128 @@ export default function Users() {
                     setActionError('Password must be at least 8 characters');
                     return;
                   }
-                  createUserMutation.mutate(newUserForm);
+                  createUserMutation.mutate({
+                    ...newUserForm,
+                    email: normalizePandaEmployeeEmail(newUserForm.email),
+                  });
                 }}
                 disabled={createUserMutation.isPending}
                 className="px-4 py-2 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg font-medium hover:opacity-90 disabled:opacity-50"
               >
                 {createUserMutation.isPending ? 'Creating...' : 'Create User'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Merge Users Modal */}
+      {showMergeModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg">
+            <div className="p-6 border-b border-gray-100">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-bold text-gray-900">Merge Users</h2>
+                  <p className="text-sm text-gray-500 mt-1">Select the active record to keep, then merge the duplicates into it.</p>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowMergeModal(false);
+                    setMergeError('');
+                  }}
+                  className="p-2 hover:bg-gray-100 rounded-full"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            <div className="p-6 space-y-4">
+              {(mergeError || actionError) && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2 text-red-700 text-sm">
+                  <AlertTriangle className="w-4 h-4" />
+                  {mergeError || actionError}
+                </div>
+              )}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Search selected users</label>
+                <input
+                  type="text"
+                  value={mergeForm.search}
+                  onChange={(e) => setMergeForm((prev) => ({ ...prev, search: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                  placeholder="Search by name or email"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Keep this record as the master *</label>
+                <select
+                  value={mergeForm.masterUserId}
+                  onChange={(e) => setMergeForm((prev) => ({ ...prev, masterUserId: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                >
+                  <option value="">Select a master user...</option>
+                  {filteredMasterOptions.map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {(user.fullName || `${user.firstName || ''} ${user.lastName || ''}`).trim()} ({normalizePandaEmployeeEmail(user.email)})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                <p className="text-sm font-medium text-gray-800">Users to merge</p>
+                <ul className="mt-2 space-y-2 text-sm text-gray-600">
+                  {selectedMergeUsers.map((user) => (
+                    <li key={user.id} className="flex items-center justify-between">
+                      <span>{(user.fullName || `${user.firstName || ''} ${user.lastName || ''}`).trim()}</span>
+                      <span className="text-gray-400">{normalizePandaEmployeeEmail(user.email)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Reason</label>
+                <textarea
+                  value={mergeForm.reason}
+                  onChange={(e) => setMergeForm((prev) => ({ ...prev, reason: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary min-h-[88px]"
+                  placeholder="Optional note for why these users are being merged"
+                />
+              </div>
+            </div>
+            <div className="p-6 border-t border-gray-100 flex justify-end gap-3">
+              <button
+                onClick={() => {
+                  setShowMergeModal(false);
+                  setMergeError('');
+                }}
+                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (!mergeForm.masterUserId) {
+                    setMergeError('Select a master user to keep.');
+                    return;
+                  }
+
+                  const duplicateUserIds = selectedMergeUserIds.filter((id) => id !== mergeForm.masterUserId);
+                  if (duplicateUserIds.length === 0) {
+                    setMergeError('Select at least one duplicate user to merge into the master record.');
+                    return;
+                  }
+
+                  mergeUsersMutation.mutate({
+                    masterUserId: mergeForm.masterUserId,
+                    duplicateUserIds,
+                    reason: mergeForm.reason || undefined,
+                  });
+                }}
+                disabled={mergeUsersMutation.isPending}
+                className="px-4 py-2 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg font-medium hover:opacity-90 disabled:opacity-50"
+              >
+                {mergeUsersMutation.isPending ? 'Merging...' : 'Merge Users'}
               </button>
             </div>
           </div>

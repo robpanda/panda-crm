@@ -64,15 +64,27 @@ export default function Support() {
       setLoading(true);
       const response = await api.get('/api/support/tickets');
       const ticketData = response.data.tickets || [];
-      setTickets(ticketData);
+      const currentUserId = user?.id || user?.userId || user?.sub || null;
+      const currentUserEmail = String(user?.email || '').trim().toLowerCase();
+      const scopedTickets = ticketData.filter((ticket) => {
+        if (currentUserId) {
+          return ticket.user_id === currentUserId || ticket.userId === currentUserId || ticket.createdById === currentUserId;
+        }
+        if (currentUserEmail) {
+          const ticketEmail = String(ticket.user?.email || ticket.email || '').trim().toLowerCase();
+          return Boolean(ticketEmail) && ticketEmail === currentUserEmail;
+        }
+        return false;
+      });
+      setTickets(scopedTickets);
 
       // Calculate stats
       setStats({
-        total: ticketData.length,
-        new: ticketData.filter(t => t.status === 'NEW').length,
-        inProgress: ticketData.filter(t => t.status === 'IN_PROGRESS').length,
-        waitingForUser: ticketData.filter(t => t.status === 'WAITING_FOR_USER').length,
-        resolved: ticketData.filter(t => ['RESOLVED', 'CLOSED'].includes(t.status)).length,
+        total: scopedTickets.length,
+        new: scopedTickets.filter(t => t.status === 'NEW').length,
+        inProgress: scopedTickets.filter(t => t.status === 'IN_PROGRESS').length,
+        waitingForUser: scopedTickets.filter(t => t.status === 'WAITING_FOR_USER').length,
+        resolved: scopedTickets.filter(t => ['RESOLVED', 'CLOSED'].includes(t.status)).length,
       });
     } catch (error) {
       console.error('Failed to load tickets:', error);

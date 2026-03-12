@@ -42,6 +42,18 @@ function normalizePandaEmployeeEmail(email) {
   return `${localPart.replace(/\./g, '').toLowerCase()}@${domainPart}`;
 }
 
+function normalizeCalendarUser(user = {}) {
+  return {
+    ...user,
+    googleCalendarEmail: user.googleCalendarEmail || user.google_calendar_email || null,
+    googleCalendarSyncEnabled: Boolean(
+      user.googleCalendarSyncEnabled ?? user.google_calendar_sync_enabled
+    ),
+    googleCalendarLastSyncAt:
+      user.googleCalendarLastSyncAt || user.google_calendar_last_sync_at || user.lastSyncAt || null,
+  };
+}
+
 export default function GoogleCalendar() {
   const navigate = useNavigate();
   const fileInputRef = useRef(null);
@@ -70,7 +82,7 @@ export default function GoogleCalendar() {
     try {
       setLoading(true);
       const response = await api.get('/api/integrations/google/users');
-      setUsers(response.data.data || []);
+      setUsers((response.data.data || []).map(normalizeCalendarUser));
     } catch (error) {
       console.error('Failed to load users:', error);
     } finally {

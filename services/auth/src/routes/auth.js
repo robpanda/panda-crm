@@ -126,11 +126,19 @@ async function getDatabaseUserProfile(email) {
         officeAssignment: true,
         managerId: true,
         isActive: true,
-        createdAt: true,
-        updatedAt: true,
-        roleId: true,
+      createdAt: true,
+      updatedAt: true,
+      roleId: true,
+      role: {
+        select: {
+          id: true,
+          name: true,
+          roleType: true,
+          permissionsJson: true,
+        },
       },
-    });
+    },
+  });
 
     const dbUser = pickBestEmailMatch(dbUsers, emailCandidates);
     let isManager = false;
@@ -173,6 +181,203 @@ function buildUserResponse(cognitoUser, dbUser, isManager) {
     createdAt: dbUser?.createdAt,
     updatedAt: dbUser?.updatedAt,
   };
+}
+
+function normalizeRoleString(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function hasAdminAccess(dbUser) {
+  if (!dbUser) return false;
+
+  const roleName = normalizeRoleString(dbUser.role?.name);
+  const roleType = normalizeRoleString(dbUser.role?.roleType);
+  if (roleType === 'admin' || roleType === 'system' || roleType === 'super_admin') {
+    return true;
+  }
+  if (roleName.includes('admin')) {
+    return true;
+  }
+
+  const permissionsJson = dbUser.role?.permissionsJson;
+  if (!permissionsJson) return false;
+
+  let permissions = permissionsJson;
+  if (typeof permissionsJson === 'string') {
+    try {
+      permissions = JSON.parse(permissionsJson);
+    } catch {
+      permissions = {};
+    }
+  }
+
+  const pages = permissions?.pages && typeof permissions.pages === 'object' ? permissions.pages : {};
+  return Boolean(
+    pages.admin === true
+    || pages.users === true
+    || pages.userManagement === true
+    || pages.adminUsers === true
+    || pages['/admin/users'] === true
+  );
+}
+
+async function requireAdminAccess(req, res, next) {
+  try {
+    const apiKey = req.headers['x-api-key'];
+    if (apiKey === process.env.INTERNAL_API_KEY) {
+      req.adminAccess = { isSystem: true };
+      return next();
+    }
+
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(403).json({
+        success: false,
+        error: { code: 'FORBIDDEN', message: 'Invalid API key' },
+      });
+    }
+
+    const accessToken = authHeader.split(' ')[1];
+    const cognitoUser = await authService.getCurrentUser(accessToken);
+    const { dbUser } = await getDatabaseUserProfile(cognitoUser.email);
+
+    if (!hasAdminAccess(dbUser)) {
+      return res.status(403).json({
+        success: false,
+        error: { code: 'FORBIDDEN', message: 'Insufficient permissions' },
+      });
+    }
+
+    req.adminAccess = { cognitoUser, dbUser };
+    return next();
+  } catch (error) {
+    logger.warn(`Admin access check failed: ${error.message}`);
+    return res.status(403).json({
+      success: false,
+      error: { code: 'FORBIDDEN', message: 'Invalid API key' },
+    });
+  }
+}
+
+function normalizeAdminCreatePayload(body = {}) {
+  const normalizedEmail = normalizePandaEmployeeEmail(body.email);
+  const suppliedName = typeof body.name === 'string' ? body.name.trim() : '';
+  let firstName = typeof body.firstName === 'string' ? body.firstName.trim() : '';
+  let lastName = typeof body.lastName === 'string' ? body.lastName.trim() : '';
+
+  if ((!firstName || !lastName) && suppliedName) {
+    const nameParts = suppliedName.split(/\s+/).filter(Boolean);
+    if (!firstName && nameParts.length > 0) {
+      firstName = nameParts[0];
+    }
+    if (!lastName && nameParts.length > 1) {
+      lastName = nameParts.slice(1).join(' ');
+    }
+  }
+
+  if (!firstName && normalizedEmail) {
+    firstName = normalizedEmail.split('@')[0] || '';
+  }
+  if (!lastName) {
+    lastName = 'User';
+  }
+
+  return {
+    email: normalizedEmail,
+    firstName,
+    lastName,
+    fullName: suppliedName || `${firstName} ${lastName}`.trim(),
+    temporaryPassword: body.temporaryPassword || body.password,
+    roleId: body.roleId || null,
+    role: body.role || null,
+    department: body.department || null,
+    title: body.title || null,
+    officeAssignment: body.officeAssignment || null,
+    phone: body.phone || null,
+    mobilePhone: body.mobilePhone || null,
+    managerId: body.managerId || null,
+    salesforceId: body.salesforceId || null,
+    isActive: body.isActive !== false,
+  };
+}
+
+async function resolveRoleForAdminCreate(roleId, roleName) {
+  if (roleId) {
+    const role = await prisma.role.findUnique({
+      where: { id: roleId },
+      select: { id: true, name: true, roleType: true },
+    });
+    if (!role) {
+      const error = new Error('Selected role was not found');
+      error.code = 'VALIDATION_ERROR';
+      throw error;
+    }
+    return role;
+  }
+
+  if (roleName) {
+    return prisma.role.findFirst({
+      where: {
+        name: {
+          equals: String(roleName).trim(),
+          mode: 'insensitive',
+        },
+      },
+      select: { id: true, name: true, roleType: true },
+    });
+  }
+
+  return null;
+}
+
+async function upsertCrmUserRecordFromAdminPayload(payload, cognitoUsername) {
+  const role = await resolveRoleForAdminCreate(payload.roleId, payload.role);
+  const fullName = payload.fullName || `${payload.firstName || ''} ${payload.lastName || ''}`.trim() || payload.email;
+
+  return prisma.user.upsert({
+    where: { email: payload.email },
+    update: {
+      cognitoId: cognitoUsername || undefined,
+      firstName: payload.firstName,
+      lastName: payload.lastName,
+      fullName,
+      roleId: role?.id || null,
+      department: payload.department,
+      title: payload.title,
+      officeAssignment: payload.officeAssignment,
+      phone: payload.phone,
+      mobilePhone: payload.mobilePhone,
+      managerId: payload.managerId,
+      salesforceId: payload.salesforceId,
+      isActive: payload.isActive,
+      status: payload.isActive ? 'ACTIVE' : 'INACTIVE',
+    },
+    create: {
+      email: payload.email,
+      cognitoId: cognitoUsername || null,
+      firstName: payload.firstName,
+      lastName: payload.lastName,
+      fullName,
+      roleId: role?.id || null,
+      department: payload.department,
+      title: payload.title,
+      officeAssignment: payload.officeAssignment,
+      phone: payload.phone,
+      mobilePhone: payload.mobilePhone,
+      managerId: payload.managerId,
+      salesforceId: payload.salesforceId,
+      isActive: payload.isActive,
+      status: payload.isActive ? 'ACTIVE' : 'INACTIVE',
+    },
+    include: {
+      role: {
+        select: { id: true, name: true, roleType: true },
+      },
+      manager: {
+        select: { id: true, fullName: true, firstName: true, lastName: true },
+      },
+    },
+  });
 }
 
 // Login
@@ -389,44 +594,42 @@ router.post('/logout', async (req, res, next) => {
 });
 
 // Admin routes (protected by API key)
-const requireApiKey = (req, res, next) => {
-  const apiKey = req.headers['x-api-key'];
-  if (apiKey !== process.env.INTERNAL_API_KEY) {
-    return res.status(403).json({
-      success: false,
-      error: { code: 'FORBIDDEN', message: 'Invalid API key' },
-    });
-  }
-  next();
-};
-
 // Admin: Create user
-router.post('/admin/users', requireApiKey, async (req, res, next) => {
+router.post('/admin/users', requireAdminAccess, async (req, res, next) => {
   try {
-    const { email, name, temporaryPassword, role, department, salesforceId } = req.body;
-    const normalizedEmail = normalizePandaEmployeeEmail(email);
+    const payload = normalizeAdminCreatePayload(req.body);
 
-    if (!normalizedEmail || !name || !temporaryPassword) {
+    if (!payload.email || !payload.firstName || !payload.lastName || !payload.temporaryPassword) {
       return res.status(400).json({
         success: false,
-        error: { code: 'VALIDATION_ERROR', message: 'Email, name, and temporaryPassword are required' },
+        error: { code: 'VALIDATION_ERROR', message: 'Email, first name, last name, and temporaryPassword are required' },
       });
     }
 
-    const result = await authService.adminCreateUser(normalizedEmail, name, temporaryPassword, {
-      role,
-      department,
-      salesforceId,
+    const result = await authService.adminCreateUser(payload.email, payload.fullName, payload.temporaryPassword, {
+      role: payload.role,
+      department: payload.department,
+      salesforceId: payload.salesforceId,
+      firstName: payload.firstName,
+      lastName: payload.lastName,
     });
-    logger.info(`Admin created user: ${normalizedEmail}`);
-    res.json({ success: true, data: result });
+    const crmUser = await upsertCrmUserRecordFromAdminPayload(payload, result.username);
+
+    logger.info(`Admin created user: ${payload.email}`);
+    res.json({
+      success: true,
+      data: {
+        ...result,
+        user: crmUser,
+      },
+    });
   } catch (error) {
     next(error);
   }
 });
 
 // Admin: Get user
-router.get('/admin/users/:email', requireApiKey, async (req, res, next) => {
+router.get('/admin/users/:email', requireAdminAccess, async (req, res, next) => {
   try {
     const user = await authService.adminGetUser(normalizePandaEmployeeEmail(req.params.email));
     res.json({ success: true, data: user });
@@ -436,7 +639,7 @@ router.get('/admin/users/:email', requireApiKey, async (req, res, next) => {
 });
 
 // Admin: Update user attributes
-router.patch('/admin/users/:email', requireApiKey, async (req, res, next) => {
+router.patch('/admin/users/:email', requireAdminAccess, async (req, res, next) => {
   try {
     const normalizedEmail = normalizePandaEmployeeEmail(req.params.email);
     const result = await authService.adminUpdateUserAttributes(normalizedEmail, req.body);
@@ -448,7 +651,7 @@ router.patch('/admin/users/:email', requireApiKey, async (req, res, next) => {
 });
 
 // Admin: Set user password
-router.post('/admin/users/:email/password', requireApiKey, async (req, res, next) => {
+router.post('/admin/users/:email/password', requireAdminAccess, async (req, res, next) => {
   try {
     const password = req.body.password || req.body.newPassword;
 

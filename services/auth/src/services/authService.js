@@ -304,6 +304,13 @@ export const authService = {
       { Name: 'name', Value: name },
     ];
 
+    if (attributes.firstName) {
+      userAttributes.push({ Name: 'given_name', Value: attributes.firstName });
+    }
+    if (attributes.lastName) {
+      userAttributes.push({ Name: 'family_name', Value: attributes.lastName });
+    }
+
     if (attributes.role) {
       userAttributes.push({ Name: 'custom:role', Value: attributes.role });
     }
@@ -314,7 +321,7 @@ export const authService = {
       userAttributes.push({ Name: 'custom:salesforce_id', Value: attributes.salesforceId });
     }
 
-    await cognitoClient.send(
+    const response = await cognitoClient.send(
       new AdminCreateUserCommand({
         UserPoolId: creds.userPoolId,
         Username: email,
@@ -324,7 +331,10 @@ export const authService = {
       })
     );
 
-    return { message: 'User created successfully.' };
+    return {
+      message: 'User created successfully.',
+      username: response.User?.Username || email,
+    };
   },
 
   /**

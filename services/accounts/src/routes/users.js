@@ -1,6 +1,6 @@
 // User Routes
 import { Router } from 'express';
-import { param, query, validationResult } from 'express-validator';
+import { body, param, query, validationResult } from 'express-validator';
 import { userController } from '../controllers/userController.js';
 import { requireRole } from '../middleware/auth.js';
 
@@ -49,6 +49,20 @@ router.get('/salesforce/:salesforceId', userController.getBySalesforceId);
 
 // Get by email (for auth context lookup)
 router.get('/email/:email', userController.getByEmail);
+
+// Merge duplicate users into a master user
+router.post(
+  '/merge',
+  requireRole('admin', 'super_admin', 'system'),
+  [
+    body('masterUserId').isString().notEmpty().withMessage('masterUserId is required'),
+    body('duplicateUserIds').isArray({ min: 1 }).withMessage('duplicateUserIds must contain at least one id'),
+    body('duplicateUserIds.*').isString().notEmpty().withMessage('Each duplicate user id must be a non-empty string'),
+    body('reason').optional().isString(),
+  ],
+  handleValidation,
+  userController.merge
+);
 
 // Get single user
 router.get('/:id', userController.get);
