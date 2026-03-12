@@ -16,7 +16,7 @@ export default function DiagnosticsDrawer({ open, onClose, context }) {
       <div className="absolute right-0 top-0 h-full w-full max-w-md bg-white shadow-xl flex flex-col">
         <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
           <div>
-            <div className="text-sm text-gray-500">Why is this empty?</div>
+            <div className="text-sm text-gray-500">No data found</div>
             <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
           </div>
           <button
@@ -53,7 +53,7 @@ export default function DiagnosticsDrawer({ open, onClose, context }) {
           </div>
 
           <div className="space-y-2">
-            <div className="text-xs uppercase tracking-wide text-gray-400">Diagnostics</div>
+            <div className="text-xs uppercase tracking-wide text-gray-400">Possible Reasons</div>
             {diagnostics.length === 0 ? (
               <div className="text-sm text-gray-500">Diagnostics unavailable.</div>
             ) : (

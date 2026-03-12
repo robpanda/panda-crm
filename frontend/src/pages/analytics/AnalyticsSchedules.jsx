@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { insightSchedulesApi } from '../../services/api';
+import { useSearchParams } from 'react-router-dom';
+import { insightSchedulesApi, reportsApi } from '../../services/api';
 import { Calendar, Clock, Play } from 'lucide-react';
 
 function ScheduleCard({ schedule }) {
@@ -39,9 +40,16 @@ function ScheduleCard({ schedule }) {
 }
 
 export default function AnalyticsSchedules() {
+  const [searchParams] = useSearchParams();
+  const reportId = searchParams.get('reportId');
   const { data, isLoading } = useQuery({
     queryKey: ['insight-schedules'],
     queryFn: () => insightSchedulesApi.getSchedules(),
+  });
+  const { data: selectedReport } = useQuery({
+    queryKey: ['saved-report', reportId, 'schedule-context'],
+    queryFn: () => reportsApi.getSavedReport(reportId),
+    enabled: Boolean(reportId),
   });
 
   const schedules = Array.isArray(data) ? data : (data?.data || []);
@@ -49,10 +57,17 @@ export default function AnalyticsSchedules() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <p className="text-gray-500 dark:text-gray-400">Manage your scheduled report deliveries</p>
+        <div>
+          <p className="text-gray-500 dark:text-gray-400">Manage your scheduled report deliveries</p>
+          {selectedReport && (
+            <p className="mt-1 text-sm text-gray-700">
+              Scheduling context: <span className="font-medium">{selectedReport.name}</span>
+            </p>
+          )}
+        </div>
         <button className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
           <Play className="w-4 h-4" />
-          New Schedule
+          {selectedReport ? 'Schedule Report' : 'New Schedule'}
         </button>
       </div>
 

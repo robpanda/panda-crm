@@ -60,28 +60,58 @@ export async function authMiddleware(req, res, next) {
 }
 
 async function verifyToken(token) {
-  // TODO: Implement Cognito JWT verification
-  // For now, use simple JWT decoding for development
+  const { PrismaClient } = await import('@prisma/client');
 
   if (process.env.NODE_ENV === 'development' && process.env.DEV_BYPASS_AUTH === 'true') {
     // Development bypass - decode JWT without verification
     try {
       const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+      const cognitoId = payload.sub;
+      const email = payload.email;
+
+      const prisma = new PrismaClient();
+      try {
+        let user = null;
+
+        if (email) {
+          user = await prisma.user.findUnique({
+            where: { email },
+            include: { role: true },
+          });
+        }
+
+        if (!user && cognitoId) {
+          user = await prisma.user.findFirst({
+            where: { cognitoId },
+            include: { role: true },
+          });
+        }
+
+        if (user) {
+          return {
+            id: user.id,
+            email: user.email,
+            role: user.role?.name || payload.role || 'user',
+            roleType: user.role?.roleType,
+            cognitoId,
+          };
+        }
+      } finally {
+        await prisma.$disconnect();
+      }
+
       return {
-        id: payload.sub || payload.userId,
-        email: payload.email,
+        id: payload.userId || payload.sub,
+        email,
         role: payload.role || 'user',
-        cognitoId: payload.sub,
+        cognitoId,
       };
     } catch {
       throw new Error('Invalid token format');
     }
   }
 
-  // Production: Verify with Cognito
-  // This will be implemented when we set up Cognito
   const { CognitoJwtVerifier } = await import('aws-jwt-verify');
-
   const verifier = CognitoJwtVerifier.create({
     userPoolId: process.env.COGNITO_USER_POOL_ID,
     tokenUse: 'access',
@@ -89,14 +119,49 @@ async function verifyToken(token) {
   });
 
   const payload = await verifier.verify(token);
+  const cognitoId = payload.sub;
+  const email = payload.email;
 
-  return {
-    id: payload.sub,
-    email: payload.email,
-    role: payload['custom:role'] || 'user',
-    cognitoId: payload.sub,
-    groups: payload['cognito:groups'] || [],
-  };
+  const prisma = new PrismaClient();
+  try {
+    let user = null;
+
+    if (email) {
+      user = await prisma.user.findUnique({
+        where: { email },
+        include: { role: true },
+      });
+    }
+
+    if (!user && cognitoId) {
+      user = await prisma.user.findFirst({
+        where: { cognitoId },
+        include: { role: true },
+      });
+    }
+
+    if (user) {
+      return {
+        id: user.id,
+        email: user.email,
+        role: user.role?.name || payload['custom:role'] || 'user',
+        roleType: user.role?.roleType,
+        cognitoId,
+        groups: payload['cognito:groups'] || [],
+      };
+    }
+
+    logger.warn('User not found in database for cognitoId:', cognitoId);
+    return {
+      id: cognitoId,
+      email,
+      role: payload['custom:role'] || 'user',
+      cognitoId,
+      groups: payload['cognito:groups'] || [],
+    };
+  } finally {
+    await prisma.$disconnect();
+  }
 }
 
 // Role-based authorization middleware factory
