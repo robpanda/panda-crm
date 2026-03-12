@@ -6440,9 +6440,9 @@ export const subcontractorPortalApi = {
   },
 };
 
-const CUSTOMER_PORTAL_BASES = ['/api/opportunities/portal', '/api/portal'];
+const CUSTOMER_PORTAL_BASES = ['/api/portal', '/api/opportunities/portal'];
 
-const shouldRetryPortalRequest = (error) => [401, 403, 404].includes(error?.response?.status);
+const shouldRetryPortalRequest = (error) => [401, 403, 404, 502, 503].includes(error?.response?.status);
 
 async function requestCustomerPortal({ method = 'get', suffix, data, params }) {
   let lastError = null;

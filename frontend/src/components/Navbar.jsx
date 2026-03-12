@@ -825,9 +825,7 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
           className="hidden md:flex flex-1 max-w-3xl mx-4 h-10 items-center gap-3 rounded-xl border border-gray-300 bg-white px-4 text-left text-sm text-gray-500 shadow-sm transition-colors hover:border-panda-primary/30 hover:bg-gray-50"
         >
           <Search className="h-4 w-4 text-gray-400" />
-          <span className="min-w-0 flex-1 truncate">
-            Search accounts, contacts, leads, jobs, invoices, phones, addresses, emails, and mentions...
-          </span>
+          <span className="min-w-0 flex-1 truncate">Search</span>
           <span className="rounded-full bg-gray-100 px-2 py-1 text-xs font-medium text-gray-500">
             Search
           </span>

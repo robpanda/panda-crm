@@ -89,6 +89,66 @@ const APPT_DATE_FILTERS = [
   { id: 'all', label: 'All' },
 ];
 
+function formatUiDate(value) {
+  if (!value) return '';
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '';
+  return parsed.toLocaleDateString('en-US', {
+    month: '2-digit',
+    day: '2-digit',
+    year: 'numeric',
+  });
+}
+
+function formatUiTime(value) {
+  if (!value) return '';
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    });
+  }
+
+  const raw = String(value || '').trim();
+  const twelveHourMatch = raw.match(/^(\d{1,2}):(\d{2})\s*([ap]m)$/i);
+  if (twelveHourMatch) {
+    const [, hour, minute, meridiem] = twelveHourMatch;
+    return `${Number(hour)}:${minute} ${meridiem.toUpperCase()}`;
+  }
+
+  const twentyFourHourMatch = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (twentyFourHourMatch) {
+    const [, hourText, minute] = twentyFourHourMatch;
+    const hour = Number(hourText);
+    if (Number.isFinite(hour)) {
+      const normalizedHour = hour % 12 || 12;
+      const meridiem = hour >= 12 ? 'PM' : 'AM';
+      return `${normalizedHour}:${minute} ${meridiem}`;
+    }
+  }
+
+  return raw;
+}
+
+function resolveMergeFieldValue(source, path) {
+  if (!source || !path) return '';
+  return String(path)
+    .split('.')
+    .filter(Boolean)
+    .reduce((value, key) => (value !== undefined && value !== null ? value[key] : undefined), source) ?? '';
+}
+
+function interpolateMergeFields(template, mergeData = {}) {
+  if (!template) return '';
+  return String(template).replace(/\{\{\s*([^}]+?)\s*\}\}|\{([a-zA-Z0-9_.]+)\}/g, (match, dottedKey, simpleKey) => {
+    const key = (dottedKey || simpleKey || '').trim();
+    const resolved = resolveMergeFieldValue(mergeData, key);
+    return resolved === undefined || resolved === null ? '' : String(resolved);
+  });
+}
+
 // SMS Modal Component with Canned Responses
 function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {} }) {
   const [message, setMessage] = useState('');
@@ -128,8 +188,6 @@ function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {
 
     const template = templates.find((t) => t.id === templateId);
     if (template) {
-      // Interpolate merge fields
-      let interpolated = template.body || '';
       const data = {
         firstName: mergeData.firstName || '',
         lastName: mergeData.lastName || '',
@@ -138,13 +196,7 @@ function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {
         phone: mergeData.phone || phone,
         ...mergeData,
       };
-
-      // Replace {{variable}} and {variable} patterns
-      interpolated = interpolated.replace(/\{\{?(\w+)\}?\}/g, (match, key) => {
-        return data[key] !== undefined && data[key] !== '' ? data[key] : match;
-      });
-
-      setMessage(interpolated);
+      setMessage(interpolateMergeFields(template.body || '', data));
     }
   };
 
@@ -325,20 +377,8 @@ function EmailModal({ isOpen, onClose, email, recipientName, onSent, mergeData =
         ...mergeData,
       };
 
-      // Interpolate subject
-      let interpolatedSubject = template.subject || '';
-      interpolatedSubject = interpolatedSubject.replace(/\{\{?(\w+)\}?\}/g, (match, key) => {
-        return data[key] !== undefined && data[key] !== '' ? data[key] : match;
-      });
-
-      // Interpolate body
-      let interpolatedBody = template.body || '';
-      interpolatedBody = interpolatedBody.replace(/\{\{?(\w+)\}?\}/g, (match, key) => {
-        return data[key] !== undefined && data[key] !== '' ? data[key] : match;
-      });
-
-      setSubject(interpolatedSubject);
-      setBody(interpolatedBody);
+      setSubject(interpolateMergeFields(template.subject || '', data));
+      setBody(interpolateMergeFields(template.body || '', data));
     }
   };
 
@@ -2449,9 +2489,9 @@ export default function CallCenterDashboard() {
   // Format appointment date/time nicely
   const formatApptDateTime = (dateStr, timeStr) => {
     if (!dateStr) return '-';
-    const date = parseISO(dateStr.split('T')[0]);
-    const dateLabel = isToday(date) ? 'Today' : isTomorrow(date) ? 'Tomorrow' : format(date, 'EEE, MMM d');
-    return timeStr ? `${dateLabel} at ${timeStr}` : dateLabel;
+    const dateLabel = formatUiDate(dateStr);
+    const timeLabel = formatUiTime(timeStr);
+    return timeLabel ? `${dateLabel} at ${timeLabel}` : dateLabel;
   };
 
   // Open SMS modal
@@ -2489,6 +2529,17 @@ export default function CallCenterDashboard() {
           city: record.city,
           state: record.state,
           status: record.status,
+          contact: {
+            firstName: record.firstName,
+            lastName: record.lastName,
+            fullName: `${record.firstName} ${record.lastName}`,
+            email: record.email,
+            phone: record.phone,
+          },
+          appointment: {
+            date: formatUiDate(record.tentativeAppointmentDate || record.scheduledStart),
+            time: formatUiTime(record.tentativeAppointmentTime || record.scheduledStart),
+          },
         }
       : {
           firstName: record.contact?.firstName || record.account?.name?.split(' ')[0] || '',
@@ -2500,7 +2551,18 @@ export default function CallCenterDashboard() {
           email: record.contact?.email || record.account?.email,
           projectAddress: getProjectAddress(),
           status: record.stage || record.status,
-          appointmentDate: record.scheduledStart ? new Date(record.scheduledStart).toLocaleDateString() : '',
+          appointmentDate: formatUiDate(record.scheduledStart),
+          contact: {
+            firstName: record.contact?.firstName || record.account?.name?.split(' ')[0] || '',
+            lastName: record.contact?.lastName || '',
+            fullName: record.contact?.name || record.account?.name || '',
+            email: record.contact?.email || record.account?.email,
+            phone: record.contact?.phone || record.account?.phone,
+          },
+          appointment: {
+            date: formatUiDate(record.scheduledStart),
+            time: formatUiTime(record.scheduledStart),
+          },
         };
     setSmsModal({ open: true, phone, recipientName, mergeData });
   };
@@ -2540,6 +2602,17 @@ export default function CallCenterDashboard() {
           city: record.city,
           state: record.state,
           status: record.status,
+          contact: {
+            firstName: record.firstName,
+            lastName: record.lastName,
+            fullName: `${record.firstName} ${record.lastName}`,
+            email: record.email,
+            phone: record.phone,
+          },
+          appointment: {
+            date: formatUiDate(record.tentativeAppointmentDate || record.scheduledStart),
+            time: formatUiTime(record.tentativeAppointmentTime || record.scheduledStart),
+          },
         }
       : {
           firstName: record.contact?.firstName || record.account?.name?.split(' ')[0] || '',
@@ -2551,7 +2624,18 @@ export default function CallCenterDashboard() {
           email: record.contact?.email || record.account?.email,
           projectAddress: getProjectAddress(),
           status: record.stage || record.status,
-          appointmentDate: record.scheduledStart ? new Date(record.scheduledStart).toLocaleDateString() : '',
+          appointmentDate: formatUiDate(record.scheduledStart),
+          contact: {
+            firstName: record.contact?.firstName || record.account?.name?.split(' ')[0] || '',
+            lastName: record.contact?.lastName || '',
+            fullName: record.contact?.name || record.account?.name || '',
+            email: record.contact?.email || record.account?.email,
+            phone: record.contact?.phone || record.account?.phone,
+          },
+          appointment: {
+            date: formatUiDate(record.scheduledStart),
+            time: formatUiTime(record.scheduledStart),
+          },
         };
     setEmailModal({ open: true, email, recipientName, mergeData });
   };

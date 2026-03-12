@@ -30,6 +30,7 @@ export default function Search() {
   const { user } = useAuth();
   const [searchParams] = useSearchParams();
   const query = searchParams.get('q') || '';
+  const normalizedQuery = query.trim();
   const moduleParam = (searchParams.get('module') || 'all').toLowerCase();
   const [activeTab, setActiveTab] = useState(SEARCH_TABS.includes(moduleParam) ? moduleParam : 'all');
 
@@ -37,40 +38,54 @@ export default function Search() {
     setActiveTab(SEARCH_TABS.includes(moduleParam) ? moduleParam : 'all');
   }, [moduleParam]);
 
+  const shouldSearch = normalizedQuery.length > 0;
+  const shouldLoadTab = (tabId) => activeTab === 'all' || activeTab === tabId;
+  const queryOptions = {
+    staleTime: 30_000,
+    gcTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+  };
+
   const { data: accountsData, isLoading: accountsLoading } = useQuery({
-    queryKey: ['searchAccounts', query],
-    queryFn: () => accountsApi.getAccounts({ search: query, limit: 20 }),
-    enabled: !!query,
+    queryKey: ['searchAccounts', normalizedQuery, activeTab],
+    queryFn: () => accountsApi.getAccounts({ search: normalizedQuery, limit: 20 }),
+    enabled: shouldSearch && shouldLoadTab('accounts'),
+    ...queryOptions,
   });
 
   const { data: contactsData, isLoading: contactsLoading } = useQuery({
-    queryKey: ['searchContacts', query],
-    queryFn: () => contactsApi.getContacts({ search: query, limit: 20 }),
-    enabled: !!query,
+    queryKey: ['searchContacts', normalizedQuery, activeTab],
+    queryFn: () => contactsApi.getContacts({ search: normalizedQuery, limit: 20 }),
+    enabled: shouldSearch && shouldLoadTab('contacts'),
+    ...queryOptions,
   });
 
   const { data: leadsData, isLoading: leadsLoading } = useQuery({
-    queryKey: ['searchLeads', query],
-    queryFn: () => leadsApi.getLeads({ search: query, limit: 20 }),
-    enabled: !!query,
+    queryKey: ['searchLeads', normalizedQuery, activeTab],
+    queryFn: () => leadsApi.getLeads({ search: normalizedQuery, limit: 20 }),
+    enabled: shouldSearch && shouldLoadTab('leads'),
+    ...queryOptions,
   });
 
   const { data: jobsData, isLoading: jobsLoading } = useQuery({
-    queryKey: ['searchJobs', query],
-    queryFn: () => opportunitiesApi.getOpportunities({ search: query, limit: 20 }),
-    enabled: !!query,
+    queryKey: ['searchJobs', normalizedQuery, activeTab],
+    queryFn: () => opportunitiesApi.getOpportunities({ search: normalizedQuery, limit: 20 }),
+    enabled: shouldSearch && shouldLoadTab('jobs'),
+    ...queryOptions,
   });
 
   const { data: invoicesData, isLoading: invoicesLoading } = useQuery({
-    queryKey: ['searchInvoices', query],
-    queryFn: () => invoicesApi.getInvoices({ search: query, limit: 20 }),
-    enabled: !!query,
+    queryKey: ['searchInvoices', normalizedQuery, activeTab],
+    queryFn: () => invoicesApi.getInvoices({ search: normalizedQuery, limit: 20 }),
+    enabled: shouldSearch && shouldLoadTab('invoices'),
+    ...queryOptions,
   });
 
   const { data: mentionsData, isLoading: mentionsLoading } = useQuery({
-    queryKey: ['searchMentions', user?.id, query],
+    queryKey: ['searchMentions', user?.id, normalizedQuery, activeTab],
     queryFn: () => notificationsApi.getNotifications({ userId: user.id, type: 'MENTION', limit: 200 }),
-    enabled: !!query && !!user?.id,
+    enabled: shouldSearch && !!user?.id && shouldLoadTab('mentions'),
+    ...queryOptions,
   });
 
   const isLoading = accountsLoading || contactsLoading || leadsLoading || jobsLoading || invoicesLoading || mentionsLoading;
@@ -82,12 +97,12 @@ export default function Search() {
   const invoices = normalizeCollection(invoicesData, ['invoices', 'data']);
   const mentions = useMemo(() => {
     const allMentions = normalizeCollection(mentionsData, ['data']).filter((item) => item.type === 'MENTION');
-    const normalizedQuery = query.trim().toLowerCase();
+    const lowerQuery = normalizedQuery.toLowerCase();
     return allMentions.filter((item) => {
       const haystack = `${item.title || ''} ${item.message || ''}`.toLowerCase();
-      return haystack.includes(normalizedQuery);
+      return haystack.includes(lowerQuery);
     });
-  }, [mentionsData, query]);
+  }, [mentionsData, normalizedQuery]);
 
   const totalResults = accounts.length + contacts.length + leads.length + jobs.length + invoices.length + mentions.length;
 
@@ -101,7 +116,7 @@ export default function Search() {
     { id: 'mentions', label: 'Mentions', count: mentions.length, icon: AtSign },
   ];
 
-  if (!query) {
+  if (!normalizedQuery) {
     return (
       <div className="text-center py-12">
         <SearchIcon className="w-12 h-12 text-gray-300 mx-auto mb-4" />
@@ -114,7 +129,7 @@ export default function Search() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">Search Results for "{query}"</h1>
+        <h1 className="text-2xl font-bold text-gray-900">Search Results for "{normalizedQuery}"</h1>
         <p className="text-gray-500 mt-1">{isLoading ? 'Searching...' : `Found ${totalResults} results`}</p>
       </div>
 

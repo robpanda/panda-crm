@@ -20,6 +20,23 @@ import CommunicationsTab from '../components/CommunicationsTab';
 import UserSearchDropdown from '../components/UserSearchDropdown';
 import { WIZARD_LEAD_SOURCES } from '../constants/leadOptions';
 
+function resolveMergeFieldValue(source, path) {
+  if (!source || !path) return '';
+  return String(path)
+    .split('.')
+    .filter(Boolean)
+    .reduce((value, key) => (value !== undefined && value !== null ? value[key] : undefined), source) ?? '';
+}
+
+function interpolateMergeFields(template, mergeData = {}) {
+  if (!template) return '';
+  return String(template).replace(/\{\{\s*([^}]+?)\s*\}\}|\{([a-zA-Z0-9_.]+)\}/g, (match, dottedKey, simpleKey) => {
+    const key = (dottedKey || simpleKey || '').trim();
+    const resolved = resolveMergeFieldValue(mergeData, key);
+    return resolved === undefined || resolved === null ? '' : String(resolved);
+  });
+}
+
 // SMS Modal Component with Canned Responses
 function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {} }) {
   const [message, setMessage] = useState('');
@@ -56,8 +73,6 @@ function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {
 
     const template = templates.find((t) => t.id === templateId);
     if (template) {
-      // Interpolate merge fields
-      let interpolated = template.body || '';
       const data = {
         firstName: mergeData.firstName || '',
         lastName: mergeData.lastName || '',
@@ -66,13 +81,7 @@ function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {
         phone: mergeData.phone || phone,
         ...mergeData,
       };
-
-      // Replace {{variable}} and {variable} patterns
-      interpolated = interpolated.replace(/\{\{?(\w+)\}?\}/g, (match, key) => {
-        return data[key] !== undefined && data[key] !== '' ? data[key] : match;
-      });
-
-      setMessage(interpolated);
+      setMessage(interpolateMergeFields(template.body || '', data));
     }
   };
 
@@ -252,20 +261,8 @@ function EmailModal({ isOpen, onClose, email, recipientName, onSent, mergeData =
         ...mergeData,
       };
 
-      // Interpolate subject
-      let interpolatedSubject = template.subject || '';
-      interpolatedSubject = interpolatedSubject.replace(/\{\{?(\w+)\}?\}/g, (match, key) => {
-        return data[key] !== undefined && data[key] !== '' ? data[key] : match;
-      });
-
-      // Interpolate body
-      let interpolatedBody = template.body || '';
-      interpolatedBody = interpolatedBody.replace(/\{\{?(\w+)\}?\}/g, (match, key) => {
-        return data[key] !== undefined && data[key] !== '' ? data[key] : match;
-      });
-
-      setSubject(interpolatedSubject);
-      setBody(interpolatedBody);
+      setSubject(interpolateMergeFields(template.subject || '', data));
+      setBody(interpolateMergeFields(template.body || '', data));
     }
   };
 
@@ -1668,6 +1665,17 @@ export default function LeadDetail() {
           state: lead.state,
           status: lead.status,
           leadSource: lead.source,
+          contact: {
+            firstName: lead.firstName,
+            lastName: lead.lastName,
+            fullName: `${lead.firstName} ${lead.lastName}`,
+            email: lead.email,
+            phone: lead.mobilePhone || lead.phone,
+          },
+          appointment: {
+            date: formatAppointmentDateDisplay(lead.tentativeAppointmentDate),
+            time: formatAppointmentTimeDisplay(lead.tentativeAppointmentTime),
+          },
         }}
         onSent={() => {
           // Optionally refresh data or show success toast
@@ -1694,6 +1702,17 @@ export default function LeadDetail() {
           state: lead.state,
           status: lead.status,
           leadSource: lead.source,
+          contact: {
+            firstName: lead.firstName,
+            lastName: lead.lastName,
+            fullName: `${lead.firstName} ${lead.lastName}`,
+            email: lead.email,
+            phone: lead.mobilePhone || lead.phone,
+          },
+          appointment: {
+            date: formatAppointmentDateDisplay(lead.tentativeAppointmentDate),
+            time: formatAppointmentTimeDisplay(lead.tentativeAppointmentTime),
+          },
         }}
         onSent={() => {
           // Optionally refresh data or show success toast

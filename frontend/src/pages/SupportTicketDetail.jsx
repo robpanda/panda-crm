@@ -132,12 +132,12 @@ export default function SupportTicketDetail() {
           name: file.name,
           size: file.size,
           type: file.type,
-          url: response.data.url,
+          url: response.data?.url || response.data?.data?.url,
         };
       });
 
       const uploadedFiles = await Promise.all(uploadPromises);
-      setAttachments([...attachments, ...uploadedFiles]);
+      setAttachments((prev) => [...prev, ...uploadedFiles.filter((file) => file.url)]);
     } catch (error) {
       console.error('Failed to upload files:', error);
       alert('Failed to upload files. Please try again.');

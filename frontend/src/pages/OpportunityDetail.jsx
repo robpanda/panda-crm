@@ -310,17 +310,70 @@ function formatLocalAppointmentDateTime(value) {
   if (!value) return 'Not scheduled';
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return 'Not scheduled';
-  const date = parsed.toLocaleDateString('en-US', {
+  const date = formatDisplayDate(parsed);
+  const time = formatDisplayTime(parsed);
+  return `${date} at ${time}`;
+}
+
+function formatDisplayDate(value) {
+  if (!value) return '-';
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '-';
+  return parsed.toLocaleDateString('en-US', {
     month: '2-digit',
     day: '2-digit',
     year: 'numeric',
   });
-  const time = parsed.toLocaleTimeString('en-US', {
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
+}
+
+function formatDisplayTime(value) {
+  if (!value) return '';
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    });
+  }
+
+  const raw = String(value || '').trim();
+  const twelveHourMatch = raw.match(/^(\d{1,2}):(\d{2})\s*([ap]m)$/i);
+  if (twelveHourMatch) {
+    const [, hour, minute, meridiem] = twelveHourMatch;
+    return `${Number(hour)}:${minute} ${meridiem.toUpperCase()}`;
+  }
+
+  const twentyFourHourMatch = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (twentyFourHourMatch) {
+    const [, hourText, minute] = twentyFourHourMatch;
+    const hour = Number(hourText);
+    if (Number.isFinite(hour)) {
+      const normalizedHour = hour % 12 || 12;
+      const meridiem = hour >= 12 ? 'PM' : 'AM';
+      return `${normalizedHour}:${minute} ${meridiem}`;
+    }
+  }
+
+  return raw;
+}
+
+function resolveMergeFieldValue(source, path) {
+  if (!source || !path) return '';
+  return String(path)
+    .split('.')
+    .filter(Boolean)
+    .reduce((value, key) => (value !== undefined && value !== null ? value[key] : undefined), source) ?? '';
+}
+
+function interpolateMergeFields(template, mergeData = {}) {
+  if (!template) return '';
+
+  return String(template).replace(/\{\{\s*([^}]+?)\s*\}\}|\{([a-zA-Z0-9_.]+)\}/g, (match, dottedKey, simpleKey) => {
+    const key = (dottedKey || simpleKey || '').trim();
+    const resolved = resolveMergeFieldValue(mergeData, key);
+    return resolved === undefined || resolved === null ? '' : String(resolved);
   });
-  return `${date} at ${time}`;
 }
 
 // SMS Modal Component with Canned Responses (same as LeadDetail)
@@ -359,8 +412,6 @@ function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {
 
     const template = templates.find((t) => t.id === templateId);
     if (template) {
-      // Interpolate merge fields
-      let interpolated = template.body || '';
       const data = {
         firstName: mergeData.firstName || '',
         lastName: mergeData.lastName || '',
@@ -369,13 +420,7 @@ function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {
         phone: mergeData.phone || phone,
         ...mergeData,
       };
-
-      // Replace {{variable}} and {variable} patterns
-      interpolated = interpolated.replace(/\{\{?(\w+)\}?\}/g, (match, key) => {
-        return data[key] !== undefined && data[key] !== '' ? data[key] : match;
-      });
-
-      setMessage(interpolated);
+      setMessage(interpolateMergeFields(template.body || '', data));
     }
   };
 
@@ -555,20 +600,8 @@ function EmailModal({ isOpen, onClose, email, recipientName, onSent, mergeData =
         ...mergeData,
       };
 
-      // Interpolate subject
-      let interpolatedSubject = template.subject || '';
-      interpolatedSubject = interpolatedSubject.replace(/\{\{?(\w+)\}?\}/g, (match, key) => {
-        return data[key] !== undefined && data[key] !== '' ? data[key] : match;
-      });
-
-      // Interpolate body
-      let interpolatedBody = template.body || '';
-      interpolatedBody = interpolatedBody.replace(/\{\{?(\w+)\}?\}/g, (match, key) => {
-        return data[key] !== undefined && data[key] !== '' ? data[key] : match;
-      });
-
-      setSubject(interpolatedSubject);
-      setBody(interpolatedBody);
+      setSubject(interpolateMergeFields(template.subject || '', data));
+      setBody(interpolateMergeFields(template.body || '', data));
     }
   };
 
@@ -805,7 +838,7 @@ function InvoiceDetailModal({
       notes: persistedNotes,
       chargeType: 'ADJUSTMENT',
       percentageOfTotal: entryKind === 'discount' && calcMode === 'percent'
-        ? Number(charge?.inputValue || 0)
+        ? Math.abs(Number(charge?.inputValue || 0))
         : null,
     };
   }, [actorDisplayName, getAdjustmentComputedAmount]);
@@ -983,7 +1016,7 @@ function InvoiceDetailModal({
     setForm((prev) => {
       const updated = [...prev.additionalCharges];
       const normalizedValue = ['amount', 'inputValue', 'percentageOfTotal'].includes(key)
-        ? Number(value || 0)
+        ? Math.abs(Number(value || 0))
         : value;
       updated[index] = {
         ...updated[index],
@@ -1607,7 +1640,20 @@ function InvoiceDetailModal({
 }
 
 // Communications Tab Component - Shows SMS, Email, and Phone call history
-function CommunicationsTab({ phone, email, contactName, archivedActivities = [], onActivityClick, opportunityId }) {
+function CommunicationsTab({
+  phone,
+  email,
+  contactName,
+  archivedActivities = [],
+  onActivityClick,
+  opportunityId,
+  onComposeSms,
+  onComposeEmail,
+  onCall,
+  canComposeSms = true,
+  canComposeEmail = true,
+  canCall = true,
+}) {
   const [filter, setFilter] = useState('all'); // all, sms, email, phone
   const [activeSubTab, setActiveSubTab] = useState('live'); // live, archive
   const [collapsedThreads, setCollapsedThreads] = useState(new Set());
@@ -1765,6 +1811,43 @@ function CommunicationsTab({ phone, email, contactName, archivedActivities = [],
             {archiveCount}
           </span>
         </button>
+      </div>
+
+      <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-gray-900">Customer Comms</h3>
+            <p className="mt-1 text-sm text-gray-500">
+              Threaded SMS, email, and call activity for {contactName || 'this customer'}.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 lg:w-auto">
+            <button
+              onClick={onComposeSms}
+              disabled={!canComposeSms}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-purple-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <MessageSquare className="h-4 w-4" />
+              <span>SMS</span>
+            </button>
+            <button
+              onClick={onComposeEmail}
+              disabled={!canComposeEmail}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-orange-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-orange-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Mail className="h-4 w-4" />
+              <span>Email</span>
+            </button>
+            <button
+              onClick={onCall}
+              disabled={!canCall}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Phone className="h-4 w-4" />
+              <span>Call</span>
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* AI Conversation Summary - Shows at top when there's activity */}
@@ -4480,13 +4563,49 @@ export default function OpportunityDetail() {
           conversations: totalUnread,
           internalNotes: internalNotesCount,
           internalComments: internalCommentsCount,
-          communications: activityData?.activities?.filter(a => a.sourceType === 'ACCULYNX_IMPORT')?.length || 0,
+          communications: totalConversationsCount,
           notifications: unreadNotifications,
         };
       default:
         return {};
     }
   }, [activeCategory, appointments, tasks, invoices, commissions, quotes, documents, photos, activityData, contacts, workOrders, cases, totalUnread, unreadNotifications, internalNotesCount, internalCommentsCount]);
+
+  const primaryAppointmentForMessaging = useMemo(() => {
+    if (!Array.isArray(appointments) || appointments.length === 0) return null;
+    return [...appointments]
+      .filter((appointment) => appointment?.scheduledStart)
+      .sort((a, b) => new Date(a.scheduledStart).getTime() - new Date(b.scheduledStart).getTime())[0] || null;
+  }, [appointments]);
+
+  const jobMessagingMergeData = useMemo(() => ({
+    firstName: opportunity?.contact?.firstName || '',
+    lastName: opportunity?.contact?.lastName || '',
+    fullName: opportunity?.contact?.firstName
+      ? `${opportunity.contact.firstName} ${opportunity.contact.lastName || ''}`.trim()
+      : (opportunity?.contact?.name || opportunity?.account?.name || ''),
+    company: opportunity?.account?.name || '',
+    phone: opportunity?.contact?.phone || opportunity?.phone || '',
+    email: opportunity?.contact?.email || '',
+    jobNumber: opportunity?.jobId || '',
+    contact: {
+      firstName: opportunity?.contact?.firstName || '',
+      lastName: opportunity?.contact?.lastName || '',
+      fullName: opportunity?.contact?.firstName
+        ? `${opportunity.contact.firstName} ${opportunity.contact.lastName || ''}`.trim()
+        : (opportunity?.contact?.name || opportunity?.account?.name || ''),
+      email: opportunity?.contact?.email || '',
+      phone: opportunity?.contact?.phone || opportunity?.phone || '',
+    },
+    appointment: {
+      date: primaryAppointmentForMessaging?.scheduledStart ? formatDisplayDate(primaryAppointmentForMessaging.scheduledStart) : '',
+      time: primaryAppointmentForMessaging?.scheduledStart ? formatDisplayTime(primaryAppointmentForMessaging.scheduledStart) : '',
+    },
+    job: {
+      number: opportunity?.jobId || '',
+      name: opportunity?.name || '',
+    },
+  }), [opportunity, primaryAppointmentForMessaging]);
 
   // Early returns (after all hooks)
   if (isLoading) {
@@ -6980,7 +7099,7 @@ export default function OpportunityDetail() {
                             {wo.scheduledStartDate && (
                               <div className="flex items-center space-x-2 text-gray-600">
                                 <Calendar className="w-4 h-4" />
-                                <span>Scheduled: {new Date(wo.scheduledStartDate).toLocaleDateString()}</span>
+                                <span>Scheduled: {formatDisplayDate(wo.scheduledStartDate)}</span>
                               </div>
                             )}
                             {wo.serviceTerritory?.name && (
@@ -7002,12 +7121,12 @@ export default function OpportunityDetail() {
                                       <CalendarDays className="w-4 h-4 text-gray-400" />
                                       <div>
                                         <p className="text-sm font-medium text-gray-700">
-                                          {apt.scheduledStart ? new Date(apt.scheduledStart).toLocaleDateString() : 'Unscheduled'}
+                                          {apt.scheduledStart ? formatDisplayDate(apt.scheduledStart) : 'Unscheduled'}
                                         </p>
                                         {apt.scheduledStart && apt.scheduledEnd && (
                                           <p className="text-xs text-gray-500">
-                                            {new Date(apt.scheduledStart).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})} -
-                                            {new Date(apt.scheduledEnd).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                            {formatDisplayTime(apt.scheduledStart)} -
+                                            {formatDisplayTime(apt.scheduledEnd)}
                                           </p>
                                         )}
                                       </div>
@@ -7221,7 +7340,7 @@ export default function OpportunityDetail() {
                 {/* ============================================================ */}
                 {/* UNIFIED CONVERSATIONS TAB - SMS, Email, and Call Log */}
                 {/* ============================================================ */}
-                {activeTab === 'conversations' && (
+                {activeTab === 'legacyConversationsDisabled' && (
                   <div className="space-y-4">
                     {/* Header with Action Buttons */}
                     <div className="flex items-center justify-between">
@@ -9083,9 +9202,9 @@ export default function OpportunityDetail() {
                   />
                 )}
 
-                {activeTab === 'communications' && (
+                {(activeTab === 'communications' || activeTab === 'conversations') && (
                   <CommunicationsTab
-                    phone={opportunity?.contact?.phone || opportunity?.contact?.mobilePhone}
+                    phone={opportunity?.contact?.phone || opportunity?.contact?.mobilePhone || opportunity?.phone}
                     email={opportunity?.contact?.email}
                     contactName={opportunity?.contact?.name || `${opportunity?.contact?.firstName || ''} ${opportunity?.contact?.lastName || ''}`}
                     archivedActivities={activityData?.activities?.filter(a => a.sourceType === 'ACCULYNX_IMPORT') || []}
@@ -9094,6 +9213,22 @@ export default function OpportunityDetail() {
                       setShowActivityModal(true);
                     }}
                     opportunityId={id}
+                    onComposeSms={() => setShowSmsModal(true)}
+                    onComposeEmail={() => setShowEmailModal(true)}
+                    onCall={() => {
+                      const phoneNumber = opportunity?.contact?.phone || opportunity?.phone;
+                      if (!phoneNumber) return;
+                      if (rcLoggedIn) {
+                        initiateCall(phoneNumber);
+                      } else {
+                        loadWidget();
+                        setActionSuccess('RingCentral widget loaded. Click on the phone number to call.');
+                        setTimeout(() => setActionSuccess(null), 3000);
+                      }
+                    }}
+                    canComposeSms={Boolean(opportunity?.contact?.phone || opportunity?.phone)}
+                    canComposeEmail={Boolean(opportunity?.contact?.email)}
+                    canCall={Boolean(opportunity?.contact?.phone || opportunity?.phone)}
                   />
                 )}
 
@@ -13195,15 +13330,7 @@ export default function OpportunityDetail() {
           setActionSuccess('SMS sent successfully');
           setTimeout(() => setActionSuccess(null), 3000);
         }}
-        mergeData={{
-          firstName: opportunity?.contact?.firstName || '',
-          lastName: opportunity?.contact?.lastName || '',
-          fullName: opportunity?.contact?.firstName ? `${opportunity.contact.firstName} ${opportunity.contact.lastName || ''}`.trim() : '',
-          company: opportunity?.account?.name || '',
-          phone: opportunity?.contact?.phone || opportunity?.phone || '',
-          email: opportunity?.contact?.email || '',
-          jobNumber: opportunity?.jobId || '',
-        }}
+        mergeData={jobMessagingMergeData}
       />
 
       {/* Email Modal */}
@@ -13217,15 +13344,7 @@ export default function OpportunityDetail() {
           setActionSuccess('Email sent successfully');
           setTimeout(() => setActionSuccess(null), 3000);
         }}
-        mergeData={{
-          firstName: opportunity?.contact?.firstName || '',
-          lastName: opportunity?.contact?.lastName || '',
-          fullName: opportunity?.contact?.firstName ? `${opportunity.contact.firstName} ${opportunity.contact.lastName || ''}`.trim() : '',
-          company: opportunity?.account?.name || '',
-          phone: opportunity?.contact?.phone || opportunity?.phone || '',
-          email: opportunity?.contact?.email || '',
-          jobNumber: opportunity?.jobId || '',
-        }}
+        mergeData={jobMessagingMergeData}
       />
     </div>
   );

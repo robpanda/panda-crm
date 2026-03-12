@@ -698,7 +698,11 @@ export default function OpportunityList() {
                         {opp.closeDate ? (
                           <span className="flex items-center">
                             <Calendar className="w-3 h-3 mr-1" />
-                            {new Date(opp.closeDate).toLocaleDateString()}
+                            {new Date(opp.closeDate).toLocaleDateString('en-US', {
+                              month: '2-digit',
+                              day: '2-digit',
+                              year: 'numeric',
+                            })}
                           </span>
                         ) : '-'}
                       </td>
@@ -710,7 +714,11 @@ export default function OpportunityList() {
                     )}
                     {isColumnVisible('createdAt') && (
                       <td className="px-6 py-4 text-sm text-gray-600">
-                        {opp.createdAt ? new Date(opp.createdAt).toLocaleDateString() : '-'}
+                        {opp.createdAt ? new Date(opp.createdAt).toLocaleDateString('en-US', {
+                          month: '2-digit',
+                          day: '2-digit',
+                          year: 'numeric',
+                        }) : '-'}
                       </td>
                     )}
                     {isColumnVisible('source') && (

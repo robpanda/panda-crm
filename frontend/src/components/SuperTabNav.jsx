@@ -76,7 +76,6 @@ export const CATEGORIES = {
       { id: 'internalComments', label: 'Internal Comments' },
       { id: 'internalNotes', label: 'Internal Notes' },
       { id: 'communications', label: 'Customer Comms' },
-      { id: 'conversations', label: 'Conversations' },
       { id: 'notifications', label: 'Notifications' },
       { id: 'activity', label: 'Activity' },
     ],

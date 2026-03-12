@@ -9,6 +9,7 @@ import authRoutes from './routes/auth.js';
 import permissionRoutes from './routes/permissions.js';
 import auditRoutes from './routes/audit.js';
 import helpRoutes from './routes/help.js';
+import portalRoutes from './routes/portal.js';
 import supportRoutes from './routes/support.js';
 import setupRoutes from './routes/setup.js';
 import { errorHandler } from './middleware/errorHandler.js';
@@ -50,6 +51,8 @@ app.use('/api/auth', authRoutes);
 app.use('/api/permissions', authMiddleware, permissionRoutes);
 app.use('/api/audit', authMiddleware, auditRoutes);
 app.use('/api/help', helpRoutes); // Help routes have their own auth handling (some public, some protected)
+app.use('/api/portal', portalRoutes);
+app.use('/api/opportunities/portal', portalRoutes);
 app.use('/api/support', supportRoutes); // Support ticket routes
 app.use('/api/setup', authMiddleware, setupRoutes); // Setup/Object Manager routes
 

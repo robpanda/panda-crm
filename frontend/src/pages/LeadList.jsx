@@ -661,7 +661,11 @@ export default function LeadList() {
                         <div className="flex items-center text-sm text-gray-600">
                           <Calendar className="w-3 h-3 mr-1.5 text-gray-400" />
                           {lead.createdAt
-                            ? new Date(lead.createdAt).toLocaleDateString()
+                            ? new Date(lead.createdAt).toLocaleDateString('en-US', {
+                                month: '2-digit',
+                                day: '2-digit',
+                                year: 'numeric',
+                              })
                             : '—'}
                         </div>
                         {lead.daysOld > 0 && (
