@@ -19,6 +19,46 @@ import InternalComments from '../components/InternalComments';
 import CommunicationsTab from '../components/CommunicationsTab';
 import UserSearchDropdown from '../components/UserSearchDropdown';
 
+const formatAppointmentDateDisplay = (value) => {
+  if (!value) return '-';
+  const raw = String(value).trim();
+  const isoMatch = /^(\d{4})-(\d{2})-(\d{2})/.exec(raw);
+  if (isoMatch) {
+    const [, year, month, day] = isoMatch;
+    return `${month}/${day}/${year}`;
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '-';
+
+  const month = String(parsed.getMonth() + 1).padStart(2, '0');
+  const day = String(parsed.getDate()).padStart(2, '0');
+  const year = String(parsed.getFullYear());
+  return `${month}/${day}/${year}`;
+};
+
+const formatAppointmentTimeDisplay = (value) => {
+  if (!value) return '-';
+  const raw = String(value).trim();
+  const timeMatch = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(raw);
+
+  if (timeMatch) {
+    const hour = Number(timeMatch[1]);
+    const minute = timeMatch[2];
+    if (!Number.isFinite(hour) || hour < 0 || hour > 23) return raw;
+    const meridiem = hour >= 12 ? 'PM' : 'AM';
+    const hour12 = hour % 12 || 12;
+    return `${hour12}:${minute} ${meridiem}`;
+  }
+
+  const parsed = new Date(value);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  }
+
+  return raw;
+};
+
 // SMS Modal Component with Canned Responses
 function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {} }) {
   const [message, setMessage] = useState('');
@@ -1591,13 +1631,13 @@ export default function LeadDetail() {
                 <span className="text-gray-500">Tentative Date</span>
                 <span className="text-gray-900">
                   {lead.tentativeAppointmentDate
-                    ? lead.tentativeAppointmentDate.split('T')[0]
+                    ? formatAppointmentDateDisplay(lead.tentativeAppointmentDate)
                     : '-'}
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">Tentative Time</span>
-                <span className="text-gray-900">{lead.tentativeAppointmentTime || '-'}</span>
+                <span className="text-gray-900">{formatAppointmentTimeDisplay(lead.tentativeAppointmentTime)}</span>
               </div>
             </div>
           )}
