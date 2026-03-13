@@ -926,9 +926,13 @@ class MeasurementService {
         // Some responses already include full payload/assets; process directly.
         if (statusData?.RoofMeasurement || statusData?.roofMeasurement) {
           try {
-            await this.processGAFReport(measurementReportId, statusData);
-            logger.info(`GAF report ${gafOrderNumber} hydrated directly from status payload (${statusIdentifier}) for ${measurementReportId}`);
-            return { success: true, status: 'DELIVERED' };
+            const processed = await this.processGAFReport(measurementReportId, statusData);
+            if (processed?.delivered) {
+              logger.info(`GAF report ${gafOrderNumber} hydrated directly from status payload (${statusIdentifier}) for ${measurementReportId}`);
+              return { success: true, status: 'DELIVERED' };
+            }
+            logger.info(`GAF report ${gafOrderNumber} completed status payload is still incomplete; keeping ${measurementReportId} in processing`);
+            return { success: false, status: processed?.status || 'PROCESSING' };
           } catch (statusProcessError) {
             logger.warn(`GAF status payload process warning for ${measurementReportId}: ${statusProcessError.message}`);
           }
@@ -962,23 +966,40 @@ class MeasurementService {
           };
 
           try {
-            await this.processGAFReport(measurementReportId, normalizedPayload);
-            logger.info(`GAF report ${gafOrderNumber} hydrated via processGAFReport for ${measurementReportId}`);
+            const processed = await this.processGAFReport(measurementReportId, normalizedPayload);
+            if (processed?.delivered) {
+              logger.info(`GAF report ${gafOrderNumber} hydrated via processGAFReport for ${measurementReportId}`);
+              logger.info(`GAF report ${gafOrderNumber} retrieved and stored for ${measurementReportId}`);
+              return { success: true, status: 'DELIVERED' };
+            }
+            logger.info(`GAF report ${gafOrderNumber} completed download payload is still incomplete; keeping ${measurementReportId} in processing`);
+            return { success: false, status: processed?.status || 'PROCESSING' };
           } catch (processError) {
             logger.warn(`GAF process fallback for ${measurementReportId}: ${processError.message}`);
             const measurements = this.parseGAFMeasurements(measurementData);
+            const fallbackReportPdfUrl = statusData.viewUrl || measurementData.viewUrl || statusData.pdfUrl || measurementData.pdfUrl || null;
+            const fallbackDelivered = this.isGAFDeliveryReady({
+              normalized: this.normalizeGAFWebhookPayload(normalizedPayload),
+              measurements,
+              reportPdfUrl: fallbackReportPdfUrl,
+            });
 
             await prisma.measurementReport.update({
               where: { id: measurementReportId },
               data: {
-                orderStatus: 'DELIVERED',
-                deliveredAt: new Date(),
+                orderStatus: fallbackDelivered ? 'DELIVERED' : 'PROCESSING',
+                deliveredAt: fallbackDelivered ? new Date() : null,
                 reportUrl: statusData.viewUrl || measurementData.viewUrl,
                 reportPdfUrl: statusData.pdfUrl || measurementData.pdfUrl,
                 ...measurements,
                 rawData: { statusData, measurementData },
               },
             });
+
+            if (!fallbackDelivered) {
+              logger.info(`GAF report ${gafOrderNumber} fallback payload incomplete; keeping ${measurementReportId} in processing`);
+              return { success: false, status: 'PROCESSING' };
+            }
           }
 
           logger.info(`GAF report ${gafOrderNumber} retrieved and stored for ${measurementReportId}`);
@@ -1839,6 +1860,50 @@ class MeasurementService {
       });
     }
 
+    const isDeliveryReady = this.isGAFDeliveryReady({
+      normalized,
+      measurements,
+      reportPdfUrl,
+      reportXmlUrl,
+      reportJsonUrl,
+    });
+
+    if (!isDeliveryReady) {
+      await prisma.measurementReport.update({
+        where: { id: reportId },
+        data: {
+          orderStatus: normalized.status === 'FAILED' ? 'FAILED' : 'PROCESSING',
+          deliveredAt: null,
+          reportUrl: normalized.reportUrl || reportPdfUrl || null,
+          reportPdfUrl: reportPdfUrl || null,
+          reportXmlUrl: reportXmlUrl || null,
+          reportJsonUrl: reportJsonUrl || normalized.modelUrl || normalized.report3dUrl || null,
+          ...measurements,
+          rawData: {
+            ...gafData,
+            pdfS3Key: pdfStorage?.s3Key || null,
+            xmlS3Key: xmlStorage?.s3Key || null,
+            pdfDocumentId: pdfDocumentId || null,
+            normalizedWebhook: {
+              orderId: normalized.orderId,
+              subscriberOrderNumber: normalized.subscriberOrderNumber,
+              status: normalized.status,
+              assets: normalized.assets,
+              pdfS3Key: pdfStorage?.s3Key,
+              xmlS3Key: xmlStorage?.s3Key,
+              pdfDocumentId,
+            },
+          },
+        },
+      });
+
+      logger.info(`GAF report ${reportId} still incomplete after processing; keeping status ${normalized.status === 'FAILED' ? 'FAILED' : 'PROCESSING'}`);
+      return {
+        delivered: false,
+        status: normalized.status === 'FAILED' ? 'FAILED' : 'PROCESSING',
+      };
+    }
+
     await prisma.measurementReport.update({
       where: { id: reportId },
       data: {
@@ -1870,6 +1935,10 @@ class MeasurementService {
     });
 
     logger.info(`GAF report processed: ${reportId}`);
+    return {
+      delivered: true,
+      status: 'DELIVERED',
+    };
   }
 
   async hydrateGAFAssetsFromStoredPayload(reportId) {
@@ -2028,6 +2097,60 @@ class MeasurementService {
       roofComplexity: this.calculateComplexity(facets || 0),
       suggestedWasteFactor: toNumberOrNull(firstNonEmptyValue(roof.recommendedWaste, roof.SuggestedWaste)),
     };
+  }
+
+  hasGAFMeasurementValues(measurements = {}) {
+    return [
+      measurements.totalRoofArea,
+      measurements.totalRoofSquares,
+      measurements.predominantPitch,
+      measurements.pitches,
+      measurements.facets,
+      measurements.ridgeLength,
+      measurements.hipLength,
+      measurements.valleyLength,
+      measurements.rakeLength,
+      measurements.eaveLength,
+      measurements.flashingLength,
+      measurements.stepFlashingLength,
+      measurements.dripEdgeLength,
+      measurements.suggestedWasteFactor,
+    ].some((value) => value !== null && value !== undefined && value !== '');
+  }
+
+  hasGAFDeliverables({
+    normalized,
+    reportPdfUrl = null,
+    reportXmlUrl = null,
+    reportJsonUrl = null,
+  } = {}) {
+    return Boolean(
+      reportPdfUrl
+      || reportXmlUrl
+      || reportJsonUrl
+      || normalized?.reportPdfUrl
+      || normalized?.reportUrl
+      || normalized?.reportAsset
+      || normalized?.homeownerReportAsset
+      || normalized?.xmlAsset
+      || normalized?.report3dUrl
+      || normalized?.modelUrl
+    );
+  }
+
+  isGAFDeliveryReady({
+    normalized,
+    measurements,
+    reportPdfUrl = null,
+    reportXmlUrl = null,
+    reportJsonUrl = null,
+  } = {}) {
+    if (!normalized || normalized.status !== 'COMPLETED') {
+      return false;
+    }
+
+    return this.hasGAFMeasurementValues(measurements)
+      || this.hasGAFDeliverables({ normalized, reportPdfUrl, reportXmlUrl, reportJsonUrl });
   }
 
   // ==========================================
