@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { useAuth } from './context/AuthContext';
 import Layout from './components/Layout';
@@ -11,33 +12,9 @@ import ContactsDashboard from './pages/ContactsDashboard';
 import Contacts from './pages/Contacts';
 import ContactList from './pages/ContactList';
 import ContactDetail from './pages/ContactDetail';
-import LeadsDashboard from './pages/LeadsDashboard';
-import LeadList from './pages/LeadList';
-import LeadDetail from './pages/LeadDetail';
-import LeadWizard from './pages/LeadWizard';
-import JobsDashboard from './pages/JobsDashboard';
 import Opportunities from './pages/Opportunities';
-import OpportunityList from './pages/OpportunityList';
-import OpportunityDetail from './pages/OpportunityDetail';
-import OpportunityWizard from './pages/OpportunityWizard';
-import UnapprovedJobs from './pages/UnapprovedJobs';
 import AccountWizard from './pages/AccountWizard';
 import AttentionQueue from './pages/AttentionQueue';
-import Reports from './pages/Reports';
-import ReportBuilder from './pages/ReportBuilder';
-import ReportDetail from './pages/ReportDetail';
-import DashboardBuilder from './pages/DashboardBuilder';
-import Dashboards from './pages/Dashboards';
-import DashboardView from './pages/DashboardView';
-import ExecutiveDashboards from './pages/ExecutiveDashboards';
-import ClaimsOnboarding from './pages/ClaimsOnboarding';
-import AdvancedReportEditor from './pages/AdvancedReportEditor';
-import AnalyticsShell from './pages/analytics/AnalyticsShell';
-import AnalyticsOverview from './pages/analytics/AnalyticsOverview';
-import AnalyticsSchedules from './pages/analytics/AnalyticsSchedules';
-import AnalyticsHealth from './pages/analytics/AnalyticsHealth';
-import AnalyticsMetabase from './pages/analytics/AnalyticsMetabase';
-import AnalyticsRedirect from './pages/analytics/AnalyticsRedirect';
 import More from './pages/More';
 import PriceBooks from './pages/PriceBooks';
 import PriceBookDetail from './pages/PriceBookDetail';
@@ -55,10 +32,6 @@ import Cases from './pages/Cases';
 import Emails from './pages/Emails';
 import MyCommissions from './pages/MyCommissions';
 import SalesRepDashboard from './pages/SalesRepDashboard';
-import AIInsightsFeed from './pages/AIInsightsFeed';
-import CustomerPortal from './pages/CustomerPortal';
-import PMPortal from './pages/PMPortal';
-import SubcontractorPortal from './pages/SubcontractorPortal';
 
 // Management Pages
 import TasksPage from './pages/management/TasksPage';
@@ -68,43 +41,74 @@ import AppointmentsPage from './pages/management/AppointmentsPage';
 import { PermissionRoute } from './components/PermissionRoute';
 
 // Admin Pages
-import Workflows from './pages/admin/Workflows';
-import RolesPermissions from './pages/admin/RolesPermissions';
-import Commissions from './pages/admin/Commissions';
-import CommissionEngine from './pages/admin/CommissionEngine';
-import PaymentEngine from './pages/admin/PaymentEngine';
 // Templates page is now part of Bamboogli - redirect in routes
-import Integrations from './pages/admin/Integrations';
-import Users from './pages/admin/Users';
-import AuditLogs from './pages/admin/AuditLogs';
-import PandaSign from './pages/admin/PandaSign';
-import Bamboogli from './pages/admin/Bamboogli';
-import ServiceAdmin from './pages/admin/ServiceAdmin';
-import TrainingBotAnalytics from './pages/admin/TrainingBotAnalytics';
-import RingCentral from './pages/admin/RingCentral';
-import CallCenterSettings from './pages/admin/CallCenterSettings';
-import AdminHelp from './pages/admin/AdminHelp';
-import AdminSupport from './pages/admin/Support';
-import AdminSupportTickets from './pages/admin/AdminSupportTickets';
-import Setup from './pages/admin/Setup';
-import GoogleCalendar from './pages/admin/GoogleCalendar';
-import DeletedRecords from './pages/admin/DeletedRecords';
-import OrphanedRecords from './pages/admin/OrphanedRecords';
-import Referral from './pages/admin/Referral';
 
 // Help
 import Help from './pages/Help';
 
 // Support
-import Support from './pages/Support';
-import SupportTicketDetail from './pages/SupportTicketDetail';
-
-// Search
-import Search from './pages/Search';
-
 // Champion Public Pages
 import ChampionRegister from './pages/ChampionRegister';
 import ChampionJoin from './pages/ChampionJoin';
+
+const LeadsDashboard = lazy(() => import('./pages/LeadsDashboard'));
+const LeadList = lazy(() => import('./pages/LeadList'));
+const LeadDetail = lazy(() => import('./pages/LeadDetail'));
+const LeadWizard = lazy(() => import('./pages/LeadWizard'));
+
+const JobsDashboard = lazy(() => import('./pages/JobsDashboard'));
+const OpportunityList = lazy(() => import('./pages/OpportunityList'));
+const OpportunityDetail = lazy(() => import('./pages/OpportunityDetail'));
+const OpportunityWizard = lazy(() => import('./pages/OpportunityWizard'));
+const UnapprovedJobs = lazy(() => import('./pages/UnapprovedJobs'));
+
+const Reports = lazy(() => import('./pages/Reports'));
+const ReportBuilder = lazy(() => import('./pages/ReportBuilder'));
+const ReportDetail = lazy(() => import('./pages/ReportDetail'));
+const DashboardBuilder = lazy(() => import('./pages/DashboardBuilder'));
+const Dashboards = lazy(() => import('./pages/Dashboards'));
+const DashboardView = lazy(() => import('./pages/DashboardView'));
+const ExecutiveDashboards = lazy(() => import('./pages/ExecutiveDashboards'));
+const ClaimsOnboarding = lazy(() => import('./pages/ClaimsOnboarding'));
+const AdvancedReportEditor = lazy(() => import('./pages/AdvancedReportEditor'));
+const AIInsightsFeed = lazy(() => import('./pages/AIInsightsFeed'));
+const AnalyticsShell = lazy(() => import('./pages/analytics/AnalyticsShell'));
+const AnalyticsOverview = lazy(() => import('./pages/analytics/AnalyticsOverview'));
+const AnalyticsSchedules = lazy(() => import('./pages/analytics/AnalyticsSchedules'));
+const AnalyticsHealth = lazy(() => import('./pages/analytics/AnalyticsHealth'));
+const AnalyticsMetabase = lazy(() => import('./pages/analytics/AnalyticsMetabase'));
+const AnalyticsRedirect = lazy(() => import('./pages/analytics/AnalyticsRedirect'));
+
+const CustomerPortal = lazy(() => import('./pages/CustomerPortal'));
+const PMPortal = lazy(() => import('./pages/PMPortal'));
+const SubcontractorPortal = lazy(() => import('./pages/SubcontractorPortal'));
+
+const Workflows = lazy(() => import('./pages/admin/Workflows'));
+const RolesPermissions = lazy(() => import('./pages/admin/RolesPermissions'));
+const Commissions = lazy(() => import('./pages/admin/Commissions'));
+const CommissionEngine = lazy(() => import('./pages/admin/CommissionEngine'));
+const PaymentEngine = lazy(() => import('./pages/admin/PaymentEngine'));
+const Integrations = lazy(() => import('./pages/admin/Integrations'));
+const Users = lazy(() => import('./pages/admin/Users'));
+const AuditLogs = lazy(() => import('./pages/admin/AuditLogs'));
+const PandaSign = lazy(() => import('./pages/admin/PandaSign'));
+const Bamboogli = lazy(() => import('./pages/admin/Bamboogli'));
+const ServiceAdmin = lazy(() => import('./pages/admin/ServiceAdmin'));
+const TrainingBotAnalytics = lazy(() => import('./pages/admin/TrainingBotAnalytics'));
+const RingCentral = lazy(() => import('./pages/admin/RingCentral'));
+const CallCenterSettings = lazy(() => import('./pages/admin/CallCenterSettings'));
+const AdminHelp = lazy(() => import('./pages/admin/AdminHelp'));
+const AdminSupport = lazy(() => import('./pages/admin/Support'));
+const AdminSupportTickets = lazy(() => import('./pages/admin/AdminSupportTickets'));
+const Setup = lazy(() => import('./pages/admin/Setup'));
+const GoogleCalendar = lazy(() => import('./pages/admin/GoogleCalendar'));
+const DeletedRecords = lazy(() => import('./pages/admin/DeletedRecords'));
+const OrphanedRecords = lazy(() => import('./pages/admin/OrphanedRecords'));
+const Referral = lazy(() => import('./pages/admin/Referral'));
+
+const Support = lazy(() => import('./pages/Support'));
+const SupportTicketDetail = lazy(() => import('./pages/SupportTicketDetail'));
+const Search = lazy(() => import('./pages/Search'));
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -132,6 +136,22 @@ function RedirectWithId({ basePath, suffix = '' }) {
   return <Navigate to={`${basePath}/${id}${suffix}`} replace />;
 }
 
+function RouteLoadingFallback() {
+  return (
+    <div className="flex items-center justify-center min-h-[40vh] py-12">
+      <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-panda-primary"></div>
+    </div>
+  );
+}
+
+function withSuspense(Component, props) {
+  return (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <Component {...props} />
+    </Suspense>
+  );
+}
+
 export default function App() {
   return (
     <Routes>
@@ -142,10 +162,10 @@ export default function App() {
       <Route path="/champion/join/:token" element={<ChampionJoin />} />
 
       {/* Public Customer Portal Routes */}
-      <Route path="/portal/:token" element={<CustomerPortal />} />
+      <Route path="/portal/:token" element={withSuspense(CustomerPortal)} />
 
       {/* Public Contractor Portal Routes */}
-      <Route path="/contractor-portal/:token" element={<SubcontractorPortal />} />
+      <Route path="/contractor-portal/:token" element={withSuspense(SubcontractorPortal)} />
 
       <Route
         path="/"
@@ -156,7 +176,7 @@ export default function App() {
         }
       >
         <Route index element={<Dashboard />} />
-        <Route path="pm-portal" element={<PMPortal />} />
+        <Route path="pm-portal" element={withSuspense(PMPortal)} />
         <Route path="accounts" element={<AccountsDashboard />} />
         <Route path="accounts/list" element={<AccountList />} />
         <Route path="accounts/new" element={<AccountWizard />} />
@@ -166,24 +186,24 @@ export default function App() {
         <Route path="contacts/list" element={<ContactList />} />
         <Route path="contacts/new" element={<ContactDetail />} />
         <Route path="contacts/:id" element={<ContactDetail />} />
-        <Route path="leads" element={<LeadsDashboard />} />
-        <Route path="leads/list" element={<LeadList />} />
-        <Route path="leads/new" element={<LeadWizard />} />
-        <Route path="leads/:id" element={<LeadDetail />} />
-        <Route path="leads/:id/wizard" element={<LeadWizard />} />
+        <Route path="leads" element={withSuspense(LeadsDashboard)} />
+        <Route path="leads/list" element={withSuspense(LeadList)} />
+        <Route path="leads/new" element={withSuspense(LeadWizard)} />
+        <Route path="leads/:id" element={withSuspense(LeadDetail)} />
+        <Route path="leads/:id/wizard" element={withSuspense(LeadWizard)} />
         {/* Jobs (Opportunities) - both URL patterns supported */}
-        <Route path="jobs" element={<JobsDashboard />} />
-        <Route path="jobs/list" element={<OpportunityList />} />
-        <Route path="jobs/new" element={<OpportunityWizard />} />
-        <Route path="jobs/unapproved" element={<UnapprovedJobs />} />
-        <Route path="jobs/:id" element={<OpportunityDetail />} />
-        <Route path="jobs/:id/wizard" element={<OpportunityWizard />} />
+        <Route path="jobs" element={withSuspense(JobsDashboard)} />
+        <Route path="jobs/list" element={withSuspense(OpportunityList)} />
+        <Route path="jobs/new" element={withSuspense(OpportunityWizard)} />
+        <Route path="jobs/unapproved" element={withSuspense(UnapprovedJobs)} />
+        <Route path="jobs/:id" element={withSuspense(OpportunityDetail)} />
+        <Route path="jobs/:id/wizard" element={withSuspense(OpportunityWizard)} />
         {/* Legacy /opportunities URLs redirect to /jobs */}
         <Route path="opportunities" element={<Navigate to="/jobs" replace />} />
         <Route path="opportunities/list" element={<Navigate to="/jobs/list" replace />} />
         <Route path="opportunities/new" element={<Navigate to="/jobs/new" replace />} />
-        <Route path="opportunities/:id" element={<OpportunityDetail />} />
-        <Route path="opportunities/:id/wizard" element={<OpportunityWizard />} />
+        <Route path="opportunities/:id" element={withSuspense(OpportunityDetail)} />
+        <Route path="opportunities/:id/wizard" element={withSuspense(OpportunityWizard)} />
         <Route path="attention" element={<AttentionQueue />} />
         <Route path="reports" element={<Navigate to="/analytics/reports" replace />} />
         <Route path="reports/builder" element={<Navigate to="/analytics/reports/new" replace />} />
@@ -222,58 +242,58 @@ export default function App() {
         <Route path="settings" element={<Settings />} />
         <Route path="notifications" element={<Notifications />} />
         <Route path="more" element={<More />} />
-        <Route path="search" element={<Search />} />
+        <Route path="search" element={withSuspense(Search)} />
         <Route path="help" element={<Help />} />
-        <Route path="support" element={<Support />} />
-        <Route path="support/:id" element={<SupportTicketDetail />} />
+        <Route path="support" element={withSuspense(Support)} />
+        <Route path="support/:id" element={withSuspense(SupportTicketDetail)} />
 
         {/* Analytics Hub */}
-        <Route path="analytics" element={<AnalyticsShell />}>
-          <Route index element={<AnalyticsRedirect />} />
-          <Route path="overview" element={<AnalyticsOverview />} />
-          <Route path="reports" element={<Reports />} />
-          <Route path="reports/new" element={<ReportBuilder />} />
-          <Route path="reports/advanced/new" element={<AdvancedReportEditor />} />
-          <Route path="reports/advanced/:id" element={<AdvancedReportEditor />} />
-          <Route path="reports/:id" element={<ReportDetail />} />
-          <Route path="reports/:id/edit" element={<ReportBuilder />} />
-          <Route path="dashboards" element={<Dashboards />} />
-          <Route path="dashboards/new" element={<DashboardBuilder />} />
-          <Route path="dashboards/executive" element={<ExecutiveDashboards />} />
-          <Route path="dashboards/claims-onboarding" element={<ClaimsOnboarding />} />
-          <Route path="dashboards/:id" element={<DashboardView />} />
-          <Route path="dashboards/:id/edit" element={<DashboardBuilder />} />
-          <Route path="schedules" element={<AnalyticsSchedules />} />
-          <Route path="ai" element={<AIInsightsFeed />} />
-          <Route path="health" element={<AnalyticsHealth />} />
-          <Route path="metabase" element={<AnalyticsMetabase />} />
+        <Route path="analytics" element={withSuspense(AnalyticsShell)}>
+          <Route index element={withSuspense(AnalyticsRedirect)} />
+          <Route path="overview" element={withSuspense(AnalyticsOverview)} />
+          <Route path="reports" element={withSuspense(Reports)} />
+          <Route path="reports/new" element={withSuspense(ReportBuilder)} />
+          <Route path="reports/advanced/new" element={withSuspense(AdvancedReportEditor)} />
+          <Route path="reports/advanced/:id" element={withSuspense(AdvancedReportEditor)} />
+          <Route path="reports/:id" element={withSuspense(ReportDetail)} />
+          <Route path="reports/:id/edit" element={withSuspense(ReportBuilder)} />
+          <Route path="dashboards" element={withSuspense(Dashboards)} />
+          <Route path="dashboards/new" element={withSuspense(DashboardBuilder)} />
+          <Route path="dashboards/executive" element={withSuspense(ExecutiveDashboards)} />
+          <Route path="dashboards/claims-onboarding" element={withSuspense(ClaimsOnboarding)} />
+          <Route path="dashboards/:id" element={withSuspense(DashboardView)} />
+          <Route path="dashboards/:id/edit" element={withSuspense(DashboardBuilder)} />
+          <Route path="schedules" element={withSuspense(AnalyticsSchedules)} />
+          <Route path="ai" element={withSuspense(AIInsightsFeed)} />
+          <Route path="health" element={withSuspense(AnalyticsHealth)} />
+          <Route path="metabase" element={withSuspense(AnalyticsMetabase)} />
         </Route>
 
         {/* Admin Routes */}
-        <Route path="admin/workflows" element={<Workflows />} />
-        <Route path="admin/roles" element={<RolesPermissions />} />
-        <Route path="admin/commissions" element={<Commissions />} />
-        <Route path="admin/commission-engine" element={<CommissionEngine />} />
-        <Route path="admin/payment-engine" element={<PaymentEngine />} />
+        <Route path="admin/workflows" element={withSuspense(Workflows)} />
+        <Route path="admin/roles" element={withSuspense(RolesPermissions)} />
+        <Route path="admin/commissions" element={withSuspense(Commissions)} />
+        <Route path="admin/commission-engine" element={withSuspense(CommissionEngine)} />
+        <Route path="admin/payment-engine" element={withSuspense(PaymentEngine)} />
         <Route path="admin/templates" element={<Navigate to="/admin/bamboogli?tab=templates" replace />} />
-        <Route path="admin/integrations" element={<Integrations />} />
-        <Route path="admin/users" element={<Users />} />
-        <Route path="admin/audit" element={<AuditLogs />} />
-        <Route path="admin/pandasign" element={<PandaSign />} />
-        <Route path="admin/bamboogli" element={<Bamboogli />} />
-        <Route path="admin/service-admin" element={<ServiceAdmin />} />
-        <Route path="admin/training-bot" element={<TrainingBotAnalytics />} />
-        <Route path="admin/support" element={<AdminSupport />} />
-        <Route path="admin/support/tickets" element={<AdminSupportTickets />} />
-        <Route path="admin/support/ticket/:id" element={<SupportTicketDetail />} />
-        <Route path="admin/ringcentral" element={<RingCentral />} />
-        <Route path="admin/call-center" element={<CallCenterSettings />} />
-        <Route path="admin/help" element={<AdminHelp />} />
-        <Route path="admin/setup" element={<Setup />} />
-        <Route path="admin/google-calendar" element={<GoogleCalendar />} />
-        <Route path="admin/deleted-records" element={<DeletedRecords />} />
-        <Route path="admin/orphaned-records" element={<OrphanedRecords />} />
-        <Route path="admin/referral" element={<Referral />} />
+        <Route path="admin/integrations" element={withSuspense(Integrations)} />
+        <Route path="admin/users" element={withSuspense(Users)} />
+        <Route path="admin/audit" element={withSuspense(AuditLogs)} />
+        <Route path="admin/pandasign" element={withSuspense(PandaSign)} />
+        <Route path="admin/bamboogli" element={withSuspense(Bamboogli)} />
+        <Route path="admin/service-admin" element={withSuspense(ServiceAdmin)} />
+        <Route path="admin/training-bot" element={withSuspense(TrainingBotAnalytics)} />
+        <Route path="admin/support" element={withSuspense(AdminSupport)} />
+        <Route path="admin/support/tickets" element={withSuspense(AdminSupportTickets)} />
+        <Route path="admin/support/ticket/:id" element={withSuspense(SupportTicketDetail)} />
+        <Route path="admin/ringcentral" element={withSuspense(RingCentral)} />
+        <Route path="admin/call-center" element={withSuspense(CallCenterSettings)} />
+        <Route path="admin/help" element={withSuspense(AdminHelp)} />
+        <Route path="admin/setup" element={withSuspense(Setup)} />
+        <Route path="admin/google-calendar" element={withSuspense(GoogleCalendar)} />
+        <Route path="admin/deleted-records" element={withSuspense(DeletedRecords)} />
+        <Route path="admin/orphaned-records" element={withSuspense(OrphanedRecords)} />
+        <Route path="admin/referral" element={withSuspense(Referral)} />
 
         {/* Management Routes - Protected by page access permissions */}
         <Route path="management/cases" element={<PermissionRoute page="cases"><Cases /></PermissionRoute>} />
