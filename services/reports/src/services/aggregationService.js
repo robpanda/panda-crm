@@ -3,9 +3,106 @@
 
 import { PrismaClient } from '@prisma/client';
 import { parseDateRange, getComparisonPeriod, generateTimeBuckets } from './dateRangeService.js';
+import { buildWhereClause } from './crossModuleQueryEngine.js';
 import { logger } from '../middleware/logger.js';
 
 const prisma = new PrismaClient();
+const GROUP_COUNT_ORDER_FIELD = 'id';
+
+const ENTITY_ALIASES = {
+  opportunity: 'opportunities',
+  opportunities: 'opportunities',
+  job: 'opportunities',
+  jobs: 'opportunities',
+  lead: 'leads',
+  leads: 'leads',
+  account: 'accounts',
+  accounts: 'accounts',
+  contact: 'contacts',
+  contacts: 'contacts',
+  invoice: 'invoices',
+  invoices: 'invoices',
+  payment: 'payments',
+  payments: 'payments',
+  user: 'users',
+  users: 'users',
+};
+
+const ENTITY_TO_MODULE = {
+  opportunities: 'jobs',
+  leads: 'leads',
+  accounts: 'accounts',
+  contacts: 'contacts',
+  invoices: 'invoices',
+  payments: 'payments',
+  users: 'users',
+};
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeEntityName(entity = 'opportunities') {
+  const normalizedKey = String(entity || '').trim().toLowerCase();
+  return ENTITY_ALIASES[normalizedKey] || normalizedKey || 'opportunities';
+}
+
+function getModuleNameByEntity(entity = 'opportunities') {
+  return ENTITY_TO_MODULE[normalizeEntityName(entity)] || 'jobs';
+}
+
+function normalizeFilters(entity, filters) {
+  if (!filters) {
+    return {};
+  }
+
+  if (Array.isArray(filters)) {
+    if (filters.length === 0) {
+      return {};
+    }
+
+    try {
+      return buildWhereClause(getModuleNameByEntity(entity), filters);
+    } catch (error) {
+      logger.warn('Failed to normalize array filters for aggregation service', {
+        entity,
+        error: error.message,
+      });
+      return {};
+    }
+  }
+
+  return isPlainObject(filters) ? filters : {};
+}
+
+function buildDateWhereClause(dateField, start, end) {
+  if (!start && !end) {
+    return {};
+  }
+
+  return {
+    [dateField]: {
+      ...(start && { gte: start }),
+      ...(end && { lte: end }),
+    },
+  };
+}
+
+function combineWhereClauses(...clauses) {
+  const validClauses = clauses.filter(
+    (clause) => isPlainObject(clause) && Object.keys(clause).length > 0
+  );
+
+  if (validClauses.length === 0) {
+    return {};
+  }
+
+  if (validClauses.length === 1) {
+    return validClauses[0];
+  }
+
+  return { AND: validClauses };
+}
 
 /**
  * Get pipeline metrics with optional comparison
@@ -21,13 +118,11 @@ export async function getPipelineMetrics(options = {}) {
   } = options;
 
   const range = parseDateRange(dateRange, dateRangeOptions);
-  const dateFilter = {
-    createdAt: {
-      gte: range.start,
-      lte: range.end,
-    },
-    ...filters,
-  };
+  const normalizedFilters = normalizeFilters('jobs', filters);
+  const dateFilter = combineWhereClauses(
+    buildDateWhereClause('createdAt', range.start, range.end),
+    normalizedFilters
+  );
 
   try {
     // Base metrics
@@ -66,13 +161,10 @@ export async function getPipelineMetrics(options = {}) {
     let comparisonData = null;
     if (includeComparison) {
       const compRange = getComparisonPeriod(range, comparisonType);
-      const compFilter = {
-        createdAt: {
-          gte: compRange.start,
-          lte: compRange.end,
-        },
-        ...filters,
-      };
+      const compFilter = combineWhereClauses(
+        buildDateWhereClause('createdAt', compRange.start, compRange.end),
+        normalizedFilters
+      );
 
       const [compCount, compAmount] = await Promise.all([
         prisma.opportunity.count({ where: compFilter }),
@@ -134,18 +226,17 @@ export async function getTimeSeriesData(options = {}) {
   const buckets = generateTimeBuckets(range.start, range.end, granularity);
 
   try {
-    const model = getModelByEntity(entity);
-    const dateField = getDateFieldByEntity(entity);
+    const normalizedEntity = normalizeEntityName(entity);
+    const model = getModelByEntity(normalizedEntity);
+    const dateField = getDateFieldByEntity(normalizedEntity);
+    const normalizedFilters = normalizeFilters(normalizedEntity, filters);
 
     // Get data for each bucket
     const data = await Promise.all(buckets.map(async (bucket) => {
-      const where = {
-        [dateField]: {
-          gte: bucket.start,
-          lte: bucket.end,
-        },
-        ...filters,
-      };
+      const where = combineWhereClauses(
+        buildDateWhereClause(dateField, bucket.start, bucket.end),
+        normalizedFilters
+      );
 
       let value;
       if (metric === 'count') {
@@ -177,13 +268,10 @@ export async function getTimeSeriesData(options = {}) {
       const compBuckets = generateTimeBuckets(compRange.start, compRange.end, granularity);
 
       comparisonData = await Promise.all(compBuckets.map(async (bucket, index) => {
-        const where = {
-          [dateField]: {
-            gte: bucket.start,
-            lte: bucket.end,
-          },
-          ...filters,
-        };
+        const where = combineWhereClauses(
+          buildDateWhereClause(dateField, bucket.start, bucket.end),
+          normalizedFilters
+        );
 
         let value;
         if (metric === 'count') {
@@ -237,16 +325,15 @@ export async function getPerformanceMetrics(options = {}) {
   const range = parseDateRange(dateRange, dateRangeOptions);
 
   try {
-    const model = getModelByEntity(entity);
-    const dateField = getDateFieldByEntity(entity);
+    const normalizedEntity = normalizeEntityName(entity);
+    const model = getModelByEntity(normalizedEntity);
+    const dateField = getDateFieldByEntity(normalizedEntity);
+    const normalizedFilters = normalizeFilters(normalizedEntity, filters);
 
-    const where = {
-      [dateField]: {
-        gte: range.start,
-        lte: range.end,
-      },
-      ...filters,
-    };
+    const where = combineWhereClauses(
+      buildDateWhereClause(dateField, range.start, range.end),
+      normalizedFilters
+    );
 
     // Group by the specified field
     const grouped = await model.groupBy({
@@ -255,7 +342,7 @@ export async function getPerformanceMetrics(options = {}) {
       _count: { _all: true },
       _sum: field ? { [field]: true } : undefined,
       orderBy: {
-        _count: { _all: 'desc' },
+        _count: { [GROUP_COUNT_ORDER_FIELD]: 'desc' },
       },
       take: limit,
     });
@@ -308,13 +395,11 @@ export async function getLeadMetrics(options = {}) {
   } = options;
 
   const range = parseDateRange(dateRange, dateRangeOptions);
-  const dateFilter = {
-    createdAt: {
-      gte: range.start,
-      lte: range.end,
-    },
-    ...filters,
-  };
+  const normalizedFilters = normalizeFilters('leads', filters);
+  const dateFilter = combineWhereClauses(
+    buildDateWhereClause('createdAt', range.start, range.end),
+    normalizedFilters
+  );
 
   try {
     const [
@@ -333,34 +418,28 @@ export async function getLeadMetrics(options = {}) {
 
       prisma.lead.groupBy({
         by: ['source'],
-        where: { ...dateFilter, source: { not: null } },
+        where: combineWhereClauses(dateFilter, { source: { not: null } }),
         _count: { _all: true },
-        orderBy: { _count: { _all: 'desc' } },
+        orderBy: { _count: { [GROUP_COUNT_ORDER_FIELD]: 'desc' } },
         take: 10,
       }),
 
       prisma.lead.count({
-        where: {
-          ...dateFilter,
-          isConverted: true,
-        },
+        where: combineWhereClauses(dateFilter, { isConverted: true }),
       }),
     ]);
 
     let comparisonData = null;
     if (includeComparison) {
       const compRange = getComparisonPeriod(range, comparisonType);
-      const compFilter = {
-        createdAt: {
-          gte: compRange.start,
-          lte: compRange.end,
-        },
-        ...filters,
-      };
+      const compFilter = combineWhereClauses(
+        buildDateWhereClause('createdAt', compRange.start, compRange.end),
+        normalizedFilters
+      );
 
       const [compCount, compConverted] = await Promise.all([
         prisma.lead.count({ where: compFilter }),
-        prisma.lead.count({ where: { ...compFilter, isConverted: true } }),
+        prisma.lead.count({ where: combineWhereClauses(compFilter, { isConverted: true }) }),
       ]);
 
       comparisonData = {
@@ -408,17 +487,15 @@ export async function getRevenueMetrics(options = {}) {
   } = options;
 
   const range = parseDateRange(dateRange, dateRangeOptions);
+  const normalizedFilters = normalizeFilters('jobs', filters);
 
   try {
     // Revenue from closed won opportunities
-    const oppFilter = {
-      soldDate: {
-        gte: range.start,
-        lte: range.end,
-      },
-      stage: 'CLOSED_WON',
-      ...filters,
-    };
+    const oppFilter = combineWhereClauses(
+      buildDateWhereClause('soldDate', range.start, range.end),
+      normalizedFilters,
+      { stage: 'CLOSED_WON' }
+    );
 
     const [closedWon, invoiceData, paymentData] = await Promise.all([
       prisma.opportunity.aggregate({
@@ -447,14 +524,11 @@ export async function getRevenueMetrics(options = {}) {
     let comparisonData = null;
     if (includeComparison) {
       const compRange = getComparisonPeriod(range, comparisonType);
-      const compOppFilter = {
-        soldDate: {
-          gte: compRange.start,
-          lte: compRange.end,
-        },
-        stage: 'CLOSED_WON',
-        ...filters,
-      };
+      const compOppFilter = combineWhereClauses(
+        buildDateWhereClause('soldDate', compRange.start, compRange.end),
+        normalizedFilters,
+        { stage: 'CLOSED_WON' }
+      );
 
       const compClosedWon = await prisma.opportunity.aggregate({
         where: compOppFilter,
@@ -505,25 +579,24 @@ export async function getStateMetrics(options = {}) {
   } = options;
 
   const range = parseDateRange(dateRange, dateRangeOptions);
-  const model = getModelByEntity(entity);
-  const dateField = getDateFieldByEntity(entity);
+  const normalizedEntity = normalizeEntityName(entity);
+  const model = getModelByEntity(normalizedEntity);
+  const dateField = getDateFieldByEntity(normalizedEntity);
+  const normalizedFilters = normalizeFilters(normalizedEntity, filters);
 
   try {
-    const where = {
-      [dateField]: {
-        gte: range.start,
-        lte: range.end,
-      },
-      state: { not: null },
-      ...filters,
-    };
+    const where = combineWhereClauses(
+      buildDateWhereClause(dateField, range.start, range.end),
+      normalizedFilters,
+      { state: { not: null } }
+    );
 
     const grouped = await model.groupBy({
       by: ['state'],
       where,
       _count: { _all: true },
       _sum: metric === 'sum' ? { amount: true } : undefined,
-      orderBy: { _count: { _all: 'desc' } },
+      orderBy: { _count: { [GROUP_COUNT_ORDER_FIELD]: 'desc' } },
     });
 
     return {
@@ -543,7 +616,9 @@ export async function getStateMetrics(options = {}) {
 
 // Helper functions
 function getModelByEntity(entity) {
-  switch (entity) {
+  const normalizedEntity = normalizeEntityName(entity);
+
+  switch (normalizedEntity) {
     case 'opportunities':
       return prisma.opportunity;
     case 'leads':
@@ -562,7 +637,9 @@ function getModelByEntity(entity) {
 }
 
 function getDateFieldByEntity(entity) {
-  switch (entity) {
+  const normalizedEntity = normalizeEntityName(entity);
+
+  switch (normalizedEntity) {
     case 'opportunities':
       return 'createdAt';
     case 'leads':
