@@ -151,13 +151,32 @@ async function resolveRequestActorName(req) {
   const rawAuthorization = req.headers?.authorization || req.headers?.Authorization || '';
   const bearerToken = rawAuthorization.startsWith('Bearer ') ? rawAuthorization.slice(7).trim() : null;
   const tokenPayload = bearerToken ? decodeJwtPayload(bearerToken) : null;
+  const authUser = req.user && typeof req.user === 'object' ? req.user : null;
+
+  const directActorName = [
+    req.headers?.['x-user-name'],
+    req.headers?.['x-user-full-name'],
+    authUser?.fullName,
+    authUser?.name,
+    [authUser?.firstName, authUser?.lastName].filter(Boolean).join(' ').trim(),
+  ].map((value) => (value ? String(value).trim() : '')).find(Boolean);
 
   const identityCandidates = Array.from(new Set([
+    authUser?.id,
+    authUser?.userId,
+    authUser?.sub,
+    authUser?.cognitoId,
+    authUser?.username,
+    authUser?.email,
     req.headers?.['x-user-id'],
     req.headers?.['x-user-email'],
+    req.headers?.['x-user-sub'],
+    req.headers?.['x-cognito-id'],
     tokenPayload?.sub,
     tokenPayload?.username,
     tokenPayload?.cognitoId,
+    tokenPayload?.email,
+    tokenPayload?.['cognito:username'],
   ].map((value) => (value ? String(value).trim() : '')).filter(Boolean)));
 
   if (identityCandidates.length > 0) {
@@ -190,7 +209,8 @@ async function resolveRequestActorName(req) {
     }
   }
 
-  return tokenPayload?.name
+  return directActorName
+    || tokenPayload?.name
     || tokenPayload?.email
     || null;
 }

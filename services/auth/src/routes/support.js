@@ -72,6 +72,90 @@ const SUPPORT_TICKET_LIST_INCLUDE = {
   },
 };
 
+const SUPPORT_TICKET_BASE_SELECT = {
+  id: true,
+  ticket_number: true,
+  subject: true,
+  description: true,
+  status: true,
+  priority: true,
+  category: true,
+  page_url: true,
+  screenshot_url: true,
+  browser_info: true,
+  user_id: true,
+  assigned_to_id: true,
+  resolved_at: true,
+  resolved_by_id: true,
+  first_response_at: true,
+  last_response_at: true,
+  response_time_mins: true,
+  resolution_time_mins: true,
+  related_help_article_id: true,
+  created_at: true,
+  updated_at: true,
+};
+
+const SUPPORT_TICKET_USER_LIST_SELECT = {
+  id: true,
+  firstName: true,
+  lastName: true,
+  email: true,
+};
+
+function uniqueIds(values = []) {
+  return [...new Set(values.filter(Boolean).map((value) => String(value).trim()).filter(Boolean))];
+}
+
+async function hydrateSupportTicketList(rawTickets = []) {
+  const tickets = Array.isArray(rawTickets) ? rawTickets : [];
+  if (tickets.length === 0) return [];
+
+  const userIds = uniqueIds([
+    ...tickets.map((ticket) => ticket.user_id),
+    ...tickets.map((ticket) => ticket.assigned_to_id),
+  ]);
+
+  const ticketIds = tickets.map((ticket) => ticket.id);
+
+  const [users, messageCounts, attachmentCounts] = await Promise.all([
+    userIds.length > 0
+      ? prisma.user.findMany({
+          where: { id: { in: userIds } },
+          select: SUPPORT_TICKET_USER_LIST_SELECT,
+        })
+      : Promise.resolve([]),
+    prisma.support_ticket_messages.groupBy({
+      by: ['ticket_id'],
+      where: { ticket_id: { in: ticketIds } },
+      _count: { _all: true },
+    }),
+    prisma.support_ticket_attachments.groupBy({
+      by: ['ticket_id'],
+      where: { ticket_id: { in: ticketIds } },
+      _count: { _all: true },
+    }),
+  ]);
+
+  const userMap = new Map(users.map((user) => [user.id, user]));
+  const messageCountMap = new Map(
+    messageCounts.map((row) => [row.ticket_id, row._count?._all || 0])
+  );
+  const attachmentCountMap = new Map(
+    attachmentCounts.map((row) => [row.ticket_id, row._count?._all || 0])
+  );
+
+  return tickets.map((ticket) => ({
+    ...ticket,
+    user: userMap.get(ticket.user_id) || null,
+    assigned_to: userMap.get(ticket.assigned_to_id) || null,
+    _count: {
+      messages: messageCountMap.get(ticket.id) || 0,
+      attachments: attachmentCountMap.get(ticket.id) || 0,
+    },
+  }));
+}
+
 function normalizeRoleString(value) {
   return String(value || '').trim().toLowerCase();
 }
@@ -365,11 +449,12 @@ router.get('/tickets', authMiddleware, async (req, res) => {
     const context = await getSupportContext(req, res);
     if (!context) return;
 
-    const tickets = await prisma.support_tickets.findMany({
-      where: context.canManageAll ? {} : { user_id: context.userId },
-      include: SUPPORT_TICKET_LIST_INCLUDE,
+    const rawTickets = await prisma.support_tickets.findMany({
+      where: { user_id: context.userId },
+      select: SUPPORT_TICKET_BASE_SELECT,
       orderBy: { created_at: 'desc' },
     });
+    const tickets = await hydrateSupportTicketList(rawTickets);
 
     res.json({ tickets });
   } catch (error) {
@@ -605,10 +690,11 @@ router.get('/admin/tickets', authMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
-    const tickets = await prisma.support_tickets.findMany({
-      include: SUPPORT_TICKET_LIST_INCLUDE,
+    const rawTickets = await prisma.support_tickets.findMany({
+      select: SUPPORT_TICKET_BASE_SELECT,
       orderBy: { created_at: 'desc' },
     });
+    const tickets = await hydrateSupportTicketList(rawTickets);
 
     res.json({ tickets });
   } catch (error) {

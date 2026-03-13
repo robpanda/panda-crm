@@ -120,7 +120,7 @@ export default function Users() {
     if (search) params.search = search;
     if (departmentFilter) params.department = departmentFilter;
     if (officeFilter) params.officeAssignment = officeFilter;
-    if (statusFilter !== '') params.status = statusFilter;
+    if (statusFilter !== '') params.isActive = statusFilter;
     return params;
   }, [search, departmentFilter, officeFilter, statusFilter, sortBy, sortOrder, page]);
 
@@ -213,8 +213,12 @@ export default function Users() {
     },
   });
 
-  const users = data?.data || [];
-  const pagination = data?.pagination || {};
+  const users = Array.isArray(data?.data)
+    ? data.data
+    : Array.isArray(data?.data?.data)
+      ? data.data.data
+      : [];
+  const pagination = data?.pagination || data?.data?.pagination || {};
   const stats = statsData || { total: 0, active: 0, inactive: 0, byDepartment: {}, byOffice: {} };
   const userOptions = dropdownUsers || [];
   // Ensure roles is always an array (API may return error object on 403)

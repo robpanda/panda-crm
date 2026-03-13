@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { leadsApi, usersApi } from '../services/api';
@@ -80,6 +80,8 @@ export default function LeadList() {
   const [workType, setWorkType] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [ownerSearch, setOwnerSearch] = useState('');
+  const [ownerId, setOwnerId] = useState('');
 
   // Bulk selection state
   const [selectionMode, setSelectionMode] = useState(false);
@@ -114,8 +116,9 @@ export default function LeadList() {
     if (workType) params.workType = workType;
     if (startDate) params.startDate = startDate;
     if (endDate) params.endDate = endDate;
+    if (ownerId) params.ownerId = ownerId;
     return params;
-  }, [search, status, source, sortBy, sortOrder, page, leadSource, workType, startDate, endDate]);
+  }, [search, status, source, sortBy, sortOrder, page, leadSource, workType, startDate, endDate, ownerId]);
 
   const { data, isLoading } = useQuery({
     queryKey: ['leads', queryParams],
@@ -134,6 +137,29 @@ export default function LeadList() {
     enabled: showReassignModal,
   });
   const users = usersData || [];
+
+  const { data: ownerOptionsData } = useQuery({
+    queryKey: ['lead-owner-options'],
+    queryFn: () => usersApi.getUsersForDropdown({ isActive: true }),
+    enabled: showFilters,
+    staleTime: 5 * 60 * 1000,
+  });
+  const ownerOptions = Array.isArray(ownerOptionsData) ? ownerOptionsData : [];
+
+  const ownerDisplayById = useMemo(() => new Map(
+    ownerOptions.map((owner) => [
+      owner.id,
+      owner.fullName || `${owner.firstName || ''} ${owner.lastName || ''}`.trim() || owner.email || owner.id,
+    ])
+  ), [ownerOptions]);
+
+  useEffect(() => {
+    if (!ownerId) return;
+    const nextLabel = ownerDisplayById.get(ownerId);
+    if (nextLabel && nextLabel !== ownerSearch) {
+      setOwnerSearch(nextLabel);
+    }
+  }, [ownerDisplayById, ownerId, ownerSearch]);
 
   // Bulk mutations
   const bulkReassignMutation = useMutation({
@@ -220,11 +246,13 @@ export default function LeadList() {
     setWorkType('');
     setStartDate('');
     setEndDate('');
+    setOwnerId('');
+    setOwnerSearch('');
     setSortBy('createdAt');
     setSortOrder('desc');
   };
 
-  const hasActiveFilters = search || (status && status !== 'all') || source || leadSource || workType || startDate || endDate;
+  const hasActiveFilters = search || (status && status !== 'all') || source || leadSource || workType || startDate || endDate || ownerId;
 
   // Tabs for status filter
   const tabs = [
@@ -327,7 +355,7 @@ export default function LeadList() {
         {showFilters && (
           <div className="px-4 pb-4 border-b border-gray-100">
             <div className="bg-gray-50 rounded-lg p-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
                 {/* Lead Source Filter */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -408,6 +436,37 @@ export default function LeadList() {
                       className="w-full pl-10 pr-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
                     />
                   </div>
+                </div>
+
+                {/* Owner Filter */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Owner
+                  </label>
+                  <input
+                    list="lead-owner-options"
+                    value={ownerSearch}
+                    onChange={(e) => {
+                      const nextValue = e.target.value;
+                      setOwnerSearch(nextValue);
+                      const normalized = nextValue.trim().toLowerCase();
+                      const matchedOwner = ownerOptions.find((owner) => {
+                        const displayName = (owner.fullName || `${owner.firstName || ''} ${owner.lastName || ''}`.trim() || owner.email || '').trim().toLowerCase();
+                        return displayName === normalized || owner.id === nextValue;
+                      });
+                      setOwnerId(matchedOwner?.id || '');
+                    }}
+                    placeholder="Search and select owner..."
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent bg-white"
+                  />
+                  <datalist id="lead-owner-options">
+                    {ownerOptions.map((owner) => {
+                      const label = owner.fullName || `${owner.firstName || ''} ${owner.lastName || ''}`.trim() || owner.email || owner.id;
+                      return (
+                        <option key={owner.id} value={label} />
+                      );
+                    })}
+                  </datalist>
                 </div>
               </div>
             </div>

@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
 import {
   Plus,
   Search,
@@ -39,10 +38,10 @@ const PRIORITY_CONFIG = {
 };
 
 export default function Support() {
-  const { user } = useAuth();
   const navigate = useNavigate();
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -62,32 +61,22 @@ export default function Support() {
   const loadTickets = async () => {
     try {
       setLoading(true);
+      setLoadError('');
       const response = await api.get('/api/support/tickets');
       const ticketData = response.data.tickets || [];
-      const currentUserId = user?.id || user?.userId || user?.sub || null;
-      const currentUserEmail = String(user?.email || '').trim().toLowerCase();
-      const scopedTickets = ticketData.filter((ticket) => {
-        if (currentUserId) {
-          return ticket.user_id === currentUserId || ticket.userId === currentUserId || ticket.createdById === currentUserId;
-        }
-        if (currentUserEmail) {
-          const ticketEmail = String(ticket.user?.email || ticket.email || '').trim().toLowerCase();
-          return Boolean(ticketEmail) && ticketEmail === currentUserEmail;
-        }
-        return false;
-      });
-      setTickets(scopedTickets);
+      setTickets(ticketData);
 
       // Calculate stats
       setStats({
-        total: scopedTickets.length,
-        new: scopedTickets.filter(t => t.status === 'NEW').length,
-        inProgress: scopedTickets.filter(t => t.status === 'IN_PROGRESS').length,
-        waitingForUser: scopedTickets.filter(t => t.status === 'WAITING_FOR_USER').length,
-        resolved: scopedTickets.filter(t => ['RESOLVED', 'CLOSED'].includes(t.status)).length,
+        total: ticketData.length,
+        new: ticketData.filter(t => t.status === 'NEW').length,
+        inProgress: ticketData.filter(t => t.status === 'IN_PROGRESS').length,
+        waitingForUser: ticketData.filter(t => t.status === 'WAITING_FOR_USER').length,
+        resolved: ticketData.filter(t => ['RESOLVED', 'CLOSED'].includes(t.status)).length,
       });
     } catch (error) {
       console.error('Failed to load tickets:', error);
+      setLoadError('Failed to load tickets');
     } finally {
       setLoading(false);
     }
@@ -160,6 +149,12 @@ export default function Support() {
           </button>
         </div>
       </div>
+
+      {loadError && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          {loadError}
+        </div>
+      )}
 
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4">

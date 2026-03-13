@@ -28,6 +28,7 @@ import WorkflowSidebar from '../components/WorkflowSidebar';
 import NotesSidebar from '../components/NotesSidebar';
 import InternalNotesTabs from '../components/InternalNotesTabs';
 import InternalComments from '../components/InternalComments';
+import CustomerCommunicationsTab from '../components/CommunicationsTab';
 import AddressAutocomplete from '../components/AddressAutocomplete';
 import ExpediterChecklist from '../components/ExpediterChecklist';
 import {
@@ -9250,34 +9251,16 @@ export default function OpportunityDetail() {
                 )}
 
                 {(activeTab === 'communications' || activeTab === 'conversations') && (
-                  <CommunicationsTab
+                  <CustomerCommunicationsTab
                     phone={opportunity?.contact?.phone || opportunity?.contact?.mobilePhone || opportunity?.phone}
                     email={opportunity?.contact?.email}
                     contactName={opportunity?.contact?.name || `${opportunity?.contact?.firstName || ''} ${opportunity?.contact?.lastName || ''}`}
-                    conversations={conversations || []}
-                    emails={emails || []}
                     archivedActivities={activityData?.activities?.filter(a => a.sourceType === 'ACCULYNX_IMPORT') || []}
                     onActivityClick={(item) => {
                       setSelectedActivity(item);
                       setShowActivityModal(true);
                     }}
                     opportunityId={id}
-                    onComposeSms={() => setShowSmsModal(true)}
-                    onComposeEmail={() => setShowEmailModal(true)}
-                    onCall={() => {
-                      const phoneNumber = opportunity?.contact?.phone || opportunity?.phone;
-                      if (!phoneNumber) return;
-                      if (rcLoggedIn) {
-                        initiateCall(phoneNumber);
-                      } else {
-                        loadWidget();
-                        setActionSuccess('RingCentral widget loaded. Click on the phone number to call.');
-                        setTimeout(() => setActionSuccess(null), 3000);
-                      }
-                    }}
-                    canComposeSms={Boolean(opportunity?.contact?.phone || opportunity?.phone)}
-                    canComposeEmail={Boolean(opportunity?.contact?.email)}
-                    canCall={Boolean(opportunity?.contact?.phone || opportunity?.phone)}
                   />
                 )}
 
