@@ -7,67 +7,377 @@ import { logger } from '../middleware/logger.js';
 const prisma = new PrismaClient();
 
 const router = Router();
+const PANDA_EMPLOYEE_EMAIL_DOMAINS = new Set(['pandaexteriors.com', 'panda-exteriors.com']);
 
-const INTERNAL_EMAIL_DOMAINS = ['pandaexteriors.com', 'panda-exteriors.com'];
+function normalizePandaEmployeeEmail(email) {
+  if (typeof email !== 'string') return email;
+  const trimmed = email.trim();
+  if (!trimmed) return trimmed;
 
-function buildEmailCandidates(email) {
-  if (!email || typeof email !== 'string' || !email.includes('@')) return [];
-
-  const normalized = email.trim().toLowerCase();
-  const [localRaw, domainRaw] = normalized.split('@');
-  if (!localRaw || !domainRaw) return [normalized];
-
-  const localNoDots = localRaw.replace(/\./g, '');
-  const domainCandidates = INTERNAL_EMAIL_DOMAINS.includes(domainRaw)
-    ? INTERNAL_EMAIL_DOMAINS
-    : [domainRaw];
-
-  return Array.from(new Set(domainCandidates.flatMap((domain) => ([
-    `${localRaw}@${domain}`,
-    `${localNoDots}@${domain}`,
-  ]))));
-}
-
-async function findDbUserFromCognito(cognitoUser) {
-  const select = {
-    id: true,
-    email: true,
-    firstName: true,
-    lastName: true,
-    fullName: true,
-    phone: true,
-    mobilePhone: true,
-    department: true,
-    division: true,
-    title: true,
-    officeAssignment: true,
-    managerId: true,
-    isActive: true,
-    createdAt: true,
-    updatedAt: true,
-    roleId: true,
-  };
-
-  // 1) Exact + tolerant email variants
-  const emailCandidates = buildEmailCandidates(cognitoUser?.email);
-  for (const candidate of emailCandidates) {
-    const user = await prisma.user.findUnique({
-      where: { email: candidate },
-      select,
-    });
-    if (user) return user;
+  const atIndex = trimmed.lastIndexOf('@');
+  if (atIndex <= 0 || atIndex === trimmed.length - 1) {
+    return trimmed;
   }
 
-  // 2) Fallback by Cognito username if it happens to match local user id
-  if (cognitoUser?.username) {
-    const byId = await prisma.user.findUnique({
-      where: { id: cognitoUser.username },
-      select,
+  const localPart = trimmed.slice(0, atIndex);
+  const domainPart = trimmed.slice(atIndex + 1).toLowerCase();
+  if (!PANDA_EMPLOYEE_EMAIL_DOMAINS.has(domainPart)) {
+    return trimmed;
+  }
+
+  return `${localPart.replace(/\./g, '').toLowerCase()}@${domainPart}`;
+}
+
+function buildEmailLookupCandidates(email) {
+  if (typeof email !== 'string') return [];
+
+  const trimmed = email.trim();
+  if (!trimmed) return [];
+
+  const candidates = [];
+  const seen = new Set();
+
+  const addCandidate = (value) => {
+    const candidate = String(value || '').trim();
+    if (!candidate) return;
+    const key = candidate.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push(candidate);
+  };
+
+  const lowerEmail = trimmed.toLowerCase();
+  addCandidate(trimmed);
+  addCandidate(lowerEmail);
+
+  const atIndex = lowerEmail.lastIndexOf('@');
+  if (atIndex <= 0 || atIndex === lowerEmail.length - 1) {
+    return candidates;
+  }
+
+  const localPart = lowerEmail.slice(0, atIndex);
+  const domainPart = lowerEmail.slice(atIndex + 1);
+  addCandidate(`${localPart}@${domainPart}`);
+
+  if (PANDA_EMPLOYEE_EMAIL_DOMAINS.has(domainPart)) {
+    const dotlessLocalPart = localPart.replace(/\./g, '');
+    for (const domain of PANDA_EMPLOYEE_EMAIL_DOMAINS) {
+      addCandidate(`${localPart}@${domain}`);
+      addCandidate(`${dotlessLocalPart}@${domain}`);
+    }
+  }
+
+  return candidates;
+}
+
+function pickBestEmailMatch(users, emailCandidates) {
+  if (!Array.isArray(users) || !users.length) return null;
+  const rankedCandidates = emailCandidates.map((candidate) => candidate.toLowerCase());
+
+  return [...users].sort((a, b) => {
+    const aEmail = String(a.email || '').toLowerCase();
+    const bEmail = String(b.email || '').toLowerCase();
+    const aRank = rankedCandidates.indexOf(aEmail);
+    const bRank = rankedCandidates.indexOf(bEmail);
+    const safeARank = aRank === -1 ? Number.MAX_SAFE_INTEGER : aRank;
+    const safeBRank = bRank === -1 ? Number.MAX_SAFE_INTEGER : bRank;
+
+    if (safeARank !== safeBRank) return safeARank - safeBRank;
+    if (a.isActive !== b.isActive) return Number(b.isActive) - Number(a.isActive);
+
+    const aUpdatedAt = a.updatedAt ? new Date(a.updatedAt).getTime() : 0;
+    const bUpdatedAt = b.updatedAt ? new Date(b.updatedAt).getTime() : 0;
+    return bUpdatedAt - aUpdatedAt;
+  })[0];
+}
+
+async function getDatabaseUserProfile(email) {
+  if (!email) {
+    logger.warn('Skipping DB user enrichment: Cognito user has no email attribute');
+    return { dbUser: null, isManager: false };
+  }
+
+  try {
+    const emailCandidates = buildEmailLookupCandidates(email);
+    if (!emailCandidates.length) {
+      return { dbUser: null, isManager: false };
+    }
+
+    const dbUsers = await prisma.user.findMany({
+      where: {
+        OR: emailCandidates.map((candidate) => ({
+          email: {
+            equals: candidate,
+            mode: 'insensitive',
+          },
+        })),
+      },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        fullName: true,
+        phone: true,
+        mobilePhone: true,
+        department: true,
+        division: true,
+        title: true,
+        officeAssignment: true,
+        managerId: true,
+        isActive: true,
+      createdAt: true,
+      updatedAt: true,
+      roleId: true,
+      role: {
+        select: {
+          id: true,
+          name: true,
+          roleType: true,
+          permissionsJson: true,
+        },
+      },
+    },
+  });
+
+    const dbUser = pickBestEmailMatch(dbUsers, emailCandidates);
+    let isManager = false;
+    if (dbUser?.id) {
+      const teamCount = await prisma.user.count({
+        where: { managerId: dbUser.id, isActive: true },
+      });
+      isManager = teamCount > 0;
+    }
+
+    return { dbUser, isManager };
+  } catch (error) {
+    logger.warn(`Failed DB user enrichment for ${email}: ${error.message}`);
+    return { dbUser: null, isManager: false };
+  }
+}
+
+function buildUserResponse(cognitoUser, dbUser, isManager) {
+  const fullName = dbUser?.fullName
+    || cognitoUser.name
+    || `${dbUser?.firstName || cognitoUser.firstName || ''} ${dbUser?.lastName || cognitoUser.lastName || ''}`.trim()
+    || null;
+
+  return {
+    id: dbUser?.id || cognitoUser.username,
+    email: cognitoUser.email || dbUser?.email || null,
+    firstName: dbUser?.firstName || cognitoUser.firstName,
+    lastName: dbUser?.lastName || cognitoUser.lastName,
+    fullName,
+    name: fullName,
+    phone: dbUser?.phone || dbUser?.mobilePhone,
+    department: dbUser?.department || cognitoUser.department,
+    jobTitle: dbUser?.title,
+    officeName: dbUser?.officeAssignment,
+    division: dbUser?.division,
+    role: cognitoUser.role || 'SALES_REP',
+    managerId: dbUser?.managerId,
+    isManager,
+    isActive: dbUser?.isActive ?? true,
+    createdAt: dbUser?.createdAt,
+    updatedAt: dbUser?.updatedAt,
+  };
+}
+
+function normalizeRoleString(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function hasAdminAccess(dbUser) {
+  if (!dbUser) return false;
+
+  const roleName = normalizeRoleString(dbUser.role?.name);
+  const roleType = normalizeRoleString(dbUser.role?.roleType);
+  if (roleType === 'admin' || roleType === 'system' || roleType === 'super_admin') {
+    return true;
+  }
+  if (roleName.includes('admin')) {
+    return true;
+  }
+
+  const permissionsJson = dbUser.role?.permissionsJson;
+  if (!permissionsJson) return false;
+
+  let permissions = permissionsJson;
+  if (typeof permissionsJson === 'string') {
+    try {
+      permissions = JSON.parse(permissionsJson);
+    } catch {
+      permissions = {};
+    }
+  }
+
+  const pages = permissions?.pages && typeof permissions.pages === 'object' ? permissions.pages : {};
+  return Boolean(
+    pages.admin === true
+    || pages.users === true
+    || pages.userManagement === true
+    || pages.adminUsers === true
+    || pages['/admin/users'] === true
+  );
+}
+
+async function requireAdminAccess(req, res, next) {
+  try {
+    const apiKey = req.headers['x-api-key'];
+    if (apiKey === process.env.INTERNAL_API_KEY) {
+      req.adminAccess = { isSystem: true };
+      return next();
+    }
+
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(403).json({
+        success: false,
+        error: { code: 'FORBIDDEN', message: 'Invalid API key' },
+      });
+    }
+
+    const accessToken = authHeader.split(' ')[1];
+    const cognitoUser = await authService.getCurrentUser(accessToken);
+    const { dbUser } = await getDatabaseUserProfile(cognitoUser.email);
+
+    if (!hasAdminAccess(dbUser)) {
+      return res.status(403).json({
+        success: false,
+        error: { code: 'FORBIDDEN', message: 'Insufficient permissions' },
+      });
+    }
+
+    req.adminAccess = { cognitoUser, dbUser };
+    return next();
+  } catch (error) {
+    logger.warn(`Admin access check failed: ${error.message}`);
+    return res.status(403).json({
+      success: false,
+      error: { code: 'FORBIDDEN', message: 'Invalid API key' },
     });
-    if (byId) return byId;
+  }
+}
+
+function normalizeAdminCreatePayload(body = {}) {
+  const normalizedEmail = normalizePandaEmployeeEmail(body.email);
+  const suppliedName = typeof body.name === 'string' ? body.name.trim() : '';
+  let firstName = typeof body.firstName === 'string' ? body.firstName.trim() : '';
+  let lastName = typeof body.lastName === 'string' ? body.lastName.trim() : '';
+
+  if ((!firstName || !lastName) && suppliedName) {
+    const nameParts = suppliedName.split(/\s+/).filter(Boolean);
+    if (!firstName && nameParts.length > 0) {
+      firstName = nameParts[0];
+    }
+    if (!lastName && nameParts.length > 1) {
+      lastName = nameParts.slice(1).join(' ');
+    }
+  }
+
+  if (!firstName && normalizedEmail) {
+    firstName = normalizedEmail.split('@')[0] || '';
+  }
+  if (!lastName) {
+    lastName = 'User';
+  }
+
+  return {
+    email: normalizedEmail,
+    firstName,
+    lastName,
+    fullName: suppliedName || `${firstName} ${lastName}`.trim(),
+    temporaryPassword: body.temporaryPassword || body.password,
+    roleId: body.roleId || null,
+    role: body.role || null,
+    department: body.department || null,
+    title: body.title || null,
+    officeAssignment: body.officeAssignment || null,
+    phone: body.phone || null,
+    mobilePhone: body.mobilePhone || null,
+    managerId: body.managerId || null,
+    salesforceId: body.salesforceId || null,
+    isActive: body.isActive !== false,
+  };
+}
+
+async function resolveRoleForAdminCreate(roleId, roleName) {
+  if (roleId) {
+    const role = await prisma.role.findUnique({
+      where: { id: roleId },
+      select: { id: true, name: true, roleType: true },
+    });
+    if (!role) {
+      const error = new Error('Selected role was not found');
+      error.code = 'VALIDATION_ERROR';
+      throw error;
+    }
+    return role;
+  }
+
+  if (roleName) {
+    return prisma.role.findFirst({
+      where: {
+        name: {
+          equals: String(roleName).trim(),
+          mode: 'insensitive',
+        },
+      },
+      select: { id: true, name: true, roleType: true },
+    });
   }
 
   return null;
+}
+
+async function upsertCrmUserRecordFromAdminPayload(payload, cognitoUsername) {
+  const role = await resolveRoleForAdminCreate(payload.roleId, payload.role);
+  const fullName = payload.fullName || `${payload.firstName || ''} ${payload.lastName || ''}`.trim() || payload.email;
+
+  return prisma.user.upsert({
+    where: { email: payload.email },
+    update: {
+      cognitoId: cognitoUsername || undefined,
+      firstName: payload.firstName,
+      lastName: payload.lastName,
+      fullName,
+      roleId: role?.id || null,
+      department: payload.department,
+      title: payload.title,
+      officeAssignment: payload.officeAssignment,
+      phone: payload.phone,
+      mobilePhone: payload.mobilePhone,
+      managerId: payload.managerId,
+      salesforceId: payload.salesforceId,
+      isActive: payload.isActive,
+      status: payload.isActive ? 'ACTIVE' : 'INACTIVE',
+    },
+    create: {
+      email: payload.email,
+      cognitoId: cognitoUsername || null,
+      firstName: payload.firstName,
+      lastName: payload.lastName,
+      fullName,
+      roleId: role?.id || null,
+      department: payload.department,
+      title: payload.title,
+      officeAssignment: payload.officeAssignment,
+      phone: payload.phone,
+      mobilePhone: payload.mobilePhone,
+      managerId: payload.managerId,
+      salesforceId: payload.salesforceId,
+      isActive: payload.isActive,
+      status: payload.isActive ? 'ACTIVE' : 'INACTIVE',
+    },
+    include: {
+      role: {
+        select: { id: true, name: true, roleType: true },
+      },
+      manager: {
+        select: { id: true, fullName: true, firstName: true, lastName: true },
+      },
+    },
+  });
 }
 
 // Login
@@ -94,58 +404,8 @@ router.post('/login', async (req, res, next) => {
     // This is needed for mobile apps that expect { user, accessToken, refreshToken }
     const cognitoUser = await authService.getCurrentUser(result.accessToken);
 
-    // Look up full user record from database by email
-    const dbUser = await prisma.user.findUnique({
-      where: { email: cognitoUser.email },
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        fullName: true,
-        phone: true,
-        mobilePhone: true,
-        department: true,
-        division: true,
-        title: true,
-        officeAssignment: true,
-        managerId: true,
-        isActive: true,
-        createdAt: true,
-        updatedAt: true,
-        // Include role info
-        roleId: true,
-      },
-    });
-
-    // Check if user has team members (is a manager)
-    let isManager = false;
-    if (dbUser?.id) {
-      const teamCount = await prisma.user.count({
-        where: { managerId: dbUser.id, isActive: true },
-      });
-      isManager = teamCount > 0;
-    }
-
-    // Merge Cognito attributes with database user
-    const user = {
-      id: dbUser?.id || cognitoUser.username,
-      email: cognitoUser.email,
-      firstName: dbUser?.firstName || cognitoUser.firstName,
-      lastName: dbUser?.lastName || cognitoUser.lastName,
-      fullName: dbUser?.fullName || cognitoUser.name,
-      phone: dbUser?.phone || dbUser?.mobilePhone,
-      department: dbUser?.department || cognitoUser.department,
-      jobTitle: dbUser?.title,
-      officeName: dbUser?.officeAssignment,
-      division: dbUser?.division,
-      role: cognitoUser.role || 'SALES_REP', // Default role
-      managerId: dbUser?.managerId,
-      isManager,
-      isActive: dbUser?.isActive ?? true,
-      createdAt: dbUser?.createdAt,
-      updatedAt: dbUser?.updatedAt,
-    };
+    const { dbUser, isManager } = await getDatabaseUserProfile(cognitoUser.email);
+    const user = buildUserResponse(cognitoUser, dbUser, isManager);
 
     logger.info(`User logged in: ${email}`);
     res.json({
@@ -304,152 +564,10 @@ router.get('/me', async (req, res, next) => {
     const accessToken = authHeader.split(' ')[1];
     const cognitoUser = await authService.getCurrentUser(accessToken);
 
-    const dbUser = await findDbUserFromCognito(cognitoUser);
-
-    // Check if user has team members (is a manager)
-    let isManager = false;
-    if (dbUser?.id) {
-      const teamCount = await prisma.user.count({
-        where: { managerId: dbUser.id, isActive: true },
-      });
-      isManager = teamCount > 0;
-    }
-
-    // Merge Cognito attributes with database user
-    const user = {
-      id: dbUser?.id || cognitoUser.username,
-      email: cognitoUser.email,
-      firstName: dbUser?.firstName || cognitoUser.firstName,
-      lastName: dbUser?.lastName || cognitoUser.lastName,
-      fullName: dbUser?.fullName || cognitoUser.name,
-      phone: dbUser?.phone || dbUser?.mobilePhone,
-      department: dbUser?.department || cognitoUser.department,
-      jobTitle: dbUser?.title,
-      officeName: dbUser?.officeAssignment,
-      division: dbUser?.division,
-      role: cognitoUser.role || 'SALES_REP',
-      managerId: dbUser?.managerId,
-      isManager,
-      isActive: dbUser?.isActive ?? true,
-      createdAt: dbUser?.createdAt,
-      updatedAt: dbUser?.updatedAt,
-    };
+    const { dbUser, isManager } = await getDatabaseUserProfile(cognitoUser.email);
+    const user = buildUserResponse(cognitoUser, dbUser, isManager);
 
     res.json({ success: true, data: user });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// Update current user profile (self-service)
-router.put('/me', async (req, res, next) => {
-  try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({
-        success: false,
-        error: { code: 'UNAUTHORIZED', message: 'Access token required' },
-      });
-    }
-
-    const accessToken = authHeader.split(' ')[1];
-    const cognitoUser = await authService.getCurrentUser(accessToken);
-    const existingUser = await findDbUserFromCognito(cognitoUser);
-
-    if (!existingUser) {
-      return res.status(404).json({
-        success: false,
-        error: { code: 'NOT_FOUND', message: 'User profile not found in database' },
-      });
-    }
-
-    const {
-      firstName,
-      lastName,
-      phone,
-      department,
-      title,
-    } = req.body || {};
-
-    const updateData = {};
-
-    if (firstName !== undefined) {
-      updateData.firstName = typeof firstName === 'string' ? firstName.trim() : '';
-    }
-
-    if (lastName !== undefined) {
-      updateData.lastName = typeof lastName === 'string' ? lastName.trim() : '';
-    }
-
-    if (phone !== undefined) {
-      const phoneValue = typeof phone === 'string' ? phone.trim() : '';
-      updateData.phone = phoneValue || null;
-    }
-
-    if (department !== undefined) {
-      const departmentValue = typeof department === 'string' ? department.trim() : '';
-      updateData.department = departmentValue || null;
-    }
-
-    if (title !== undefined) {
-      const titleValue = typeof title === 'string' ? title.trim() : '';
-      updateData.title = titleValue || null;
-    }
-
-    if (Object.keys(updateData).length === 0) {
-      return res.json({
-        success: true,
-        data: {
-          id: existingUser.id,
-          email: existingUser.email,
-          firstName: existingUser.firstName || '',
-          lastName: existingUser.lastName || '',
-          fullName: existingUser.fullName || '',
-          phone: existingUser.phone || existingUser.mobilePhone || '',
-          department: existingUser.department || '',
-          title: existingUser.title || '',
-          updatedAt: existingUser.updatedAt,
-        },
-      });
-    }
-
-    const nextFirstName = updateData.firstName !== undefined ? updateData.firstName : (existingUser.firstName || '');
-    const nextLastName = updateData.lastName !== undefined ? updateData.lastName : (existingUser.lastName || '');
-    const fullName = `${nextFirstName} ${nextLastName}`.trim();
-    updateData.fullName = fullName || null;
-    updateData.updatedAt = new Date();
-
-    const updated = await prisma.user.update({
-      where: { id: existingUser.id },
-      data: updateData,
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        fullName: true,
-        phone: true,
-        mobilePhone: true,
-        department: true,
-        title: true,
-        updatedAt: true,
-      },
-    });
-
-    res.json({
-      success: true,
-      data: {
-        id: updated.id,
-        email: updated.email,
-        firstName: updated.firstName || '',
-        lastName: updated.lastName || '',
-        fullName: updated.fullName || '',
-        phone: updated.phone || updated.mobilePhone || '',
-        department: updated.department || '',
-        title: updated.title || '',
-        updatedAt: updated.updatedAt,
-      },
-    });
   } catch (error) {
     next(error);
   }
@@ -476,45 +594,44 @@ router.post('/logout', async (req, res, next) => {
 });
 
 // Admin routes (protected by API key)
-const requireApiKey = (req, res, next) => {
-  const apiKey = req.headers['x-api-key'];
-  if (apiKey !== process.env.INTERNAL_API_KEY) {
-    return res.status(403).json({
-      success: false,
-      error: { code: 'FORBIDDEN', message: 'Invalid API key' },
-    });
-  }
-  next();
-};
-
 // Admin: Create user
-router.post('/admin/users', requireApiKey, async (req, res, next) => {
+router.post('/admin/users', requireAdminAccess, async (req, res, next) => {
   try {
-    const { email, name, temporaryPassword, role, department, salesforceId } = req.body;
+    const payload = normalizeAdminCreatePayload(req.body);
 
-    if (!email || !name || !temporaryPassword) {
+    if (!payload.email || !payload.firstName || !payload.lastName || !payload.temporaryPassword) {
       return res.status(400).json({
         success: false,
-        error: { code: 'VALIDATION_ERROR', message: 'Email, name, and temporaryPassword are required' },
+        error: { code: 'VALIDATION_ERROR', message: 'Email, first name, last name, and temporaryPassword are required' },
       });
     }
 
-    const result = await authService.adminCreateUser(email, name, temporaryPassword, {
-      role,
-      department,
-      salesforceId,
+    const result = await authService.adminCreateUser(payload.email, payload.fullName, payload.temporaryPassword, {
+      role: payload.role,
+      department: payload.department,
+      salesforceId: payload.salesforceId,
+      firstName: payload.firstName,
+      lastName: payload.lastName,
     });
-    logger.info(`Admin created user: ${email}`);
-    res.json({ success: true, data: result });
+    const crmUser = await upsertCrmUserRecordFromAdminPayload(payload, result.username);
+
+    logger.info(`Admin created user: ${payload.email}`);
+    res.json({
+      success: true,
+      data: {
+        ...result,
+        user: crmUser,
+      },
+    });
   } catch (error) {
     next(error);
   }
 });
 
 // Admin: Get user
-router.get('/admin/users/:email', requireApiKey, async (req, res, next) => {
+router.get('/admin/users/:email', requireAdminAccess, async (req, res, next) => {
   try {
-    const user = await authService.adminGetUser(req.params.email);
+    const user = await authService.adminGetUser(normalizePandaEmployeeEmail(req.params.email));
     res.json({ success: true, data: user });
   } catch (error) {
     next(error);
@@ -522,10 +639,11 @@ router.get('/admin/users/:email', requireApiKey, async (req, res, next) => {
 });
 
 // Admin: Update user attributes
-router.patch('/admin/users/:email', requireApiKey, async (req, res, next) => {
+router.patch('/admin/users/:email', requireAdminAccess, async (req, res, next) => {
   try {
-    const result = await authService.adminUpdateUserAttributes(req.params.email, req.body);
-    logger.info(`Admin updated user: ${req.params.email}`);
+    const normalizedEmail = normalizePandaEmployeeEmail(req.params.email);
+    const result = await authService.adminUpdateUserAttributes(normalizedEmail, req.body);
+    logger.info(`Admin updated user: ${normalizedEmail}`);
     res.json({ success: true, data: result });
   } catch (error) {
     next(error);
@@ -533,9 +651,9 @@ router.patch('/admin/users/:email', requireApiKey, async (req, res, next) => {
 });
 
 // Admin: Set user password
-router.post('/admin/users/:email/password', requireApiKey, async (req, res, next) => {
+router.post('/admin/users/:email/password', requireAdminAccess, async (req, res, next) => {
   try {
-    const { password } = req.body;
+    const password = req.body.password || req.body.newPassword;
 
     if (!password) {
       return res.status(400).json({
@@ -544,8 +662,9 @@ router.post('/admin/users/:email/password', requireApiKey, async (req, res, next
       });
     }
 
-    const result = await authService.adminSetPassword(req.params.email, password);
-    logger.info(`Admin set password for: ${req.params.email}`);
+    const normalizedEmail = normalizePandaEmployeeEmail(req.params.email);
+    const result = await authService.adminSetPassword(normalizedEmail, password);
+    logger.info(`Admin set password for: ${normalizedEmail}`);
     res.json({ success: true, data: result });
   } catch (error) {
     next(error);

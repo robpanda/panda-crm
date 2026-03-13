@@ -17,100 +17,182 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024 }, // 50MB limit for screenshots/docs in replies
 });
 
+const PANDA_EMPLOYEE_EMAIL_DOMAINS = new Set(['pandaexteriors.com', 'panda-exteriors.com']);
+
 // S3 configuration
 const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-east-2' });
 const BUCKET_NAME = process.env.S3_BUCKET_NAME || 'panda-crm-support';
 
-function getRequestUserId(req) {
-  return req?.user?.id || req?.user?.userId || req?.user?.sub || null;
+// Helper to generate ticket number
+function generateTicketNumber() {
+  const prefix = 'TKT';
+  const timestamp = Date.now().toString().slice(-8);
+  const random = Math.random().toString(36).substring(2, 6).toUpperCase();
+  return `${prefix}-${timestamp}-${random}`;
 }
 
-function buildEmailVariants(email) {
-  const normalized = String(email || '').trim().toLowerCase();
-  if (!normalized || !normalized.includes('@')) return [];
-  const [localPart, domainPart] = normalized.split('@');
-  if (!localPart || !domainPart) return [normalized];
-
-  const domains = new Set([domainPart]);
-  if (domainPart === 'pandaexteriors.com') domains.add('panda-exteriors.com');
-  if (domainPart === 'panda-exteriors.com') domains.add('pandaexteriors.com');
-
-  const localVariants = new Set([localPart, localPart.replace(/\./g, '')]);
-
-  const variants = [];
-  for (const local of localVariants) {
-    for (const domain of domains) {
-      variants.push(`${local}@${domain}`);
-    }
-  }
-  return Array.from(new Set(variants));
-}
-
-async function resolveSupportUserContext(req) {
-  const tokenUserId = getRequestUserId(req);
-  const tokenEmail = String(req?.user?.email || '').trim().toLowerCase() || null;
-  const emailVariants = buildEmailVariants(tokenEmail);
-
-  const orFilters = [];
-  if (tokenUserId) {
-    orFilters.push({ id: tokenUserId });
-    orFilters.push({ cognitoId: tokenUserId });
-  }
-  if (emailVariants.length > 0) {
-    orFilters.push({ email: { in: emailVariants } });
-  }
-
-  if (orFilters.length === 0) {
-    return {
-      tokenUserId: null,
-      tokenEmail: null,
-      resolvedUserId: null,
-      candidateUserIds: [],
-    };
-  }
-
-  const users = await prisma.user.findMany({
-    where: { OR: orFilters },
+const SUPPORT_USER_SELECT = {
+  id: true,
+  email: true,
+  firstName: true,
+  lastName: true,
+  isActive: true,
+  role: {
     select: {
       id: true,
-      cognitoId: true,
+      name: true,
+      roleType: true,
+      permissionsJson: true,
+    },
+  },
+};
+
+const SUPPORT_TICKET_LIST_INCLUDE = {
+  user: {
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
       email: true,
     },
-    take: 25,
-  });
+  },
+  assigned_to: {
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      email: true,
+    },
+  },
+  _count: {
+    select: {
+      messages: true,
+      attachments: true,
+    },
+  },
+};
 
-  const normalizedTokenEmail = tokenEmail || null;
-  const resolvedUser =
-    users.find((user) => user.id === tokenUserId || user.cognitoId === tokenUserId)
-    || users.find((user) => normalizedTokenEmail && String(user.email || '').toLowerCase() === normalizedTokenEmail)
-    || users[0]
-    || null;
-
-  const candidateUserIds = Array.from(
-    new Set([tokenUserId, ...users.map((user) => user.id)].filter(Boolean))
-  );
-
-  return {
-    tokenUserId,
-    tokenEmail,
-    emailVariants,
-    resolvedUserId: resolvedUser?.id || null,
-    candidateUserIds,
-  };
+function normalizeRoleString(value) {
+  return String(value || '').trim().toLowerCase();
 }
 
-function isSupportAdmin(user = {}) {
-  const roleType = String(user?.roleType || user?.role || '').toLowerCase();
-  const roleName = String(user?.role?.name || '').toLowerCase();
-  const groups = Array.isArray(user?.groups)
-    ? user.groups.map((group) => String(group).toLowerCase())
+function hasAdminIndicator(value) {
+  return normalizeRoleString(value).includes('admin');
+}
+
+function normalizePermissionsJson(permissionsJson) {
+  if (!permissionsJson) return {};
+  if (typeof permissionsJson === 'object') return permissionsJson;
+  if (typeof permissionsJson === 'string') {
+    try {
+      const parsed = JSON.parse(permissionsJson);
+      return typeof parsed === 'object' && parsed ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+function toActionSet(value) {
+  if (!value) return new Set();
+  if (Array.isArray(value)) {
+    return new Set(value.map((item) => normalizeRoleString(item)).filter(Boolean));
+  }
+  if (typeof value === 'string') {
+    const normalized = normalizeRoleString(value);
+    return normalized ? new Set([normalized]) : new Set();
+  }
+  if (typeof value === 'object') {
+    return new Set(
+      Object.entries(value)
+        .filter(([, allowed]) => allowed === true)
+        .map(([action]) => normalizeRoleString(action))
+        .filter(Boolean)
+    );
+  }
+  return new Set();
+}
+
+function hasAnyAction(actions, expected) {
+  for (const action of expected) {
+    if (actions.has(action)) return true;
+  }
+  return false;
+}
+
+function hasSupportAdminPermission(permissionsJson) {
+  const permissions = normalizePermissionsJson(permissionsJson);
+  const supportActions = toActionSet(
+    permissions.support ?? permissions.supportTickets ?? permissions.support_tickets
+  );
+
+  if (
+    hasAnyAction(supportActions, [
+      '*',
+      'admin',
+      'manage',
+      'viewall',
+      'view_all',
+      'assign',
+      'edit',
+      'resolve',
+    ])
+  ) {
+    return true;
+  }
+
+  const pages = permissions.pages && typeof permissions.pages === 'object' ? permissions.pages : {};
+  const pageKeys = [
+    'supportAdmin',
+    'support_admin',
+    'support',
+    'supportTickets',
+    'support_tickets',
+    'admin/support',
+    'admin/support/tickets',
+    '/admin/support',
+    '/admin/support/tickets',
+  ];
+
+  for (const key of pageKeys) {
+    const value = pages[key];
+    if (value === true) return true;
+    if (value && typeof value === 'object' && value.access === true) return true;
+  }
+
+  const packs = toActionSet(permissions.packs);
+  return hasAnyAction(packs, [
+    'can_manage_support',
+    'can_manage_support_tickets',
+    'can_view_support_admin',
+  ]);
+}
+
+function canManageAllSupportTickets(authUser, dbUser) {
+  if (authUser?.isSystem) return true;
+
+  const dbRoleName = normalizeRoleString(dbUser?.role?.name);
+  const dbRoleType = normalizeRoleString(dbUser?.role?.roleType);
+  const tokenRole = normalizeRoleString(
+    typeof authUser?.role === 'string' ? authUser.role : authUser?.role?.name
+  );
+  const groups = Array.isArray(authUser?.groups)
+    ? authUser.groups.map((group) => normalizeRoleString(group))
     : [];
 
-  return roleType.includes('admin')
-    || roleName.includes('admin')
-    || roleType.includes('system_admin')
-    || roleName.includes('system_admin')
-    || groups.some((group) => group.includes('admin'));
+  if (dbRoleType === 'admin' || dbRoleType === 'support_admin' || dbRoleType === 'system') return true;
+  if (hasAdminIndicator(dbRoleName)) return true;
+  if (
+    dbRoleName === 'support administrator'
+    || dbRoleName === 'support admin'
+    || (dbRoleName.includes('support') && hasAdminIndicator(dbRoleName))
+  ) {
+    return true;
+  }
+  if (hasAdminIndicator(tokenRole)) return true;
+  if (groups.some((group) => group.includes('support') && hasAdminIndicator(group))) return true;
+  return hasSupportAdminPermission(dbUser?.role?.permissionsJson);
 }
 
 function buildTicketIdentifierWhere(rawTicketId) {
@@ -122,44 +204,130 @@ function buildTicketIdentifierWhere(rawTicketId) {
   };
 }
 
-async function isSupportAdminResolved(req) {
-  if (isSupportAdmin(req?.user)) return true;
+function buildEmailLookupCandidates(email) {
+  if (typeof email !== 'string') return [];
 
-  const userContext = await resolveSupportUserContext(req);
-  if (!userContext.resolvedUserId) return false;
+  const trimmed = email.trim();
+  if (!trimmed) return [];
 
-  const dbUser = await prisma.user.findUnique({
-    where: { id: userContext.resolvedUserId },
-    select: {
-      title: true,
-      department: true,
-      role: {
-        select: {
-          name: true,
-          roleType: true,
-        },
-      },
-    },
-  });
+  const candidates = [];
+  const seen = new Set();
 
-  const values = [
-    dbUser?.title,
-    dbUser?.department,
-    dbUser?.role?.name,
-    dbUser?.role?.roleType,
-  ]
-    .map((value) => String(value || '').toLowerCase())
-    .filter(Boolean);
+  const addCandidate = (value) => {
+    const candidate = String(value || '').trim();
+    if (!candidate) return;
+    const key = candidate.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push(candidate);
+  };
 
-  return values.some((value) => value.includes('admin') || value.includes('system'));
+  const lowerEmail = trimmed.toLowerCase();
+  addCandidate(trimmed);
+  addCandidate(lowerEmail);
+
+  const atIndex = lowerEmail.lastIndexOf('@');
+  if (atIndex <= 0 || atIndex === lowerEmail.length - 1) {
+    return candidates;
+  }
+
+  const localPart = lowerEmail.slice(0, atIndex);
+  const domainPart = lowerEmail.slice(atIndex + 1);
+  addCandidate(`${localPart}@${domainPart}`);
+
+  if (PANDA_EMPLOYEE_EMAIL_DOMAINS.has(domainPart)) {
+    const dotlessLocalPart = localPart.replace(/\./g, '');
+    for (const domain of PANDA_EMPLOYEE_EMAIL_DOMAINS) {
+      addCandidate(`${localPart}@${domain}`);
+      addCandidate(`${dotlessLocalPart}@${domain}`);
+    }
+  }
+
+  return candidates;
 }
 
-// Helper to generate ticket number
-function generateTicketNumber() {
-  const prefix = 'TKT';
-  const timestamp = Date.now().toString().slice(-8);
-  const random = Math.random().toString(36).substring(2, 6).toUpperCase();
-  return `${prefix}-${timestamp}-${random}`;
+function pickBestEmailMatch(users, emailCandidates) {
+  if (!Array.isArray(users) || !users.length) return null;
+  const rankedCandidates = emailCandidates.map((candidate) => candidate.toLowerCase());
+
+  return [...users].sort((a, b) => {
+    const aEmail = String(a.email || '').toLowerCase();
+    const bEmail = String(b.email || '').toLowerCase();
+    const aRank = rankedCandidates.indexOf(aEmail);
+    const bRank = rankedCandidates.indexOf(bEmail);
+    const safeARank = aRank === -1 ? Number.MAX_SAFE_INTEGER : aRank;
+    const safeBRank = bRank === -1 ? Number.MAX_SAFE_INTEGER : bRank;
+
+    if (safeARank !== safeBRank) return safeARank - safeBRank;
+    if (a.isActive !== b.isActive) return Number(b.isActive) - Number(a.isActive);
+    return 0;
+  })[0];
+}
+
+async function resolveAuthenticatedUser(authUser) {
+  if (!authUser) return null;
+
+  const identityCandidates = Array.from(
+    new Set(
+      [authUser.id, authUser.userId, authUser.sub, authUser.cognitoId]
+        .map((value) => (value ? String(value).trim() : ''))
+        .filter(Boolean)
+    )
+  );
+
+  if (identityCandidates.length > 0) {
+    const byId = await prisma.user.findFirst({
+      where: {
+        id: { in: identityCandidates },
+        isActive: true,
+      },
+      select: SUPPORT_USER_SELECT,
+    });
+    if (byId) return byId;
+
+    const byCognitoId = await prisma.user.findFirst({
+      where: {
+        cognitoId: { in: identityCandidates },
+        isActive: true,
+      },
+      select: SUPPORT_USER_SELECT,
+    });
+    if (byCognitoId) return byCognitoId;
+  }
+
+  if (authUser.email) {
+    const emailCandidates = buildEmailLookupCandidates(authUser.email);
+    const usersByEmail = await prisma.user.findMany({
+      where: {
+        isActive: true,
+        OR: emailCandidates.map((candidate) => ({
+          email: {
+            equals: candidate,
+            mode: 'insensitive',
+          },
+        })),
+      },
+      select: SUPPORT_USER_SELECT,
+    });
+    const byEmail = pickBestEmailMatch(usersByEmail, emailCandidates);
+    if (byEmail) return byEmail;
+  }
+
+  return null;
+}
+
+async function getSupportContext(req, res) {
+  const authenticatedUser = await resolveAuthenticatedUser(req.user);
+  if (!authenticatedUser) {
+    res.status(401).json({ error: 'Unable to resolve authenticated user' });
+    return null;
+  }
+
+  return {
+    authenticatedUser,
+    userId: authenticatedUser.id,
+    canManageAll: canManageAllSupportTickets(req.user, authenticatedUser),
+  };
 }
 
 // Helper to upload to S3
@@ -194,37 +362,12 @@ router.post('/upload', authMiddleware, upload.single('file'), async (req, res) =
 // Get user's tickets
 router.get('/tickets', authMiddleware, async (req, res) => {
   try {
-    const userContext = await resolveSupportUserContext(req);
-    if (!userContext.resolvedUserId) {
-      return res.status(401).json({ error: 'Authentication required' });
-    }
-
-    const whereClauses = [];
-    if (userContext.candidateUserIds.length > 0) {
-      whereClauses.push({ user_id: { in: userContext.candidateUserIds } });
-    }
-    if (userContext.tokenEmail) {
-      whereClauses.push({
-        user: {
-          email: { in: userContext.emailVariants.length > 0 ? userContext.emailVariants : [userContext.tokenEmail] },
-        },
-      });
-    }
-
-    if (whereClauses.length === 0) {
-      return res.json({ tickets: [] });
-    }
+    const context = await getSupportContext(req, res);
+    if (!context) return;
 
     const tickets = await prisma.support_tickets.findMany({
-      where: { OR: whereClauses },
-      include: {
-        _count: {
-          select: {
-            messages: true,
-            attachments: true,
-          },
-        },
-      },
+      where: context.canManageAll ? {} : { user_id: context.userId },
+      include: SUPPORT_TICKET_LIST_INCLUDE,
       orderBy: { created_at: 'desc' },
     });
 
@@ -238,34 +381,13 @@ router.get('/tickets', authMiddleware, async (req, res) => {
 // Get single ticket
 router.get('/tickets/:id', authMiddleware, async (req, res) => {
   try {
-    const userContext = await resolveSupportUserContext(req);
-    if (!userContext.resolvedUserId) {
-      return res.status(401).json({ error: 'Authentication required' });
-    }
+    const context = await getSupportContext(req, res);
+    if (!context) return;
 
-    const ownershipFilters = [];
-    if (userContext.candidateUserIds.length > 0) {
-      ownershipFilters.push({ user_id: { in: userContext.candidateUserIds } });
-    }
-    if (userContext.tokenEmail) {
-      ownershipFilters.push({
-        user: {
-          email: { in: userContext.emailVariants.length > 0 ? userContext.emailVariants : [userContext.tokenEmail] },
-        },
-      });
-    }
-
-    if (ownershipFilters.length === 0 && !isSupportAdmin(req.user)) {
-      return res.status(401).json({ error: 'Authentication required' });
-    }
-
-    const canViewAllTickets = await isSupportAdminResolved(req);
     const ticket = await prisma.support_tickets.findFirst({
       where: {
         ...buildTicketIdentifierWhere(req.params.id),
-        ...(canViewAllTickets
-          ? {}
-          : { OR: ownershipFilters }), // Users can only see their own tickets
+        ...(context.canManageAll ? {} : { user_id: context.userId }),
       },
       include: {
         user: {
@@ -318,30 +440,7 @@ router.get('/tickets/:id', authMiddleware, async (req, res) => {
       orderBy: { created_at: 'asc' },
     });
 
-    const messageIds = messages.map((message) => message.id);
-    const attachments = messageIds.length > 0
-      ? await prisma.support_ticket_attachments.findMany({
-          where: {
-            ticket_id: ticket.id,
-            message_id: { in: messageIds },
-          },
-          orderBy: { created_at: 'asc' },
-        })
-      : [];
-
-    const attachmentsByMessageId = new Map();
-    for (const attachment of attachments) {
-      const existing = attachmentsByMessageId.get(attachment.message_id) || [];
-      existing.push(attachment);
-      attachmentsByMessageId.set(attachment.message_id, existing);
-    }
-
-    const messagesWithAttachments = messages.map((message) => ({
-      ...message,
-      attachments: attachmentsByMessageId.get(message.id) || [],
-    }));
-
-    res.json({ ticket, messages: messagesWithAttachments });
+    res.json({ ticket, messages });
   } catch (error) {
     console.error('Failed to get ticket:', error);
     res.status(500).json({ error: 'Failed to load ticket' });
@@ -354,10 +453,8 @@ router.post('/tickets', authMiddleware, upload.fields([
   { name: 'attachments', maxCount: 5 }
 ]), async (req, res) => {
   try {
-    const userContext = await resolveSupportUserContext(req);
-    if (!userContext.resolvedUserId) {
-      return res.status(401).json({ error: 'Authentication required' });
-    }
+    const context = await getSupportContext(req, res);
+    if (!context) return;
 
     const { subject, description, category, priority, pageUrl, browserInfo } = req.body;
 
@@ -379,7 +476,7 @@ router.post('/tickets', authMiddleware, upload.fields([
         page_url: pageUrl || null,
         browser_info: browserInfo || null,
         screenshot_url: screenshotUrl,
-        user_id: userContext.resolvedUserId,
+        user_id: context.userId,
       },
     });
 
@@ -395,7 +492,7 @@ router.post('/tickets', authMiddleware, upload.fields([
             file_url: fileUrl,
             file_size: file.size,
             file_type: file.mimetype,
-            uploaded_by_id: userContext.resolvedUserId,
+            uploaded_by_id: context.userId,
           },
         });
       }
@@ -411,10 +508,8 @@ router.post('/tickets', authMiddleware, upload.fields([
 // Add message to ticket
 router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
   try {
-    const userContext = await resolveSupportUserContext(req);
-    if (!userContext.resolvedUserId) {
-      return res.status(401).json({ error: 'Authentication required' });
-    }
+    const context = await getSupportContext(req, res);
+    if (!context) return;
 
     const { message, attachments } = req.body;
     const normalizedMessage = typeof message === 'string' ? message.trim() : '';
@@ -424,30 +519,16 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
     }
 
     // Verify ticket belongs to user or user is admin
-    const ownershipFilters = [];
-    if (userContext.candidateUserIds.length > 0) {
-      ownershipFilters.push({ user_id: { in: userContext.candidateUserIds } });
-    }
-    if (userContext.tokenEmail) {
-      ownershipFilters.push({
-        user: {
-          email: { in: userContext.emailVariants.length > 0 ? userContext.emailVariants : [userContext.tokenEmail] },
-        },
-      });
-    }
-
-    if (ownershipFilters.length === 0 && !isSupportAdmin(req.user)) {
-      return res.status(401).json({ error: 'Authentication required' });
-    }
-
-    const canViewAllTickets = await isSupportAdminResolved(req);
     const ticket = await prisma.support_tickets.findFirst({
       where: {
         ...buildTicketIdentifierWhere(req.params.id),
-        ...(canViewAllTickets
+        ...(context.canManageAll
           ? {}
           : {
-              OR: ownershipFilters,
+              OR: [
+                { user_id: context.userId },
+                { assigned_to_id: context.userId },
+              ],
             }),
       },
     });
@@ -460,17 +541,15 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
     const newMessage = await prisma.support_ticket_messages.create({
       data: {
         ticket_id: ticket.id,
-        user_id: userContext.resolvedUserId,
+        user_id: context.userId,
         message: normalizedMessage || 'Attachment(s) uploaded',
         is_internal: false,
       },
     });
 
-    if (Array.isArray(attachments) && attachments.length > 0) {
+    if (hasAttachments) {
       for (const attachment of attachments) {
-        const fileUrl = typeof attachment === 'string'
-          ? attachment
-          : attachment.file_url || attachment.url || null;
+        const fileUrl = attachment.file_url || attachment.url;
         if (!fileUrl) continue;
 
         await prisma.support_ticket_attachments.create({
@@ -479,16 +558,16 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
             message_id: newMessage.id,
             file_name: attachment.file_name || attachment.name || 'attachment',
             file_url: fileUrl,
-            file_size: Number(attachment.file_size || attachment.size || 0) || null,
+            file_size: attachment.file_size || attachment.size || null,
             file_type: attachment.file_type || attachment.type || null,
-            uploaded_by_id: userContext.resolvedUserId,
+            uploaded_by_id: context.userId,
           },
         });
       }
     }
 
     // Update ticket timestamps
-    const isUserMessage = userContext.candidateUserIds.includes(ticket.user_id);
+    const isUserMessage = context.userId === ticket.user_id;
     const updateData = {
       last_response_at: new Date(),
     };
@@ -520,93 +599,18 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
 // Admin: Get all tickets
 router.get('/admin/tickets', authMiddleware, async (req, res) => {
   try {
-    // Check if user is admin
-    const isAdmin = await isSupportAdminResolved(req);
-    if (!isAdmin) {
+    const context = await getSupportContext(req, res);
+    if (!context) return;
+    if (!context.canManageAll) {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
     const tickets = await prisma.support_tickets.findMany({
-      select: {
-        id: true,
-        ticket_number: true,
-        subject: true,
-        description: true,
-        status: true,
-        priority: true,
-        category: true,
-        page_url: true,
-        screenshot_url: true,
-        browser_info: true,
-        user_id: true,
-        assigned_to_id: true,
-        resolved_at: true,
-        resolved_by_id: true,
-        first_response_at: true,
-        last_response_at: true,
-        response_time_mins: true,
-        resolution_time_mins: true,
-        related_help_article_id: true,
-        created_at: true,
-        updated_at: true,
-      },
-      orderBy: [
-        { status: 'asc' },
-        { priority: 'desc' },
-        { created_at: 'desc' },
-      ],
+      include: SUPPORT_TICKET_LIST_INCLUDE,
+      orderBy: { created_at: 'desc' },
     });
 
-    const userIds = Array.from(new Set(
-      tickets
-        .flatMap((ticket) => [ticket.user_id, ticket.assigned_to_id])
-        .filter(Boolean)
-    ));
-
-    const ticketIds = tickets.map((ticket) => ticket.id);
-
-    const [users, messageCounts, attachmentCounts] = await Promise.all([
-      userIds.length > 0
-        ? prisma.user.findMany({
-            where: { id: { in: userIds } },
-            select: { id: true, firstName: true, lastName: true, fullName: true, email: true },
-          })
-        : Promise.resolve([]),
-      ticketIds.length > 0
-        ? prisma.support_ticket_messages.groupBy({
-            by: ['ticket_id'],
-            where: { ticket_id: { in: ticketIds } },
-            _count: { ticket_id: true },
-          })
-        : Promise.resolve([]),
-      ticketIds.length > 0
-        ? prisma.support_ticket_attachments.groupBy({
-            by: ['ticket_id'],
-            where: { ticket_id: { in: ticketIds } },
-            _count: { ticket_id: true },
-          })
-        : Promise.resolve([]),
-    ]);
-
-    const usersById = new Map(users.map((user) => [user.id, user]));
-    const messagesByTicketId = new Map(messageCounts.map((row) => [row.ticket_id, row._count.ticket_id || 0]));
-    const attachmentsByTicketId = new Map(attachmentCounts.map((row) => [row.ticket_id, row._count.ticket_id || 0]));
-
-    const hydratedTickets = tickets.map((ticket) => {
-      const owner = usersById.get(ticket.user_id) || null;
-      const assigned = usersById.get(ticket.assigned_to_id) || null;
-      return {
-        ...ticket,
-        user: owner,
-        assigned_to: assigned,
-        _count: {
-          messages: messagesByTicketId.get(ticket.id) || 0,
-          attachments: attachmentsByTicketId.get(ticket.id) || 0,
-        },
-      };
-    });
-
-    res.json({ tickets: hydratedTickets });
+    res.json({ tickets });
   } catch (error) {
     console.error('Failed to get admin tickets:', error);
     res.status(500).json({ error: 'Failed to load tickets' });
@@ -616,8 +620,9 @@ router.get('/admin/tickets', authMiddleware, async (req, res) => {
 // Admin: Get stats
 router.get('/admin/stats', authMiddleware, async (req, res) => {
   try {
-    const isAdmin = await isSupportAdminResolved(req);
-    if (!isAdmin) {
+    const context = await getSupportContext(req, res);
+    if (!context) return;
+    if (!context.canManageAll) {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
@@ -660,8 +665,9 @@ router.get('/admin/stats', authMiddleware, async (req, res) => {
 // Admin: Export tickets
 router.get('/admin/export', authMiddleware, async (req, res) => {
   try {
-    const isAdmin = await isSupportAdminResolved(req);
-    if (!isAdmin) {
+    const context = await getSupportContext(req, res);
+    if (!context) return;
+    if (!context.canManageAll) {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
@@ -936,12 +942,20 @@ router.get('/tickets/similar', authMiddleware, async (req, res) => {
 // Admin: Update ticket status/priority/assignment
 router.patch('/admin/tickets/:id', authMiddleware, async (req, res) => {
   try {
-    const isAdmin = await isSupportAdminResolved(req);
-    if (!isAdmin) {
+    const context = await getSupportContext(req, res);
+    if (!context) return;
+    if (!context.canManageAll) {
       return res.status(403).json({ error: 'Unauthorized' });
     }
 
     const { status, priority, assigned_to_id } = req.body;
+    const existingTicket = await prisma.support_tickets.findFirst({
+      where: buildTicketIdentifierWhere(req.params.id),
+    });
+    if (!existingTicket) {
+      return res.status(404).json({ error: 'Ticket not found' });
+    }
+
     const updateData = {};
 
     if (status) updateData.status = status;
@@ -950,21 +964,17 @@ router.patch('/admin/tickets/:id', authMiddleware, async (req, res) => {
 
     // If resolving, record resolution time
     if (status === 'RESOLVED' || status === 'CLOSED') {
-      const ticket = await prisma.support_tickets.findUnique({
-        where: { id: req.params.id },
-      });
-
-      if (ticket && !ticket.resolved_at) {
+      if (!existingTicket.resolved_at) {
         updateData.resolved_at = new Date();
-        updateData.resolved_by_id = getRequestUserId(req);
+        updateData.resolved_by_id = context.userId;
 
-        const diffMs = new Date() - new Date(ticket.created_at);
+        const diffMs = new Date() - new Date(existingTicket.created_at);
         updateData.resolution_time_mins = Math.floor(diffMs / 60000);
       }
     }
 
     const ticket = await prisma.support_tickets.update({
-      where: { id: req.params.id },
+      where: { id: existingTicket.id },
       data: updateData,
     });
 

@@ -75,8 +75,7 @@ export const CATEGORIES = {
     subTabs: [
       { id: 'internalComments', label: 'Internal Comments' },
       { id: 'internalNotes', label: 'Internal Notes' },
-      { id: 'conversations', label: 'Customer Comms' },
-      { id: 'communications', label: 'Communications' },
+      { id: 'communications', label: 'Customer Comms' },
       { id: 'notifications', label: 'Notifications' },
       { id: 'activity', label: 'Activity' },
     ],
@@ -101,9 +100,9 @@ export const TAB_TO_CATEGORY = {
   workOrders: 'team',
   cases: 'team',
   approvals: 'team',
-  conversations: 'messages',
   internalComments: 'messages',
   internalNotes: 'messages',
+  conversations: 'messages',
   communications: 'messages',
   notifications: 'messages',
 };

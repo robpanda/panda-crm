@@ -65,18 +65,18 @@ export default function AdminSupportTickets() {
     try {
       setLoading(true);
       setLoadError('');
-      const response = await api.get('/api/support/tickets');
+      const response = await api.get('/api/support/admin/tickets');
       const ticketList = response.data.tickets || [];
       setTickets(ticketList);
       setStats((prev) => prev || buildFallbackStats(ticketList));
     } catch (error) {
       console.error('Failed to load tickets:', error);
       try {
-        const fallbackResponse = await api.get('/api/support/admin/tickets');
+        const fallbackResponse = await api.get('/api/support/tickets');
         const ticketList = fallbackResponse.data.tickets || [];
         setTickets(ticketList);
         setStats(buildFallbackStats(ticketList));
-        setLoadError('Loaded support tickets using the admin fallback path.');
+        setLoadError('Loaded support tickets with a fallback path. Admin-only ticket actions may be limited until the admin route is healthy again.');
       } catch (fallbackError) {
         console.error('Failed to load tickets:', fallbackError);
         setTickets([]);

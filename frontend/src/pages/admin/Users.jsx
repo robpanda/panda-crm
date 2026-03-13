@@ -23,10 +23,25 @@ import {
   Trash2,
   AlertTriangle,
   Settings,
-  UserX,
   GitMerge,
 } from 'lucide-react';
 import AdminLayout from '../../components/AdminLayout';
+
+const PANDA_EMPLOYEE_EMAIL_DOMAINS = new Set(['pandaexteriors.com', 'panda-exteriors.com']);
+
+function normalizePandaEmployeeEmail(email) {
+  if (typeof email !== 'string') return email || '';
+  const trimmed = email.trim();
+  if (!trimmed) return '';
+
+  const atIndex = trimmed.lastIndexOf('@');
+  if (atIndex <= 0 || atIndex === trimmed.length - 1) return trimmed;
+
+  const localPart = trimmed.slice(0, atIndex);
+  const domainPart = trimmed.slice(atIndex + 1).toLowerCase();
+  if (!PANDA_EMPLOYEE_EMAIL_DOMAINS.has(domainPart)) return trimmed;
+  return `${localPart.replace(/\./g, '').toLowerCase()}@${domainPart}`;
+}
 
 const statusColors = {
   ACTIVE: 'bg-green-100 text-green-700',
@@ -58,18 +73,21 @@ const roleTypeLabels = {
   viewer: 'Viewer',
 };
 
-const uniqueArray = (values = []) => [...new Set(values.filter(Boolean))];
-
-const normalizeCompanyEmail = (value) => {
-  const email = String(value || '').trim().toLowerCase();
-  if (!email.includes('@')) return email;
-  const [localPart, domainPart] = email.split('@');
-  if (!localPart || !domainPart) return email;
-  if (domainPart === 'pandaexteriors.com' || domainPart === 'panda-exteriors.com') {
-    return `${localPart.replace(/\./g, '')}@${domainPart}`;
-  }
-  return email;
+const INITIAL_NEW_USER_FORM = {
+  email: '',
+  firstName: '',
+  lastName: '',
+  password: '',
+  roleId: '',
+  title: '',
+  department: '',
+  officeAssignment: '',
+  phone: '',
+  mobilePhone: '',
+  managerId: '',
 };
+
+const uniqueArray = (values = []) => [...new Set(values.filter(Boolean))];
 
 export default function Users() {
   const [search, setSearch] = useState('');
@@ -86,11 +104,9 @@ export default function Users() {
   const [showAddUserModal, setShowAddUserModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
-  const [showTerminateModal, setShowTerminateModal] = useState(false);
   const [showMergeModal, setShowMergeModal] = useState(false);
-  const [newUserForm, setNewUserForm] = useState({ email: '', firstName: '', lastName: '', password: '', roleId: '' });
+  const [newUserForm, setNewUserForm] = useState(INITIAL_NEW_USER_FORM);
   const [passwordForm, setPasswordForm] = useState({ newPassword: '', confirmPassword: '' });
-  const [terminateForm, setTerminateForm] = useState({ transferToUserId: '', reason: '', search: '' });
   const [mergeForm, setMergeForm] = useState({ masterUserId: '', reason: '', search: '' });
   const [selectedMergeUserIds, setSelectedMergeUserIds] = useState([]);
   const [actionError, setActionError] = useState('');
@@ -104,7 +120,7 @@ export default function Users() {
     if (search) params.search = search;
     if (departmentFilter) params.department = departmentFilter;
     if (officeFilter) params.officeAssignment = officeFilter;
-    if (statusFilter !== '') params.isActive = statusFilter;
+    if (statusFilter !== '') params.status = statusFilter;
     return params;
   }, [search, departmentFilter, officeFilter, statusFilter, sortBy, sortOrder, page]);
 
@@ -146,7 +162,7 @@ export default function Users() {
       queryClient.invalidateQueries(['users']);
       queryClient.invalidateQueries(['userStats']);
       setShowAddUserModal(false);
-      setNewUserForm({ email: '', firstName: '', lastName: '', password: '', roleId: '' });
+      setNewUserForm(INITIAL_NEW_USER_FORM);
       setActionError('');
     },
     onError: (error) => {
@@ -178,22 +194,6 @@ export default function Users() {
     },
     onError: (error) => {
       setActionError(error.response?.data?.error?.message || error.message || 'Failed to reset password');
-    },
-  });
-
-  const terminateUserMutation = useMutation({
-    mutationFn: ({ userId, payload }) => usersApi.terminateUser(userId, payload),
-    onSuccess: () => {
-      queryClient.invalidateQueries(['users']);
-      queryClient.invalidateQueries(['userStats']);
-      setShowTerminateModal(false);
-      setShowUserModal(false);
-      setSelectedUser(null);
-      setTerminateForm({ transferToUserId: '', reason: '', search: '' });
-      setActionError('');
-    },
-    onError: (error) => {
-      setActionError(error.response?.data?.error?.message || error.message || 'Failed to terminate user');
     },
   });
 
@@ -259,14 +259,6 @@ export default function Users() {
   };
 
   const hasActiveFilters = search || departmentFilter || officeFilter || statusFilter !== 'true';
-  const transferCandidates = (userOptions || [])
-    .filter((u) => u.id !== selectedUser?.id)
-    .filter((u) => {
-      const q = terminateForm.search.trim().toLowerCase();
-      if (!q) return true;
-      const name = (u.fullName || `${u.firstName || ''} ${u.lastName || ''}`).toLowerCase();
-      return name.includes(q) || normalizeCompanyEmail(u.email).includes(q);
-    });
 
   useEffect(() => {
     const visibleIds = new Set(users.map((u) => u.id));
@@ -282,7 +274,7 @@ export default function Users() {
     const q = mergeForm.search.trim().toLowerCase();
     if (!q) return true;
     const name = (u.fullName || `${u.firstName || ''} ${u.lastName || ''}`).toLowerCase();
-    return name.includes(q) || normalizeCompanyEmail(u.email).includes(q);
+    return name.includes(q) || normalizePandaEmployeeEmail(u.email || '').includes(q);
   });
 
   const allVisibleSelected = users.length > 0 && users.every((u) => selectedMergeUserIds.includes(u.id));
@@ -290,22 +282,26 @@ export default function Users() {
 
   const toggleUserForMerge = (userId, checked) => {
     setSelectedMergeUserIds((prev) => {
-      if (checked) {
-        if (prev.includes(userId)) return prev;
-        return [...prev, userId];
-      }
+      if (checked) return uniqueArray([...prev, userId]);
       return prev.filter((id) => id !== userId);
     });
+    setMergeError('');
   };
 
   const toggleAllVisibleForMerge = (checked) => {
     if (checked) {
-      const visibleIds = users.map((u) => u.id);
-      setSelectedMergeUserIds((prev) => uniqueArray([...prev, ...visibleIds]));
-      return;
+      setSelectedMergeUserIds((prev) => uniqueArray([...prev, ...users.map((u) => u.id)]));
+    } else {
+      const visibleIdSet = new Set(users.map((u) => u.id));
+      setSelectedMergeUserIds((prev) => prev.filter((id) => !visibleIdSet.has(id)));
     }
-    const visibleIdSet = new Set(users.map((u) => u.id));
-    setSelectedMergeUserIds((prev) => prev.filter((id) => !visibleIdSet.has(id)));
+    setMergeError('');
+  };
+
+  const resetNewUserModal = () => {
+    setShowAddUserModal(false);
+    setNewUserForm(INITIAL_NEW_USER_FORM);
+    setActionError('');
   };
 
   const startEditing = (user) => {
@@ -375,17 +371,6 @@ export default function Users() {
                 <div className="flex items-center space-x-2">
                   <button
                     onClick={() => {
-                      setShowTerminateModal(true);
-                      setTerminateForm({ transferToUserId: '', reason: '', search: '' });
-                      setActionError('');
-                    }}
-                    className="flex items-center space-x-2 px-3 py-2 border border-red-200 rounded-lg text-red-700 hover:bg-red-50"
-                    title="Terminate Employee"
-                  >
-                    <UserX className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() => {
                       setShowPasswordModal(true);
                       setPasswordForm({ newPassword: '', confirmPassword: '' });
                       setActionError('');
@@ -426,7 +411,7 @@ export default function Users() {
                   <label className="block text-sm text-gray-500 mb-1">Email</label>
                   <div className="flex items-center">
                     <Mail className="w-4 h-4 text-gray-400 mr-2" />
-                    <span className="text-gray-900">{normalizeCompanyEmail(user.email)}</span>
+                    <span className="text-gray-900">{normalizePandaEmployeeEmail(user.email)}</span>
                   </div>
                 </div>
                 <div>
@@ -842,12 +827,7 @@ export default function Users() {
                 return;
               }
               setShowMergeModal(true);
-              setMergeForm((prev) => ({
-                ...prev,
-                masterUserId: selectedMergeUserIds[0] || '',
-                reason: '',
-                search: '',
-              }));
+              setMergeForm({ masterUserId: selectedMergeUserIds[0] || '', reason: '', search: '' });
               setMergeError('');
               setActionError('');
             }}
@@ -956,9 +936,9 @@ export default function Users() {
             onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
             className="px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-white"
           >
+            <option value="">All Status</option>
             <option value="true">Active</option>
             <option value="false">Inactive</option>
-            <option value="">All Status</option>
           </select>
           {hasActiveFilters && (
             <button
@@ -1077,7 +1057,7 @@ export default function Users() {
                         </div>
                         <div className="ml-3">
                           <p className="font-medium text-gray-900">{user.fullName || `${user.firstName} ${user.lastName}`}</p>
-                          <p className="text-sm text-gray-500">{normalizeCompanyEmail(user.email)}</p>
+                          <p className="text-sm text-gray-500">{normalizePandaEmployeeEmail(user.email)}</p>
                         </div>
                       </div>
                     </td>
@@ -1195,16 +1175,12 @@ export default function Users() {
       {/* Add User Modal */}
       {showAddUserModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl">
             <div className="p-6 border-b border-gray-100">
               <div className="flex items-center justify-between">
                 <h2 className="text-xl font-bold text-gray-900">Add New User</h2>
                 <button
-                  onClick={() => {
-                    setShowAddUserModal(false);
-                    setNewUserForm({ email: '', firstName: '', lastName: '', password: '', roleId: '' });
-                    setActionError('');
-                  }}
+                  onClick={resetNewUserModal}
                   className="p-2 hover:bg-gray-100 rounded-full"
                 >
                   <X className="w-5 h-5" />
@@ -1224,6 +1200,7 @@ export default function Users() {
                   type="email"
                   value={newUserForm.email}
                   onChange={(e) => setNewUserForm({ ...newUserForm, email: e.target.value })}
+                  onBlur={(e) => setNewUserForm((prev) => ({ ...prev, email: normalizePandaEmployeeEmail(e.target.value) }))}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
                   placeholder="user@pandaexteriors.com"
                 />
@@ -1245,6 +1222,75 @@ export default function Users() {
                     value={newUserForm.lastName}
                     onChange={(e) => setNewUserForm({ ...newUserForm, lastName: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Title</label>
+                  <input
+                    type="text"
+                    value={newUserForm.title}
+                    onChange={(e) => setNewUserForm({ ...newUserForm, title: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    placeholder="Project Consultant"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Department</label>
+                  <input
+                    type="text"
+                    value={newUserForm.department}
+                    onChange={(e) => setNewUserForm({ ...newUserForm, department: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    placeholder="Sales"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Office</label>
+                  <input
+                    type="text"
+                    value={newUserForm.officeAssignment}
+                    onChange={(e) => setNewUserForm({ ...newUserForm, officeAssignment: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    placeholder="MD"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Manager</label>
+                  <select
+                    value={newUserForm.managerId}
+                    onChange={(e) => setNewUserForm({ ...newUserForm, managerId: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                  >
+                    <option value="">Select a manager...</option>
+                    {userOptions.map((u) => (
+                      <option key={u.id} value={u.id}>{u.fullName}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
+                  <input
+                    type="tel"
+                    value={newUserForm.phone}
+                    onChange={(e) => setNewUserForm({ ...newUserForm, phone: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    placeholder="(555) 555-5555"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Mobile Phone</label>
+                  <input
+                    type="tel"
+                    value={newUserForm.mobilePhone}
+                    onChange={(e) => setNewUserForm({ ...newUserForm, mobilePhone: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    placeholder="(555) 555-5555"
                   />
                 </div>
               </div>
@@ -1274,11 +1320,7 @@ export default function Users() {
             </div>
             <div className="p-6 border-t border-gray-100 flex justify-end gap-3">
               <button
-                onClick={() => {
-                  setShowAddUserModal(false);
-                  setNewUserForm({ email: '', firstName: '', lastName: '', password: '', roleId: '' });
-                  setActionError('');
-                }}
+                onClick={resetNewUserModal}
                 className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
               >
                 Cancel
@@ -1293,12 +1335,128 @@ export default function Users() {
                     setActionError('Password must be at least 8 characters');
                     return;
                   }
-                  createUserMutation.mutate(newUserForm);
+                  createUserMutation.mutate({
+                    ...newUserForm,
+                    email: normalizePandaEmployeeEmail(newUserForm.email),
+                  });
                 }}
                 disabled={createUserMutation.isPending}
                 className="px-4 py-2 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg font-medium hover:opacity-90 disabled:opacity-50"
               >
                 {createUserMutation.isPending ? 'Creating...' : 'Create User'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Merge Users Modal */}
+      {showMergeModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg">
+            <div className="p-6 border-b border-gray-100">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-bold text-gray-900">Merge Users</h2>
+                  <p className="text-sm text-gray-500 mt-1">Select the active record to keep, then merge the duplicates into it.</p>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowMergeModal(false);
+                    setMergeError('');
+                  }}
+                  className="p-2 hover:bg-gray-100 rounded-full"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            <div className="p-6 space-y-4">
+              {(mergeError || actionError) && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2 text-red-700 text-sm">
+                  <AlertTriangle className="w-4 h-4" />
+                  {mergeError || actionError}
+                </div>
+              )}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Search selected users</label>
+                <input
+                  type="text"
+                  value={mergeForm.search}
+                  onChange={(e) => setMergeForm((prev) => ({ ...prev, search: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                  placeholder="Search by name or email"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Keep this record as the master *</label>
+                <select
+                  value={mergeForm.masterUserId}
+                  onChange={(e) => setMergeForm((prev) => ({ ...prev, masterUserId: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                >
+                  <option value="">Select a master user...</option>
+                  {filteredMasterOptions.map((user) => (
+                    <option key={user.id} value={user.id}>
+                      {(user.fullName || `${user.firstName || ''} ${user.lastName || ''}`).trim()} ({normalizePandaEmployeeEmail(user.email)})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                <p className="text-sm font-medium text-gray-800">Users to merge</p>
+                <ul className="mt-2 space-y-2 text-sm text-gray-600">
+                  {selectedMergeUsers.map((user) => (
+                    <li key={user.id} className="flex items-center justify-between">
+                      <span>{(user.fullName || `${user.firstName || ''} ${user.lastName || ''}`).trim()}</span>
+                      <span className="text-gray-400">{normalizePandaEmployeeEmail(user.email)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Reason</label>
+                <textarea
+                  value={mergeForm.reason}
+                  onChange={(e) => setMergeForm((prev) => ({ ...prev, reason: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary min-h-[88px]"
+                  placeholder="Optional note for why these users are being merged"
+                />
+              </div>
+            </div>
+            <div className="p-6 border-t border-gray-100 flex justify-end gap-3">
+              <button
+                onClick={() => {
+                  setShowMergeModal(false);
+                  setMergeError('');
+                }}
+                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (!mergeForm.masterUserId) {
+                    setMergeError('Select a master user to keep.');
+                    return;
+                  }
+
+                  const duplicateUserIds = selectedMergeUserIds.filter((id) => id !== mergeForm.masterUserId);
+                  if (duplicateUserIds.length === 0) {
+                    setMergeError('Select at least one duplicate user to merge into the master record.');
+                    return;
+                  }
+
+                  mergeUsersMutation.mutate({
+                    masterUserId: mergeForm.masterUserId,
+                    duplicateUserIds,
+                    reason: mergeForm.reason || undefined,
+                  });
+                }}
+                disabled={mergeUsersMutation.isPending}
+                className="px-4 py-2 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg font-medium hover:opacity-90 disabled:opacity-50"
+              >
+                {mergeUsersMutation.isPending ? 'Merging...' : 'Merge Users'}
               </button>
             </div>
           </div>
@@ -1326,7 +1484,7 @@ export default function Users() {
                 </div>
               )}
               <p className="text-gray-600 mb-6">
-                Are you sure you want to delete <span className="font-semibold">{selectedUser.firstName} {selectedUser.lastName}</span> ({normalizeCompanyEmail(selectedUser.email)})?
+                Are you sure you want to delete <span className="font-semibold">{selectedUser.firstName} {selectedUser.lastName}</span> ({normalizePandaEmployeeEmail(selectedUser.email)})?
               </p>
               <div className="flex justify-end gap-3">
                 <button
@@ -1426,7 +1584,7 @@ export default function Users() {
                     setActionError('Passwords do not match');
                     return;
                   }
-                  resetPasswordMutation.mutate({ email: normalizeCompanyEmail(selectedUser.email), newPassword: passwordForm.newPassword });
+                  resetPasswordMutation.mutate({ email: selectedUser.email, newPassword: passwordForm.newPassword });
                 }}
                 disabled={resetPasswordMutation.isPending}
                 className="px-4 py-2 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg font-medium hover:opacity-90 disabled:opacity-50"
@@ -1437,250 +1595,6 @@ export default function Users() {
           </div>
         </div>
         )}
-
-      {/* Terminate User Modal */}
-      {showTerminateModal && selectedUser && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-xl">
-            <div className="p-6 border-b border-gray-100">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-xl font-bold text-gray-900">Terminate Employee</h2>
-                  <p className="text-sm text-gray-500 mt-1">
-                    {selectedUser.firstName} {selectedUser.lastName} ({normalizeCompanyEmail(selectedUser.email)})
-                  </p>
-                </div>
-                <button
-                  onClick={() => {
-                    setShowTerminateModal(false);
-                    setTerminateForm({ transferToUserId: '', reason: '', search: '' });
-                    setActionError('');
-                  }}
-                  className="p-2 hover:bg-gray-100 rounded-full"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-            <div className="p-6 space-y-4">
-              {actionError && (
-                <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2 text-red-700 text-sm">
-                  <AlertTriangle className="w-4 h-4" />
-                  {actionError}
-                </div>
-              )}
-              <div className="p-3 rounded-lg border border-amber-200 bg-amber-50 text-sm text-amber-900">
-                Termination will deactivate the employee and transfer ownership of jobs, leads, appointments,
-                tasks, and other assigned records.
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Transfer Ownership To *</label>
-                <input
-                  type="text"
-                  value={terminateForm.search}
-                  onChange={(e) => setTerminateForm((prev) => ({ ...prev, search: e.target.value }))}
-                  placeholder="Search active users..."
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary mb-2"
-                />
-                <select
-                  value={terminateForm.transferToUserId}
-                  onChange={(e) => setTerminateForm((prev) => ({ ...prev, transferToUserId: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
-                >
-                  <option value="">Select active user...</option>
-                  {transferCandidates.map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.fullName || `${u.firstName || ''} ${u.lastName || ''}`.trim()} ({normalizeCompanyEmail(u.email)})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Reason (optional)</label>
-                <textarea
-                  rows={3}
-                  value={terminateForm.reason}
-                  onChange={(e) => setTerminateForm((prev) => ({ ...prev, reason: e.target.value }))}
-                  placeholder="Termination reason"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
-                />
-              </div>
-            </div>
-            <div className="p-6 border-t border-gray-100 flex justify-end gap-3">
-              <button
-                onClick={() => {
-                  setShowTerminateModal(false);
-                  setTerminateForm({ transferToUserId: '', reason: '', search: '' });
-                  setActionError('');
-                }}
-                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  if (!terminateForm.transferToUserId) {
-                    setActionError('Please select an active user to transfer ownership');
-                    return;
-                  }
-                  terminateUserMutation.mutate({
-                    userId: selectedUser.id,
-                    payload: {
-                      transferToUserId: terminateForm.transferToUserId,
-                      reason: terminateForm.reason || undefined,
-                    },
-                  });
-                }}
-                disabled={terminateUserMutation.isPending}
-                className="px-4 py-2 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 disabled:opacity-50"
-              >
-                {terminateUserMutation.isPending ? 'Terminating...' : 'Terminate & Transfer'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Merge Users Modal */}
-      {showMergeModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl">
-            <div className="p-6 border-b border-gray-100">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-xl font-bold text-gray-900">Merge Duplicate Users</h2>
-                  <p className="text-sm text-gray-500 mt-1">
-                    Select the master record. All selected duplicates will be merged into it.
-                  </p>
-                </div>
-                <button
-                  onClick={() => {
-                    setShowMergeModal(false);
-                    setMergeForm({ masterUserId: '', reason: '', search: '' });
-                    setMergeError('');
-                  }}
-                  className="p-2 hover:bg-gray-100 rounded-full"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-
-            <div className="p-6 space-y-4">
-              {mergeError && (
-                <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2 text-red-700 text-sm">
-                  <AlertTriangle className="w-4 h-4" />
-                  {mergeError}
-                </div>
-              )}
-              <div className="p-3 rounded-lg border border-amber-200 bg-amber-50 text-sm text-amber-900">
-                The selected master user will remain active after merge. Duplicate users will be set to inactive.
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Find Master User</label>
-                <input
-                  type="text"
-                  value={mergeForm.search}
-                  onChange={(e) => setMergeForm((prev) => ({ ...prev, search: e.target.value }))}
-                  placeholder="Search selected users by name or email..."
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Master Record *</label>
-                <div className="max-h-72 overflow-y-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
-                  {filteredMasterOptions.length === 0 ? (
-                    <div className="p-4 text-sm text-gray-500">No selected users match your search.</div>
-                  ) : (
-                    filteredMasterOptions.map((user) => {
-                      const userName = user.fullName || `${user.firstName || ''} ${user.lastName || ''}`.trim();
-                      return (
-                        <label key={user.id} className="flex items-start gap-3 p-3 cursor-pointer hover:bg-gray-50">
-                          <input
-                            type="radio"
-                            name="master-user"
-                            value={user.id}
-                            checked={mergeForm.masterUserId === user.id}
-                            onChange={(e) => setMergeForm((prev) => ({ ...prev, masterUserId: e.target.value }))}
-                            className="mt-1 w-4 h-4 text-panda-primary border-gray-300 focus:ring-panda-primary"
-                          />
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm font-medium text-gray-900">{userName || normalizeCompanyEmail(user.email)}</span>
-                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                                user.isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'
-                              }`}>
-                                {user.isActive ? 'Active' : 'Inactive'}
-                              </span>
-                            </div>
-                            <div className="text-xs text-gray-500">{normalizeCompanyEmail(user.email)}</div>
-                          </div>
-                        </label>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Reason (optional)</label>
-                <textarea
-                  rows={3}
-                  value={mergeForm.reason}
-                  onChange={(e) => setMergeForm((prev) => ({ ...prev, reason: e.target.value }))}
-                  placeholder="Why are these records being merged?"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
-                />
-              </div>
-            </div>
-
-            <div className="p-6 border-t border-gray-100 flex justify-end gap-3">
-              <button
-                onClick={() => {
-                  setShowMergeModal(false);
-                  setMergeForm({ masterUserId: '', reason: '', search: '' });
-                  setMergeError('');
-                }}
-                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  if (selectedMergeUserIds.length < 2) {
-                    setMergeError('Select at least 2 users to merge.');
-                    return;
-                  }
-                  if (!mergeForm.masterUserId || !selectedMergeUserIds.includes(mergeForm.masterUserId)) {
-                    setMergeError('Select a master user from the selected records.');
-                    return;
-                  }
-
-                  const duplicateUserIds = selectedMergeUserIds.filter((id) => id !== mergeForm.masterUserId);
-                  if (!duplicateUserIds.length) {
-                    setMergeError('Select at least one duplicate user to merge.');
-                    return;
-                  }
-
-                  mergeUsersMutation.mutate({
-                    masterUserId: mergeForm.masterUserId,
-                    duplicateUserIds,
-                    reason: mergeForm.reason || undefined,
-                  });
-                }}
-                disabled={mergeUsersMutation.isPending}
-                className="px-4 py-2 bg-panda-primary text-white rounded-lg font-medium hover:bg-panda-primary/90 disabled:opacity-50"
-              >
-                {mergeUsersMutation.isPending ? 'Merging...' : 'Merge Users'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
       </div>
     </AdminLayout>
   );
