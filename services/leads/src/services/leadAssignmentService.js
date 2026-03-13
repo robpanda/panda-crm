@@ -4,6 +4,25 @@ import { logger } from '../middleware/logger.js';
 
 const prisma = new PrismaClient();
 
+async function resolveUserId(idOrCognitoId) {
+  if (!idOrCognitoId) return null;
+
+  const directUser = await prisma.user.findUnique({
+    where: { id: idOrCognitoId },
+    select: { id: true },
+  });
+  if (directUser?.id) {
+    return directUser.id;
+  }
+
+  const cognitoUser = await prisma.user.findFirst({
+    where: { cognitoId: idOrCognitoId },
+    select: { id: true },
+  });
+
+  return cognitoUser?.id || null;
+}
+
 // Settings key constants
 const SETTINGS_KEYS = {
   ROUND_ROBIN_ENABLED: 'lead_round_robin_enabled',
@@ -302,6 +321,8 @@ export const leadAssignmentService = {
    * This is the main entry point for lead assignment
    */
   async assignLead(leadId, options = {}) {
+    const assignedById = await resolveUserId(options.assignedById) || options.assignedById || null;
+
     // Check if auto-assignment is globally enabled
     const autoAssignmentEnabled = await this.isAutoAssignmentEnabled();
     if (!autoAssignmentEnabled && !options.forceAssign) {
@@ -356,7 +377,7 @@ export const leadAssignmentService = {
       data: {
         ownerId: assignee.id,
         assignedAt: new Date(),
-        assignedById: options.assignedById,
+        assignedById,
         assignmentRuleId: rule.id,
         status: rule.status || lead.status, // Update status if rule specifies
       },
@@ -368,7 +389,7 @@ export const leadAssignmentService = {
         leadId,
         ruleId: rule.id,
         assignedToId: assignee.id,
-        assignedById: options.assignedById,
+        assignedById,
         previousOwnerId: lead.ownerId,
         assignmentType: rule.assignmentType,
         metadata: {
@@ -753,6 +774,13 @@ export const leadAssignmentService = {
    * Manually reassign a lead to a specific user
    */
   async manualAssign(leadId, assignToUserId, assignedById, notes = null) {
+    const normalizedAssignToUserId = await resolveUserId(assignToUserId);
+    const normalizedAssignedById = await resolveUserId(assignedById) || assignedById || null;
+
+    if (!normalizedAssignToUserId) {
+      throw new Error('Assigned user not found');
+    }
+
     const lead = await prisma.lead.findUnique({
       where: { id: leadId },
     });
@@ -766,9 +794,9 @@ export const leadAssignmentService = {
     const updatedLead = await prisma.lead.update({
       where: { id: leadId },
       data: {
-        ownerId: assignToUserId,
+        ownerId: normalizedAssignToUserId,
         assignedAt: new Date(),
-        assignedById,
+        assignedById: normalizedAssignedById,
       },
       include: {
         owner: { select: { id: true, firstName: true, lastName: true, email: true } },
@@ -779,8 +807,8 @@ export const leadAssignmentService = {
     await prisma.leadAssignmentLog.create({
       data: {
         leadId,
-        assignedToId: assignToUserId,
-        assignedById,
+        assignedToId: normalizedAssignToUserId,
+        assignedById: normalizedAssignedById,
         previousOwnerId,
         assignmentType: 'MANUAL',
         notes,
@@ -788,7 +816,7 @@ export const leadAssignmentService = {
       },
     });
 
-    logger.info(`Lead ${leadId} manually assigned to ${assignToUserId} by ${assignedById}`);
+    logger.info(`Lead ${leadId} manually assigned to ${normalizedAssignToUserId} by ${normalizedAssignedById}`);
     return updatedLead;
   },
 

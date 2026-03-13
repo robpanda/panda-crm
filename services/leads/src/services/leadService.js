@@ -1158,7 +1158,22 @@ class LeadService {
     if (data.source !== undefined) updateData.source = data.source || null;
     if (data.rating !== undefined) updateData.rating = this.normalizeRating(data.rating);
     if (data.industry !== undefined) updateData.industry = data.industry || null;
-    if (data.ownerId !== undefined) updateData.ownerId = data.ownerId || null;
+    if (data.ownerId !== undefined) {
+      const normalizedOwnerReference = this.normalizeOptionalText(data.ownerId);
+      if (!normalizedOwnerReference) {
+        updateData.ownerId = null;
+      } else {
+        const resolvedOwnerId = await this.resolveUserId(normalizedOwnerReference);
+        if (resolvedOwnerId) {
+          updateData.ownerId = resolvedOwnerId;
+        } else if (oldLead?.ownerId && oldLead.ownerId !== normalizedOwnerReference) {
+          logger.warn(`Lead ${id} received unresolved owner reference "${normalizedOwnerReference}". Preserving existing owner ${oldLead.ownerId}.`);
+          updateData.ownerId = oldLead.ownerId;
+        } else {
+          updateData.ownerId = normalizedOwnerReference;
+        }
+      }
+    }
     if (data.score !== undefined) updateData.score = data.score;
     if (data.workType !== undefined) updateData.workType = data.workType || null;
     if (data.propertyType !== undefined) updateData.propertyType = data.propertyType || null;
@@ -1174,6 +1189,22 @@ class LeadService {
       );
     }
     if (data.tentativeAppointmentTime !== undefined) updateData.tentativeAppointmentTime = this.normalizeOptionalText(data.tentativeAppointmentTime);
+    if (data.leadSetById !== undefined) {
+      const normalizedLeadSetByReference = this.normalizeOptionalText(data.leadSetById);
+      if (!normalizedLeadSetByReference) {
+        updateData.leadSetById = null;
+      } else {
+        const resolvedLeadSetById = await this.resolveUserId(normalizedLeadSetByReference);
+        if (resolvedLeadSetById) {
+          updateData.leadSetById = resolvedLeadSetById;
+        } else if (oldLead?.leadSetById && oldLead.leadSetById !== normalizedLeadSetByReference) {
+          logger.warn(`Lead ${id} received unresolved leadSetBy reference "${normalizedLeadSetByReference}". Preserving existing leadSetBy ${oldLead.leadSetById}.`);
+          updateData.leadSetById = oldLead.leadSetById;
+        } else {
+          updateData.leadSetById = normalizedLeadSetByReference;
+        }
+      }
+    }
     if (data.disposition !== undefined) updateData.disposition = data.disposition || null;
 
     const lead = await prisma.lead.update({
