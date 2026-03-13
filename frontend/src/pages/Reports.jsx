@@ -25,6 +25,7 @@ import {
   getReportBaseModule,
   getReportCreatedByLabel,
   getReportTablesUsed,
+  normalizeReportConfig,
 } from '../utils/reporting';
 import { deriveDataSource } from '../utils/analyticsSource';
 
@@ -207,9 +208,10 @@ export default function Reports({ embedded = false }) {
     queryFn: () => reportsApi.getSavedReports({ limit: 200 }),
   });
 
-  const savedReports = Array.isArray(savedReportsResponse)
+  const rawSavedReports = Array.isArray(savedReportsResponse)
     ? savedReportsResponse
     : savedReportsResponse?.data?.reports || savedReportsResponse?.data || [];
+  const savedReports = rawSavedReports.map((report) => normalizeReportConfig(report));
 
   const filteredReports = useMemo(() => {
     const normalizedSearch = searchQuery.trim().toLowerCase();

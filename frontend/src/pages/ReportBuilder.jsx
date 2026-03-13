@@ -7,6 +7,7 @@ import {
   buildSqlPreview,
   getLegacyBaseObject,
   getModuleMetadata,
+  normalizeReportConfig,
   getTemplateById,
 } from '../utils/reporting';
 import {
@@ -181,7 +182,7 @@ export default function ReportBuilder() {
   const [validationErrors, setValidationErrors] = useState({});
   const [appliedTemplateId, setAppliedTemplateId] = useState(null);
 
-  const [report, setReport] = useState({
+  const [report, setReport] = useState(normalizeReportConfig({
     name: '',
     description: '',
     category: 'CUSTOM',
@@ -196,7 +197,7 @@ export default function ReportBuilder() {
     isPublic: false,
     sharedWithRoles: [],
     includeRelations: [],
-  });
+  }));
 
   // Fetch available modules
   const { data: modulesData, isLoading: modulesLoading } = useQuery({
@@ -252,7 +253,7 @@ export default function ReportBuilder() {
     const template = getTemplateById(templateId);
     if (!template) return;
 
-    setReport((prev) => ({
+    setReport((prev) => normalizeReportConfig({
       ...prev,
       ...template.report,
       name: prev.name || template.name,
@@ -273,10 +274,10 @@ export default function ReportBuilder() {
           Contact: 'contacts',
           WorkOrder: 'workOrders',
         };
-        setReport({
+        setReport(normalizeReportConfig({
           ...response,
           baseModule: moduleMapping[response.baseObject] || response.baseModule || response.base_module || 'jobs',
-        });
+        }));
       }
     } catch (error) {
       console.error('Failed to load report:', error);
@@ -337,7 +338,7 @@ export default function ReportBuilder() {
   };
 
   const toggleField = (fieldId) => {
-    setReport(prev => ({
+    setReport(prev => normalizeReportConfig({
       ...prev,
       selectedFields: prev.selectedFields.includes(fieldId)
         ? prev.selectedFields.filter(f => f !== fieldId)
@@ -346,7 +347,7 @@ export default function ReportBuilder() {
   };
 
   const toggleGroupByField = (fieldId) => {
-    setReport(prev => ({
+    setReport(prev => normalizeReportConfig({
       ...prev,
       groupByFields: prev.groupByFields.includes(fieldId)
         ? prev.groupByFields.filter(f => f !== fieldId)
@@ -355,7 +356,7 @@ export default function ReportBuilder() {
   };
 
   const toggleRelation = (relationId) => {
-    setReport(prev => ({
+    setReport(prev => normalizeReportConfig({
       ...prev,
       includeRelations: prev.includeRelations.includes(relationId)
         ? prev.includeRelations.filter(r => r !== relationId)
@@ -364,7 +365,7 @@ export default function ReportBuilder() {
   };
 
   const addFilter = () => {
-    setReport(prev => ({
+    setReport(prev => normalizeReportConfig({
       ...prev,
       filters: [
         ...prev.filters,
@@ -374,14 +375,14 @@ export default function ReportBuilder() {
   };
 
   const updateFilter = (index, key, value) => {
-    setReport(prev => ({
+    setReport(prev => normalizeReportConfig({
       ...prev,
       filters: prev.filters.map((f, i) => (i === index ? { ...f, [key]: value } : f)),
     }));
   };
 
   const removeFilter = (index) => {
-    setReport(prev => ({
+    setReport(prev => normalizeReportConfig({
       ...prev,
       filters: prev.filters.filter((_, i) => i !== index),
     }));
@@ -485,13 +486,13 @@ export default function ReportBuilder() {
     if (allSelected) {
       // Deselect all in category
       setReport(prev => ({
-        ...prev,
+        ...normalizeReportConfig(prev),
         selectedFields: prev.selectedFields.filter(id => !fieldIds.includes(id)),
       }));
     } else {
       // Select all in category
       setReport(prev => ({
-        ...prev,
+        ...normalizeReportConfig(prev),
         selectedFields: [...new Set([...prev.selectedFields, ...fieldIds])],
       }));
     }
