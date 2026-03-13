@@ -14,6 +14,7 @@ import {
   formatReportTimestamp,
   getReportCreatedByLabel,
   getReportTablesUsed,
+  normalizeReportConfig,
 } from '../utils/reporting';
 
 export default function ReportDetail() {
@@ -67,7 +68,7 @@ export default function ReportDetail() {
     try {
       setLoading(true);
       const response = await reportsApi.getSavedReport(id);
-      setReport(response);
+      setReport(normalizeReportConfig(response));
     } catch (error) {
       console.error('Failed to load report:', error);
     } finally {

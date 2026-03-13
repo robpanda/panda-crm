@@ -117,6 +117,82 @@ function getFieldId(field) {
   return '';
 }
 
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeObjectFilter(field, value) {
+  if (!field || value === undefined) return [];
+
+  if (value === null) {
+    return [{ field, operator: 'isNull' }];
+  }
+
+  if (Array.isArray(value)) {
+    return [{ field, operator: 'in', value }];
+  }
+
+  if (!isPlainObject(value)) {
+    return [{ field, operator: 'equals', value }];
+  }
+
+  if (Object.prototype.hasOwnProperty.call(value, 'not') && value.not === null) {
+    return [{ field, operator: 'isNotNull' }];
+  }
+
+  if (Object.prototype.hasOwnProperty.call(value, 'gte') || Object.prototype.hasOwnProperty.call(value, 'lte')) {
+    if (value.gte !== undefined && value.lte !== undefined) {
+      return [{ field, operator: 'between', value: [value.gte, value.lte] }];
+    }
+
+    return [
+      ...(value.gte !== undefined ? [{ field, operator: 'gte', value: value.gte }] : []),
+      ...(value.lte !== undefined ? [{ field, operator: 'lte', value: value.lte }] : []),
+    ];
+  }
+
+  if (Object.prototype.hasOwnProperty.call(value, 'contains')) {
+    return [{ field, operator: 'contains', value: value.contains }];
+  }
+
+  if (Object.prototype.hasOwnProperty.call(value, 'equals')) {
+    return [{ field, operator: 'equals', value: value.equals }];
+  }
+
+  return [{ field, operator: 'equals', value }];
+}
+
+export function normalizeReportFilters(filters) {
+  if (!filters) return [];
+  if (Array.isArray(filters)) {
+    return filters.filter((filter) => filter && typeof filter === 'object' && filter.field);
+  }
+  if (!isPlainObject(filters)) {
+    return [];
+  }
+
+  if (['AND', 'OR', 'NOT'].some((key) => Object.prototype.hasOwnProperty.call(filters, key))) {
+    return [];
+  }
+
+  return Object.entries(filters).flatMap(([field, value]) => normalizeObjectFilter(field, value));
+}
+
+export function normalizeReportConfig(report = {}) {
+  const baseModule = getReportBaseModule(report);
+
+  return {
+    ...report,
+    baseModule,
+    selectedFields: Array.isArray(report?.selectedFields) ? report.selectedFields : [],
+    groupByFields: Array.isArray(report?.groupByFields) ? report.groupByFields : [],
+    filters: normalizeReportFilters(report?.filters),
+    includeRelations: Array.isArray(report?.includeRelations) ? report.includeRelations : [],
+    sharedWithRoles: Array.isArray(report?.sharedWithRoles) ? report.sharedWithRoles : [],
+    aggregations: Array.isArray(report?.aggregations) ? report.aggregations : [],
+  };
+}
+
 export function humanizeFieldLabel(fieldId) {
   if (!fieldId) return 'Field';
   return FIELD_LABEL_OVERRIDES[fieldId] || startCase(fieldId);

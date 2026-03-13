@@ -144,6 +144,21 @@ function normalizeFiltersToArray(filters) {
   return Object.entries(filters).flatMap(([field, value]) => normalizeObjectFilter(field, value));
 }
 
+function normalizeSavedReportPayload(report) {
+  if (!report) return report;
+
+  return {
+    ...report,
+    baseModule: normalizeReportModule(report) || 'jobs',
+    selectedFields: Array.isArray(report.selectedFields) ? report.selectedFields : [],
+    groupByFields: Array.isArray(report.groupByFields) ? report.groupByFields : [],
+    filters: normalizeFiltersToArray(report.filters),
+    includeRelations: Array.isArray(report.includeRelations) ? report.includeRelations : [],
+    sharedWithRoles: Array.isArray(report.sharedWithRoles) ? report.sharedWithRoles : [],
+    aggregations: Array.isArray(report.aggregations) ? report.aggregations : [],
+  };
+}
+
 function mergeReportFilters(savedFilters, runtimeFilters) {
   const savedFilterArray = normalizeFiltersToArray(savedFilters);
   const runtimeFilterArray = normalizeFiltersToArray(runtimeFilters);
@@ -319,7 +334,7 @@ router.get('/', async (req, res, next) => {
       success: true,
       data: {
         reports: reports.map(r => ({
-          ...r,
+          ...normalizeSavedReportPayload(r),
           isFavorite: r.favorites.length > 0,
           favoriteCount: r._count.favorites,
           favorites: undefined,
@@ -380,7 +395,7 @@ router.get('/:id', async (req, res, next) => {
     res.json({
       success: true,
       data: {
-        ...report,
+        ...normalizeSavedReportPayload(report),
         isFavorite: report.favorites.length > 0,
         favorites: undefined,
       },
@@ -461,7 +476,7 @@ router.post('/', async (req, res, next) => {
 
     res.status(201).json({
       success: true,
-      data: report,
+      data: normalizeSavedReportPayload(report),
     });
   } catch (error) {
     next(error);
@@ -548,7 +563,7 @@ router.put('/:id', async (req, res, next) => {
 
     res.json({
       success: true,
-      data: report,
+      data: normalizeSavedReportPayload(report),
     });
   } catch (error) {
     next(error);
