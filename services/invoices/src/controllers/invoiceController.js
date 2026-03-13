@@ -553,6 +553,21 @@ export async function updateInvoice(req, res, next) {
       updateData.balanceDue = Math.max(total - amountPaid, 0);
     }
 
+    const shouldRegeneratePdf = Boolean(
+      hasLineItems
+      || hasAdditionalCharges
+      || data.tax !== undefined
+      || data.notes !== undefined
+      || data.invoiceDate
+      || data.dueDate
+      || data.terms !== undefined
+    );
+
+    if (shouldRegeneratePdf) {
+      updateData.pdf_key = null;
+      updateData.pdf_url = null;
+    }
+
     delete updateData.lineItems;
     delete updateData.additionalCharges;
 
@@ -1224,6 +1239,7 @@ export async function generateInvoicePdf(req, res, next) {
       include: {
         account: true,
         lineItems: true,
+        additionalCharges: true,
         payments: {
           where: { status: 'SETTLED' },
           orderBy: { paymentDate: 'desc' },
@@ -1269,6 +1285,7 @@ export async function getInvoicePdf(req, res, next) {
       include: {
         account: true,
         lineItems: true,
+        additionalCharges: true,
         payments: {
           where: { status: 'SETTLED' },
           orderBy: { paymentDate: 'desc' },

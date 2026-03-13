@@ -1803,6 +1803,7 @@ class OpportunityService {
           orderBy: { paymentDate: 'desc' },
         },
         lineItems: true,
+        additionalCharges: true,
       },
     });
 
@@ -1817,6 +1818,7 @@ class OpportunityService {
             orderBy: { paymentDate: 'desc' },
           },
           lineItems: true,
+          additionalCharges: true,
         },
       });
     }
@@ -1829,6 +1831,8 @@ class OpportunityService {
         invoiceNumber: inv.invoiceNumber,
         status: inv.status,
         invoiceDate: inv.invoiceDate,
+        createdAt: inv.createdAt,
+        updatedAt: inv.updatedAt,
         dueDate: inv.dueDate,
         terms: inv.terms,
         subtotal: Number(inv.subtotal),
@@ -1836,6 +1840,12 @@ class OpportunityService {
         total: Number(inv.total),
         amountPaid: Number(inv.amountPaid),
         balanceDue: Number(inv.balanceDue),
+        notes: inv.notes,
+        pdf_key: inv.pdf_key,
+        pdf_url: inv.pdf_url,
+        isInsuranceInvoice: Boolean(inv.is_insurance_invoice),
+        insuranceCarrier: inv.insurance_carrier || null,
+        claimNumber: inv.claim_number || null,
         // Stripe
         stripePaymentLinkUrl: inv.stripePaymentLinkUrl,
         stripeHostedInvoiceUrl: inv.stripeHostedInvoiceUrl,
@@ -1844,10 +1854,24 @@ class OpportunityService {
         qbSyncStatus: inv.qbSyncStatus,
         // Line items
         lineItems: inv.lineItems.map((li) => ({
+          id: li.id,
           description: li.description,
           quantity: Number(li.quantity),
           unitPrice: Number(li.unitPrice),
           totalPrice: Number(li.totalPrice),
+        })),
+        additionalCharges: (inv.additionalCharges || []).map((charge) => ({
+          id: charge.id,
+          name: charge.name,
+          amount: Number(charge.amount ?? charge.fixedAmount ?? 0),
+          fixedAmount: Number(charge.fixedAmount ?? charge.amount ?? 0),
+          percentageOfTotal: charge.percentageOfTotal === null || charge.percentageOfTotal === undefined
+            ? null
+            : Number(charge.percentageOfTotal),
+          chargeType: charge.chargeType,
+          notes: charge.notes,
+          createdAt: charge.createdAt,
+          updatedAt: charge.updatedAt,
         })),
         // Payments
         payments: inv.payments.map((p) => ({

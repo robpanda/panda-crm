@@ -970,6 +970,20 @@ function InvoiceDetailModal({
     mutationFn: (payload) => invoicesApi.updateInvoice(invoice.id, payload),
     onSuccess: (updated) => {
       const updatedInvoice = normalizeInvoiceTotals(updated?.data || updated);
+      queryClient.setQueryData(['opportunityInvoices', opportunity?.id], (current) => {
+        if (!current || !Array.isArray(current.invoices)) return current;
+        return {
+          ...current,
+          invoices: current.invoices.map((existingInvoice) => (
+            existingInvoice.id === updatedInvoice?.id
+              ? normalizeInvoiceTotals({
+                  ...existingInvoice,
+                  ...updatedInvoice,
+                })
+              : existingInvoice
+          )),
+        };
+      });
       onInvoiceUpdated?.(updatedInvoice);
       setEditSuccess('Invoice updated successfully');
       setEditError(null);
@@ -13163,11 +13177,22 @@ export default function OpportunityDetail() {
           currentUser={currentUser}
           onInvoiceUpdated={(updatedInvoice) => {
             const normalizedInvoice = normalizeInvoiceTotals(updatedInvoice);
+            queryClient.setQueryData(['opportunityInvoices', id], (current) => {
+              if (!current || !Array.isArray(current.invoices)) return current;
+              return {
+                ...current,
+                invoices: current.invoices.map((existingInvoice) => (
+                  existingInvoice.id === normalizedInvoice?.id
+                    ? normalizeInvoiceTotals({
+                        ...existingInvoice,
+                        ...normalizedInvoice,
+                      })
+                    : existingInvoice
+                )),
+              };
+            });
             queryClient.invalidateQueries({ queryKey: ['opportunityInvoices', id] });
-            setSelectedInvoice((prev) => normalizeInvoiceTotals({
-              ...prev,
-              ...(normalizedInvoice || {}),
-            }));
+            setSelectedInvoice(normalizedInvoice);
           }}
           onOpenSendInvoice={(invoiceRecord) => {
             setInvoiceToSend(normalizeInvoiceTotals(invoiceRecord));
