@@ -1,111 +1,122 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { accountsApi, contactsApi, leadsApi, opportunitiesApi, invoicesApi } from '../services/api';
+import { useAuth } from '../context/AuthContext';
+import { accountsApi, contactsApi, leadsApi, opportunitiesApi, invoicesApi, notificationsApi } from '../services/api';
 import {
   Search as SearchIcon,
   Building2,
   Users,
   UserPlus,
   Target,
-  Receipt,
   ArrowRight,
   Loader2,
+  Receipt,
+  AtSign,
+  ExternalLink,
 } from 'lucide-react';
 
-function asCollection(payload, keys = []) {
+const SEARCH_TABS = ['all', 'accounts', 'contacts', 'leads', 'jobs', 'invoices', 'mentions'];
+
+function normalizeCollection(payload, keys = []) {
   if (Array.isArray(payload)) return payload;
-  if (!payload || typeof payload !== 'object') return [];
-
-  const candidateContainers = [
-    payload,
-    payload.data,
-    payload.data?.data,
-    payload.result,
-    payload.results,
-    payload.payload,
-  ].filter((candidate) => candidate && typeof candidate === 'object');
-
-  for (const container of candidateContainers) {
-    for (const key of keys) {
-      if (Array.isArray(container[key])) {
-        return container[key];
-      }
-    }
-
-    if (Array.isArray(container.data)) return container.data;
-    if (Array.isArray(container.items)) return container.items;
-    if (Array.isArray(container.results)) return container.results;
-    if (Array.isArray(container.records)) return container.records;
+  for (const key of keys) {
+    if (Array.isArray(payload?.[key])) return payload[key];
   }
-
   return [];
 }
 
 export default function Search() {
+  const { user } = useAuth();
   const [searchParams] = useSearchParams();
   const query = searchParams.get('q') || '';
-  const [activeTab, setActiveTab] = useState('all');
+  const normalizedQuery = query.trim();
+  const moduleParam = (searchParams.get('module') || 'all').toLowerCase();
+  const [activeTab, setActiveTab] = useState(SEARCH_TABS.includes(moduleParam) ? moduleParam : 'all');
 
-  // Search accounts
+  useEffect(() => {
+    setActiveTab(SEARCH_TABS.includes(moduleParam) ? moduleParam : 'all');
+  }, [moduleParam]);
+
+  const shouldSearch = normalizedQuery.length > 0;
+  const shouldLoadTab = (tabId) => activeTab === 'all' || activeTab === tabId;
+  const queryOptions = {
+    staleTime: 30_000,
+    gcTime: 5 * 60_000,
+    refetchOnWindowFocus: false,
+  };
+
   const { data: accountsData, isLoading: accountsLoading } = useQuery({
-    queryKey: ['searchAccounts', query],
-    queryFn: () => accountsApi.getAccounts({ search: query, limit: 20 }),
-    enabled: !!query,
+    queryKey: ['searchAccounts', normalizedQuery, activeTab],
+    queryFn: () => accountsApi.getAccounts({ search: normalizedQuery, limit: 20 }),
+    enabled: shouldSearch && shouldLoadTab('accounts'),
+    ...queryOptions,
   });
 
-  // Search contacts
   const { data: contactsData, isLoading: contactsLoading } = useQuery({
-    queryKey: ['searchContacts', query],
-    queryFn: () => contactsApi.getContacts({ search: query, limit: 20 }),
-    enabled: !!query,
+    queryKey: ['searchContacts', normalizedQuery, activeTab],
+    queryFn: () => contactsApi.getContacts({ search: normalizedQuery, limit: 20 }),
+    enabled: shouldSearch && shouldLoadTab('contacts'),
+    ...queryOptions,
   });
 
-  // Search leads
   const { data: leadsData, isLoading: leadsLoading } = useQuery({
-    queryKey: ['searchLeads', query],
-    queryFn: () => leadsApi.getLeads({ search: query, limit: 20 }),
-    enabled: !!query,
+    queryKey: ['searchLeads', normalizedQuery, activeTab],
+    queryFn: () => leadsApi.getLeads({ search: normalizedQuery, limit: 20 }),
+    enabled: shouldSearch && shouldLoadTab('leads'),
+    ...queryOptions,
   });
 
-  // Search opportunities
-  const { data: opportunitiesData, isLoading: opportunitiesLoading } = useQuery({
-    queryKey: ['searchOpportunities', query],
-    queryFn: () => opportunitiesApi.getOpportunities({ search: query, limit: 20 }),
-    enabled: !!query,
+  const { data: jobsData, isLoading: jobsLoading } = useQuery({
+    queryKey: ['searchJobs', normalizedQuery, activeTab],
+    queryFn: () => opportunitiesApi.getOpportunities({ search: normalizedQuery, limit: 20 }),
+    enabled: shouldSearch && shouldLoadTab('jobs'),
+    ...queryOptions,
   });
 
-  // Search invoices
   const { data: invoicesData, isLoading: invoicesLoading } = useQuery({
-    queryKey: ['searchInvoices', query],
-    queryFn: () => invoicesApi.getInvoices({ search: query, limit: 20 }),
-    enabled: !!query,
+    queryKey: ['searchInvoices', normalizedQuery, activeTab],
+    queryFn: () => invoicesApi.getInvoices({ search: normalizedQuery, limit: 20 }),
+    enabled: shouldSearch && shouldLoadTab('invoices'),
+    ...queryOptions,
   });
 
-  const isLoading = accountsLoading
-    || contactsLoading
-    || leadsLoading
-    || opportunitiesLoading
-    || invoicesLoading;
+  const { data: mentionsData, isLoading: mentionsLoading } = useQuery({
+    queryKey: ['searchMentions', user?.id, normalizedQuery, activeTab],
+    queryFn: () => notificationsApi.getNotifications({ userId: user.id, type: 'MENTION', limit: 200 }),
+    enabled: shouldSearch && !!user?.id && shouldLoadTab('mentions'),
+    ...queryOptions,
+  });
 
-  const accounts = asCollection(accountsData, ['accounts']);
-  const contacts = asCollection(contactsData, ['contacts']);
-  const leads = asCollection(leadsData, ['leads']);
-  const opportunities = asCollection(opportunitiesData, ['opportunities']);
-  const invoices = asCollection(invoicesData, ['invoices']);
+  const isLoading = accountsLoading || contactsLoading || leadsLoading || jobsLoading || invoicesLoading || mentionsLoading;
 
-  const totalResults = accounts.length + contacts.length + leads.length + opportunities.length + invoices.length;
+  const accounts = normalizeCollection(accountsData, ['accounts', 'data']);
+  const contacts = normalizeCollection(contactsData, ['contacts', 'data']);
+  const leads = normalizeCollection(leadsData, ['leads', 'data']);
+  const jobs = normalizeCollection(jobsData, ['opportunities', 'data']);
+  const invoices = normalizeCollection(invoicesData, ['invoices', 'data']);
+  const mentions = useMemo(() => {
+    const allMentions = normalizeCollection(mentionsData, ['data']).filter((item) => item.type === 'MENTION');
+    const lowerQuery = normalizedQuery.toLowerCase();
+    return allMentions.filter((item) => {
+      const haystack = `${item.title || ''} ${item.message || ''}`.toLowerCase();
+      return haystack.includes(lowerQuery);
+    });
+  }, [mentionsData, normalizedQuery]);
+
+  const totalResults = accounts.length + contacts.length + leads.length + jobs.length + invoices.length + mentions.length;
 
   const tabs = [
     { id: 'all', label: 'All', count: totalResults },
     { id: 'accounts', label: 'Accounts', count: accounts.length, icon: Building2 },
     { id: 'contacts', label: 'Contacts', count: contacts.length, icon: Users },
     { id: 'leads', label: 'Leads', count: leads.length, icon: UserPlus },
-    { id: 'opportunities', label: 'Opportunities', count: opportunities.length, icon: Target },
+    { id: 'jobs', label: 'Jobs', count: jobs.length, icon: Target },
     { id: 'invoices', label: 'Invoices', count: invoices.length, icon: Receipt },
+    { id: 'mentions', label: 'Mentions', count: mentions.length, icon: AtSign },
   ];
 
-  if (!query) {
+  if (!normalizedQuery) {
     return (
       <div className="text-center py-12">
         <SearchIcon className="w-12 h-12 text-gray-300 mx-auto mb-4" />
@@ -117,26 +128,20 @@ export default function Search() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">
-          Search Results for "{query}"
-        </h1>
-        <p className="text-gray-500 mt-1">
-          {isLoading ? 'Searching...' : `Found ${totalResults} results`}
-        </p>
+        <h1 className="text-2xl font-bold text-gray-900">Search Results for "{normalizedQuery}"</h1>
+        <p className="text-gray-500 mt-1">{isLoading ? 'Searching...' : `Found ${totalResults} results`}</p>
       </div>
 
-      {/* Tabs */}
-      <div className="border-b border-gray-200">
-        <nav className="-mb-px flex space-x-8">
+      <div className="border-b border-gray-200 overflow-x-auto">
+        <nav className="-mb-px flex min-w-max gap-6">
           {tabs.map((tab) => {
             const Icon = tab.icon;
             return (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`py-4 px-1 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors ${
+                className={`py-4 px-1 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors whitespace-nowrap ${
                   activeTab === tab.id
                     ? 'border-panda-primary text-panda-primary'
                     : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
@@ -145,9 +150,7 @@ export default function Search() {
                 {Icon && <Icon className="w-4 h-4" />}
                 <span>{tab.label}</span>
                 <span className={`px-2 py-0.5 rounded-full text-xs ${
-                  activeTab === tab.id
-                    ? 'bg-panda-primary/10 text-panda-primary'
-                    : 'bg-gray-100 text-gray-600'
+                  activeTab === tab.id ? 'bg-panda-primary/10 text-panda-primary' : 'bg-gray-100 text-gray-600'
                 }`}>
                   {tab.count}
                 </span>
@@ -157,17 +160,14 @@ export default function Search() {
         </nav>
       </div>
 
-      {/* Loading State */}
       {isLoading && (
         <div className="flex items-center justify-center py-12">
           <Loader2 className="w-8 h-8 animate-spin text-panda-primary" />
         </div>
       )}
 
-      {/* Results */}
       {!isLoading && (
         <div className="space-y-6">
-          {/* Accounts */}
           {(activeTab === 'all' || activeTab === 'accounts') && accounts.length > 0 && (
             <ResultSection
               title="Accounts"
@@ -186,7 +186,7 @@ export default function Search() {
                     <div>
                       <p className="font-medium text-gray-900">{account.name}</p>
                       <p className="text-sm text-gray-500">
-                        {account.billingCity}, {account.billingState}
+                        {[account.email, account.phone].filter(Boolean).join(' • ') || [account.billingCity, account.billingState].filter(Boolean).join(', ')}
                       </p>
                     </div>
                   </div>
@@ -196,7 +196,6 @@ export default function Search() {
             />
           )}
 
-          {/* Contacts */}
           {(activeTab === 'all' || activeTab === 'contacts') && contacts.length > 0 && (
             <ResultSection
               title="Contacts"
@@ -215,10 +214,8 @@ export default function Search() {
                       </span>
                     </div>
                     <div>
-                      <p className="font-medium text-gray-900">
-                        {contact.firstName} {contact.lastName}
-                      </p>
-                      <p className="text-sm text-gray-500">{contact.email}</p>
+                      <p className="font-medium text-gray-900">{contact.firstName} {contact.lastName}</p>
+                      <p className="text-sm text-gray-500">{[contact.email, contact.phone || contact.mobilePhone].filter(Boolean).join(' • ')}</p>
                     </div>
                   </div>
                   <ArrowRight className="w-4 h-4 text-gray-400" />
@@ -227,7 +224,6 @@ export default function Search() {
             />
           )}
 
-          {/* Leads */}
           {(activeTab === 'all' || activeTab === 'leads') && leads.length > 0 && (
             <ResultSection
               title="Leads"
@@ -244,10 +240,8 @@ export default function Search() {
                       <UserPlus className="w-5 h-5 text-green-600" />
                     </div>
                     <div>
-                      <p className="font-medium text-gray-900">
-                        {lead.firstName} {lead.lastName}
-                      </p>
-                      <p className="text-sm text-gray-500">{lead.status}</p>
+                      <p className="font-medium text-gray-900">{lead.firstName} {lead.lastName}</p>
+                      <p className="text-sm text-gray-500">{[lead.email, lead.phone || lead.mobilePhone, lead.company].filter(Boolean).join(' • ')}</p>
                     </div>
                   </div>
                   <ArrowRight className="w-4 h-4 text-gray-400" />
@@ -256,12 +250,11 @@ export default function Search() {
             />
           )}
 
-          {/* Opportunities */}
-          {(activeTab === 'all' || activeTab === 'opportunities') && opportunities.length > 0 && (
+          {(activeTab === 'all' || activeTab === 'jobs') && jobs.length > 0 && (
             <ResultSection
               title="Jobs"
               icon={Target}
-              items={opportunities}
+              items={jobs}
               renderItem={(opp) => (
                 <Link
                   key={opp.id}
@@ -274,7 +267,7 @@ export default function Search() {
                     </div>
                     <div>
                       <p className="font-medium text-gray-900">{opp.name}</p>
-                      <p className="text-sm text-gray-500">{opp.stageName}</p>
+                      <p className="text-sm text-gray-500">{[opp.jobNumber, opp.accountName, opp.stageName || opp.stage, opp.primaryContactEmail, opp.primaryContactPhone].filter(Boolean).join(' • ')}</p>
                     </div>
                   </div>
                   <ArrowRight className="w-4 h-4 text-gray-400" />
@@ -283,7 +276,6 @@ export default function Search() {
             />
           )}
 
-          {/* Invoices */}
           {(activeTab === 'all' || activeTab === 'invoices') && invoices.length > 0 && (
             <ResultSection
               title="Invoices"
@@ -292,20 +284,16 @@ export default function Search() {
               renderItem={(invoice) => (
                 <Link
                   key={invoice.id}
-                  to={invoice.opportunityId ? `/jobs/${invoice.opportunityId}` : '/invoices'}
+                  to={`/invoices/${invoice.id}`}
                   className="flex items-center justify-between p-4 hover:bg-gray-50 rounded-lg transition-colors"
                 >
                   <div className="flex items-center space-x-4">
-                    <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center">
-                      <Receipt className="w-5 h-5 text-amber-700" />
+                    <div className="w-10 h-10 rounded-full bg-indigo-100 flex items-center justify-center">
+                      <Receipt className="w-5 h-5 text-indigo-600" />
                     </div>
                     <div>
-                      <p className="font-medium text-gray-900">
-                        {invoice.invoiceNumber || `Invoice ${invoice.id?.slice?.(-6) || ''}`}
-                      </p>
-                      <p className="text-sm text-gray-500">
-                        {invoice.account?.name || invoice.accountName || 'No account'} • {invoice.status || 'DRAFT'}
-                      </p>
+                      <p className="font-medium text-gray-900">{invoice.invoiceNumber}</p>
+                      <p className="text-sm text-gray-500">{[invoice.account?.name, invoice.account?.email, invoice.account?.phone, invoice.status].filter(Boolean).join(' • ')}</p>
                     </div>
                   </div>
                   <ArrowRight className="w-4 h-4 text-gray-400" />
@@ -314,14 +302,56 @@ export default function Search() {
             />
           )}
 
-          {/* No Results */}
+          {(activeTab === 'all' || activeTab === 'mentions') && mentions.length > 0 && (
+            <ResultSection
+              title="Mentions"
+              icon={AtSign}
+              items={mentions}
+              renderItem={(mention) => {
+                const actionUrl = mention.actionUrl || '/notifications';
+                const content = (
+                  <>
+                    <div className="flex items-center space-x-4">
+                      <div className="w-10 h-10 rounded-full bg-sky-100 flex items-center justify-center">
+                        <AtSign className="w-5 h-5 text-sky-600" />
+                      </div>
+                      <div>
+                        <p className="font-medium text-gray-900">{mention.title || 'Mention'}</p>
+                        <p className="text-sm text-gray-500">{mention.message}</p>
+                      </div>
+                    </div>
+                    <ExternalLink className="w-4 h-4 text-gray-400" />
+                  </>
+                );
+
+                return /^https?:\/\//i.test(actionUrl) ? (
+                  <a
+                    key={mention.id}
+                    href={actionUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center justify-between p-4 hover:bg-gray-50 rounded-lg transition-colors"
+                  >
+                    {content}
+                  </a>
+                ) : (
+                  <Link
+                    key={mention.id}
+                    to={actionUrl}
+                    className="flex items-center justify-between p-4 hover:bg-gray-50 rounded-lg transition-colors"
+                  >
+                    {content}
+                  </Link>
+                );
+              }}
+            />
+          )}
+
           {totalResults === 0 && (
             <div className="text-center py-12">
               <SearchIcon className="w-12 h-12 text-gray-300 mx-auto mb-4" />
               <h3 className="text-lg font-medium text-gray-900 mb-2">No results found</h3>
-              <p className="text-gray-500">
-                Try adjusting your search terms or check the spelling
-              </p>
+              <p className="text-gray-500">Try adjusting your search terms or check the spelling</p>
             </div>
           )}
         </div>

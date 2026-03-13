@@ -607,17 +607,31 @@ export default function LeadDetail() {
   }, [location.search]);
 
   useEffect(() => {
-    if (!lead?.id || !user?.id) return;
+    if (!lead?.id || !user) return;
     const name = [lead.firstName, lead.lastName].filter(Boolean).join(' ');
     const label = name || lead.company || 'Lead';
     const meta = lead.email || lead.phone || lead.city || lead.street || '';
-    addRecentItem('leads', user.id, {
+    addRecentItem('leads', user, {
       id: lead.id,
       label,
       meta,
       path: `/leads/${lead.id}`,
     });
-  }, [lead?.id, user?.id]);
+  }, [
+    lead?.id,
+    lead?.firstName,
+    lead?.lastName,
+    lead?.company,
+    lead?.email,
+    lead?.phone,
+    lead?.city,
+    lead?.street,
+    user?.id,
+    user?.userId,
+    user?.cognitoId,
+    user?.sub,
+    user?.email,
+  ]);
 
   const userIdentityCandidates = [
     user?.id,

@@ -43,8 +43,9 @@ const lineItemSchema = z.object({
 
 const additionalChargeSchema = z.object({
   name: z.string().min(1).default('Supplement'),
-  amount: z.number().nonnegative(),
+  amount: z.number(),
   notes: z.string().optional().nullable(),
+  percentageOfTotal: z.number().nonnegative().optional().nullable(),
   chargeType: z.enum(['LATE_FEE', 'SERVICE_FEE', 'PROCESSING_FEE', 'ADJUSTMENT', 'OTHER']).optional(),
 });
 
@@ -57,8 +58,8 @@ const createInvoiceSchema = z.object({
   lineItems: z.array(lineItemSchema),
   // Insurance invoice fields
   isInsuranceInvoice: z.boolean().optional(),
-  insuranceCarrier: z.string().optional(),
-  claimNumber: z.string().optional(),
+  insuranceCarrier: z.string().nullable().optional(),
+  claimNumber: z.string().nullable().optional(),
   notes: z.string().optional(),
 });
 
@@ -114,6 +115,84 @@ function calculateTotals(lineItems, taxAmount = 0) {
     tax: tax.toNumber(),
     total: total.toNumber(),
   };
+}
+
+function stripInvoiceActivityMeta(notes) {
+  if (typeof notes !== 'string') return notes || '';
+  return notes.replace(/^\[\[actor:[^\]]+\]\]\s*/i, '').trim();
+}
+
+function extractInvoiceActivityActor(notes) {
+  if (typeof notes !== 'string') return null;
+  const match = notes.match(/^\[\[actor:([^\]]+)\]\]/i);
+  return match?.[1]?.trim() || null;
+}
+
+function buildInvoiceActivityNotes(notes, actorName) {
+  const normalizedNotes = stripInvoiceActivityMeta(notes);
+  const normalizedActor = String(actorName || '').trim();
+  if (!normalizedActor) return normalizedNotes || null;
+  return `[[actor:${normalizedActor}]] ${normalizedNotes}`.trim();
+}
+
+function decodeJwtPayload(token) {
+  try {
+    const [, payloadSegment] = String(token || '').split('.');
+    if (!payloadSegment) return null;
+    const normalized = payloadSegment.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+    return JSON.parse(Buffer.from(padded, 'base64').toString('utf8'));
+  } catch {
+    return null;
+  }
+}
+
+async function resolveRequestActorName(req) {
+  const rawAuthorization = req.headers?.authorization || req.headers?.Authorization || '';
+  const bearerToken = rawAuthorization.startsWith('Bearer ') ? rawAuthorization.slice(7).trim() : null;
+  const tokenPayload = bearerToken ? decodeJwtPayload(bearerToken) : null;
+
+  const identityCandidates = Array.from(new Set([
+    req.headers?.['x-user-id'],
+    req.headers?.['x-user-email'],
+    tokenPayload?.sub,
+    tokenPayload?.username,
+    tokenPayload?.cognitoId,
+  ].map((value) => (value ? String(value).trim() : '')).filter(Boolean)));
+
+  if (identityCandidates.length > 0) {
+    const matchedUser = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { id: { in: identityCandidates } },
+          { cognitoId: { in: identityCandidates } },
+          {
+            email: {
+              in: identityCandidates.filter((value) => value.includes('@')),
+            },
+          },
+        ],
+      },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        fullName: true,
+      },
+    });
+
+    if (matchedUser) {
+      return matchedUser.fullName
+        || `${matchedUser.firstName || ''} ${matchedUser.lastName || ''}`.trim()
+        || matchedUser.email
+        || null;
+    }
+  }
+
+  return tokenPayload?.name
+    || tokenPayload?.email
+    || null;
 }
 
 async function getFreshInvoicePdfUrl(pdfKey, expiresIn = 3600 * 24 * 7) {
@@ -399,6 +478,7 @@ export async function updateInvoice(req, res, next) {
   try {
     const { id } = req.params;
     const data = updateInvoiceSchema.parse(req.body);
+    const actorName = await resolveRequestActorName(req);
 
     const existing = await prisma.invoice.findUnique({
       where: { id },
@@ -478,14 +558,24 @@ export async function updateInvoice(req, res, next) {
       if (hasAdditionalCharges) {
         await tx.invoiceAdditionalCharge.deleteMany({ where: { invoiceId: id } });
         const normalizedCharges = data.additionalCharges
-          .filter((charge) => Number(charge.amount || 0) > 0)
+          .filter((charge) => Number(charge.amount || 0) !== 0)
           .map((charge) => ({
+            constHasActorMeta: Boolean(extractInvoiceActivityActor(charge.notes)),
+            sourceNotes: charge.notes,
             invoiceId: id,
             name: charge.name || 'Supplement',
             amount: Number(charge.amount || 0),
             fixedAmount: Number(charge.amount || 0),
             chargeType: charge.chargeType || 'ADJUSTMENT',
-            notes: charge.notes || null,
+            notes: buildInvoiceActivityNotes(charge.notes, actorName),
+            percentageOfTotal: charge.percentageOfTotal ?? null,
+          }))
+          .map(({ constHasActorMeta, sourceNotes, ...charge }) => ({
+            invoiceId: id,
+            ...charge,
+            notes: constHasActorMeta
+              ? sourceNotes || null
+              : charge.notes || null,
           }));
         if (normalizedCharges.length > 0) {
           await tx.invoiceAdditionalCharge.createMany({ data: normalizedCharges });
@@ -885,7 +975,7 @@ ${Buffer.from(pdfResult.pdfBytes).toString('base64')}`;
 // Internal PDF generation (replicates pdfService.generateInvoicePdf logic)
 async function generateInvoicePdfInternal(invoice) {
   const { PDFDocument, StandardFonts, rgb } = await import('pdf-lib');
-  const { v4: uuidv4 } = await import('uuid');
+  const { randomUUID } = await import('node:crypto');
   const { PutObjectCommand } = await import('@aws-sdk/client-s3');
 
   const COMPANY_INFO = getInvoiceCompanyInfo();
@@ -1004,6 +1094,26 @@ async function generateInvoicePdfInternal(invoice) {
     page.drawLine({ start: { x: tableLeft, y: y - 8 }, end: { x: width - 50, y: y - 8 }, thickness: 0.5, color: COLORS.lightGray });
   }
 
+  if (Array.isArray(invoice.additionalCharges) && invoice.additionalCharges.length > 0) {
+    y -= 28;
+    page.drawText('Additional Charges', { x: tableLeft, y, size: 11, font: fontBold, color: COLORS.dark });
+    y -= 18;
+
+    for (const charge of invoice.additionalCharges) {
+      const chargeName = charge.name || 'Additional Charge';
+      const chargeAmount = Number(charge.amount ?? charge.fixedAmount ?? 0);
+      page.drawText(chargeName, { x: tableLeft + 10, y, size: 10, font: fontRegular, color: COLORS.dark });
+      page.drawText(formatCurrency(chargeAmount), { x: width - 130, y, size: 10, font: fontBold, color: COLORS.dark });
+      const chargeNotes = stripInvoiceActivityMeta(charge.notes);
+      if (chargeNotes) {
+        y -= 12;
+        page.drawText(String(chargeNotes).slice(0, 80), { x: tableLeft + 20, y, size: 8, font: fontRegular, color: COLORS.gray });
+      }
+      y -= 18;
+      page.drawLine({ start: { x: tableLeft, y: y + 8 }, end: { x: width - 50, y: y + 8 }, thickness: 0.5, color: COLORS.lightGray });
+    }
+  }
+
   // Totals Section
   y -= 40;
   const totalsX = width - 200;
@@ -1055,7 +1165,7 @@ async function generateInvoicePdfInternal(invoice) {
 
   // Upload to S3
   const S3_BUCKET = process.env.DOCUMENTS_BUCKET || 'panda-crm-documents';
-  const key = `invoices/${invoice.invoiceNumber}-${uuidv4().slice(0, 8)}.pdf`;
+  const key = `invoices/${invoice.invoiceNumber}-${randomUUID().slice(0, 8)}.pdf`;
 
   await s3Client.send(new PutObjectCommand({
     Bucket: S3_BUCKET,

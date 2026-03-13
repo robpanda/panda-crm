@@ -3543,6 +3543,11 @@ export const measurementsApi = {
     return response.data;
   },
 
+  async backfillGAFAssets(data = {}) {
+    const response = await api.post('/api/integrations/measurements/gaf/backfill-assets', data);
+    return response.data;
+  },
+
   // EagleView
   async orderEagleViewReport(data) {
     const response = await api.post('/api/integrations/measurements/eagleview/order', data);
