@@ -59,6 +59,148 @@ const SIMPLE_FILTER_OPERATORS = {
   between: 'between',
 };
 
+function normalizeStringArray(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
+    .filter(Boolean);
+}
+
+function normalizePresentationWidgets(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter((widget) => isPlainObject(widget))
+    .map((widget, index) => ({
+      id: widget.id || `widget_${index + 1}`,
+      type: String(widget.type || widget.widgetType || 'TABLE').toUpperCase(),
+      title: widget.title || '',
+      subtitle: widget.subtitle || '',
+      metricField: widget.metricField || null,
+      metricFunction: widget.metricFunction || null,
+      visualization: isPlainObject(widget.visualization) ? widget.visualization : {},
+      order: typeof widget.order === 'number' ? widget.order : index,
+    }))
+    .sort((left, right) => left.order - right.order);
+}
+
+function normalizeSortRules(value, fallbackSortBy = null, fallbackDirection = null) {
+  if (Array.isArray(value)) {
+    return value
+      .filter((entry) => isPlainObject(entry) && entry.field)
+      .map((entry) => ({
+        field: entry.field,
+        direction: String(entry.direction || 'asc').toLowerCase() === 'desc' ? 'desc' : 'asc',
+      }));
+  }
+
+  if (typeof fallbackSortBy === 'string' && fallbackSortBy.trim()) {
+    return [{
+      field: fallbackSortBy.trim(),
+      direction: String(fallbackDirection || 'asc').toLowerCase() === 'desc' ? 'desc' : 'asc',
+    }];
+  }
+
+  return [];
+}
+
+function normalizeAggregationConfig(rawAggregations, report = {}) {
+  if (Array.isArray(rawAggregations)) {
+    return {
+      items: rawAggregations,
+      includeRelations: normalizeStringArray(report.includeRelations),
+      presentation: {
+        widgets: normalizePresentationWidgets(report.presentation?.widgets),
+      },
+      sort: normalizeSortRules(report.sort, report.sortBy, report.sortDirection),
+      visualization: isPlainObject(report.visualization) ? report.visualization : {},
+    };
+  }
+
+  if (isPlainObject(rawAggregations)) {
+    return {
+      items: Array.isArray(rawAggregations.items)
+        ? rawAggregations.items
+        : Array.isArray(rawAggregations.aggregations)
+        ? rawAggregations.aggregations
+        : [],
+      includeRelations: normalizeStringArray(rawAggregations.includeRelations ?? report.includeRelations),
+      presentation: {
+        widgets: normalizePresentationWidgets(rawAggregations.presentation?.widgets ?? report.presentation?.widgets),
+      },
+      sort: normalizeSortRules(rawAggregations.sort, report.sortBy, report.sortDirection),
+      visualization: isPlainObject(rawAggregations.visualization)
+        ? rawAggregations.visualization
+        : isPlainObject(report.visualization)
+        ? report.visualization
+        : {},
+    };
+  }
+
+  return {
+    items: [],
+    includeRelations: normalizeStringArray(report.includeRelations),
+    presentation: {
+      widgets: normalizePresentationWidgets(report.presentation?.widgets),
+    },
+    sort: normalizeSortRules(report.sort, report.sortBy, report.sortDirection),
+    visualization: isPlainObject(report.visualization) ? report.visualization : {},
+  };
+}
+
+function buildPersistedAggregationConfig(report = {}) {
+  const normalized = normalizeAggregationConfig(report.aggregations, report);
+
+  return {
+    items: normalized.items,
+    includeRelations: normalized.includeRelations,
+    presentation: normalized.presentation,
+    sort: normalized.sort,
+    visualization: normalized.visualization,
+  };
+}
+
+function normalizeReportSpec(report = {}) {
+  const normalizedModule = normalizeReportModule(report) || 'jobs';
+  const aggregationConfig = normalizeAggregationConfig(report.aggregations, report);
+  const sortRules = aggregationConfig.sort;
+
+  return {
+    ...report,
+    baseModule: normalizedModule,
+    baseObject: report.baseObject || report.base_object || normalizedModule,
+    selectedFields: normalizeStringArray(report.selectedFields),
+    groupByFields: normalizeStringArray(report.groupByFields),
+    filters: normalizeFiltersToArray(report.filters),
+    includeRelations: aggregationConfig.includeRelations,
+    sort: sortRules,
+    sortBy: typeof report.sortBy === 'string' && report.sortBy.trim()
+      ? report.sortBy.trim()
+      : sortRules[0]?.field || null,
+    sortDirection: typeof report.sortDirection === 'string' && report.sortDirection.trim()
+      ? report.sortDirection.trim()
+      : sortRules[0]?.direction || null,
+    aggregations: aggregationConfig.items,
+    aggregationItems: aggregationConfig.items,
+    presentation: aggregationConfig.presentation,
+    visualization: aggregationConfig.visualization,
+  };
+}
+
+function normalizeSavedReportPayload(report = {}) {
+  const normalized = normalizeReportSpec(report);
+
+  return {
+    ...report,
+    ...normalized,
+  };
+}
+
 function isPlainObject(value) {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -144,21 +286,6 @@ function normalizeFiltersToArray(filters) {
   return Object.entries(filters).flatMap(([field, value]) => normalizeObjectFilter(field, value));
 }
 
-function normalizeSavedReportPayload(report) {
-  if (!report) return report;
-
-  return {
-    ...report,
-    baseModule: normalizeReportModule(report) || 'jobs',
-    selectedFields: Array.isArray(report.selectedFields) ? report.selectedFields : [],
-    groupByFields: Array.isArray(report.groupByFields) ? report.groupByFields : [],
-    filters: normalizeFiltersToArray(report.filters),
-    includeRelations: Array.isArray(report.includeRelations) ? report.includeRelations : [],
-    sharedWithRoles: Array.isArray(report.sharedWithRoles) ? report.sharedWithRoles : [],
-    aggregations: Array.isArray(report.aggregations) ? report.aggregations : [],
-  };
-}
-
 function mergeReportFilters(savedFilters, runtimeFilters) {
   const savedFilterArray = normalizeFiltersToArray(savedFilters);
   const runtimeFilterArray = normalizeFiltersToArray(runtimeFilters);
@@ -205,6 +332,10 @@ function buildDateRangeContext(report, moduleName, dateRange, dateRangeOptions) 
 }
 
 function buildSortConfig(report) {
+  if (Array.isArray(report?.sort) && report.sort.length > 0) {
+    return normalizeSortRules(report.sort);
+  }
+
   if (!report?.sortBy) {
     return [];
   }
@@ -263,6 +394,63 @@ function normalizeQueryEngineResult(result, periodLabel) {
     rowCount: result?.metadata?.totalCount || rows.length,
     metadata: result?.metadata || {},
   };
+}
+
+async function executeNormalizedReportSpec(reportSpec, {
+  dateRange,
+  dateRangeOptions,
+  runtimeFilters = [],
+  limit = 100,
+} = {}) {
+  const normalizedReport = normalizeReportSpec(reportSpec);
+  const moduleName = normalizedReport.baseModule || 'jobs';
+  const mergedFilters = mergeReportFilters(normalizedReport.filters, runtimeFilters);
+  const dateRangeContext = buildDateRangeContext(normalizedReport, moduleName, dateRange, dateRangeOptions);
+  const normalizedFilterArray = normalizeFiltersToArray(mergedFilters);
+  const queryFilters = [
+    ...normalizedFilterArray,
+    ...dateRangeContext.filters,
+  ];
+  const effectiveDateRange = dateRange || normalizedReport.defaultDateRange || 'thisMonth';
+
+  if (shouldUseQueryEngine(normalizedReport, moduleName)) {
+    const queryResult = await executeReport({
+      module: moduleName,
+      fields: normalizedReport.selectedFields,
+      filters: queryFilters,
+      sortBy: buildSortConfig(normalizedReport),
+      groupBy: normalizedReport.groupByFields,
+      aggregations: normalizedReport.aggregationItems,
+      pagination: { page: 1, pageSize: Math.min(Math.max(Number(limit) || 100, 1), 100) },
+      includeRelations: normalizedReport.includeRelations,
+    });
+
+    return normalizeQueryEngineResult(queryResult, dateRangeContext.label);
+  }
+
+  const aggregationService = await import('../services/aggregationService.js');
+
+  switch (moduleName) {
+    case 'jobs':
+      return aggregationService.getPipelineMetrics({
+        dateRange: effectiveDateRange,
+        dateRangeOptions,
+        filters: mergedFilters,
+      });
+    case 'leads':
+      return aggregationService.getLeadMetrics({
+        dateRange: effectiveDateRange,
+        dateRangeOptions,
+        filters: mergedFilters,
+      });
+    default:
+      return aggregationService.getTimeSeriesData({
+        dateRange: effectiveDateRange,
+        dateRangeOptions,
+        entity: AGGREGATION_ENTITY_BY_MODULE[moduleName] || 'opportunities',
+        filters: mergedFilters,
+      });
+  }
 }
 
 /**
@@ -412,14 +600,15 @@ router.get('/:id', async (req, res, next) => {
 router.post('/', async (req, res, next) => {
   try {
     const userId = req.user?.id;
+    const normalizedInput = normalizeReportSpec(req.body);
     const {
       name,
       description,
       category = 'CUSTOM',
       reportType,
       chartType = 'TABLE',
-      baseModule,       // New: module name (jobs, leads, accounts, etc.)
-      baseObject,       // Legacy: object name (Opportunity, Lead, Account, etc.)
+      baseModule,
+      baseObject,
       selectedFields = [],
       groupByFields = [],
       sortBy,
@@ -430,7 +619,7 @@ router.post('/', async (req, res, next) => {
       aggregations,
       isPublic = false,
       sharedWithRoles = [],
-    } = req.body;
+    } = normalizedInput;
 
     // Accept either baseModule (new) or baseObject (legacy)
     const effectiveModule = baseModule || baseObject;
@@ -460,7 +649,7 @@ router.post('/', async (req, res, next) => {
         filters,
         dateRangeField,
         defaultDateRange,
-        aggregations,
+        aggregations: buildPersistedAggregationConfig(normalizedInput),
         isPublic,
         sharedWithRoles,
         createdById: userId,
@@ -511,14 +700,15 @@ router.put('/:id', async (req, res, next) => {
       });
     }
 
+    const normalizedInput = normalizeReportSpec(req.body);
     const {
       name,
       description,
       category,
       reportType,
       chartType,
-      baseModule,       // New: module name
-      baseObject,       // Legacy: object name
+      baseModule,
+      baseObject,
       selectedFields,
       groupByFields,
       sortBy,
@@ -529,7 +719,7 @@ router.put('/:id', async (req, res, next) => {
       aggregations,
       isPublic,
       sharedWithRoles,
-    } = req.body;
+    } = normalizedInput;
 
     const report = await prisma.savedReport.update({
       where: { id },
@@ -548,7 +738,11 @@ router.put('/:id', async (req, res, next) => {
         ...(filters !== undefined && { filters }),
         ...(dateRangeField !== undefined && { dateRangeField }),
         ...(defaultDateRange !== undefined && { defaultDateRange }),
-        ...(aggregations !== undefined && { aggregations }),
+        ...(req.body.aggregations !== undefined || req.body.includeRelations !== undefined || req.body.presentation !== undefined || req.body.sort !== undefined || req.body.visualization !== undefined
+          ? { aggregations: buildPersistedAggregationConfig(normalizedInput) }
+          : aggregations !== undefined
+          ? { aggregations: buildPersistedAggregationConfig(normalizedInput) }
+          : {}),
         ...(isPublic !== undefined && { isPublic }),
         ...(sharedWithRoles !== undefined && { sharedWithRoles }),
       },
@@ -564,6 +758,34 @@ router.put('/:id', async (req, res, next) => {
     res.json({
       success: true,
       data: normalizeSavedReportPayload(report),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/reports/preview
+ * Execute an unsaved report spec and return preview rows/widgets
+ */
+router.post('/preview', async (req, res, next) => {
+  try {
+    const { reportSpec = {}, limit = 100, dateRange, dateRangeOptions, filters: runtimeFilters = [] } = req.body || {};
+    const normalizedReport = normalizeReportSpec(reportSpec);
+
+    const results = await executeNormalizedReportSpec(normalizedReport, {
+      dateRange,
+      dateRangeOptions,
+      runtimeFilters,
+      limit,
+    });
+
+    res.json({
+      success: true,
+      data: {
+        reportSpec: normalizedReport,
+        results,
+      },
     });
   } catch (error) {
     next(error);
@@ -694,65 +916,19 @@ router.post('/:id/run', async (req, res, next) => {
       data: { lastRunAt: new Date() },
     });
 
-    // Merge saved filters with runtime filters
-    const moduleName = normalizeReportModule(report) || 'jobs';
-    const mergedFilters = mergeReportFilters(report.filters, runtimeFilters);
-    const dateRangeContext = buildDateRangeContext(report, moduleName, dateRange, dateRangeOptions);
-    const normalizedFilterArray = normalizeFiltersToArray(mergedFilters);
-    const queryFilters = [
-      ...normalizedFilterArray,
-      ...dateRangeContext.filters,
-    ];
-    const effectiveDateRange = dateRange || report.defaultDateRange || 'thisMonth';
-
-    // Execute report based on type and configuration
-    let result;
-    if (shouldUseQueryEngine(report, moduleName)) {
-      const queryResult = await executeReport({
-        module: moduleName,
-        fields: Array.isArray(report.selectedFields) ? report.selectedFields : [],
-        filters: queryFilters,
-        sortBy: buildSortConfig(report),
-        groupBy: Array.isArray(report.groupByFields) ? report.groupByFields : [],
-        aggregations: Array.isArray(report.aggregations) ? report.aggregations : [],
-        pagination: { page: 1, pageSize: 100 },
-      });
-
-      result = normalizeQueryEngineResult(queryResult, dateRangeContext.label);
-    } else {
-      const aggregationService = await import('../services/aggregationService.js');
-
-      switch (moduleName) {
-        case 'jobs':
-          result = await aggregationService.getPipelineMetrics({
-            dateRange: effectiveDateRange,
-            dateRangeOptions,
-            filters: mergedFilters,
-          });
-          break;
-        case 'leads':
-          result = await aggregationService.getLeadMetrics({
-            dateRange: effectiveDateRange,
-            dateRangeOptions,
-            filters: mergedFilters,
-          });
-          break;
-        default:
-          result = await aggregationService.getTimeSeriesData({
-            dateRange: effectiveDateRange,
-            dateRangeOptions,
-            entity: AGGREGATION_ENTITY_BY_MODULE[moduleName] || 'opportunities',
-            filters: mergedFilters,
-          });
-      }
-    }
+    const result = await executeNormalizedReportSpec(report, {
+      dateRange,
+      dateRangeOptions,
+      runtimeFilters,
+      limit: 100,
+    });
 
     logger.info('Executed report:', { reportId: id, userId });
 
     res.json({
       success: true,
       data: {
-        report: { id: report.id, name: report.name },
+        report: normalizeSavedReportPayload({ id: report.id, name: report.name, ...report }),
         results: result,
       },
     });
