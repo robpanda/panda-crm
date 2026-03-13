@@ -38,6 +38,34 @@ const CHART_TYPE_TO_WIDGET_TYPE = {
   TABLE: 'TABLE',
 };
 
+function resolveExplicitWidgetType(widget = {}) {
+  const chartConfig = widget.chartConfig && typeof widget.chartConfig === 'object' ? widget.chartConfig : {};
+  const widgetKind = String(chartConfig.widgetKind || '').toUpperCase();
+  const visualizationChartType = String(chartConfig.visualization?.chartType || '').toUpperCase();
+
+  if (widgetKind === 'KPI') {
+    return 'KPI_CARD';
+  }
+
+  if (widgetKind === 'TABLE') {
+    return 'TABLE';
+  }
+
+  if (widgetKind === 'AI_SUMMARY') {
+    return 'STAT_LIST';
+  }
+
+  if (widgetKind === 'METABASE') {
+    return 'TABLE';
+  }
+
+  if (widgetKind === 'CHART') {
+    return CHART_TYPE_TO_WIDGET_TYPE[visualizationChartType] || 'BAR_CHART';
+  }
+
+  return null;
+}
+
 async function loadSavedReportsById(client, widgets = []) {
   const savedReportIds = [...new Set(
     widgets
@@ -73,6 +101,11 @@ function getMissingSavedReportIds(widgets = [], savedReportsById = new Map()) {
 function resolveWidgetType(widget = {}, savedReportsById = new Map()) {
   const rawWidgetType = String(widget.widgetType || '').toUpperCase();
   const aliasedWidgetType = WIDGET_TYPE_ALIASES[rawWidgetType] || rawWidgetType;
+  const explicitWidgetType = resolveExplicitWidgetType(widget);
+
+  if (explicitWidgetType) {
+    return explicitWidgetType;
+  }
 
   if (widget.savedReportId) {
     const savedReport = savedReportsById.get(widget.savedReportId);
