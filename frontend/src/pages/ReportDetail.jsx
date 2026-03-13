@@ -3,7 +3,8 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Calendar, Copy, Pencil, Play, Star, Trash2 } from 'lucide-react';
 import { reportsApi } from '../services/api';
 import { GlobalDateRangePicker } from '../components/reports';
-import ReportRenderer from '../components/reports/ReportRenderer';
+import TableWidget from '../components/reports/charts/TableWidget';
+import PresentationWidgets from '../components/reports/PresentationWidgets';
 import DataSourceBadge from '../components/analytics/DataSourceBadge';
 import VerifiedBadge from '../components/analytics/VerifiedBadge';
 import { useAnalyticsBadgeContext } from '../components/analytics/AnalyticsBadgeContext';
@@ -13,8 +14,10 @@ import {
   buildDuplicateReportPayload,
   formatReportTimestamp,
   getReportCreatedByLabel,
-  getReportTablesUsed,
   normalizeReportConfig,
+  normalizeReportRunResult,
+  getReportTablesUsed,
+  formatReportFieldLabel,
 } from '../utils/reporting';
 
 export default function ReportDetail() {
@@ -174,6 +177,19 @@ export default function ReportDetail() {
     },
   };
 
+  const normalizedResult = useMemo(
+    () => normalizeReportRunResult(report, payload),
+    [payload, report]
+  );
+
+  const tableColumns = useMemo(() => {
+    const sample = normalizedResult.rows?.[0] || {};
+    return Object.keys(sample).map((key) => ({
+      key,
+      label: formatReportFieldLabel(key),
+    }));
+  }, [normalizedResult.rows]);
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm xl:flex-row xl:items-start xl:justify-between">
@@ -311,14 +327,23 @@ export default function ReportDetail() {
       </div>
 
       {payload ? (
-        <ReportRenderer
-          report={report}
-          payload={payload}
-          loading={running}
-          title={report.name}
-          subtitle={payload?.data?.results?.period || payload?.results?.period || null}
-          emptyStateContext={emptyStateContext}
-        />
+        <div className="space-y-6">
+          <PresentationWidgets
+            report={report}
+            payload={payload}
+            emptyStateContext={emptyStateContext}
+          />
+          <TableWidget
+            title={report.name}
+            subtitle={payload?.data?.results?.period || payload?.results?.period || null}
+            data={normalizedResult.rows}
+            columns={tableColumns}
+            loading={running}
+            pageSize={12}
+            emptyStateContext={emptyStateContext}
+            emptyMessage="No data found"
+          />
+        </div>
       ) : (
         <div className="rounded-2xl border border-dashed border-gray-300 bg-white px-6 py-14 text-center">
           <Play className="mx-auto h-10 w-10 text-gray-300" />
