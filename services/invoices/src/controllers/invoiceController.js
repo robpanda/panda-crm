@@ -571,7 +571,7 @@ export async function updateInvoice(req, res, next) {
     delete updateData.lineItems;
     delete updateData.additionalCharges;
 
-    const invoice = await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async (tx) => {
       if (hasLineItems) {
         await tx.invoiceLineItem.deleteMany({ where: { invoiceId: id } });
         if (data.lineItems.length > 0) {
@@ -617,20 +617,24 @@ export async function updateInvoice(req, res, next) {
         }
       }
 
-      return tx.invoice.update({
+      await tx.invoice.update({
         where: { id },
         data: {
           ...updateData,
           invoiceDate: data.invoiceDate ? new Date(data.invoiceDate) : undefined,
           dueDate: updateData.dueDate,
         },
-        include: {
-          account: { select: { id: true, name: true } },
-          lineItems: true,
-          additionalCharges: true,
-          payments: true,
-        },
       });
+    });
+
+    const invoice = await prisma.invoice.findUnique({
+      where: { id },
+      include: {
+        account: { select: { id: true, name: true } },
+        lineItems: true,
+        additionalCharges: true,
+        payments: true,
+      },
     });
 
     res.json(invoice);

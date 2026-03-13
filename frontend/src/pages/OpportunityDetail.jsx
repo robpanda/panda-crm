@@ -968,30 +968,6 @@ function InvoiceDetailModal({
 
   const updateInvoiceMutation = useMutation({
     mutationFn: (payload) => invoicesApi.updateInvoice(invoice.id, payload),
-    onSuccess: (updated) => {
-      const updatedInvoice = normalizeInvoiceTotals(updated?.data || updated);
-      queryClient.setQueryData(['opportunityInvoices', opportunity?.id], (current) => {
-        if (!current || !Array.isArray(current.invoices)) return current;
-        return {
-          ...current,
-          invoices: current.invoices.map((existingInvoice) => (
-            existingInvoice.id === updatedInvoice?.id
-              ? normalizeInvoiceTotals({
-                  ...existingInvoice,
-                  ...updatedInvoice,
-                })
-              : existingInvoice
-          )),
-        };
-      });
-      onInvoiceUpdated?.(updatedInvoice);
-      setEditSuccess('Invoice updated successfully');
-      setEditError(null);
-      setIsEditing(false);
-    },
-    onError: (error) => {
-      setEditError(error.message || 'Failed to update invoice');
-    },
   });
 
   const downloadInvoicePdfMutation = useMutation({
@@ -1044,7 +1020,7 @@ function InvoiceDetailModal({
     });
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!form.lineItems.length) {
       setEditError('At least one line item is required.');
       return;
@@ -1079,7 +1055,34 @@ function InvoiceDetailModal({
         .filter((charge) => Number(charge.amount || 0) !== 0),
     };
 
-    updateInvoiceMutation.mutate(payload);
+    try {
+      setEditError(null);
+      setEditSuccess(null);
+      await updateInvoiceMutation.mutateAsync(payload);
+      const refreshedInvoiceResponse = await invoicesApi.getInvoice(invoice.id);
+      const refreshedInvoice = normalizeInvoiceTotals(refreshedInvoiceResponse?.data || refreshedInvoiceResponse);
+
+      queryClient.setQueryData(['opportunityInvoices', opportunity?.id], (current) => {
+        if (!current || !Array.isArray(current.invoices)) return current;
+        return {
+          ...current,
+          invoices: current.invoices.map((existingInvoice) => (
+            existingInvoice.id === refreshedInvoice?.id
+              ? normalizeInvoiceTotals({
+                  ...existingInvoice,
+                  ...refreshedInvoice,
+                })
+              : existingInvoice
+          )),
+        };
+      });
+
+      onInvoiceUpdated?.(refreshedInvoice);
+      setEditSuccess('Invoice updated successfully');
+      setIsEditing(false);
+    } catch (error) {
+      setEditError(error?.message || 'Failed to update invoice');
+    }
   };
 
   return (
