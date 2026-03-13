@@ -12,7 +12,7 @@ const prisma = new PrismaClient();
 const secretsClient = new SecretsManagerClient({ region: process.env.AWS_REGION || 'us-east-2' });
 
 // S3 configuration for document storage
-const S3_BUCKET = process.env.MEASUREMENT_DOCS_BUCKET || 'panda-crm-measurement-docs';
+const S3_BUCKET = process.env.MEASUREMENT_DOCS_BUCKET || process.env.DOCUMENTS_BUCKET || 'panda-crm-documents';
 const S3_REGION = process.env.AWS_REGION || 'us-east-2';
 const s3Client = new S3Client({ region: S3_REGION });
 const lambdaClient = new LambdaClient({ region: S3_REGION });
@@ -130,6 +130,15 @@ const firstNonEmptyValue = (...values) => {
     if (value === undefined || value === null) continue;
     const text = String(value).trim();
     if (text.length > 0) return text;
+  }
+  return null;
+};
+
+const firstPresentValue = (...values) => {
+  for (const value of values) {
+    if (value === undefined || value === null) continue;
+    if (typeof value === 'string' && value.trim().length === 0) continue;
+    return value;
   }
   return null;
 };
@@ -888,6 +897,23 @@ class MeasurementService {
       }
 
       if (!statusData) {
+        const storedPayload = measurementReport?.rawData && typeof measurementReport.rawData === 'object'
+          ? measurementReport.rawData
+          : null;
+        const normalizedStoredPayload = storedPayload
+          ? this.normalizeGAFWebhookPayload(storedPayload)
+          : null;
+
+        if (normalizedStoredPayload?.hasMeasurementData) {
+          try {
+            await this.processGAFReport(measurementReportId, storedPayload);
+            logger.info(`GAF report ${gafOrderNumber} recovered from stored webhook payload for ${measurementReportId}`);
+            return { success: true, status: 'DELIVERED' };
+          } catch (storedPayloadError) {
+            logger.warn(`GAF stored payload recovery warning for ${measurementReportId}: ${storedPayloadError.message}`);
+          }
+        }
+
         if (lastStatusError) {
           throw lastStatusError;
         }
@@ -1302,7 +1328,7 @@ class MeasurementService {
       ? payload.statusData
       : {};
 
-    const roofMeasurement = firstNonEmptyValue(
+    const roofMeasurement = firstPresentValue(
       payload.RoofMeasurement,
       payload.roofMeasurement,
       payload.measurements,
@@ -1313,7 +1339,7 @@ class MeasurementService {
       nestedStatusPayload.roofMeasurement,
       nestedStatusPayload.measurements
     );
-    const assets = firstNonEmptyValue(
+    const assets = firstPresentValue(
       roofMeasurement?.Assets,
       roofMeasurement?.assets,
       payload.assets,
@@ -5120,7 +5146,7 @@ class MeasurementService {
    * Calculate roof complexity from facet count
    */
   calculateComplexity(facetCount) {
-    if (!facetCount) return 'UNKNOWN';
+    if (!facetCount) return null;
     if (facetCount <= 4) return 'SIMPLE';
     if (facetCount <= 8) return 'MODERATE';
     if (facetCount <= 15) return 'COMPLEX';
