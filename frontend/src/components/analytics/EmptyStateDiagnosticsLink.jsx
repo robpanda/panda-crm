@@ -16,7 +16,7 @@ export default function EmptyStateDiagnosticsLink({ context, className = '' }) {
         onClick={() => setOpen(true)}
         className={`text-xs text-indigo-600 hover:text-indigo-700 hover:underline ${className}`}
       >
-        Why is this empty?
+        View diagnostics
       </button>
       <DiagnosticsDrawer open={open} onClose={() => setOpen(false)} context={computedContext} />
     </>

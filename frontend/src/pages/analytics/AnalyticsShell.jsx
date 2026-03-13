@@ -1,6 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useAuth } from '../../context/AuthContext';
 import { analyticsHealthApi } from '../../services/api';
 import { formatDateMDY } from '../../utils/formatters';
 import { AnalyticsBadgeProvider } from '../../components/analytics/AnalyticsBadgeContext';
@@ -9,25 +8,20 @@ import {
   FileText,
   PieChart,
   Calendar,
-  Brain,
-  Activity,
   Settings,
   RefreshCw,
+  Activity,
 } from 'lucide-react';
 
 const navItems = [
   { to: '/analytics/overview', label: 'Overview', icon: Activity },
-  { to: '/analytics/reports', label: 'Reports', icon: FileText },
   { to: '/analytics/dashboards', label: 'Dashboards', icon: PieChart },
+  { to: '/analytics/reports', label: 'Reports', icon: FileText },
   { to: '/analytics/schedules', label: 'Schedules', icon: Calendar },
-  { to: '/analytics/ai', label: 'AI Insights', icon: Brain },
-  { to: '/analytics/health', label: 'Data Health', icon: BarChart3 },
-  { to: '/analytics/metabase', label: 'Metabase', icon: BarChart3 },
 ];
 
 export default function AnalyticsShell() {
   const queryClient = useQueryClient();
-  const { user } = useAuth();
 
   const { data: analyticsHealth } = useQuery({
     queryKey: ['analytics-health'],
@@ -82,12 +76,6 @@ export default function AnalyticsShell() {
 
   const banner = bannerConfig[status] || bannerConfig.unknown;
 
-  const isAdmin =
-    user?.role?.roleType?.toLowerCase?.() === 'admin' ||
-    user?.role?.roleType?.toLowerCase?.() === 'super_admin' ||
-    user?.roleType?.toLowerCase?.() === 'admin' ||
-    user?.roleType?.toLowerCase?.() === 'super_admin';
-
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900">
       <div className="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
@@ -99,7 +87,7 @@ export default function AnalyticsShell() {
                 Analytics Hub
               </h1>
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                Unified reporting, dashboards, schedules, and AI insights
+                Unified reporting, dashboards, schedules, and analytics settings
               </p>
             </div>
             <div className="flex items-center gap-3">
@@ -110,26 +98,18 @@ export default function AnalyticsShell() {
                 <RefreshCw className="w-4 h-4" />
                 Refresh
               </button>
-              {isAdmin && (
-                <NavLink
-                  to="/admin/metabase"
-                  className="flex items-center gap-2 px-4 py-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
-                >
-                  <Settings className="w-4 h-4" />
-                  Settings
-                </NavLink>
-              )}
+              <NavLink
+                to="/analytics/settings"
+                className="flex items-center gap-2 px-4 py-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg"
+              >
+                <Settings className="w-4 h-4" />
+                Settings
+              </NavLink>
               <NavLink
                 to="/analytics/reports/new"
                 className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
               >
                 New Report
-              </NavLink>
-              <NavLink
-                to="/analytics/reports/advanced/new"
-                className="flex items-center gap-2 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 dark:border-gray-600 dark:text-gray-200 dark:hover:bg-gray-700"
-              >
-                Advanced Report
               </NavLink>
               <NavLink
                 to="/analytics/dashboards/new"
@@ -177,7 +157,7 @@ export default function AnalyticsShell() {
             </div>
             {status !== 'healthy' && (
               <NavLink
-                to="/analytics/health"
+                to="/analytics/settings/health"
                 className="text-xs font-medium text-indigo-600 hover:text-indigo-700"
               >
                 View details

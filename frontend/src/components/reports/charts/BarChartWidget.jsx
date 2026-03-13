@@ -92,7 +92,7 @@ export default function BarChartWidget({
           </div>
         )}
         <div className="p-5 flex flex-col items-center justify-center h-64 gap-2">
-          <p className="text-gray-400">No data available</p>
+          <p className="text-gray-500 font-medium">No data found</p>
           {emptyStateContext && (
             <EmptyStateDiagnosticsLink context={emptyStateContext} />
           )}

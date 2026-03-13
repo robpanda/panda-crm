@@ -160,6 +160,9 @@ export default function KPICard({
           )}
           <p className={`${valueSizeClasses[size]} font-bold text-gray-900 mt-1`}>{formattedValue}</p>
           {showEmptyDiagnostics && (
+            <p className="mt-1 text-sm font-medium text-gray-500">No data found</p>
+          )}
+          {showEmptyDiagnostics && (
             <div className="mt-1">
               <EmptyStateDiagnosticsLink context={emptyStateContext} />
             </div>

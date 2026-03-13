@@ -3,6 +3,36 @@ import { ChevronUp, ChevronDown, ArrowUpDown, ExternalLink } from 'lucide-react'
 import { useNavigate } from 'react-router-dom';
 import EmptyStateDiagnosticsLink from '../../analytics/EmptyStateDiagnosticsLink';
 
+const ISO_DATE_PREFIX_PATTERN = /^(\d{4})-(\d{2})-(\d{2})(?:[T\s].*)?$/;
+
+function isDateLikeValue(value) {
+  if (value instanceof Date) {
+    return !Number.isNaN(value.getTime());
+  }
+
+  return typeof value === 'string' && ISO_DATE_PREFIX_PATTERN.test(value);
+}
+
+function formatDateValue(value) {
+  if (typeof value === 'string') {
+    const match = value.match(ISO_DATE_PREFIX_PATTERN);
+    if (match) {
+      const [, year, month, day] = match;
+      return `${month}/${day}/${year}`;
+    }
+  }
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return new Intl.DateTimeFormat('en-US', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(value);
+  }
+
+  return value;
+}
+
 export default function TableWidget({
   data,
   columns,
@@ -13,7 +43,7 @@ export default function TableWidget({
   showPagination = true,
   sortable = true,
   onRowClick,
-  emptyMessage = 'No data available',
+  emptyMessage = 'No data found',
   compact = false,
   reportId,  // Optional report ID for "View All" link
   reportFilter, // Optional filter to apply when navigating
@@ -84,6 +114,10 @@ export default function TableWidget({
   const formatCellValue = (value, column) => {
     if (value == null) return '-';
 
+    if (column.render) {
+      return column.render(value);
+    }
+
     if (column.format === 'currency') {
       return new Intl.NumberFormat('en-US', {
         style: 'currency',
@@ -101,11 +135,11 @@ export default function TableWidget({
     }
 
     if (column.format === 'date') {
-      return new Date(value).toLocaleDateString();
+      return formatDateValue(value);
     }
 
-    if (column.render) {
-      return column.render(value);
+    if (isDateLikeValue(value)) {
+      return formatDateValue(value);
     }
 
     return value;

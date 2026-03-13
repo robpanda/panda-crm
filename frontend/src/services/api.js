@@ -1,4 +1,8 @@
 import axios from 'axios';
+import {
+  normalizeDashboardCollectionResponse,
+  normalizeDashboardDetailResponse,
+} from '../utils/reporting';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 
@@ -3257,6 +3261,11 @@ export const reportsApi = {
     return response.data;
   },
 
+  async previewReport(payload = {}) {
+    const response = await api.post('/api/reports/preview', payload);
+    return response.data;
+  },
+
   async toggleFavorite(id) {
     const response = await api.post(`/api/reports/${id}/favorite`);
     return response.data;
@@ -3270,41 +3279,105 @@ export const reportsApi = {
     return response.data;
   },
 
-  // Dashboards - gracefully handle when backend not deployed yet
+  // Dashboards - use report-backed dashboards for create/edit and legacy dashboards for existing reads
   async getDashboards(params = {}) {
-    try {
-      const response = await api.get('/api/dashboards', { params });
-      return response.data;
-    } catch (error) {
-      // Return empty data if API not available
-      console.warn('Dashboards API not available, using placeholder data');
-      return { success: true, data: [] };
+    const [legacyResult, reportResult] = await Promise.allSettled([
+      api.get('/api/dashboards', { params }),
+      api.get('/api/reports-dashboards', { params }),
+    ]);
+
+    const legacyPayload = legacyResult.status === 'fulfilled'
+      ? normalizeDashboardCollectionResponse(legacyResult.value.data)
+      : { success: false, data: [], meta: { backend: 'legacy', canWrite: false } };
+
+    const reportPayload = reportResult.status === 'fulfilled'
+      ? normalizeDashboardCollectionResponse(reportResult.value.data)
+      : { success: false, data: [], meta: { backend: 'reports', canWrite: false } };
+
+    if (legacyResult.status === 'rejected' && reportResult.status === 'rejected') {
+      console.warn('Dashboard APIs not available, using placeholder data');
+      return {
+        success: true,
+        data: [],
+        meta: {
+          backend: 'unknown',
+          canWrite: false,
+        },
+      };
     }
+
+    const merged = [...reportPayload.data, ...legacyPayload.data];
+    const deduped = [];
+    const seen = new Set();
+
+    for (const dashboard of merged) {
+      if (!dashboard?.id || seen.has(dashboard.id)) continue;
+      seen.add(dashboard.id);
+      deduped.push(dashboard);
+    }
+
+    deduped.sort((left, right) => {
+      if (Boolean(right?.isDefault) !== Boolean(left?.isDefault)) {
+        return Boolean(right?.isDefault) - Boolean(left?.isDefault);
+      }
+
+      const rightTime = new Date(right?.updatedAt || right?.createdAt || 0).getTime() || 0;
+      const leftTime = new Date(left?.updatedAt || left?.createdAt || 0).getTime() || 0;
+      return rightTime - leftTime;
+    });
+
+    return {
+      success: true,
+      data: deduped,
+      meta: {
+        backend: reportPayload.data.length > 0 && legacyPayload.data.length > 0
+          ? 'hybrid'
+          : reportPayload.data.length > 0
+          ? 'reports'
+          : 'legacy',
+        canWrite: reportResult.status === 'fulfilled',
+      },
+    };
   },
 
   async getDashboard(id) {
     try {
-      const response = await api.get(`/api/dashboards/${id}`);
-      return response.data;
-    } catch (error) {
-      // Return null if API not available
-      console.warn('Dashboard API not available');
-      return null;
+      const reportResponse = await api.get(`/api/reports-dashboards/${id}`);
+      return normalizeDashboardDetailResponse(reportResponse.data);
+    } catch (reportError) {
+      try {
+        const response = await api.get(`/api/dashboards/${id}`);
+        const rawDashboard = response?.data?.data || response?.data;
+
+        if (Array.isArray(rawDashboard?.widget_ids) && !Array.isArray(rawDashboard?.widgets)) {
+          try {
+            const widgetsResponse = await api.get(`/api/dashboards/${id}/widgets`);
+            return normalizeDashboardDetailResponse(response.data, widgetsResponse.data);
+          } catch (widgetError) {
+            console.warn('Dashboard widget definitions not available, using dashboard detail only');
+          }
+        }
+
+        return normalizeDashboardDetailResponse(response.data);
+      } catch (legacyError) {
+        console.warn('Dashboard API not available');
+        return null;
+      }
     }
   },
 
   async createDashboard(data) {
-    const response = await api.post('/api/dashboards', data);
+    const response = await api.post('/api/reports-dashboards', data);
     return response.data.data;
   },
 
   async updateDashboard(id, data) {
-    const response = await api.put(`/api/dashboards/${id}`, data);
+    const response = await api.put(`/api/reports-dashboards/${id}`, data);
     return response.data.data;
   },
 
   async deleteDashboard(id) {
-    const response = await api.delete(`/api/dashboards/${id}`);
+    const response = await api.delete(`/api/reports-dashboards/${id}`);
     return response.data;
   },
 };
