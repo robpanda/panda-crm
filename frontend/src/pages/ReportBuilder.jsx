@@ -2,13 +2,14 @@ import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { reportsApi, modulesApi } from '../services/api';
-import { AdvancedReportEditorPanel } from './AdvancedReportEditor';
+import VisualQueryBuilder from '../components/reports/VisualQueryBuilder';
 import {
   buildSqlPreview,
+  buildPreviewReportSpec,
   getLegacyBaseObject,
   getModuleMetadata,
-  normalizeReportConfig,
   getTemplateById,
+  normalizeReportConfig,
 } from '../utils/reporting';
 import {
   Users,
@@ -182,7 +183,7 @@ export default function ReportBuilder() {
   const [validationErrors, setValidationErrors] = useState({});
   const [appliedTemplateId, setAppliedTemplateId] = useState(null);
 
-  const [report, setReport] = useState(normalizeReportConfig({
+  const [report, setReport] = useState({
     name: '',
     description: '',
     category: 'CUSTOM',
@@ -197,7 +198,10 @@ export default function ReportBuilder() {
     isPublic: false,
     sharedWithRoles: [],
     includeRelations: [],
-  }));
+    sort: [],
+    presentation: { widgets: [] },
+    visualization: {},
+  });
 
   // Fetch available modules
   const { data: modulesData, isLoading: modulesLoading } = useQuery({
@@ -266,18 +270,7 @@ export default function ReportBuilder() {
     try {
       const response = await reportsApi.getSavedReport(id);
       if (response) {
-        // Map old baseObject to new baseModule
-        const moduleMapping = {
-          Opportunity: 'jobs',
-          Account: 'accounts',
-          Lead: 'leads',
-          Contact: 'contacts',
-          WorkOrder: 'workOrders',
-        };
-        setReport(normalizeReportConfig({
-          ...response,
-          baseModule: moduleMapping[response.baseObject] || response.baseModule || response.base_module || 'jobs',
-        }));
+        setReport(normalizeReportConfig(response));
       }
     } catch (error) {
       console.error('Failed to load report:', error);
@@ -288,9 +281,10 @@ export default function ReportBuilder() {
     try {
       setSaving(true);
       // Map baseModule back to baseObject for compatibility
+      const normalizedReport = normalizeReportConfig(report);
       const saveData = {
-        ...report,
-        baseObject: getLegacyBaseObject(report.baseModule),
+        ...buildPreviewReportSpec(normalizedReport),
+        baseObject: getLegacyBaseObject(normalizedReport.baseModule),
       };
 
       let response;
@@ -338,7 +332,7 @@ export default function ReportBuilder() {
   };
 
   const toggleField = (fieldId) => {
-    setReport(prev => normalizeReportConfig({
+    setReport(prev => ({
       ...prev,
       selectedFields: prev.selectedFields.includes(fieldId)
         ? prev.selectedFields.filter(f => f !== fieldId)
@@ -347,7 +341,7 @@ export default function ReportBuilder() {
   };
 
   const toggleGroupByField = (fieldId) => {
-    setReport(prev => normalizeReportConfig({
+    setReport(prev => ({
       ...prev,
       groupByFields: prev.groupByFields.includes(fieldId)
         ? prev.groupByFields.filter(f => f !== fieldId)
@@ -356,7 +350,7 @@ export default function ReportBuilder() {
   };
 
   const toggleRelation = (relationId) => {
-    setReport(prev => normalizeReportConfig({
+    setReport(prev => ({
       ...prev,
       includeRelations: prev.includeRelations.includes(relationId)
         ? prev.includeRelations.filter(r => r !== relationId)
@@ -365,7 +359,7 @@ export default function ReportBuilder() {
   };
 
   const addFilter = () => {
-    setReport(prev => normalizeReportConfig({
+    setReport(prev => ({
       ...prev,
       filters: [
         ...prev.filters,
@@ -375,14 +369,14 @@ export default function ReportBuilder() {
   };
 
   const updateFilter = (index, key, value) => {
-    setReport(prev => normalizeReportConfig({
+    setReport(prev => ({
       ...prev,
       filters: prev.filters.map((f, i) => (i === index ? { ...f, [key]: value } : f)),
     }));
   };
 
   const removeFilter = (index) => {
-    setReport(prev => normalizeReportConfig({
+    setReport(prev => ({
       ...prev,
       filters: prev.filters.filter((_, i) => i !== index),
     }));
@@ -486,13 +480,13 @@ export default function ReportBuilder() {
     if (allSelected) {
       // Deselect all in category
       setReport(prev => ({
-        ...normalizeReportConfig(prev),
+        ...prev,
         selectedFields: prev.selectedFields.filter(id => !fieldIds.includes(id)),
       }));
     } else {
       // Select all in category
       setReport(prev => ({
-        ...normalizeReportConfig(prev),
+        ...prev,
         selectedFields: [...new Set([...prev.selectedFields, ...fieldIds])],
       }));
     }
@@ -638,13 +632,9 @@ export default function ReportBuilder() {
       </div>
 
       {editorMode === 'advanced' && (
-        <AdvancedReportEditorPanel
+        <VisualQueryBuilder
           report={report}
-          onChange={setReport}
-          fields={fields}
-          relationships={relationships}
-          selectedModule={selectedModuleDetails || selectedModule}
-          fieldsError={fieldsError}
+          onChange={(nextReport) => setReport(normalizeReportConfig(nextReport))}
         />
       )}
 

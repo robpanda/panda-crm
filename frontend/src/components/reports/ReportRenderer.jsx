@@ -1,48 +1,32 @@
-import { useMemo } from 'react';
-import {
-  BarChartWidget,
-  KPICard,
-  LineChartWidget,
-  PieChartWidget,
-  TableWidget,
-} from './index';
-import { humanizeFieldLabel } from '../../utils/reporting';
+import KPICard from './KPICard';
+import BarChartWidget from './charts/BarChartWidget';
+import LineChartWidget from './charts/LineChartWidget';
+import PieChartWidget from './charts/PieChartWidget';
+import TableWidget from './charts/TableWidget';
+import { formatReportFieldLabel, normalizeReportConfig, normalizeReportRunResult } from '../../utils/reporting';
 
-function normalizeRows(payload) {
-  const results = payload?.data?.results || payload?.results || payload?.data || payload || {};
-  const rows = Array.isArray(results?.rows)
-    ? results.rows
-    : Array.isArray(results?.data)
-    ? results.data
-    : Array.isArray(results)
-    ? results
-    : [];
-
-  return {
-    rows,
-    rowCount: results?.rowCount || rows.length,
-    metadata: results?.metadata || {},
-  };
-}
-
-function inferColumns(rows, selectedFields) {
-  if (Array.isArray(selectedFields) && selectedFields.length > 0) {
-    return selectedFields.map((field) => {
-      const fieldId = typeof field === 'string' ? field : field?.id || field?.field || field?.key || field?.name;
-      return {
-        key: fieldId,
-        label: humanizeFieldLabel(fieldId),
-      };
-    });
+function getPreferredBarValueKey(chartData) {
+  if (!Array.isArray(chartData) || chartData.length === 0) {
+    return 'value';
   }
 
-  const firstRow = rows[0];
-  if (!firstRow || typeof firstRow !== 'object') return [];
+  const sample = chartData[0];
+  if (typeof sample.amount === 'number') return 'amount';
+  if (typeof sample.value === 'number') return 'value';
+  if (typeof sample.count === 'number') return 'count';
+  return 'value';
+}
 
-  return Object.keys(firstRow).map((key) => ({
-    key,
-    label: humanizeFieldLabel(key),
-  }));
+function formatMetricValue(value, format) {
+  if (format === 'currency') {
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      maximumFractionDigits: 0,
+    }).format(value || 0);
+  }
+
+  return value;
 }
 
 export default function ReportRenderer({
@@ -52,88 +36,115 @@ export default function ReportRenderer({
   title,
   subtitle,
   emptyStateContext,
+  pageSize = 10,
 }) {
-  const { rows, rowCount } = useMemo(() => normalizeRows(payload), [payload]);
-  const chartType = String(report?.chartType || 'TABLE').toUpperCase();
-  const columns = useMemo(() => inferColumns(rows, report?.selectedFields), [rows, report?.selectedFields]);
-
-  const chartRows = rows.map((row, index) => ({
-    id: row?.id || `row-${index}`,
-    ...row,
-  }));
+  const normalizedReport = normalizeReportConfig(report);
+  const normalized = normalizeReportRunResult(normalizedReport, payload);
+  const chartType = String(normalizedReport?.chartType || 'TABLE').toUpperCase();
+  const widgetTitle = title || normalizedReport?.name || 'Report';
+  const widgetSubtitle = subtitle || normalized.dateRangeLabel || null;
+  const chartData = normalized.chartData;
+  const rows = normalized.rows;
+  const rowKeys = Object.keys(rows?.[0] || {});
 
   if (chartType === 'KPI') {
-    const value = rowCount;
     return (
-      <KPICard
-        title={title}
-        value={value}
-        subtitle={subtitle}
-        loading={loading}
-        source="native"
-        emptyStateContext={emptyStateContext}
-      />
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+        {normalized.metrics.map((metric) => (
+          <KPICard
+            key={metric.id}
+            title={metric.label}
+            value={metric.value}
+            format={metric.format}
+            loading={loading}
+            subtitle={widgetSubtitle}
+            emptyStateContext={{
+              ...emptyStateContext,
+              title: metric.label,
+              rowCount: normalized.rowCount,
+              isEmpty: !metric.value,
+            }}
+          />
+        ))}
+      </div>
     );
   }
 
   if (chartType === 'BAR') {
-    const nameKey = columns[0]?.key || 'name';
-    const dataKey = columns[1]?.key || columns[0]?.key || 'value';
     return (
       <BarChartWidget
-        title={title}
-        subtitle={subtitle}
+        title={widgetTitle}
+        subtitle={widgetSubtitle}
+        data={chartData}
+        dataKey={getPreferredBarValueKey(chartData)}
+        nameKey="name"
+        layout="vertical"
         loading={loading}
-        data={chartRows}
-        nameKey={nameKey}
-        dataKey={dataKey}
-        emptyStateContext={emptyStateContext}
-      />
-    );
-  }
-
-  if (chartType === 'LINE' || chartType === 'AREA') {
-    const xAxisKey = columns[0]?.key || 'name';
-    const lineField = columns[1]?.key || columns[0]?.key || 'value';
-
-    return (
-      <LineChartWidget
-        title={title}
-        subtitle={subtitle}
-        loading={loading}
-        data={chartRows}
-        xAxisKey={xAxisKey}
-        lines={[{ dataKey: lineField, name: humanizeFieldLabel(lineField), color: 'primary' }]}
-        showArea={chartType === 'AREA'}
         emptyStateContext={emptyStateContext}
       />
     );
   }
 
   if (chartType === 'PIE') {
-    const nameKey = columns[0]?.key || 'name';
-    const dataKey = columns[1]?.key || columns[0]?.key || 'value';
-
     return (
       <PieChartWidget
-        title={title}
-        subtitle={subtitle}
+        title={widgetTitle}
+        subtitle={widgetSubtitle}
+        data={chartData}
+        dataKey={getPreferredBarValueKey(chartData)}
+        nameKey="name"
         loading={loading}
-        data={chartRows}
-        nameKey={nameKey}
-        dataKey={dataKey}
         emptyStateContext={emptyStateContext}
       />
     );
   }
 
+  if (chartType === 'LINE' || chartType === 'AREA') {
+    const lineData = Array.isArray(rows) ? rows : chartData;
+
+    return (
+      <LineChartWidget
+        title={widgetTitle}
+        subtitle={widgetSubtitle}
+        data={lineData}
+        lines={[
+          {
+            dataKey: 'value',
+            name: widgetTitle,
+            color: chartType === 'AREA' ? 'success' : 'primary',
+          },
+        ]}
+        xAxisKey={lineData[0]?.date ? 'date' : 'name'}
+        formatValue={(value) => formatMetricValue(value, 'number')}
+        loading={loading}
+        showArea={chartType === 'AREA'}
+        emptyStateContext={emptyStateContext}
+      />
+    );
+  }
+
+  const useConfiguredColumns = Array.isArray(normalizedReport?.selectedFields)
+    && normalizedReport.selectedFields.length > 0
+    && (rowKeys.length === 0 || normalizedReport.selectedFields.some((field) => rowKeys.includes(field)));
+
+  const columns = useConfiguredColumns
+    ? normalizedReport.selectedFields.map((field) => ({
+        key: field,
+        label: formatReportFieldLabel(field),
+      }))
+    : rowKeys.map((field) => ({
+        key: field,
+        label: formatReportFieldLabel(field),
+      }));
+
   return (
     <TableWidget
-      title={title}
-      subtitle={subtitle}
-      loading={loading}
-      data={chartRows}
+      title={widgetTitle}
+      subtitle={widgetSubtitle}
+      data={rows}
       columns={columns}
+      loading={loading}
+      pageSize={pageSize}
       emptyStateContext={emptyStateContext}
       emptyMessage="No data found"
     />

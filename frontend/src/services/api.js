@@ -3117,6 +3117,11 @@ export const reportsApi = {
     return response.data;
   },
 
+  async previewReport(payload = {}) {
+    const response = await api.post('/api/reports/preview', payload);
+    return response.data;
+  },
+
   async toggleFavorite(id) {
     const response = await api.post(`/api/reports/${id}/favorite`);
     return response.data;
