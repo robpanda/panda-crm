@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import {
   ArrowLeft,
@@ -41,6 +41,7 @@ const PRIORITY_CONFIG = {
 export default function SupportTicketDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useAuth();
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -52,10 +53,14 @@ export default function SupportTicketDetail() {
   const [newMessage, setNewMessage] = useState('');
   const [attachments, setAttachments] = useState([]);
   const [uploading, setUploading] = useState(false);
+  const [adminStatus, setAdminStatus] = useState('');
+  const [adminPriority, setAdminPriority] = useState('');
+  const [updatingTicket, setUpdatingTicket] = useState(false);
+  const isAdminView = location.pathname.startsWith('/admin/support/');
 
   useEffect(() => {
     loadTicketDetail();
-  }, [id]);
+  }, [id, isAdminView]);
 
   useEffect(() => {
     scrollToBottom();
@@ -64,9 +69,13 @@ export default function SupportTicketDetail() {
   const loadTicketDetail = async () => {
     try {
       setLoading(true);
-      const response = await api.get(`/api/support/tickets/${id}`);
+      const response = await api.get(
+        isAdminView ? `/api/support/admin/tickets/${id}` : `/api/support/tickets/${id}`
+      );
       setTicket(response.data.ticket);
       setMessages(response.data.messages || []);
+      setAdminStatus(response.data.ticket?.status || '');
+      setAdminPriority(response.data.ticket?.priority || '');
     } catch (error) {
       console.error('Failed to load ticket:', error);
     } finally {
@@ -127,12 +136,12 @@ export default function SupportTicketDetail() {
           name: file.name,
           size: file.size,
           type: file.type,
-          url: response.data.url,
+          url: response.data?.url || response.data?.data?.url,
         };
       });
 
       const uploadedFiles = await Promise.all(uploadPromises);
-      setAttachments([...attachments, ...uploadedFiles]);
+      setAttachments((prev) => [...prev, ...uploadedFiles.filter((file) => file.url)]);
     } catch (error) {
       console.error('Failed to upload files:', error);
       alert('Failed to upload files. Please try again.');
@@ -164,6 +173,23 @@ export default function SupportTicketDetail() {
   const isAdmin = user?.roleType?.toLowerCase() === 'admin' ||
                   user?.role?.name?.toLowerCase()?.includes('admin');
 
+  const handleAdminUpdate = async () => {
+    if (!ticket?.id) return;
+    try {
+      setUpdatingTicket(true);
+      await api.patch(`/api/support/admin/tickets/${ticket.id}`, {
+        status: adminStatus || ticket.status,
+        priority: adminPriority || ticket.priority,
+      });
+      await loadTicketDetail();
+    } catch (error) {
+      console.error('Failed to update ticket:', error);
+      alert(error.response?.data?.error || 'Failed to update ticket');
+    } finally {
+      setUpdatingTicket(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -178,7 +204,7 @@ export default function SupportTicketDetail() {
         <AlertCircle className="w-16 h-16 text-gray-300 mx-auto mb-4" />
         <h3 className="text-lg font-medium text-gray-900 mb-2">Ticket not found</h3>
         <button
-          onClick={() => navigate('/support')}
+          onClick={() => navigate(isAdminView ? '/admin/support/tickets' : '/support')}
           className="text-panda-primary hover:underline"
         >
           Back to Support
@@ -195,7 +221,7 @@ export default function SupportTicketDetail() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <button
-          onClick={() => navigate('/support')}
+          onClick={() => navigate(isAdminView ? '/admin/support/tickets' : '/support')}
           className="flex items-center gap-2 text-gray-600 hover:text-gray-900"
         >
           <ArrowLeft className="w-5 h-5" />
@@ -528,6 +554,41 @@ export default function SupportTicketDetail() {
           {/* Quick Actions (Admin Only) */}
           {isAdmin && (
             <div className="bg-white rounded-xl border border-gray-100 p-6">
+              <h3 className="font-semibold text-gray-900 mb-4">Admin Ticket Controls</h3>
+              <div className="space-y-3 mb-6">
+                <div>
+                  <label className="block text-sm text-gray-500 mb-1">Status</label>
+                  <select
+                    value={adminStatus}
+                    onChange={(e) => setAdminStatus(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                  >
+                    {Object.entries(STATUS_CONFIG).map(([value, config]) => (
+                      <option key={value} value={value}>{config.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-500 mb-1">Priority</label>
+                  <select
+                    value={adminPriority}
+                    onChange={(e) => setAdminPriority(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                  >
+                    {Object.entries(PRIORITY_CONFIG).map(([value, config]) => (
+                      <option key={value} value={value}>{config.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  onClick={handleAdminUpdate}
+                  disabled={updatingTicket}
+                  className="w-full px-4 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90 transition-colors disabled:opacity-50"
+                >
+                  {updatingTicket ? 'Saving...' : 'Save Ticket Updates'}
+                </button>
+              </div>
+
               <h3 className="font-semibold text-gray-900 mb-4">Admin Actions</h3>
               <div className="space-y-2">
                 <button

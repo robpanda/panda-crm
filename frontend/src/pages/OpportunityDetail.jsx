@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { opportunitiesApi, companyCamApi, scheduleApi, casesApi, emailsApi, notificationsApi, bamboogliApi, approvalsApi, measurementsApi, contactsApi, ringCentralApi, usersApi, quotesApi, invoicesApi, tasksApi, documentsApi } from '../services/api';
+import { opportunitiesApi, companyCamApi, scheduleApi, casesApi, emailsApi, notificationsApi, bamboogliApi, approvalsApi, measurementsApi, contactsApi, ringCentralApi, usersApi, quotesApi, invoicesApi, paymentsApi, tasksApi, documentsApi } from '../services/api';
 import { useRingCentral } from '../context/RingCentralContext';
 import { useAuth } from '../context/AuthContext';
 import { addRecentItem } from '../utils/recentItems';
@@ -97,12 +97,282 @@ import {
   Send,
   ExternalLink,
   Download,
+  Trash2,
   ZoomIn,
   ChevronLeft,
   Grid,
   Zap,
   UserCircle,
 } from 'lucide-react';
+
+const getInvoiceTotalValue = (invoice) => Number(invoice?.total ?? invoice?.totalAmount ?? 0);
+
+const INVOICE_ACTIVITY_META_PATTERN = /^\[\[actor:([^\]]+)\]\]\s*/i;
+
+const parseInvoiceActivityNotes = (notes) => {
+  const raw = typeof notes === 'string' ? notes : '';
+  const match = raw.match(INVOICE_ACTIVITY_META_PATTERN);
+  return {
+    actorName: match?.[1]?.trim() || null,
+    displayNotes: raw.replace(INVOICE_ACTIVITY_META_PATTERN, '').trim(),
+  };
+};
+
+const encodeInvoiceActivityNotes = (notes, actorName) => {
+  const baseNotes = parseInvoiceActivityNotes(notes).displayNotes;
+  if (!actorName) return baseNotes;
+  return `[[actor:${actorName}]] ${baseNotes}`.trim();
+};
+
+const computeInvoiceLineItemTotal = (item) => {
+  const quantity = Number(item?.quantity ?? 1);
+  const unitPrice = Number(item?.unitPrice ?? item?.price ?? 0);
+  const storedTotal = Number(item?.totalPrice ?? item?.totalAmount ?? item?.total);
+  const computedTotal = Number.isFinite(quantity * unitPrice) ? quantity * unitPrice : 0;
+
+  if (Number.isFinite(storedTotal) && storedTotal > 0) {
+    return storedTotal;
+  }
+
+  return computedTotal;
+};
+
+const normalizeInvoiceAdditionalCharge = (charge) => {
+  const amount = Number(charge?.amount ?? charge?.fixedAmount ?? 0);
+  const percentageOfTotal = charge?.percentageOfTotal === null || charge?.percentageOfTotal === undefined
+    ? null
+    : Number(charge.percentageOfTotal);
+  const { actorName, displayNotes } = parseInvoiceActivityNotes(charge?.notes);
+
+  return {
+    ...charge,
+    amount,
+    fixedAmount: Number(charge?.fixedAmount ?? amount ?? 0),
+    percentageOfTotal,
+    notes: displayNotes,
+    actorName,
+    isDiscount: amount < 0,
+  };
+};
+
+const normalizeInvoiceTotals = (invoice) => {
+  if (!invoice || typeof invoice !== 'object') return invoice;
+  const normalizedLineItems = Array.isArray(invoice.lineItems)
+    ? invoice.lineItems.map((item) => {
+      const totalPrice = computeInvoiceLineItemTotal(item);
+      return {
+        ...item,
+        quantity: Number(item?.quantity ?? 1),
+        unitPrice: Number(item?.unitPrice ?? item?.price ?? 0),
+        totalPrice,
+      };
+    })
+    : [];
+  const normalizedCharges = Array.isArray(invoice.additionalCharges)
+    ? invoice.additionalCharges.map(normalizeInvoiceAdditionalCharge)
+    : [];
+  const computedSubtotal = normalizedLineItems.reduce((sum, item) => sum + Number(item.totalPrice || 0), 0);
+  const computedAdjustments = normalizedCharges.reduce((sum, charge) => sum + Number(charge.amount || 0), 0);
+  const tax = Number(invoice.tax ?? 0);
+  const storedTotal = getInvoiceTotalValue(invoice);
+  const computedTotal = computedSubtotal + tax + computedAdjustments;
+  const total = computedTotal > 0 ? computedTotal : storedTotal;
+  const amountPaid = Number(invoice.amountPaid ?? 0);
+  const balanceDue = invoice.balanceDue !== undefined && invoice.balanceDue !== null
+    ? Math.max(Number(invoice.balanceDue), 0)
+    : Math.max(total - amountPaid, 0);
+
+  return {
+    ...invoice,
+    subtotal: computedSubtotal > 0 ? computedSubtotal : Number(invoice.subtotal ?? 0),
+    lineItems: normalizedLineItems,
+    additionalCharges: normalizedCharges,
+    total,
+    totalAmount: total,
+    amountPaid,
+    balanceDue,
+  };
+};
+
+const DOCUMENT_UPLOAD_CATEGORY_OPTIONS = [
+  { value: 'contract', label: 'Contract' },
+  { value: 'measurement', label: 'Measurement' },
+  { value: 'insurance', label: 'Insurance' },
+  { value: 'invoice', label: 'Invoice' },
+  { value: 'quote', label: 'Quote' },
+  { value: 'permit', label: 'Permit' },
+  { value: 'photo', label: 'Photo' },
+  { value: 'other', label: 'Other' },
+];
+
+const DOCUMENT_CATEGORY_LABELS = {
+  contract: 'Contract',
+  measurement: 'Measurement',
+  insurance: 'Insurance',
+  invoice: 'Invoice',
+  quote: 'Quote',
+  permit: 'Permit',
+  photo: 'Photo',
+  photos: 'Photo',
+  payment: 'Payment',
+  other: 'Other',
+};
+
+function normalizeDocumentCategory(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return DOCUMENT_CATEGORY_LABELS[normalized] ? normalized : 'other';
+}
+
+function getDocumentCategoryLabel(value) {
+  return DOCUMENT_CATEGORY_LABELS[normalizeDocumentCategory(value)] || 'Other';
+}
+
+function getDocumentCategoryBadgeClass(value) {
+  const normalized = normalizeDocumentCategory(value);
+  switch (normalized) {
+    case 'contract':
+      return 'bg-blue-100 text-blue-700';
+    case 'measurement':
+      return 'bg-purple-100 text-purple-700';
+    case 'insurance':
+      return 'bg-amber-100 text-amber-700';
+    case 'invoice':
+      return 'bg-green-100 text-green-700';
+    case 'quote':
+      return 'bg-cyan-100 text-cyan-700';
+    case 'permit':
+      return 'bg-indigo-100 text-indigo-700';
+    case 'photo':
+    case 'photos':
+      return 'bg-pink-100 text-pink-700';
+    case 'payment':
+      return 'bg-emerald-100 text-emerald-700';
+    default:
+      return 'bg-gray-100 text-gray-700';
+  }
+}
+
+function parseAdjusterOfficePhone(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return { phone: '', extension: '' };
+
+  const extMatch = raw.match(/^(.*?)(?:\s*(?:ext\.?|x|extension)\s*[:#-]?\s*([a-z0-9-]+))$/i);
+  if (!extMatch) return { phone: raw, extension: '' };
+
+  return {
+    phone: extMatch[1]?.trim() || '',
+    extension: extMatch[2]?.trim() || '',
+  };
+}
+
+function formatAdjusterOfficePhone(phone, extension) {
+  const normalizedPhone = String(phone || '').trim();
+  const normalizedExtension = String(extension || '').trim();
+
+  if (!normalizedPhone && !normalizedExtension) return null;
+  if (!normalizedExtension) return normalizedPhone || null;
+  return `${normalizedPhone} ext ${normalizedExtension}`.trim();
+}
+
+function toDateInputValue(value) {
+  if (!value) return '';
+  const raw = String(value);
+  const isoMatch = raw.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (isoMatch?.[1]) return isoMatch[1];
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return '';
+  const year = parsed.getUTCFullYear();
+  const month = String(parsed.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(parsed.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function toSafeIsoDateTime(dateInput) {
+  if (!dateInput) return null;
+  const value = String(dateInput).trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  return `${value}T12:00:00.000Z`;
+}
+
+function formatDateFromStoredValue(value) {
+  if (!value) return null;
+  const datePart = toDateInputValue(value);
+  if (!datePart) return null;
+  const [year, month, day] = datePart.split('-').map((n) => Number(n));
+  if (!year || !month || !day) return null;
+  const utcDate = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  return utcDate.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric', timeZone: 'UTC' });
+}
+
+function formatLocalAppointmentDateTime(value) {
+  if (!value) return 'Not scheduled';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return 'Not scheduled';
+  const date = formatDisplayDate(parsed);
+  const time = formatDisplayTime(parsed);
+  return `${date} at ${time}`;
+}
+
+function formatDisplayDate(value) {
+  if (!value) return '-';
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '-';
+  return parsed.toLocaleDateString('en-US', {
+    month: '2-digit',
+    day: '2-digit',
+    year: 'numeric',
+  });
+}
+
+function formatDisplayTime(value) {
+  if (!value) return '';
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (!Number.isNaN(parsed.getTime())) {
+    return parsed.toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    });
+  }
+
+  const raw = String(value || '').trim();
+  const twelveHourMatch = raw.match(/^(\d{1,2}):(\d{2})\s*([ap]m)$/i);
+  if (twelveHourMatch) {
+    const [, hour, minute, meridiem] = twelveHourMatch;
+    return `${Number(hour)}:${minute} ${meridiem.toUpperCase()}`;
+  }
+
+  const twentyFourHourMatch = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (twentyFourHourMatch) {
+    const [, hourText, minute] = twentyFourHourMatch;
+    const hour = Number(hourText);
+    if (Number.isFinite(hour)) {
+      const normalizedHour = hour % 12 || 12;
+      const meridiem = hour >= 12 ? 'PM' : 'AM';
+      return `${normalizedHour}:${minute} ${meridiem}`;
+    }
+  }
+
+  return raw;
+}
+
+function resolveMergeFieldValue(source, path) {
+  if (!source || !path) return '';
+  return String(path)
+    .split('.')
+    .filter(Boolean)
+    .reduce((value, key) => (value !== undefined && value !== null ? value[key] : undefined), source) ?? '';
+}
+
+function interpolateMergeFields(template, mergeData = {}) {
+  if (!template) return '';
+
+  return String(template).replace(/\{\{\s*([^}]+?)\s*\}\}|\{([a-zA-Z0-9_.]+)\}/g, (match, dottedKey, simpleKey) => {
+    const key = (dottedKey || simpleKey || '').trim();
+    const resolved = resolveMergeFieldValue(mergeData, key);
+    return resolved === undefined || resolved === null ? '' : String(resolved);
+  });
+}
 
 // SMS Modal Component with Canned Responses (same as LeadDetail)
 function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {} }) {
@@ -493,24 +763,30 @@ function EmailModal({ isOpen, onClose, email, recipientName, onSent, mergeData =
 }
 
 // Invoice Detail Modal Component - Shows invoice details with payment history
-function InvoiceDetailModal({ invoice, onClose }) {
+function InvoiceDetailModal({
+  invoice,
+  onClose,
+  onInvoiceUpdated,
+  onOpenSendInvoice,
+  onOpenPayInvoice,
+  onInvoiceDeleted,
+  activities = [],
+  currentUser,
+}) {
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    loadPayments();
-  }, [invoice.id]);
-
-  const loadPayments = async () => {
-    try {
-      const response = await paymentsApi.getPaymentsByInvoice(invoice.id);
-      setPayments(response.data || []);
-    } catch (err) {
-      console.error('Error loading payments:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [isEditing, setIsEditing] = useState(false);
+  const [editError, setEditError] = useState(null);
+  const [editSuccess, setEditSuccess] = useState(null);
+  const [activeInvoiceTab, setActiveInvoiceTab] = useState('details');
+  const [form, setForm] = useState({
+    invoiceDate: '',
+    dueDate: '',
+    tax: 0,
+    notes: '',
+    lineItems: [],
+    additionalCharges: [],
+  });
 
   const formatDate = (date) => {
     if (!date) return '-';
@@ -526,7 +802,301 @@ function InvoiceDetailModal({ invoice, onClose }) {
     return new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: 'USD',
-    }).format(amount);
+    }).format(Number(amount) || 0);
+  };
+
+  const formatRelativeTime = (value) => {
+    if (!value) return '-';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return '-';
+    return parsed.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    });
+  };
+
+  const formatDateInput = (value) => {
+    if (!value) return '';
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return '';
+    return parsed.toISOString().slice(0, 10);
+  };
+
+  const actorDisplayName = currentUser?.fullName
+    || currentUser?.name
+    || `${currentUser?.firstName || ''} ${currentUser?.lastName || ''}`.trim()
+    || 'System User';
+
+  const getAdjustmentComputedAmount = useCallback((charge, subtotal = 0) => {
+    const entryKind = charge?.entryKind === 'discount' ? 'discount' : 'charge';
+    const calcMode = charge?.calcMode === 'percent' ? 'percent' : 'amount';
+    const rawValue = Number(charge?.inputValue ?? charge?.amount ?? 0);
+    if (!Number.isFinite(rawValue) || rawValue === 0) return 0;
+
+    const baseAmount = calcMode === 'percent'
+      ? Number(((subtotal * rawValue) / 100).toFixed(2))
+      : Math.abs(rawValue);
+
+    return entryKind === 'discount' ? -Math.abs(baseAmount) : Math.abs(baseAmount);
+  }, []);
+
+  const buildAdjustmentPayload = useCallback((charge, subtotal = 0) => {
+    const amount = getAdjustmentComputedAmount(charge, subtotal);
+    const entryKind = charge?.entryKind === 'discount' ? 'discount' : 'charge';
+    const calcMode = charge?.calcMode === 'percent' ? 'percent' : 'amount';
+    const displayName = charge?.name?.trim() || (entryKind === 'discount' ? 'Discount' : 'Supplement');
+    const persistedNotes = encodeInvoiceActivityNotes(charge?.notes || '', actorDisplayName);
+
+    return {
+      name: displayName,
+      amount,
+      notes: persistedNotes,
+      chargeType: 'ADJUSTMENT',
+      percentageOfTotal: entryKind === 'discount' && calcMode === 'percent'
+        ? Math.abs(Number(charge?.inputValue || 0))
+        : null,
+    };
+  }, [actorDisplayName, getAdjustmentComputedAmount]);
+
+  const hydrateFormFromInvoice = useCallback((sourceInvoice) => ({
+    invoiceDate: formatDateInput(sourceInvoice?.invoiceDate),
+    dueDate: formatDateInput(sourceInvoice?.dueDate),
+    tax: Number(sourceInvoice?.tax || 0),
+    notes: sourceInvoice?.notes || '',
+    lineItems: (sourceInvoice?.lineItems || []).map((item) => ({
+      id: item.id || null,
+      description: item.description || item.name || '',
+      quantity: Number(item.quantity || 1),
+      unitPrice: Number(item.unitPrice || item.price || 0),
+    })),
+    additionalCharges: (sourceInvoice?.additionalCharges || []).map((charge) => {
+      const normalizedCharge = normalizeInvoiceAdditionalCharge(charge);
+      return {
+        id: normalizedCharge.id || null,
+        name: normalizedCharge.name || (normalizedCharge.isDiscount ? 'Discount' : 'Supplement'),
+        amount: normalizedCharge.amount,
+        notes: normalizedCharge.notes || '',
+        chargeType: normalizedCharge.chargeType || 'ADJUSTMENT',
+        entryKind: normalizedCharge.isDiscount ? 'discount' : 'charge',
+        calcMode: normalizedCharge.percentageOfTotal ? 'percent' : 'amount',
+        inputValue: normalizedCharge.percentageOfTotal
+          ? Math.abs(Number(normalizedCharge.percentageOfTotal || 0))
+          : Math.abs(Number(normalizedCharge.amount || 0)),
+      };
+    }),
+  }), []);
+
+  useEffect(() => {
+    setForm(hydrateFormFromInvoice(invoice));
+    setIsEditing(false);
+    setEditError(null);
+    setEditSuccess(null);
+    setActiveInvoiceTab('details');
+  }, [invoice, hydrateFormFromInvoice]);
+
+  useEffect(() => {
+    const loadPayments = async () => {
+      setLoading(true);
+      try {
+        const response = await paymentsApi.getPaymentsByInvoice(invoice.id);
+        const paymentList = Array.isArray(response?.payments)
+          ? response.payments
+          : (Array.isArray(response?.data) ? response.data : []);
+        setPayments(paymentList);
+      } catch (err) {
+        console.error('Error loading payments:', err);
+        setPayments([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadPayments();
+  }, [invoice.id]);
+
+  const lineItemsSubtotal = useMemo(
+    () => form.lineItems.reduce((sum, item) => sum + (Number(item.quantity) * Number(item.unitPrice)), 0),
+    [form.lineItems]
+  );
+  const normalizedAdjustments = useMemo(
+    () => form.additionalCharges.map((charge) => ({
+      ...charge,
+      amount: getAdjustmentComputedAmount(charge, lineItemsSubtotal),
+    })),
+    [form.additionalCharges, getAdjustmentComputedAmount, lineItemsSubtotal]
+  );
+  const supplementsTotal = useMemo(
+    () => normalizedAdjustments.filter((charge) => Number(charge.amount || 0) > 0)
+      .reduce((sum, charge) => sum + Number(charge.amount || 0), 0),
+    [normalizedAdjustments]
+  );
+  const discountsTotal = useMemo(
+    () => Math.abs(
+      normalizedAdjustments
+        .filter((charge) => Number(charge.amount || 0) < 0)
+        .reduce((sum, charge) => sum + Number(charge.amount || 0), 0)
+    ),
+    [normalizedAdjustments]
+  );
+  const adjustmentsNetTotal = useMemo(
+    () => normalizedAdjustments.reduce((sum, charge) => sum + Number(charge.amount || 0), 0),
+    [normalizedAdjustments]
+  );
+  const computedTotal = lineItemsSubtotal + Number(form.tax || 0) + adjustmentsNetTotal;
+  const invoiceAmountPaid = Number(invoice.amountPaid || 0);
+  const computedBalanceDue = Math.max(computedTotal - invoiceAmountPaid, 0);
+
+  const canSendOrResend = (invoice.status || 'DRAFT') !== 'VOID';
+  const sendLabel = ['SENT', 'OVERDUE', 'PARTIAL', 'PAID'].includes(invoice.status) ? 'Resend' : 'Send';
+  const canPay = invoice.status !== 'PAID' && Number(invoice.balanceDue || 0) > 0;
+  const canDeleteInvoice = !isEditing && payments.length === 0 && !loading;
+  const activityItems = useMemo(() => {
+    const rawItems = Array.isArray(activities) ? activities : [];
+    const communicationItems = rawItems
+      .filter((item) => {
+        const type = String(item?.activityType || item?.type || '').toLowerCase();
+        return type.includes('sms') || type.includes('email') || type.includes('phone') || type.includes('call');
+      })
+      .map((item) => ({
+        id: item.id,
+        label: String(item?.activityType || item?.type || 'Activity').replace(/_/g, ' '),
+        timestamp: item.createdAt || item.date || item.updatedAt || null,
+        summary: item.subject || item.title || item.body || item.message || item.description || 'Communication activity',
+      }));
+    const invoiceAdjustmentItems = (invoice.additionalCharges || [])
+      .filter((charge) => Number(charge.amount || 0) !== 0)
+      .map((charge) => {
+        const details = normalizeInvoiceAdditionalCharge(charge);
+        const label = details.amount < 0 ? 'discount added' : 'adjustment added';
+        const notes = details.notes || (details.amount < 0 ? details.name || 'Discount' : details.name || 'Adjustment');
+        const actorName = details.actorName || 'Unknown user';
+        return {
+          id: `invoice-adjustment-${details.id || details.name}-${details.createdAt || ''}`,
+          label,
+          timestamp: details.createdAt || details.updatedAt || null,
+          summary: `${actorName} added ${details.name || (details.amount < 0 ? 'a discount' : 'an adjustment')}${notes ? ` • ${notes}` : ''}`,
+        };
+      });
+    return [...communicationItems, ...invoiceAdjustmentItems]
+      .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+  }, [activities, invoice.additionalCharges]);
+  const lastContactedAt = activityItems[0]?.timestamp || null;
+
+  const updateInvoiceMutation = useMutation({
+    mutationFn: (payload) => invoicesApi.updateInvoice(invoice.id, payload),
+    onSuccess: (updated) => {
+      const updatedInvoice = normalizeInvoiceTotals(updated?.data || updated);
+      onInvoiceUpdated?.(updatedInvoice);
+      setEditSuccess('Invoice updated successfully');
+      setEditError(null);
+      setIsEditing(false);
+    },
+    onError: (error) => {
+      setEditError(error.message || 'Failed to update invoice');
+    },
+  });
+
+  const deleteInvoiceMutation = useMutation({
+    mutationFn: () => invoicesApi.deleteInvoice(invoice.id),
+    onSuccess: () => {
+      setEditError(null);
+      setEditSuccess('Invoice deleted successfully');
+      onInvoiceDeleted?.();
+    },
+    onError: (error) => {
+      setEditError(error.message || 'Failed to delete invoice');
+    },
+  });
+
+  const downloadInvoicePdfMutation = useMutation({
+    mutationFn: async () => {
+      let result = await invoicesApi.getInvoicePdf(invoice.id);
+      let pdfUrl = result?.pdfUrl || result?.data?.pdfUrl;
+      if (!pdfUrl) {
+        await invoicesApi.generateInvoicePdf(invoice.id);
+        result = await invoicesApi.getInvoicePdf(invoice.id);
+        pdfUrl = result?.pdfUrl || result?.data?.pdfUrl;
+      }
+      if (!pdfUrl) {
+        throw new Error('Invoice PDF is unavailable');
+      }
+      return pdfUrl;
+    },
+    onSuccess: (pdfUrl) => {
+      window.open(pdfUrl, '_blank', 'noopener,noreferrer');
+    },
+    onError: (error) => {
+      setEditError(error.message || 'Failed to download invoice PDF');
+    },
+  });
+
+  const handleLineItemChange = (index, key, value) => {
+    setForm((prev) => {
+      const updated = [...prev.lineItems];
+      updated[index] = {
+        ...updated[index],
+        [key]: key === 'quantity' || key === 'unitPrice' ? Number(value) : value,
+      };
+      return { ...prev, lineItems: updated };
+    });
+  };
+
+  const handleAdditionalChargeChange = (index, key, value) => {
+    setForm((prev) => {
+      const updated = [...prev.additionalCharges];
+      const normalizedValue = ['amount', 'inputValue', 'percentageOfTotal'].includes(key)
+        ? Math.abs(Number(value || 0))
+        : value;
+      updated[index] = {
+        ...updated[index],
+        [key]: normalizedValue,
+      };
+      if (key === 'entryKind' && value === 'charge') {
+        updated[index].calcMode = 'amount';
+      }
+      return { ...prev, additionalCharges: updated };
+    });
+  };
+
+  const handleSave = () => {
+    if (!form.lineItems.length) {
+      setEditError('At least one line item is required.');
+      return;
+    }
+    if (form.lineItems.some((item) => !item.description?.trim())) {
+      setEditError('All line items must have a description.');
+      return;
+    }
+
+    if (form.lineItems.some((item) => Number(item.quantity) <= 0)) {
+      setEditError('Line item quantity must be greater than 0.');
+      return;
+    }
+
+    if (form.lineItems.some((item) => Number(item.unitPrice) < 0)) {
+      setEditError('Line item price cannot be negative.');
+      return;
+    }
+
+    const payload = {
+      invoiceDate: form.invoiceDate ? new Date(`${form.invoiceDate}T00:00:00.000Z`).toISOString() : undefined,
+      dueDate: form.dueDate ? new Date(`${form.dueDate}T00:00:00.000Z`).toISOString() : undefined,
+      tax: Number(form.tax || 0),
+      notes: form.notes || '',
+      lineItems: form.lineItems.map((item) => ({
+        description: item.description.trim(),
+        quantity: Number(item.quantity || 1),
+        unitPrice: Number(item.unitPrice || 0),
+      })),
+      additionalCharges: form.additionalCharges
+        .map((charge) => buildAdjustmentPayload(charge, lineItemsSubtotal))
+        .filter((charge) => Number(charge.amount || 0) !== 0),
+    };
+
+    updateInvoiceMutation.mutate(payload);
   };
 
   return (
@@ -543,12 +1113,77 @@ function InvoiceDetailModal({ invoice, onClose }) {
               <p className="text-sm text-gray-500">Invoice Details</p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-          >
-            <X className="w-5 h-5 text-gray-500" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => downloadInvoicePdfMutation.mutate()}
+              disabled={downloadInvoicePdfMutation.isPending}
+              className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+            >
+              {downloadInvoicePdfMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Download className="h-4 w-4" />
+              )}
+              <span>Download</span>
+            </button>
+            {canSendOrResend && (
+              <button
+                onClick={() => onOpenSendInvoice?.(invoice)}
+                disabled={!onOpenSendInvoice}
+                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
+              >
+                <Mail className="h-4 w-4" />
+                <span>{sendLabel}</span>
+              </button>
+            )}
+            {canPay && (
+              <button
+                onClick={() => onOpenPayInvoice?.(invoice)}
+                className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700"
+              >
+                <CreditCard className="h-4 w-4" />
+                <span>Pay</span>
+              </button>
+            )}
+            {!isEditing ? (
+              <button
+                onClick={() => {
+                  setIsEditing(true);
+                  setEditError(null);
+                  setEditSuccess(null);
+                }}
+                className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+              >
+                <Edit className="h-4 w-4" />
+                <span>Edit</span>
+              </button>
+            ) : null}
+            {canDeleteInvoice ? (
+              <button
+                onClick={() => {
+                  const confirmed = window.confirm('Delete this invoice? This is only available when no payments have been applied.');
+                  if (confirmed) {
+                    deleteInvoiceMutation.mutate();
+                  }
+                }}
+                disabled={deleteInvoiceMutation.isPending}
+                className="inline-flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 hover:bg-red-100 disabled:opacity-60"
+              >
+                {deleteInvoiceMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4" />
+                )}
+                <span>Delete</span>
+              </button>
+            ) : null}
+            <button
+              onClick={onClose}
+              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+            >
+              <X className="w-5 h-5 text-gray-500" />
+            </button>
+          </div>
         </div>
 
         {/* Content */}
@@ -588,8 +1223,282 @@ function InvoiceDetailModal({ invoice, onClose }) {
             </span>
           </div>
 
+          {!isEditing && (
+            <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1">
+              <button
+                type="button"
+                onClick={() => setActiveInvoiceTab('details')}
+                className={`px-4 py-2 rounded-md text-sm ${
+                  activeInvoiceTab === 'details' ? 'bg-panda-primary text-white' : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                Details
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveInvoiceTab('activity')}
+                className={`px-4 py-2 rounded-md text-sm ${
+                  activeInvoiceTab === 'activity' ? 'bg-panda-primary text-white' : 'text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                Activity
+              </button>
+            </div>
+          )}
+
+          {isEditing && (
+            <div className="space-y-4 border border-blue-100 bg-blue-50/40 rounded-lg p-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Invoice Date</label>
+                  <input
+                    type="date"
+                    value={form.invoiceDate}
+                    onChange={(event) => setForm((prev) => ({ ...prev, invoiceDate: event.target.value }))}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Due Date</label>
+                  <input
+                    type="date"
+                    value={form.dueDate}
+                    onChange={(event) => setForm((prev) => ({ ...prev, dueDate: event.target.value }))}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1">Tax</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={form.tax}
+                    onChange={(event) => setForm((prev) => ({ ...prev, tax: Number(event.target.value || 0) }))}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-semibold text-gray-800">Line Items</h4>
+                  <button
+                    type="button"
+                    onClick={() => setForm((prev) => ({
+                      ...prev,
+                      lineItems: [...prev.lineItems, { description: '', quantity: 1, unitPrice: 0 }],
+                    }))}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-panda-primary bg-white border border-panda-primary/20 rounded-md hover:bg-panda-primary/5"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Add Item
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {form.lineItems.map((item, index) => (
+                    <div key={`line-item-${index}`} className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center bg-white border border-gray-200 rounded-lg p-2">
+                      <input
+                        type="text"
+                        value={item.description}
+                        onChange={(event) => handleLineItemChange(index, 'description', event.target.value)}
+                        placeholder="Description"
+                        className="sm:col-span-6 border border-gray-300 rounded px-2 py-1.5 text-sm"
+                      />
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={item.quantity}
+                        onChange={(event) => handleLineItemChange(index, 'quantity', event.target.value)}
+                        className="sm:col-span-2 border border-gray-300 rounded px-2 py-1.5 text-sm"
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={item.unitPrice}
+                        onChange={(event) => handleLineItemChange(index, 'unitPrice', event.target.value)}
+                        className="sm:col-span-3 border border-gray-300 rounded px-2 py-1.5 text-sm"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setForm((prev) => ({
+                            ...prev,
+                            lineItems: prev.lineItems.filter((_, lineIndex) => lineIndex !== index),
+                          }))
+                        }
+                        className="sm:col-span-1 inline-flex items-center justify-center text-red-500 hover:text-red-700"
+                        title="Remove line item"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-semibold text-gray-800">Adjustments</h4>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setForm((prev) => ({
+                        ...prev,
+                        additionalCharges: [
+                          ...prev.additionalCharges,
+                          {
+                            name: 'Supplement',
+                            amount: 0,
+                            inputValue: 0,
+                            notes: '',
+                            chargeType: 'ADJUSTMENT',
+                            entryKind: 'charge',
+                            calcMode: 'amount',
+                          },
+                        ],
+                      }))}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-panda-primary bg-white border border-panda-primary/20 rounded-md hover:bg-panda-primary/5"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      Add Charge
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setForm((prev) => ({
+                        ...prev,
+                        additionalCharges: [
+                          ...prev.additionalCharges,
+                          {
+                            name: 'Discount',
+                            amount: 0,
+                            inputValue: 0,
+                            notes: '',
+                            chargeType: 'ADJUSTMENT',
+                            entryKind: 'discount',
+                            calcMode: 'amount',
+                          },
+                        ],
+                      }))}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-red-600 bg-white border border-red-200 rounded-md hover:bg-red-50"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      Add Discount
+                    </button>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  {form.additionalCharges.map((charge, index) => (
+                    <div key={`charge-${index}`} className="grid grid-cols-1 gap-2 rounded-lg border border-gray-200 bg-white p-3 sm:grid-cols-12">
+                      <input
+                        type="text"
+                        value={charge.name}
+                        onChange={(event) => handleAdditionalChargeChange(index, 'name', event.target.value)}
+                        placeholder="Adjustment name"
+                        className="sm:col-span-3 border border-gray-300 rounded px-2 py-1.5 text-sm"
+                      />
+                      <select
+                        value={charge.entryKind || 'charge'}
+                        onChange={(event) => handleAdditionalChargeChange(index, 'entryKind', event.target.value)}
+                        className="sm:col-span-2 border border-gray-300 rounded px-2 py-1.5 text-sm"
+                      >
+                        <option value="charge">Charge</option>
+                        <option value="discount">Discount</option>
+                      </select>
+                      {(charge.entryKind || 'charge') === 'discount' && (
+                        <select
+                          value={charge.calcMode || 'amount'}
+                          onChange={(event) => handleAdditionalChargeChange(index, 'calcMode', event.target.value)}
+                          className="sm:col-span-2 border border-gray-300 rounded px-2 py-1.5 text-sm"
+                        >
+                          <option value="amount">Amount</option>
+                          <option value="percent">Percent</option>
+                        </select>
+                      )}
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={charge.inputValue ?? Math.abs(Number(charge.amount || 0))}
+                        onChange={(event) => handleAdditionalChargeChange(index, 'inputValue', event.target.value)}
+                        className={`${(charge.entryKind || 'charge') === 'discount' ? 'sm:col-span-2' : 'sm:col-span-3'} border border-gray-300 rounded px-2 py-1.5 text-sm`}
+                      />
+                      {(charge.entryKind || 'charge') === 'discount' && (charge.calcMode || 'amount') === 'percent' && (
+                        <div className="sm:col-span-1 flex items-center text-xs font-medium text-gray-500">
+                          %
+                        </div>
+                      )}
+                      <input
+                        type="text"
+                        value={charge.notes}
+                        onChange={(event) => handleAdditionalChargeChange(index, 'notes', event.target.value)}
+                        placeholder="Notes"
+                        className={`${(charge.entryKind || 'charge') === 'discount' && (charge.calcMode || 'amount') === 'percent' ? 'sm:col-span-3' : 'sm:col-span-4'} border border-gray-300 rounded px-2 py-1.5 text-sm`}
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setForm((prev) => ({
+                            ...prev,
+                            additionalCharges: prev.additionalCharges.filter((_, chargeIndex) => chargeIndex !== index),
+                          }))
+                        }
+                        className="sm:col-span-1 inline-flex items-center justify-center text-red-500 hover:text-red-700"
+                        title="Remove charge"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                      <div className="sm:col-span-12 text-xs text-gray-500">
+                        Saved amount: {formatCurrency(getAdjustmentComputedAmount(charge, lineItemsSubtotal))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">Notes</label>
+                <textarea
+                  rows={3}
+                  value={form.notes}
+                  onChange={(event) => setForm((prev) => ({ ...prev, notes: event.target.value }))}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                />
+              </div>
+
+              <div className="bg-white border border-gray-200 rounded-lg p-3 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-600">Line Items Subtotal</span>
+                  <span className="font-medium">{formatCurrency(lineItemsSubtotal)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-600">Supplements / Charges</span>
+                  <span className="font-medium">{formatCurrency(supplementsTotal)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-600">Discounts</span>
+                  <span className="font-medium text-red-600">-{formatCurrency(discountsTotal)}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-600">Tax</span>
+                  <span className="font-medium">{formatCurrency(form.tax)}</span>
+                </div>
+                <div className="mt-2 pt-2 border-t border-gray-100 flex items-center justify-between">
+                  <span className="font-semibold text-gray-800">Total</span>
+                  <span className="font-semibold text-gray-900">{formatCurrency(computedTotal)}</span>
+                </div>
+                <div className="mt-1 flex items-center justify-between">
+                  <span className="text-gray-600">Balance Due</span>
+                  <span className="font-medium text-red-600">{formatCurrency(computedBalanceDue)}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Line Items */}
-          {invoice.lineItems && invoice.lineItems.length > 0 && (
+          {!isEditing && activeInvoiceTab === 'details' && invoice.lineItems && invoice.lineItems.length > 0 && (
             <div>
               <h3 className="text-sm font-medium text-gray-900 mb-2">Line Items</h3>
               <div className="border rounded-lg overflow-hidden">
@@ -608,7 +1517,14 @@ function InvoiceDetailModal({ invoice, onClose }) {
                         <td className="p-2">{item.description || item.name}</td>
                         <td className="p-2 text-right">{item.quantity || 1}</td>
                         <td className="p-2 text-right">{formatCurrency(item.unitPrice || item.price)}</td>
-                        <td className="p-2 text-right">{formatCurrency(item.totalAmount || item.total)}</td>
+                        <td className="p-2 text-right">
+                          {formatCurrency(
+                            item.totalPrice
+                            ?? item.totalAmount
+                            ?? item.total
+                            ?? ((Number(item.quantity || 1) * Number(item.unitPrice || item.price || 0)) || 0)
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -617,8 +1533,70 @@ function InvoiceDetailModal({ invoice, onClose }) {
             </div>
           )}
 
+          {!isEditing && activeInvoiceTab === 'details' && Array.isArray(invoice.additionalCharges) && invoice.additionalCharges.some((charge) => Number(charge.amount || charge.fixedAmount || 0) > 0) && (
+            <div>
+              <h3 className="text-sm font-medium text-gray-900 mb-2">Supplements / Additional Charges</h3>
+              <div className="border rounded-lg overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="text-left p-2 text-gray-600">Name</th>
+                      <th className="text-right p-2 text-gray-600">Amount</th>
+                      <th className="text-left p-2 text-gray-600">Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invoice.additionalCharges.filter((charge) => Number(charge.amount || charge.fixedAmount || 0) > 0).map((charge, idx) => (
+                      <tr key={charge.id || idx} className="border-t">
+                        <td className="p-2">{charge.name || 'Supplement'}</td>
+                        <td className="p-2 text-right">{formatCurrency(charge.amount || charge.fixedAmount)}</td>
+                        <td className="p-2 text-gray-600">{charge.notes || '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {!isEditing && activeInvoiceTab === 'details' && Array.isArray(invoice.additionalCharges) && invoice.additionalCharges.some((charge) => Number(charge.amount || charge.fixedAmount || 0) < 0) && (
+            <div>
+              <h3 className="text-sm font-medium text-gray-900 mb-2">Discounts</h3>
+              <div className="border rounded-lg overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="text-left p-2 text-gray-600">Name</th>
+                      <th className="text-right p-2 text-gray-600">Amount</th>
+                      <th className="text-left p-2 text-gray-600">Notes</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invoice.additionalCharges.filter((charge) => Number(charge.amount || charge.fixedAmount || 0) < 0).map((charge, idx) => (
+                      <tr key={charge.id || idx} className="border-t">
+                        <td className="p-2">{charge.name || 'Discount'}</td>
+                        <td className="p-2 text-right text-red-600">-{formatCurrency(Math.abs(Number(charge.amount || charge.fixedAmount || 0)))}</td>
+                        <td className="p-2 text-gray-600">{charge.notes || '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {!isEditing && activeInvoiceTab === 'details' && invoice.notes && (
+            <div>
+              <h3 className="text-sm font-medium text-gray-900 mb-2">Notes</h3>
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
+                {invoice.notes}
+              </div>
+            </div>
+          )}
+
           {/* Payment History */}
-          <div>
+          {!isEditing && activeInvoiceTab === 'details' && (
+            <div>
             <h3 className="text-sm font-medium text-gray-900 mb-2">Payment History</h3>
             {loading ? (
               <div className="flex items-center justify-center py-4">
@@ -644,17 +1622,68 @@ function InvoiceDetailModal({ invoice, onClose }) {
             ) : (
               <p className="text-sm text-gray-500 py-2">No payments recorded for this invoice.</p>
             )}
-          </div>
+            </div>
+          )}
+
+          {!isEditing && activeInvoiceTab === 'activity' && (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Last Contacted</p>
+                <p className="mt-1 text-sm font-medium text-gray-900">
+                  {lastContactedAt ? formatDate(lastContactedAt) : 'No communication recorded'}
+                </p>
+              </div>
+
+              {activityItems.length > 0 ? (
+                <div className="space-y-2">
+                  {activityItems.slice(0, 12).map((item) => (
+                    <div key={item.id} className="rounded-lg border border-gray-200 p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm font-medium text-gray-900 capitalize">{item.label}</p>
+                        <span className="text-xs text-gray-400">{formatRelativeTime(item.timestamp)}</span>
+                      </div>
+                      <p className="mt-1 text-sm text-gray-600 break-words">{item.summary}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-500">No communication activity recorded for this invoice yet.</p>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Footer */}
-        <div className="border-t p-4">
-          <button
-            onClick={onClose}
-            className="w-full py-2 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition-colors"
-          >
-            Close
-          </button>
+        <div className="border-t p-4 flex items-center gap-2">
+          {isEditing ? (
+            <>
+              <button
+                onClick={() => {
+                  setForm(hydrateFormFromInvoice(invoice));
+                  setIsEditing(false);
+                  setEditError(null);
+                  setEditSuccess(null);
+                }}
+                className="flex-1 py-2 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={updateInvoiceMutation.isPending}
+                className="flex-1 py-2 px-4 bg-panda-primary hover:bg-panda-dark text-white rounded-lg font-medium transition-colors disabled:opacity-60"
+              >
+                {updateInvoiceMutation.isPending ? 'Saving...' : 'Save Changes'}
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={onClose}
+              className="w-full py-2 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition-colors"
+            >
+              Close
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -662,7 +1691,22 @@ function InvoiceDetailModal({ invoice, onClose }) {
 }
 
 // Communications Tab Component - Shows SMS, Email, and Phone call history
-function CommunicationsTab({ phone, email, contactName, archivedActivities = [], onActivityClick, opportunityId }) {
+function CommunicationsTab({
+  phone,
+  email,
+  contactName,
+  conversations = [],
+  emails = [],
+  archivedActivities = [],
+  onActivityClick,
+  opportunityId,
+  onComposeSms,
+  onComposeEmail,
+  onCall,
+  canComposeSms = true,
+  canComposeEmail = true,
+  canCall = true,
+}) {
   const [filter, setFilter] = useState('all'); // all, sms, email, phone
   const [activeSubTab, setActiveSubTab] = useState('live'); // live, archive
   const [collapsedThreads, setCollapsedThreads] = useState(new Set());
@@ -675,6 +1719,12 @@ function CommunicationsTab({ phone, email, contactName, archivedActivities = [],
   const [selectedMentions, setSelectedMentions] = useState([]);
   const [mentionCursorPos, setMentionCursorPos] = useState(0);
   const replyInputRef = useRef(null);
+  const conversationIds = useMemo(
+    () => (Array.isArray(conversations) ? conversations : [])
+      .map((conversation) => conversation?.id)
+      .filter(Boolean),
+    [conversations]
+  );
 
   // Fetch users for @mention autocomplete
   const { data: mentionUsers } = useQuery({
@@ -687,32 +1737,48 @@ function CommunicationsTab({ phone, email, contactName, archivedActivities = [],
     enabled: showMentionDropdown && mentionSearch.length >= 1,
   });
 
-  // Fetch SMS/Email conversation by phone or email
-  const { data: conversation, isLoading: conversationLoading } = useQuery({
-    queryKey: ['opp-conversation', phone, email],
+  // Fetch SMS/Email messages for all opportunity-linked conversations.
+  // Fall back to the identifier lookup only when no linked conversations exist yet.
+  const { data: messagesData, isLoading: messagesLoading } = useQuery({
+    queryKey: ['opp-messages', opportunityId, conversationIds.join(','), phone, email],
     queryFn: async () => {
       try {
+        if (conversationIds.length > 0) {
+          const results = await Promise.allSettled(
+            conversationIds.map((conversationId) =>
+              bamboogliApi.getMessagesByConversation(conversationId, { limit: 100 })
+            )
+          );
+
+          const dedupedMessages = new Map();
+          results.forEach((result) => {
+            if (result.status !== 'fulfilled') return;
+            const payload = Array.isArray(result.value) ? result.value : result.value?.data || [];
+            payload.forEach((message) => {
+              const key = message?.id || `${message?.conversationId || 'conversation'}-${message?.createdAt || message?.timestamp || Math.random()}`;
+              if (!dedupedMessages.has(key)) {
+                dedupedMessages.set(key, message);
+              }
+            });
+          });
+
+          return { data: Array.from(dedupedMessages.values()) };
+        }
+
         const identifier = phone || email;
-        if (!identifier) return null;
-        const data = await bamboogliApi.getConversationByIdentifier(identifier);
-        return data;
+        if (!identifier) return { data: [] };
+        const fallbackConversation = await bamboogliApi.getConversationByIdentifier(identifier);
+        if (!fallbackConversation?.id) return { data: [] };
+        const fallbackMessages = await bamboogliApi.getMessagesByConversation(fallbackConversation.id, { limit: 100 });
+        return {
+          data: Array.isArray(fallbackMessages) ? fallbackMessages : fallbackMessages?.data || [],
+        };
       } catch (err) {
-        console.error('Failed to fetch conversation:', err);
-        return null;
+        console.error('Failed to fetch customer communications:', err);
+        return { data: [] };
       }
     },
-    enabled: !!(phone || email),
-  });
-
-  // Fetch messages for the conversation
-  const { data: messagesData, isLoading: messagesLoading } = useQuery({
-    queryKey: ['opp-messages', conversation?.id],
-    queryFn: async () => {
-      if (!conversation?.id) return { data: [] };
-      const data = await bamboogliApi.getMessagesByConversation(conversation.id, { limit: 100 });
-      return data;
-    },
-    enabled: !!conversation?.id,
+    enabled: conversationIds.length > 0 || Boolean(phone || email),
   });
 
   // Fetch RingCentral call logs for this phone number
@@ -731,13 +1797,32 @@ function CommunicationsTab({ phone, email, contactName, archivedActivities = [],
     enabled: !!phone,
   });
 
-  const isLoading = conversationLoading || messagesLoading || callsLoading;
+  const isLoading = messagesLoading || callsLoading;
   const messages = messagesData?.data || messagesData || [];
   const callLogs = callLogsData?.data || callLogsData || [];
 
   // Separate messages by type
   const smsMessages = Array.isArray(messages) ? messages.filter(m => m.type === 'sms' || m.channel === 'sms') : [];
-  const emailMessages = Array.isArray(messages) ? messages.filter(m => m.type === 'email' || m.channel === 'email') : [];
+  const threadedEmailMessages = Array.isArray(messages) ? messages.filter(m => m.type === 'email' || m.channel === 'email') : [];
+  const directEmailMessages = Array.isArray(emails)
+    ? emails.map((message) => ({
+        ...message,
+        activityType: 'email',
+        timestamp: new Date(message.sentAt || message.createdAt || message.updatedAt || Date.now()),
+        displayDate: new Date(message.sentAt || message.createdAt || message.updatedAt || Date.now()).toLocaleString(),
+        body: message.body || message.htmlBody || message.textBody || '',
+        subject: message.subject || 'Email',
+        direction: message.direction || 'sent',
+      }))
+    : [];
+  const emailMessages = Array.from(
+    new Map(
+      [...threadedEmailMessages, ...directEmailMessages].map((message) => [
+        message?.id || `${message?.subject || 'email'}-${message?.timestamp || message?.createdAt || Date.now()}`,
+        message,
+      ])
+    ).values()
+  );
 
   // Combine all activity into a unified timeline
   const allActivity = [
@@ -750,8 +1835,8 @@ function CommunicationsTab({ phone, email, contactName, archivedActivities = [],
     ...emailMessages.map(m => ({
       ...m,
       activityType: 'email',
-      timestamp: new Date(m.createdAt || m.timestamp),
-      displayDate: new Date(m.createdAt || m.timestamp).toLocaleString(),
+      timestamp: new Date(m.createdAt || m.sentAt || m.timestamp),
+      displayDate: new Date(m.createdAt || m.sentAt || m.timestamp).toLocaleString(),
     })),
     ...(Array.isArray(callLogs) ? callLogs : []).map(c => ({
       ...c,
@@ -820,6 +1905,43 @@ function CommunicationsTab({ phone, email, contactName, archivedActivities = [],
             {archiveCount}
           </span>
         </button>
+      </div>
+
+      <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-gray-900">Customer Comms</h3>
+            <p className="mt-1 text-sm text-gray-500">
+              Threaded SMS, email, and call activity for {contactName || 'this customer'}.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 lg:w-auto">
+            <button
+              onClick={onComposeSms}
+              disabled={!canComposeSms}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-purple-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <MessageSquare className="h-4 w-4" />
+              <span>SMS</span>
+            </button>
+            <button
+              onClick={onComposeEmail}
+              disabled={!canComposeEmail}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-orange-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-orange-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Mail className="h-4 w-4" />
+              <span>Email</span>
+            </button>
+            <button
+              onClick={onCall}
+              disabled={!canCall}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Phone className="h-4 w-4" />
+              <span>Call</span>
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* AI Conversation Summary - Shows at top when there's activity */}
@@ -1902,6 +3024,21 @@ export default function OpportunityDetail() {
     staleTime: Infinity,
   });
 
+  const selectedConversationId = activeQuickAction?.type === 'viewConversation'
+    ? activeQuickAction?.conversation?.id
+    : null;
+
+  const {
+    data: selectedConversationMessagesData = [],
+    isLoading: selectedConversationMessagesLoading,
+  } = useQuery({
+    queryKey: ['opportunityConversationMessages', selectedConversationId],
+    queryFn: () => bamboogliApi.getMessagesByConversation(selectedConversationId, { limit: 200 }),
+    enabled: !!selectedConversationId,
+    retry: false,
+    staleTime: 30000,
+  });
+
   // CompanyCam photos - service not yet deployed, disable retries
   const { data: photos } = useQuery({
     queryKey: ['opportunityPhotos', id],
@@ -1920,6 +3057,9 @@ export default function OpportunityDetail() {
     staleTime: 30000, // Refresh every 30 seconds to check for pending report updates
   });
   const measurementReports = measurementReportsData?.data || [];
+  const selectedConversationMessages = Array.isArray(selectedConversationMessagesData)
+    ? selectedConversationMessagesData
+    : selectedConversationMessagesData?.data || [];
 
   // Update opportunity mutation
   const updateMutation = useMutation({
@@ -3046,7 +4186,7 @@ export default function OpportunityDetail() {
     { id: 'contacts', label: 'Contacts', icon: Users, count: summary?.counts?.contacts || contacts?.length || 0 },
     { id: 'workOrders', label: 'Work Orders', icon: Wrench, count: summary?.counts?.workOrders || workOrders?.length || 0 },
     { id: 'cases', label: 'Cases', icon: Briefcase, count: cases?.length || 0 },
-    { id: 'conversations', label: 'Conversations', icon: MessageSquare, count: totalUnread, highlight: totalUnread > 0 },
+    { id: 'conversations', label: 'Customer Comms', icon: MessageSquare, count: totalUnread, highlight: totalUnread > 0 },
     { id: 'notifications', label: 'Notifications', icon: Bell, count: unreadNotifications, highlight: unreadNotifications > 0 },
     { id: 'approvals', label: 'Approvals', icon: Scale },
     { id: 'financials', label: 'Financials', icon: DollarSign, count: (invoices?.length || 0) + (quotes?.length || 0) },
@@ -3056,7 +4196,6 @@ export default function OpportunityDetail() {
     { id: 'commissions', label: 'Commissions', icon: Percent, count: summary?.counts?.commissions || commissions?.length || 0 },
     { id: 'documents', label: 'Documents', icon: FileSignature, count: (summary?.counts?.documents || documents?.documents?.length || 0) },
     { id: 'activity', label: 'Activity', icon: Activity, count: activityData?.activities?.filter(a => a.sourceType !== 'ACCULYNX_IMPORT')?.length || 0 },
-    { id: 'communications', label: 'Communications', icon: PhoneCall, count: activityData?.activities?.filter(a => a.sourceType === 'ACCULYNX_IMPORT')?.length || 0 },
     { id: 'tasks', label: 'Tasks', icon: CheckSquare, count: tasks?.filter(t => t.status !== 'COMPLETED')?.length || 0 },
     { id: 'checklist', label: 'Checklist', icon: ClipboardList },
   ];
@@ -5520,207 +6659,36 @@ export default function OpportunityDetail() {
                   </div>
                 )}
 
-                {/* ============================================================ */}
-                {/* UNIFIED CONVERSATIONS TAB - SMS, Email, and Call Log */}
-                {/* ============================================================ */}
-                {activeTab === 'conversations' && (
-                  <div className="space-y-4">
-                    {/* Header with Action Buttons */}
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-sm font-semibold text-gray-900">Conversations</h3>
-                      <div className="flex items-center space-x-2">
-                        <button
-                          onClick={() => setShowSmsModal(true)}
-                          disabled={!opportunity?.contact?.phone && !opportunity?.phone}
-                          className="flex items-center space-x-1 px-3 py-1.5 bg-purple-600 text-white rounded-lg hover:bg-purple-700 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          <MessageSquare className="w-4 h-4" />
-                          <span>SMS</span>
-                        </button>
-                        <button
-                          onClick={() => setShowEmailModal(true)}
-                          disabled={!opportunity?.contact?.email}
-                          className="flex items-center space-x-1 px-3 py-1.5 bg-orange-600 text-white rounded-lg hover:bg-orange-700 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          <Mail className="w-4 h-4" />
-                          <span>Email</span>
-                        </button>
-                        <button
-                          onClick={() => {
-                            const phoneNumber = opportunity?.contact?.phone || opportunity?.phone;
-                            if (phoneNumber) {
-                              if (rcLoggedIn) {
-                                initiateCall(phoneNumber);
-                              } else {
-                                loadWidget();
-                                // After widget loads, user can click to call
-                                setActionSuccess('RingCentral widget loaded. Click on the phone number to call.');
-                                setTimeout(() => setActionSuccess(null), 3000);
-                              }
-                            }
-                          }}
-                          disabled={!opportunity?.contact?.phone && !opportunity?.phone}
-                          className="flex items-center space-x-1 px-3 py-1.5 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          <Phone className="w-4 h-4" />
-                          <span>Call</span>
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Unified Timeline - SMS Conversations + Emails merged and sorted by date */}
-                    {(() => {
-                      // Merge conversations and emails into a unified timeline
-                      const smsItems = (conversations || []).map(c => ({
-                        ...c,
-                        itemType: 'sms',
-                        sortDate: c.lastMessageAt || c.createdAt,
-                      }));
-                      const emailItems = (emails || []).map(e => ({
-                        ...e,
-                        itemType: 'email',
-                        sortDate: e.sentAt || e.createdAt,
-                      }));
-                      const allItems = [...smsItems, ...emailItems].sort((a, b) =>
-                        new Date(b.sortDate) - new Date(a.sortDate)
-                      );
-
-                      if (allItems.length === 0) {
-                        return (
-                          <div className="text-center py-8">
-                            <MessageSquare className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-                            <p className="text-gray-500 text-sm">No conversations yet</p>
-                            <p className="text-gray-400 text-xs mt-1">Send an SMS or email to start a conversation</p>
-                            <div className="mt-4 flex justify-center space-x-2">
-                              <button
-                                onClick={() => setShowSmsModal(true)}
-                                disabled={!opportunity?.contact?.phone && !opportunity?.phone}
-                                className="inline-flex items-center space-x-1 px-3 py-1.5 bg-purple-600 text-white rounded-lg hover:bg-purple-700 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                              >
-                                <MessageSquare className="w-4 h-4" />
-                                <span>Send SMS</span>
-                              </button>
-                              <button
-                                onClick={() => setShowEmailModal(true)}
-                                disabled={!opportunity?.contact?.email}
-                                className="inline-flex items-center space-x-1 px-3 py-1.5 bg-orange-600 text-white rounded-lg hover:bg-orange-700 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                              >
-                                <Mail className="w-4 h-4" />
-                                <span>Send Email</span>
-                              </button>
-                            </div>
-                          </div>
-                        );
+                {(activeTab === 'conversations' || activeTab === 'communications') && (
+                  <CommunicationsTab
+                    phone={opportunity?.contact?.phone || opportunity?.contact?.mobilePhone || opportunity?.phone}
+                    email={opportunity?.contact?.email}
+                    contactName={opportunity?.contact?.name || `${opportunity?.contact?.firstName || ''} ${opportunity?.contact?.lastName || ''}`.trim()}
+                    conversations={conversations || []}
+                    emails={emails || []}
+                    archivedActivities={activityData?.activities?.filter(a => a.sourceType === 'ACCULYNX_IMPORT') || []}
+                    onActivityClick={(item) => {
+                      setSelectedActivity(item);
+                      setShowActivityModal(true);
+                    }}
+                    opportunityId={id}
+                    onComposeSms={() => setShowSmsModal(true)}
+                    onComposeEmail={() => setShowEmailModal(true)}
+                    onCall={() => {
+                      const phoneNumber = opportunity?.contact?.phone || opportunity?.contact?.mobilePhone || opportunity?.phone;
+                      if (!phoneNumber) return;
+                      if (rcLoggedIn) {
+                        initiateCall(phoneNumber);
+                        return;
                       }
-
-                      return allItems.map((item) => {
-                        if (item.itemType === 'sms') {
-                          // SMS Conversation Card
-                          return (
-                            <div key={`sms-${item.id}`} className="border border-gray-200 rounded-lg overflow-hidden hover:border-green-400 transition-colors">
-                              <div className="p-4">
-                                <div className="flex items-center justify-between">
-                                  <div className="flex items-center space-x-3">
-                                    <div className="p-2 rounded-lg bg-green-100">
-                                      <Phone className="w-5 h-5 text-green-600" />
-                                    </div>
-                                    <div>
-                                      <div className="flex items-center space-x-2">
-                                        <h4 className="font-medium text-gray-900">{item.phoneNumber || 'SMS Conversation'}</h4>
-                                        <span className="px-2 py-0.5 bg-green-100 text-green-700 text-xs font-medium rounded-full">SMS</span>
-                                      </div>
-                                      <p className="text-sm text-gray-600 line-clamp-1">{item.lastMessagePreview || 'No messages yet'}</p>
-                                    </div>
-                                  </div>
-                                  <div className="flex items-center space-x-2">
-                                    {item.unreadCount > 0 && (
-                                      <span className="px-2 py-1 bg-panda-primary text-white rounded-full text-xs font-medium">{item.unreadCount}</span>
-                                    )}
-                                  </div>
-                                </div>
-                                <div className="mt-3 flex items-center justify-between">
-                                  <span className="flex items-center text-xs text-gray-500">
-                                    <Clock className="w-3 h-3 mr-1" />
-                                    {item.lastMessageAt ? new Date(item.lastMessageAt).toLocaleString() : 'No date'}
-                                  </span>
-                                  <button
-                                    onClick={() => {
-                                      setActiveQuickAction({ type: 'viewConversation', conversation: item });
-                                      setShowQuickActionModal(true);
-                                    }}
-                                    className="text-xs text-panda-primary hover:text-panda-dark hover:bg-panda-light px-2 py-1 rounded"
-                                  >
-                                    View Thread
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        } else {
-                          // Email Card
-                          return (
-                            <div key={`email-${item.id}`} className="border border-gray-200 rounded-lg overflow-hidden hover:border-blue-400 transition-colors">
-                              <div className="p-4">
-                                <div className="flex items-center justify-between">
-                                  <div className="flex items-center space-x-3">
-                                    <div className={`p-2 rounded-lg ${item.direction === 'INBOUND' ? 'bg-blue-100' : 'bg-indigo-100'}`}>
-                                      <Mail className={`w-5 h-5 ${item.direction === 'INBOUND' ? 'text-blue-600' : 'text-indigo-600'}`} />
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                      <div className="flex items-center space-x-2">
-                                        <h4 className="font-medium text-gray-900 truncate">{item.subject}</h4>
-                                        <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-medium rounded-full">Email</span>
-                                        {item.attachmentCount > 0 && <span className="text-xs text-gray-400">📎 {item.attachmentCount}</span>}
-                                      </div>
-                                      <p className="text-sm text-gray-500">
-                                        {item.direction === 'INBOUND' ? 'From: ' : 'To: '}
-                                        {item.direction === 'INBOUND' ? (item.fromName || item.fromAddress) : item.toAddresses?.join(', ')}
-                                      </p>
-                                    </div>
-                                  </div>
-                                  <span className={`px-2 py-1 rounded text-xs font-medium ${
-                                    item.status === 'DELIVERED' || item.status === 'SENT' ? 'bg-green-100 text-green-800' :
-                                    item.status === 'OPENED' ? 'bg-blue-100 text-blue-800' :
-                                    item.status === 'BOUNCED' ? 'bg-red-100 text-red-800' :
-                                    'bg-gray-100 text-gray-600'
-                                  }`}>
-                                    {item.status === 'OPENED' ? '👁 Opened' : item.status}
-                                  </span>
-                                </div>
-                                {item.bodyText && <p className="mt-2 text-sm text-gray-500 line-clamp-2">{item.bodyText}</p>}
-                                <div className="mt-3 flex items-center justify-between">
-                                  <span className="flex items-center text-xs text-gray-500">
-                                    <Clock className="w-3 h-3 mr-1" />
-                                    {item.sentAt ? new Date(item.sentAt).toLocaleString() : new Date(item.createdAt).toLocaleString()}
-                                  </span>
-                                  <div className="flex items-center space-x-2">
-                                    <button
-                                      onClick={() => {
-                                        setActiveQuickAction({ type: 'replyEmail', email: item });
-                                        setShowQuickActionModal(true);
-                                      }}
-                                      className="text-xs text-panda-primary hover:text-panda-dark hover:bg-panda-light px-2 py-1 rounded"
-                                    >
-                                      Reply
-                                    </button>
-                                    <button
-                                      onClick={() => {
-                                        setActiveQuickAction({ type: 'viewEmail', email: item });
-                                        setShowQuickActionModal(true);
-                                      }}
-                                      className="text-xs text-gray-600 hover:text-gray-700 hover:bg-gray-100 px-2 py-1 rounded"
-                                    >
-                                      View
-                                    </button>
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                          );
-                        }
-                      });
-                    })()}
-                  </div>
+                      loadWidget();
+                      setActionSuccess('RingCentral widget loaded. Click on the phone number to call.');
+                      setTimeout(() => setActionSuccess(null), 3000);
+                    }}
+                    canComposeSms={Boolean(opportunity?.contact?.phone || opportunity?.contact?.mobilePhone || opportunity?.phone)}
+                    canComposeEmail={Boolean(opportunity?.contact?.email)}
+                    canCall={Boolean(opportunity?.contact?.phone || opportunity?.contact?.mobilePhone || opportunity?.phone)}
+                  />
                 )}
 
                 {activeTab === 'emails' && (
@@ -6521,7 +7489,7 @@ export default function OpportunityDetail() {
                       {invoices && invoices.length > 0 ? invoices.map((invoice) => (
                         <div
                           key={invoice.id}
-                          onClick={() => { setSelectedInvoice(invoice); setShowInvoiceDetailModal(true); }}
+                          onClick={() => { setSelectedInvoice(normalizeInvoiceTotals(invoice)); setShowInvoiceDetailModal(true); }}
                           className="border border-gray-200 rounded-lg p-4 hover:border-panda-primary hover:shadow-md transition-all cursor-pointer"
                         >
                           <div className="flex items-center justify-between">
@@ -6567,7 +7535,7 @@ export default function OpportunityDetail() {
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      setSelectedInvoice(invoice);
+                                      setSelectedInvoice(normalizeInvoiceTotals(invoice));
                                       setShowPayInvoiceModal(true);
                                     }}
                                     className="flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 transition-colors"
@@ -7070,20 +8038,6 @@ export default function OpportunityDetail() {
                       setSelectedActivity(item);
                       setShowActivityModal(true);
                     }}
-                  />
-                )}
-
-                {activeTab === 'communications' && (
-                  <CommunicationsTab
-                    phone={opportunity?.contact?.phone || opportunity?.contact?.mobilePhone}
-                    email={opportunity?.contact?.email}
-                    contactName={opportunity?.contact?.name || `${opportunity?.contact?.firstName || ''} ${opportunity?.contact?.lastName || ''}`}
-                    archivedActivities={activityData?.activities?.filter(a => a.sourceType === 'ACCULYNX_IMPORT') || []}
-                    onActivityClick={(item) => {
-                      setSelectedActivity(item);
-                      setShowActivityModal(true);
-                    }}
-                    opportunityId={id}
                   />
                 )}
 
@@ -10420,6 +11374,34 @@ export default function OpportunityDetail() {
       {showInvoiceDetailModal && selectedInvoice && (
         <InvoiceDetailModal
           invoice={selectedInvoice}
+          activities={activityData?.activities || []}
+          currentUser={currentUser}
+          onInvoiceUpdated={(updatedInvoice) => {
+            const normalizedInvoice = normalizeInvoiceTotals(updatedInvoice);
+            queryClient.invalidateQueries({ queryKey: ['opportunityInvoices', id] });
+            queryClient.invalidateQueries({ queryKey: ['opportunitySummary', id] });
+            setSelectedInvoice((prev) => normalizeInvoiceTotals({
+              ...prev,
+              ...(normalizedInvoice || {}),
+            }));
+          }}
+          onOpenSendInvoice={(invoiceRecord) => {
+            setInvoiceToSend(normalizeInvoiceTotals(invoiceRecord));
+            setShowSendInvoiceModal(true);
+          }}
+          onOpenPayInvoice={(invoiceRecord) => {
+            setSelectedInvoice(normalizeInvoiceTotals(invoiceRecord));
+            setShowInvoiceDetailModal(false);
+            setShowPayInvoiceModal(true);
+          }}
+          onInvoiceDeleted={() => {
+            queryClient.invalidateQueries({ queryKey: ['opportunityInvoices', id] });
+            queryClient.invalidateQueries({ queryKey: ['opportunitySummary', id] });
+            setShowInvoiceDetailModal(false);
+            setSelectedInvoice(null);
+            setActionSuccess('Invoice deleted successfully');
+            setTimeout(() => setActionSuccess(null), 3000);
+          }}
           onClose={() => {
             setShowInvoiceDetailModal(false);
             setSelectedInvoice(null);
@@ -10598,7 +11580,8 @@ export default function OpportunityDetail() {
         phone={opportunity?.contact?.phone || opportunity?.phone || ''}
         recipientName={opportunity?.contact?.firstName ? `${opportunity.contact.firstName} ${opportunity.contact.lastName || ''}`.trim() : opportunity?.name || 'Customer'}
         onSent={() => {
-          queryClient.invalidateQueries({ queryKey: ['opportunity', id, 'conversations'] });
+          queryClient.invalidateQueries({ queryKey: ['opportunityConversations', id] });
+          queryClient.invalidateQueries({ queryKey: ['opp-messages', id] });
           setActionSuccess('SMS sent successfully');
           setTimeout(() => setActionSuccess(null), 3000);
         }}
@@ -10620,7 +11603,9 @@ export default function OpportunityDetail() {
         email={opportunity?.contact?.email || ''}
         recipientName={opportunity?.contact?.firstName ? `${opportunity.contact.firstName} ${opportunity.contact.lastName || ''}`.trim() : opportunity?.name || 'Customer'}
         onSent={() => {
-          queryClient.invalidateQueries({ queryKey: ['opportunity', id, 'emails'] });
+          queryClient.invalidateQueries({ queryKey: ['opportunityEmails', id] });
+          queryClient.invalidateQueries({ queryKey: ['opp-messages', id] });
+          queryClient.invalidateQueries({ queryKey: ['opportunityConversations', id] });
           setActionSuccess('Email sent successfully');
           setTimeout(() => setActionSuccess(null), 3000);
         }}

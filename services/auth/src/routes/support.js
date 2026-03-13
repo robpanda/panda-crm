@@ -147,6 +147,74 @@ router.get('/tickets/:id', authMiddleware, async (req, res) => {
   }
 });
 
+// Admin: Get single ticket with full thread
+router.get('/admin/tickets/:id', authMiddleware, async (req, res) => {
+  try {
+    const isAdmin = req.user.roleType?.toLowerCase() === 'admin' ||
+                    req.user.role?.name?.toLowerCase()?.includes('admin');
+    if (!isAdmin) {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+
+    const ticket = await prisma.support_tickets.findUnique({
+      where: { id: req.params.id },
+      include: {
+        user: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+          },
+        },
+        assigned_to: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+          },
+        },
+        related_article: {
+          select: {
+            id: true,
+            title: true,
+            summary: true,
+          },
+        },
+        attachments: true,
+      },
+    });
+
+    if (!ticket) {
+      return res.status(404).json({ error: 'Ticket not found' });
+    }
+
+    const messages = await prisma.support_ticket_messages.findMany({
+      where: { ticket_id: req.params.id },
+      include: {
+        user: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            role: {
+              select: {
+                name: true,
+              },
+            },
+          },
+        },
+      },
+      orderBy: { created_at: 'asc' },
+    });
+
+    res.json({ ticket, messages });
+  } catch (error) {
+    console.error('Failed to get admin ticket:', error);
+    res.status(500).json({ error: 'Failed to load ticket' });
+  }
+});
+
 // Create ticket
 router.post('/tickets', authMiddleware, upload.fields([
   { name: 'screenshot', maxCount: 1 },
