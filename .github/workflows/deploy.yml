@@ -15,6 +15,7 @@ on:
           - accounts
           - contacts
           - leads
+          - reports
           - opportunities
           - workorders
           - quotes
@@ -47,6 +48,8 @@ jobs:
             port: 3002
           - name: leads
             port: 3003
+          - name: reports
+            port: 3014
           - name: opportunities
             port: 3004
           - name: workorders
