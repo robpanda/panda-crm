@@ -260,11 +260,23 @@ export default function DashboardView() {
 
   // Render widget based on type
   const renderWidget = (widget) => {
-    if (widget.savedReportId) {
+    if (
+      widget.savedReportId
+      || widget.reportSpec
+      || widget.widgetKind
+      || widget.chartConfig?.metabaseId
+      || widget.chartConfig?.metabaseDashboardId
+      || widget.chartConfig?.metabaseQuestionId
+    ) {
       return (
         <DashboardReportWidget
           key={widget.id}
           reportId={widget.savedReportId}
+          reportSpec={widget.reportSpec}
+          chartConfig={widget.chartConfig}
+          widgetType={widget.widgetType}
+          widgetKind={widget.widgetKind}
+          visualization={widget.visualization}
           dateRange={dateRange}
           title={widget.title}
           subtitle={widget.subtitle}
@@ -377,14 +389,6 @@ export default function DashboardView() {
     const IconComponent = iconMap[widget.iconName] || Target;
 
     switch (widget.widgetType) {
-      case 'REPORT':
-        return (
-          <div key={widget.id} className="bg-white rounded-xl shadow-sm border border-amber-200 p-5">
-            <h3 className="font-semibold text-gray-900 mb-2">{widget.title || 'Report widget'}</h3>
-            <p className="text-sm text-amber-700">This widget requires configuration.</p>
-          </div>
-        );
-
       case 'KPI_CARD':
         let value = 0;
         if (widget.dataSource === 'pipeline') {
