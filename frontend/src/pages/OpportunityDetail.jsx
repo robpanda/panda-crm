@@ -755,6 +755,7 @@ function InvoiceDetailModal({
   activities = [],
   currentUser,
 }) {
+  const [currentInvoice, setCurrentInvoice] = useState(() => normalizeInvoiceTotals(invoice));
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
@@ -769,6 +770,7 @@ function InvoiceDetailModal({
     lineItems: [],
     additionalCharges: [],
   });
+  const displayInvoice = currentInvoice || normalizeInvoiceTotals(invoice);
 
   const formatDate = (date) => {
     if (!date) return '-';
@@ -873,7 +875,9 @@ function InvoiceDetailModal({
   }), []);
 
   useEffect(() => {
-    setForm(hydrateFormFromInvoice(invoice));
+    const normalizedInvoice = normalizeInvoiceTotals(invoice);
+    setCurrentInvoice(normalizedInvoice);
+    setForm(hydrateFormFromInvoice(normalizedInvoice));
     setIsEditing(false);
     setEditError(null);
     setEditSuccess(null);
@@ -884,7 +888,7 @@ function InvoiceDetailModal({
     const loadPayments = async () => {
       setLoading(true);
       try {
-        const response = await paymentsApi.getPaymentsByInvoice(invoice.id);
+        const response = await paymentsApi.getPaymentsByInvoice(displayInvoice.id);
         const paymentList = Array.isArray(response?.payments)
           ? response.payments
           : (Array.isArray(response?.data) ? response.data : []);
@@ -897,7 +901,7 @@ function InvoiceDetailModal({
       }
     };
     loadPayments();
-  }, [invoice.id]);
+  }, [displayInvoice.id]);
 
   const lineItemsSubtotal = useMemo(
     () => form.lineItems.reduce((sum, item) => sum + (Number(item.quantity) * Number(item.unitPrice)), 0),
@@ -928,12 +932,12 @@ function InvoiceDetailModal({
     [normalizedAdjustments]
   );
   const computedTotal = lineItemsSubtotal + Number(form.tax || 0) + adjustmentsNetTotal;
-  const invoiceAmountPaid = Number(invoice.amountPaid || 0);
+  const invoiceAmountPaid = Number(displayInvoice.amountPaid || 0);
   const computedBalanceDue = Math.max(computedTotal - invoiceAmountPaid, 0);
 
-  const canSendOrResend = (invoice.status || 'DRAFT') !== 'VOID';
-  const sendLabel = ['SENT', 'OVERDUE', 'PARTIAL', 'PAID'].includes(invoice.status) ? 'Resend' : 'Send';
-  const canPay = invoice.status !== 'PAID' && Number(invoice.balanceDue || 0) > 0;
+  const canSendOrResend = (displayInvoice.status || 'DRAFT') !== 'VOID';
+  const sendLabel = ['SENT', 'OVERDUE', 'PARTIAL', 'PAID'].includes(displayInvoice.status) ? 'Resend' : 'Send';
+  const canPay = displayInvoice.status !== 'PAID' && Number(displayInvoice.balanceDue || 0) > 0;
   const activityItems = useMemo(() => {
     const rawItems = Array.isArray(activities) ? activities : [];
     const communicationItems = rawItems
@@ -947,7 +951,7 @@ function InvoiceDetailModal({
         timestamp: item.createdAt || item.date || item.updatedAt || null,
         summary: item.subject || item.title || item.body || item.message || item.description || 'Communication activity',
       }));
-    const invoiceAdjustmentItems = (invoice.additionalCharges || [])
+    const invoiceAdjustmentItems = (displayInvoice.additionalCharges || [])
       .filter((charge) => Number(charge.amount || 0) !== 0)
       .map((charge) => {
         const details = normalizeInvoiceAdditionalCharge(charge);
@@ -963,20 +967,20 @@ function InvoiceDetailModal({
       });
     return [...communicationItems, ...invoiceAdjustmentItems]
       .sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
-  }, [activities, invoice.additionalCharges]);
+  }, [activities, displayInvoice.additionalCharges]);
   const lastContactedAt = activityItems[0]?.timestamp || null;
 
   const updateInvoiceMutation = useMutation({
-    mutationFn: (payload) => invoicesApi.updateInvoice(invoice.id, payload),
+    mutationFn: (payload) => invoicesApi.updateInvoice(displayInvoice.id, payload),
   });
 
   const downloadInvoicePdfMutation = useMutation({
     mutationFn: async () => {
-      let result = await invoicesApi.getInvoicePdf(invoice.id);
+      let result = await invoicesApi.getInvoicePdf(displayInvoice.id);
       let pdfUrl = result?.pdfUrl || result?.data?.pdfUrl;
       if (!pdfUrl) {
-        await invoicesApi.generateInvoicePdf(invoice.id);
-        result = await invoicesApi.getInvoicePdf(invoice.id);
+        await invoicesApi.generateInvoicePdf(displayInvoice.id);
+        result = await invoicesApi.getInvoicePdf(displayInvoice.id);
         pdfUrl = result?.pdfUrl || result?.data?.pdfUrl;
       }
       if (!pdfUrl) {
@@ -1059,27 +1063,18 @@ function InvoiceDetailModal({
       setEditError(null);
       setEditSuccess(null);
       await updateInvoiceMutation.mutateAsync(payload);
-      const refreshedInvoiceResponse = await invoicesApi.getInvoice(invoice.id);
+      const refreshedInvoiceResponse = await invoicesApi.getInvoice(displayInvoice.id);
       const refreshedInvoice = normalizeInvoiceTotals(refreshedInvoiceResponse?.data || refreshedInvoiceResponse);
-
-      queryClient.setQueryData(['opportunityInvoices', opportunity?.id], (current) => {
-        if (!current || !Array.isArray(current.invoices)) return current;
-        return {
-          ...current,
-          invoices: current.invoices.map((existingInvoice) => (
-            existingInvoice.id === refreshedInvoice?.id
-              ? normalizeInvoiceTotals({
-                  ...existingInvoice,
-                  ...refreshedInvoice,
-                })
-              : existingInvoice
-          )),
-        };
-      });
-
-      onInvoiceUpdated?.(refreshedInvoice);
-      setEditSuccess('Invoice updated successfully');
+      setCurrentInvoice(refreshedInvoice);
+      setForm(hydrateFormFromInvoice(refreshedInvoice));
       setIsEditing(false);
+      setEditSuccess('Invoice updated successfully');
+
+      try {
+        onInvoiceUpdated?.(refreshedInvoice);
+      } catch (syncError) {
+        console.error('Failed to sync invoice update to parent view:', syncError);
+      }
     } catch (error) {
       setEditError(error?.message || 'Failed to update invoice');
     }
@@ -1094,7 +1089,7 @@ function InvoiceDetailModal({
             <Receipt className="w-6 h-6 text-panda-primary" />
             <div>
               <h2 className="text-lg font-semibold text-gray-900">
-                {invoice.invoiceNumber || `INV-${invoice.id.slice(-6)}`}
+                {displayInvoice.invoiceNumber || `INV-${displayInvoice.id.slice(-6)}`}
               </h2>
               <p className="text-sm text-gray-500">Invoice Details</p>
             </div>
@@ -1114,7 +1109,7 @@ function InvoiceDetailModal({
             </button>
             {canSendOrResend && (
               <button
-                onClick={() => onOpenSendInvoice?.(invoice)}
+                    onClick={() => onOpenSendInvoice?.(displayInvoice)}
                 disabled={!onOpenSendInvoice}
                 className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-60"
               >
@@ -1124,7 +1119,7 @@ function InvoiceDetailModal({
             )}
             {canPay && (
               <button
-                onClick={() => onOpenPayInvoice?.(invoice)}
+                    onClick={() => onOpenPayInvoice?.(displayInvoice)}
                 className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700"
               >
                 <CreditCard className="h-4 w-4" />
@@ -1159,20 +1154,20 @@ function InvoiceDetailModal({
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div className="bg-gray-50 rounded-lg p-3">
               <p className="text-xs text-gray-500">Invoice Date</p>
-              <p className="text-sm font-medium">{formatDate(invoice.invoiceDate)}</p>
+              <p className="text-sm font-medium">{formatDate(displayInvoice.invoiceDate)}</p>
             </div>
             <div className="bg-gray-50 rounded-lg p-3">
               <p className="text-xs text-gray-500">Due Date</p>
-              <p className="text-sm font-medium">{formatDate(invoice.dueDate)}</p>
+              <p className="text-sm font-medium">{formatDate(displayInvoice.dueDate)}</p>
             </div>
             <div className="bg-gray-50 rounded-lg p-3">
               <p className="text-xs text-gray-500">Total Amount</p>
-              <p className="text-sm font-medium">{formatCurrency(invoice.totalAmount)}</p>
+              <p className="text-sm font-medium">{formatCurrency(displayInvoice.totalAmount)}</p>
             </div>
             <div className="bg-gray-50 rounded-lg p-3">
               <p className="text-xs text-gray-500">Balance Due</p>
-              <p className={`text-sm font-medium ${parseFloat(invoice.balanceDue) > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                {formatCurrency(invoice.balanceDue)}
+              <p className={`text-sm font-medium ${parseFloat(displayInvoice.balanceDue) > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                {formatCurrency(displayInvoice.balanceDue)}
               </p>
             </div>
           </div>
@@ -1181,12 +1176,12 @@ function InvoiceDetailModal({
           <div className="flex items-center gap-2">
             <span className="text-sm text-gray-500">Status:</span>
             <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-              invoice.status === 'PAID' ? 'bg-green-100 text-green-800' :
-              invoice.status === 'OVERDUE' ? 'bg-red-100 text-red-800' :
-              invoice.status === 'SENT' ? 'bg-blue-100 text-blue-800' :
+              displayInvoice.status === 'PAID' ? 'bg-green-100 text-green-800' :
+              displayInvoice.status === 'OVERDUE' ? 'bg-red-100 text-red-800' :
+              displayInvoice.status === 'SENT' ? 'bg-blue-100 text-blue-800' :
               'bg-gray-100 text-gray-800'
             }`}>
-              {invoice.status || 'DRAFT'}
+              {displayInvoice.status || 'DRAFT'}
             </span>
           </div>
 
@@ -1465,7 +1460,7 @@ function InvoiceDetailModal({
           )}
 
           {/* Line Items */}
-          {!isEditing && activeInvoiceTab === 'details' && invoice.lineItems && invoice.lineItems.length > 0 && (
+          {!isEditing && activeInvoiceTab === 'details' && displayInvoice.lineItems && displayInvoice.lineItems.length > 0 && (
             <div>
               <h3 className="text-sm font-medium text-gray-900 mb-2">Line Items</h3>
               <div className="border rounded-lg overflow-hidden">
@@ -1479,7 +1474,7 @@ function InvoiceDetailModal({
                     </tr>
                   </thead>
                   <tbody>
-                    {invoice.lineItems.map((item, idx) => (
+                    {displayInvoice.lineItems.map((item, idx) => (
                       <tr key={idx} className="border-t">
                         <td className="p-2">{item.description || item.name}</td>
                         <td className="p-2 text-right">{item.quantity || 1}</td>
@@ -1500,7 +1495,7 @@ function InvoiceDetailModal({
             </div>
           )}
 
-          {!isEditing && activeInvoiceTab === 'details' && Array.isArray(invoice.additionalCharges) && invoice.additionalCharges.some((charge) => Number(charge.amount || charge.fixedAmount || 0) > 0) && (
+          {!isEditing && activeInvoiceTab === 'details' && Array.isArray(displayInvoice.additionalCharges) && displayInvoice.additionalCharges.some((charge) => Number(charge.amount || charge.fixedAmount || 0) > 0) && (
             <div>
               <h3 className="text-sm font-medium text-gray-900 mb-2">Supplements / Additional Charges</h3>
               <div className="border rounded-lg overflow-hidden">
@@ -1513,7 +1508,7 @@ function InvoiceDetailModal({
                     </tr>
                   </thead>
                   <tbody>
-                    {invoice.additionalCharges.filter((charge) => Number(charge.amount || charge.fixedAmount || 0) > 0).map((charge, idx) => (
+                    {displayInvoice.additionalCharges.filter((charge) => Number(charge.amount || charge.fixedAmount || 0) > 0).map((charge, idx) => (
                       <tr key={charge.id || idx} className="border-t">
                         <td className="p-2">{charge.name || 'Supplement'}</td>
                         <td className="p-2 text-right">{formatCurrency(charge.amount || charge.fixedAmount)}</td>
@@ -1526,7 +1521,7 @@ function InvoiceDetailModal({
             </div>
           )}
 
-          {!isEditing && activeInvoiceTab === 'details' && Array.isArray(invoice.additionalCharges) && invoice.additionalCharges.some((charge) => Number(charge.amount || charge.fixedAmount || 0) < 0) && (
+          {!isEditing && activeInvoiceTab === 'details' && Array.isArray(displayInvoice.additionalCharges) && displayInvoice.additionalCharges.some((charge) => Number(charge.amount || charge.fixedAmount || 0) < 0) && (
             <div>
               <h3 className="text-sm font-medium text-gray-900 mb-2">Discounts</h3>
               <div className="border rounded-lg overflow-hidden">
@@ -1539,7 +1534,7 @@ function InvoiceDetailModal({
                     </tr>
                   </thead>
                   <tbody>
-                    {invoice.additionalCharges.filter((charge) => Number(charge.amount || charge.fixedAmount || 0) < 0).map((charge, idx) => (
+                    {displayInvoice.additionalCharges.filter((charge) => Number(charge.amount || charge.fixedAmount || 0) < 0).map((charge, idx) => (
                       <tr key={charge.id || idx} className="border-t">
                         <td className="p-2">{charge.name || 'Discount'}</td>
                         <td className="p-2 text-right text-red-600">-{formatCurrency(Math.abs(Number(charge.amount || charge.fixedAmount || 0)))}</td>
@@ -1552,11 +1547,11 @@ function InvoiceDetailModal({
             </div>
           )}
 
-          {!isEditing && activeInvoiceTab === 'details' && invoice.notes && (
+          {!isEditing && activeInvoiceTab === 'details' && displayInvoice.notes && (
             <div>
               <h3 className="text-sm font-medium text-gray-900 mb-2">Notes</h3>
               <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm text-gray-700">
-                {invoice.notes}
+                {displayInvoice.notes}
               </div>
             </div>
           )}
@@ -1626,7 +1621,7 @@ function InvoiceDetailModal({
             <>
               <button
                 onClick={() => {
-                  setForm(hydrateFormFromInvoice(invoice));
+                  setForm(hydrateFormFromInvoice(displayInvoice));
                   setIsEditing(false);
                   setEditError(null);
                   setEditSuccess(null);
