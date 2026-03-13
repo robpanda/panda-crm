@@ -51,6 +51,24 @@ router.get('/projects/:projectId/pages', async (req, res, next) => {
 });
 
 /**
+ * GET /api/photocam/pages/project/:projectId
+ * Backward-compatible alias for project page list.
+ */
+router.get('/project/:projectId', async (req, res, next) => {
+  try {
+    const { pageType } = req.query;
+    const pages = await pageService.getProjectPages(req.params.projectId, { pageType });
+
+    res.json({
+      success: true,
+      data: pages,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * GET /api/photocam/projects/:projectId/pages/search
  * Search pages by content
  */

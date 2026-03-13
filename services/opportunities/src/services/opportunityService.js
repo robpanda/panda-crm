@@ -370,6 +370,69 @@ function validateAppointmentResultPayload(payload = {}) {
   return { valid: errors.length === 0, errors };
 }
 
+const DISPOSITION_CATEGORIES = {
+  INSPECTION_NOT_COMPLETED: 'INSPECTION_NOT_COMPLETED',
+  RESCHEDULED: 'RESCHEDULED',
+  FOLLOW_UP_SCHEDULED: 'FOLLOW_UP_SCHEDULED',
+  INSURANCE_CLAIM_FILED: 'INSURANCE_CLAIM_FILED',
+  INSURANCE_NO_CLAIM: 'INSURANCE_NO_CLAIM',
+  RETAIL_SOLD: 'RETAIL_SOLD',
+  RETAIL_NOT_SOLD: 'RETAIL_NOT_SOLD',
+};
+
+const DISPOSITION_STAGE_MAP = {
+  INSPECTION_NOT_COMPLETED: 'SCHEDULED',
+  RESCHEDULED: 'SCHEDULED',
+  FOLLOW_UP_SCHEDULED: 'SCHEDULED',
+  INSURANCE_CLAIM_FILED: 'CLAIM_FILED',
+  INSURANCE_NO_CLAIM: 'INSPECTED',
+  RETAIL_SOLD: 'CONTRACT_SIGNED',
+  RETAIL_NOT_SOLD: 'CLOSED_LOST',
+};
+
+function parseDate(value) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function validateAppointmentResultPayload(payload = {}) {
+  const errors = [];
+  const category = payload.dispositionCategory;
+
+  if (!category || !Object.values(DISPOSITION_CATEGORIES).includes(category)) {
+    errors.push({ field: 'dispositionCategory', message: 'Valid dispositionCategory is required' });
+  }
+
+  if (
+    (category === DISPOSITION_CATEGORIES.RESCHEDULED || category === DISPOSITION_CATEGORIES.FOLLOW_UP_SCHEDULED)
+    && !payload.followUpAt
+  ) {
+    errors.push({ field: 'followUpAt', message: 'Follow-up date is required' });
+  }
+
+  if (category === DISPOSITION_CATEGORIES.INSPECTION_NOT_COMPLETED && !payload.dispositionReason) {
+    errors.push({ field: 'dispositionReason', message: 'Reason is required for inspection not completed' });
+  }
+
+  if (category === DISPOSITION_CATEGORIES.INSURANCE_NO_CLAIM && !payload.dispositionReason) {
+    errors.push({ field: 'dispositionReason', message: 'Reason is required for no claim filed' });
+  }
+
+  if (category === DISPOSITION_CATEGORIES.RETAIL_NOT_SOLD && !payload.dispositionReason) {
+    errors.push({ field: 'dispositionReason', message: 'Reason is required for retail not sold' });
+  }
+
+  if (category === DISPOSITION_CATEGORIES.INSURANCE_CLAIM_FILED) {
+    const hasClaimInfo = payload.insuranceCompany || payload.claimNumber;
+    if (!hasClaimInfo) {
+      errors.push({ field: 'claimNumber', message: 'Claim number or insurance company is required' });
+    }
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
 /**
  * Generate a pre-signed URL for an S3 document
  * @param {string} s3Url - The S3 URL or path
@@ -3173,6 +3236,81 @@ Be factual and professional. Highlight anything that needs attention.`;
     const convertedLeadContext = await this.getConvertedLeadContext(id);
     return {
       opportunity: this.createOpportunityWrapper({ ...updatedOpportunity, ...convertedLeadContext }, true),
+      appointmentResult,
+    };
+  }
+
+  /**
+   * Record appointment result and update opportunity disposition/claim info
+   */
+  async createAppointmentResult(id, payload = {}, userContext = {}) {
+    const opportunity = await prisma.opportunity.findUnique({ where: { id } });
+    if (!opportunity) {
+      const error = new Error(`Opportunity not found: ${id}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const validation = validateAppointmentResultPayload(payload);
+    if (!validation.valid) {
+      const error = new Error('Validation failed');
+      error.name = 'ValidationError';
+      error.details = validation.errors;
+      throw error;
+    }
+
+    const followUpAt = parseDate(payload.followUpAt);
+    const claimFiledDate = parseDate(payload.claimFiledDate);
+    const dateOfLoss = parseDate(payload.dateOfLoss);
+
+    const appointmentResult = await prisma.appointmentResult.create({
+      data: {
+        opportunityId: id,
+        appointmentId: payload.appointmentId || null,
+        payload,
+        dispositionCategory: payload.dispositionCategory,
+        dispositionReason: payload.dispositionReason || null,
+        followUpAt,
+        insuranceCompany: payload.insuranceCompany || null,
+        claimNumber: payload.claimNumber || null,
+        claimFiledDate,
+        dateOfLoss,
+        damageLocation: payload.damageLocation || null,
+        createdById: userContext?.userId || null,
+      },
+    });
+
+    const updateData = {
+      currentDispositionCategory: payload.dispositionCategory,
+      currentDispositionReason: payload.dispositionReason || null,
+      followUpDate: followUpAt || undefined,
+      claimNumber: payload.claimNumber || undefined,
+      claimFiledDate: claimFiledDate || undefined,
+      insuranceCarrier: payload.insuranceCompany || undefined,
+      dateOfLoss: dateOfLoss || undefined,
+      damageLocation: payload.damageLocation || undefined,
+    };
+
+    if (payload.autoStageUpdate !== false) {
+      const stage = DISPOSITION_STAGE_MAP[payload.dispositionCategory];
+      if (stage) {
+        updateData.stage = stage;
+      }
+    }
+
+    const updatedOpportunity = await prisma.opportunity.update({
+      where: { id },
+      data: updateData,
+      include: {
+        account: { select: { id: true, name: true } },
+        contact: { select: { id: true, firstName: true, lastName: true } },
+        owner: { select: { id: true, firstName: true, lastName: true } },
+        lineItems: { include: { product: true } },
+      },
+    });
+
+    return {
+      opportunity: this.createOpportunityWrapper(updatedOpportunity, true),
       appointmentResult,
     };
   }

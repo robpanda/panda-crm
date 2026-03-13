@@ -25,6 +25,8 @@ on:
           - documents
           - integrations
           - bamboogli
+          - notifications
+          - photocam
 
 env:
   AWS_REGION: us-east-2
@@ -66,6 +68,10 @@ jobs:
             port: 3010
           - name: bamboogli
             port: 3012
+          - name: notifications
+            port: 3011
+          - name: photocam
+            port: 3013
 
     steps:
       - name: Checkout
@@ -109,30 +115,56 @@ jobs:
           SERVICE_NAME: ${{ matrix.service.name }}
         run: |
           BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          IMAGE_REPO=""
+
+          if aws ecr describe-repositories --repository-names "panda-crm/$SERVICE_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+            IMAGE_REPO="panda-crm/$SERVICE_NAME"
+          elif aws ecr describe-repositories --repository-names "panda-crm-$SERVICE_NAME" --region "$AWS_REGION" >/dev/null 2>&1; then
+            IMAGE_REPO="panda-crm-$SERVICE_NAME"
+          else
+            echo "::error::No ECR repository found for $SERVICE_NAME. Expected panda-crm/$SERVICE_NAME or panda-crm-$SERVICE_NAME"
+            exit 1
+          fi
+
+          echo "Using ECR repository: $IMAGE_REPO"
+
           # Build Docker image
           docker build \
             --build-arg BUILD_SHA=$IMAGE_TAG \
             --build-arg BUILD_TIME="$BUILD_TIME" \
-            -t $ECR_REGISTRY/panda-crm/$SERVICE_NAME:$IMAGE_TAG \
-            -t $ECR_REGISTRY/panda-crm/$SERVICE_NAME:latest \
+            -t $ECR_REGISTRY/$IMAGE_REPO:$IMAGE_TAG \
+            -t $ECR_REGISTRY/$IMAGE_REPO:latest \
             -f services/$SERVICE_NAME/Dockerfile \
             .
 
           # Push to ECR
-          docker push $ECR_REGISTRY/panda-crm/$SERVICE_NAME:$IMAGE_TAG
-          docker push $ECR_REGISTRY/panda-crm/$SERVICE_NAME:latest
+          docker push $ECR_REGISTRY/$IMAGE_REPO:$IMAGE_TAG
+          docker push $ECR_REGISTRY/$IMAGE_REPO:latest
 
       - name: Update ECS Service
         if: steps.check.outputs.should_deploy == 'true'
         env:
           SERVICE_NAME: ${{ matrix.service.name }}
         run: |
-          # Force new deployment
+          ECS_SERVICE=""
+          for candidate in "$SERVICE_NAME-service" "panda-crm-$SERVICE_NAME" "$SERVICE_NAME"; do
+            if aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$candidate" --region "$AWS_REGION" --query 'services[0].status' --output text 2>/dev/null | grep -qE 'ACTIVE|DRAINING'; then
+              ECS_SERVICE="$candidate"
+              break
+            fi
+          done
+
+          if [ -z "$ECS_SERVICE" ]; then
+            echo "::warning::No ECS service found for $SERVICE_NAME. Checked $SERVICE_NAME-service, panda-crm-$SERVICE_NAME, and $SERVICE_NAME"
+            exit 0
+          fi
+
+          echo "Updating ECS service: $ECS_SERVICE"
           aws ecs update-service \
             --cluster $ECS_CLUSTER \
-            --service $SERVICE_NAME-service \
+            --service $ECS_SERVICE \
             --force-new-deployment \
-            --region $AWS_REGION || echo "Service may not exist yet, skipping update"
+            --region $AWS_REGION
 
   notify:
     name: Deployment Notification

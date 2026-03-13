@@ -4611,6 +4611,30 @@ export const ringCentralApi = {
 // ==========================================
 // DOCUMENTS & PDF API
 // ==========================================
+const postFirstAvailable = async (paths, payload) => {
+  let lastNotFoundError = null;
+
+  for (const path of paths) {
+    try {
+      const response = await api.post(path, payload);
+      return response.data;
+    } catch (error) {
+      const status = error?.response?.status;
+      if (status === 404 || status === 405) {
+        lastNotFoundError = error;
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  if (lastNotFoundError) {
+    throw lastNotFoundError;
+  }
+
+  throw new Error('No compatible PandaSign endpoint is currently available');
+};
+
 export const documentsApi = {
   // Generate Invoice PDF
   async generateInvoicePdf(invoiceId) {
@@ -4764,6 +4788,50 @@ export const documentsApi = {
   async deleteDocument(id, params = {}) {
     const response = await api.delete(`/api/documents/repository/${id}`, { params });
     return response.data;
+  },
+};
+
+// ==========================================
+// PANDASIGN V2 API (compatibility surface)
+// ==========================================
+export const documentsApiV2 = {
+  async getTemplates(params = {}) {
+    const response = await api.get('/api/documents/agreements/templates', { params });
+    return response.data;
+  },
+
+  async verifyRequiredFields(payload = {}) {
+    const paths = [];
+    if (payload.agreementId) {
+      paths.push(`/api/documents/agreements/${payload.agreementId}/verify-required-fields`);
+    }
+    paths.push('/api/documents/pandasign/agreements/verify-required-fields');
+    paths.push('/api/documents/pandasign/verify-required-fields');
+    paths.push('/api/documents/agreements/verify-required-fields');
+
+    return postFirstAvailable(paths, payload);
+  },
+
+  async preview(payload = {}) {
+    return postFirstAvailable(
+      [
+        '/api/documents/pandasign/preview',
+        '/api/documents/pandasign/v2/preview',
+        '/api/documents/agreements/preview',
+      ],
+      payload
+    );
+  },
+
+  async send(payload = {}) {
+    return postFirstAvailable(
+      [
+        '/api/documents/pandasign/send',
+        '/api/documents/pandasign/v2/send',
+        '/api/documents/agreements/send',
+      ],
+      payload
+    );
   },
 };
 
@@ -5864,6 +5932,26 @@ export const photocamApi = {
     return response.data.data.url;
   },
 
+  async bulkDownloadPhotos(payload) {
+    const response = await api.post('/api/photocam/photos/bulk-download', payload);
+    return response.data.data;
+  },
+
+  async getBulkDownloadStatus(exportJobId) {
+    const response = await api.get(`/api/photocam/photos/bulk-download/${exportJobId}`);
+    return response.data.data;
+  },
+
+  async bulkAssignPhotos(payload) {
+    const response = await api.post('/api/photocam/photos/bulk-assign', payload);
+    return response.data.data;
+  },
+
+  async updatePhotoMetadata(id, payload) {
+    const response = await api.patch(`/api/photocam/photos/${id}/metadata`, payload);
+    return response.data.data;
+  },
+
   // ==================== ANNOTATIONS ====================
   async getAnnotations(photoId) {
     const response = await api.get(`/api/photocam/annotations/photo/${photoId}`);
@@ -5911,6 +5999,11 @@ export const photocamApi = {
     return response.data.data;
   },
 
+  async validateChecklist(checklistId, payload = {}) {
+    const response = await api.post(`/api/photocam/checklists/${checklistId}/validate`, payload);
+    return response.data.data;
+  },
+
   async attachPhotoToChecklistItem(checklistId, itemId, photoId) {
     const response = await api.post(
       `/api/photocam/checklists/${checklistId}/items/${itemId}/photos`,
@@ -5930,10 +6023,29 @@ export const photocamApi = {
     return response.data.data;
   },
 
-  async createChecklistFromTemplate(projectId, templateId) {
+  async createChecklistFromTemplate(projectId, templateId, options = {}) {
     const response = await api.post(`/api/photocam/templates/${templateId}/instantiate`, {
       projectId,
+      name: options?.name,
+      description: options?.description,
+      assignedToId: options?.assignedToId,
+      dueDate: options?.dueDate,
     });
+    return response.data.data;
+  },
+
+  async createPhotocamTemplate(payload) {
+    const response = await api.post('/api/photocam/templates', payload);
+    return response.data.data;
+  },
+
+  async getRecommendedTemplateSeeds() {
+    const response = await api.get('/api/photocam/templates/recommended-seeds');
+    return response.data.data;
+  },
+
+  async seedPhotocamTemplates(payload = {}) {
+    const response = await api.post('/api/photocam/templates/seed-defaults', payload);
     return response.data.data;
   },
 
@@ -5999,8 +6111,63 @@ export const photocamApi = {
     return response.data;
   },
 
-  async getGalleryShareLink(id) {
-    const response = await api.post(`/api/photocam/galleries/${id}/share`);
+  async getGalleryShareLink(id, payload = {}) {
+    const response = await api.post(`/api/photocam/galleries/${id}/share`, payload);
+    return response.data.data;
+  },
+
+  async getSharedGallery(token, password = null) {
+    const response = await api.get(`/api/photocam/galleries/share/${token}`, {
+      params: password ? { password } : {},
+    });
+    return response.data.data;
+  },
+
+  async getSharedGalleryPhotoDownload(token, photoId, password = null) {
+    const response = await api.get(`/api/photocam/galleries/share/${token}/photos/${photoId}/download`, {
+      params: password ? { password } : {},
+    });
+    return response.data.data;
+  },
+
+  async createGalleryFromSelection(payload) {
+    const response = await api.post('/api/photocam/galleries/from-selection', payload);
+    return response.data.data;
+  },
+
+  async updateGalleryAccess(id, payload) {
+    const response = await api.patch(`/api/photocam/galleries/${id}/access`, payload);
+    return response.data.data;
+  },
+
+  async getGalleryAnalytics(id) {
+    const response = await api.get(`/api/photocam/galleries/${id}/analytics`);
+    return response.data.data;
+  },
+
+  // ==================== REPORTS ====================
+  async createReport(payload) {
+    const response = await api.post('/api/photocam/reports', payload);
+    return response.data.data;
+  },
+
+  async getReports(params = {}) {
+    const response = await api.get('/api/photocam/reports', { params });
+    return response.data;
+  },
+
+  async getReport(id) {
+    const response = await api.get(`/api/photocam/reports/${id}`);
+    return response.data.data;
+  },
+
+  async generateReport(id) {
+    const response = await api.post(`/api/photocam/reports/${id}/generate`);
+    return response.data.data;
+  },
+
+  async getReportDownload(id) {
+    const response = await api.get(`/api/photocam/reports/${id}/download`);
     return response.data.data;
   },
 

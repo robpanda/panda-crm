@@ -4,6 +4,7 @@ import multer from 'multer';
 import { authMiddleware } from '../middleware/auth.js';
 import { photoService } from '../services/photoService.js';
 import { logger } from '../middleware/logger.js';
+import { featureFlags, requireFeature } from '../config/featureFlags.js';
 
 const router = express.Router();
 
@@ -12,7 +13,7 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
     fileSize: 50 * 1024 * 1024, // 50MB limit
-    files: 20, // Max 20 files at once
+    files: 100, // Max 100 files at once
   },
   fileFilter: (req, file, cb) => {
     // Accept images only
@@ -26,6 +27,68 @@ const upload = multer({
 
 // Apply auth middleware to all routes
 router.use(authMiddleware);
+
+/**
+ * POST /api/photocam/photos/bulk-download
+ * Create or fetch a bulk download artifact for selected photos
+ */
+router.post('/bulk-download', async (req, res, next) => {
+  try {
+    requireFeature(featureFlags.bulkActionsV2, 'Photo bulk download');
+
+    const { photoIds, outputFormat = 'zip', projectId, opportunityId } = req.body || {};
+    if (!Array.isArray(photoIds) || photoIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'photoIds must be a non-empty array' },
+      });
+    }
+
+    if (!['zip', 'pdf'].includes(outputFormat)) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'outputFormat must be zip or pdf' },
+      });
+    }
+
+    const result = await photoService.createBulkDownload(
+      { photoIds, outputFormat, projectId, opportunityId },
+      req.user?.id || null
+    );
+
+    res.status(202).json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/photocam/photos/bulk-download/:exportJobId
+ * Get export job status and signed download URL if ready
+ */
+router.get('/bulk-download/:exportJobId', async (req, res, next) => {
+  try {
+    requireFeature(featureFlags.bulkActionsV2, 'Photo bulk download');
+    const result = await photoService.getBulkDownloadStatus(req.params.exportJobId);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/photocam/photos/bulk-assign
+ * Assign selected photos to checklist item, gallery, report section, or grouping
+ */
+router.post('/bulk-assign', async (req, res, next) => {
+  try {
+    requireFeature(featureFlags.bulkActionsV2, 'Photo bulk assign');
+    const result = await photoService.bulkAssignPhotos(req.body || {}, req.user?.id || null);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
 
 /**
  * POST /api/photocam/photos/upload
@@ -69,7 +132,7 @@ router.post('/upload', upload.single('photo'), async (req, res, next) => {
  * POST /api/photocam/photos/upload-multiple
  * Upload multiple photos
  */
-router.post('/upload-multiple', upload.array('photos', 20), async (req, res, next) => {
+router.post('/upload-multiple', upload.array('photos', 100), async (req, res, next) => {
   try {
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({
@@ -143,6 +206,19 @@ router.put('/:id', async (req, res, next) => {
       success: true,
       data: photo,
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * PATCH /api/photocam/photos/:id/metadata
+ * Update metadata fields without changing core image record semantics
+ */
+router.patch('/:id/metadata', async (req, res, next) => {
+  try {
+    const photo = await photoService.updatePhotoMetadata(req.params.id, req.body || {}, req.user?.id || null);
+    res.json({ success: true, data: photo });
   } catch (error) {
     next(error);
   }
