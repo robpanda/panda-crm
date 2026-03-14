@@ -105,6 +105,10 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
+      - name: Set up Docker Buildx
+        if: steps.check.outputs.should_deploy == 'true'
+        uses: docker/setup-buildx-action@v3
+
       - name: Build, tag, and push Docker image
         if: steps.check.outputs.should_deploy == 'true'
         env:
@@ -125,18 +129,15 @@ jobs:
 
           echo "Using ECR repository: $IMAGE_REPO"
 
-          # Build Docker image
-          docker build \
+          docker buildx build \
+            --platform linux/amd64 \
             --build-arg BUILD_SHA=$IMAGE_TAG \
             --build-arg BUILD_TIME="$BUILD_TIME" \
             -t $ECR_REGISTRY/$IMAGE_REPO:$IMAGE_TAG \
             -t $ECR_REGISTRY/$IMAGE_REPO:latest \
             -f services/$SERVICE_NAME/Dockerfile \
+            --push \
             .
-
-          # Push to ECR
-          docker push $ECR_REGISTRY/$IMAGE_REPO:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$IMAGE_REPO:latest
 
       - name: Update ECS Service
         if: steps.check.outputs.should_deploy == 'true'
