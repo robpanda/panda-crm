@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { opportunitiesApi, usersApi } from '../services/api';
 import { formatNumber, formatCurrency } from '../utils/formatters';
+import { getOpportunityDisplayName } from '../utils/opportunityDisplay';
 import ColumnSelector, { useColumnVisibility } from '../components/ColumnSelector';
 import { PriorityBadge } from '../components/JobPriority';
 import {
@@ -661,7 +662,7 @@ export default function OpportunityList() {
                     {isColumnVisible('name') && (
                       <td className="px-6 py-4">
                         <Link to={`/jobs/${opp.id}`} className="font-medium text-gray-900 hover:text-panda-primary">
-                          {opp.name}
+                          {getOpportunityDisplayName(opp.name)}
                         </Link>
                       </td>
                     )}

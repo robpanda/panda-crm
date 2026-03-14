@@ -5,6 +5,7 @@ import { opportunitiesApi, companyCamApi, scheduleApi, casesApi, emailsApi, noti
 import { useRingCentral } from '../context/RingCentralContext';
 import { useAuth } from '../context/AuthContext';
 import { addRecentItem } from '../utils/recentItems';
+import { getOpportunityDisplayName } from '../utils/opportunityDisplay';
 import PhotoGallery from '../components/PhotoGallery';
 import CrewAccessManager from '../components/CrewAccessManager';
 import InspectionChecklist from '../components/InspectionChecklist';
@@ -1786,7 +1787,7 @@ export default function OpportunityDetail() {
 
   useEffect(() => {
     if (!opportunity?.id) return;
-    const label = opportunity.account?.name || opportunity.name || 'Job';
+    const label = opportunity.account?.name || getOpportunityDisplayName(opportunity.name) || 'Job';
     const metaParts = [];
     if (opportunity.jobId) metaParts.push(`#${opportunity.jobId}`);
     if (opportunity.city || opportunity.state) {
@@ -3214,7 +3215,7 @@ export default function OpportunityDetail() {
                   <h1 className="text-lg sm:text-xl font-bold text-gray-900 truncate">
                     {opportunity.contact?.firstName && opportunity.contact?.lastName
                       ? `${opportunity.contact.firstName} ${opportunity.contact.lastName}`
-                      : opportunity.name}
+                      : getOpportunityDisplayName(opportunity.name)}
                   </h1>
                   <div className="flex items-center gap-2 mt-1 flex-wrap">
                     <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-blue-100 text-blue-700">

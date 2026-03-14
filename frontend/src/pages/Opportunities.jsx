@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { opportunitiesApi, scheduleApi } from '../services/api';
 import { useAuth, ROLE_TYPES } from '../context/AuthContext';
+import { getOpportunityDisplayName } from '../utils/opportunityDisplay';
 import { Briefcase, ChevronRight, DollarSign, Calendar, MapPin, Users, UserPlus, X, Check, Square, CheckSquare, AlertCircle, Truck, RefreshCw, Trash2 } from 'lucide-react';
 import SubNav from '../components/SubNav';
 
@@ -432,7 +433,7 @@ export default function Opportunities() {
                           <Briefcase className="w-5 h-5 text-white" />
                         </div>
                         <div>
-                          <h3 className="font-medium text-gray-900">{opp.name}</h3>
+                          <h3 className="font-medium text-gray-900">{getOpportunityDisplayName(opp.name)}</h3>
                           <div className="flex items-center space-x-4 text-sm text-gray-500">
                             {(opp.accountName || opp.account?.name) && <span>{opp.accountName || opp.account?.name}</span>}
                             {opp.closeDate && (
@@ -476,7 +477,7 @@ export default function Opportunities() {
                         <Briefcase className="w-5 h-5 text-white" />
                       </div>
                       <div>
-                        <h3 className="font-medium text-gray-900">{opp.name}</h3>
+                        <h3 className="font-medium text-gray-900">{getOpportunityDisplayName(opp.name)}</h3>
                         <div className="flex items-center space-x-4 text-sm text-gray-500">
                           {(opp.accountName || opp.account?.name) && <span>{opp.accountName || opp.account?.name}</span>}
                           {opp.closeDate && (
