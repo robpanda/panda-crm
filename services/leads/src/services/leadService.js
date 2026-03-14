@@ -3,6 +3,7 @@
 import { PrismaClient, Prisma } from '@prisma/client';
 import { logger } from '../middleware/logger.js';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
+import crypto from 'crypto';
 
 const prisma = new PrismaClient();
 const lambdaClient = new LambdaClient({ region: 'us-east-2' });
@@ -819,6 +820,7 @@ class LeadService {
             // First job of the year - create the sequence
             await tx.jobIdSequence.create({
               data: {
+                id: crypto.randomUUID(),
                 year: currentYear,
                 lastNumber: JOB_ID_STARTING_NUMBER + 1,
               },
@@ -841,7 +843,7 @@ class LeadService {
 
         opportunity = await tx.opportunity.create({
           data: {
-            name: options.opportunityName || `${lead.firstName} ${lead.lastName} - ${new Date().toLocaleDateString()}`,
+            name: options.opportunityName || [lead.firstName, lead.lastName].filter(Boolean).join(' ') || lead.company || 'Job',
             job_id: jobId, // Auto-assigned Job ID (using underscore field name from schema)
             accountId: account.id,
             contactId: contact.id,

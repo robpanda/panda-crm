@@ -434,16 +434,16 @@ export default function Opportunities() {
                         <div>
                           <h3 className="font-medium text-gray-900">{opp.name}</h3>
                           <div className="flex items-center space-x-4 text-sm text-gray-500">
-                            {opp.account && <span>{opp.account.name}</span>}
+                            {(opp.accountName || opp.account?.name) && <span>{opp.accountName || opp.account?.name}</span>}
                             {opp.closeDate && (
                               <span className="flex items-center">
                                 <Calendar className="w-3 h-3 mr-1" />
                                 {new Date(opp.closeDate).toLocaleDateString()}
                               </span>
                             )}
-                            {opp.owner && (
+                            {(opp.ownerName || opp.owner) && (
                               <span className="text-xs text-gray-400">
-                                Owner: {opp.owner.firstName} {opp.owner.lastName}
+                                Owner: {opp.ownerName || `${opp.owner.firstName} ${opp.owner.lastName}`}
                               </span>
                             )}
                           </div>
@@ -478,16 +478,16 @@ export default function Opportunities() {
                       <div>
                         <h3 className="font-medium text-gray-900">{opp.name}</h3>
                         <div className="flex items-center space-x-4 text-sm text-gray-500">
-                          {opp.account && <span>{opp.account.name}</span>}
+                          {(opp.accountName || opp.account?.name) && <span>{opp.accountName || opp.account?.name}</span>}
                           {opp.closeDate && (
                             <span className="flex items-center">
                               <Calendar className="w-3 h-3 mr-1" />
                               {new Date(opp.closeDate).toLocaleDateString()}
                             </span>
                           )}
-                          {opp.owner && activeTab !== 'mine' && (
+                          {(opp.ownerName || opp.owner) && activeTab !== 'mine' && (
                             <span className="text-xs text-gray-400">
-                              Owner: {opp.owner.firstName} {opp.owner.lastName}
+                              Owner: {opp.ownerName || `${opp.owner.firstName} ${opp.owner.lastName}`}
                             </span>
                           )}
                         </div>

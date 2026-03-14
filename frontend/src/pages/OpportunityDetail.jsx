@@ -1739,6 +1739,19 @@ export default function OpportunityDetail() {
     });
   }, [location.pathname, location.state, navigate]);
 
+  const assignMissingJobId = async () => {
+    if (!id) return null;
+    const result = await opportunitiesApi.assignJobId(id);
+    if (result?.jobId) {
+      await Promise.all([
+        queryClient.invalidateQueries(['opportunity', id]),
+        queryClient.invalidateQueries(['opportunitySummary', id]),
+        queryClient.invalidateQueries({ queryKey: ['opportunities'] }),
+      ]);
+    }
+    return result?.jobId || null;
+  };
+
   // Claim information editing state
   const [isEditingClaim, setIsEditingClaim] = useState(false);
   const [claimForm, setClaimForm] = useState({
@@ -3235,10 +3248,9 @@ export default function OpportunityDetail() {
                       <button
                         onClick={async () => {
                           try {
-                            const result = await opportunitiesApi.assignJobId(id);
-                            if (result.jobId) {
-                              queryClient.invalidateQueries(['opportunity', id]);
-                              setActionSuccess(`Assigned Job #${result.jobId}`);
+                            const jobId = await assignMissingJobId();
+                            if (jobId) {
+                              setActionSuccess(`Assigned Job #${jobId}`);
                             }
                           } catch (err) {
                             setActionError('Failed to assign Job #');
@@ -10482,8 +10494,22 @@ export default function OpportunityDetail() {
         appointmentId={appointments?.[0]?.id || null}
         opportunity={opportunity}
         onCompleted={() => {
-          setActionSuccess('Appointment result saved');
-          setTimeout(() => setActionSuccess(null), 4000);
+          void (async () => {
+            let successMessage = 'Appointment result saved';
+            if (!opportunity?.jobId) {
+              try {
+                const jobId = await assignMissingJobId();
+                if (jobId) {
+                  successMessage = `Appointment result saved. Assigned Job #${jobId}`;
+                }
+              } catch (error) {
+                console.error('Failed to assign Job # after appointment result:', error);
+                setActionError('Appointment result saved, but failed to assign Job #');
+              }
+            }
+            setActionSuccess(successMessage);
+            setTimeout(() => setActionSuccess(null), 4000);
+          })();
         }}
       />
 

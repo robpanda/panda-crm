@@ -6,6 +6,7 @@ import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { logger } from '../middleware/logger.js';
+import crypto from 'crypto';
 
 const prisma = new PrismaClient();
 
@@ -1800,6 +1801,7 @@ Be factual and professional. Highlight anything that needs attention.`;
         // First job of the year - create the sequence
         await tx.jobIdSequence.create({
           data: {
+            id: crypto.randomUUID(),
             year: currentYear,
             lastNumber: JOB_ID_STARTING_NUMBER + 1,
           },

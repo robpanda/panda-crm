@@ -569,13 +569,13 @@ export default function LeadDetail() {
   useEffect(() => {
     if (!lead?.id || !user?.id) return;
     const name = [lead.firstName, lead.lastName].filter(Boolean).join(' ');
-    const title = name || lead.company || 'Lead';
-    const subtitle = lead.email || lead.phone || lead.city || lead.street || '';
+    const label = name || lead.company || 'Lead';
+    const meta = lead.email || lead.phone || lead.city || lead.street || '';
     addRecentItem('leads', user.id, {
       id: lead.id,
-      title,
-      subtitle,
-      url: `/leads/${lead.id}`,
+      label,
+      meta,
+      path: `/leads/${lead.id}`,
     });
   }, [lead?.id, user?.id]);
 
@@ -684,13 +684,23 @@ export default function LeadDetail() {
       }
       return leadsApi.convertLead(id, conversionData);
     },
-    onSuccess: (result) => {
+    onSuccess: async (result) => {
       queryClient.invalidateQueries(['lead', id]);
-      const opportunityId =
+      let opportunityId =
         result?.opportunity?.id ||
         result?.opportunityId ||
         result?.job?.id ||
         result?.jobId;
+
+      if (!opportunityId) {
+        try {
+          const refreshedLead = await leadsApi.getLead(id);
+          opportunityId = refreshedLead?.opportunityId || null;
+        } catch (error) {
+          console.error('Failed to resolve converted opportunity:', error);
+        }
+      }
+
       if (opportunityId) {
         navigate(`/jobs/${opportunityId}`, {
           state: {
