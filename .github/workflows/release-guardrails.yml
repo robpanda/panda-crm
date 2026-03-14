@@ -1,0 +1,75 @@
+name: Release Guardrails Helper
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_live_capture:
+        description: "Capture a live production baseline (read-only)"
+        required: false
+        default: false
+        type: boolean
+      service_filter:
+        description: "Optional comma-separated ECS services for a narrower baseline"
+        required: false
+        default: ""
+        type: string
+
+env:
+  AWS_REGION: us-east-2
+
+jobs:
+  validate-guardrails:
+    name: Validate release guardrails
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify docs exist
+        run: |
+          test -f docs/release/production-guardrails.md
+          test -f docs/release/module-smoke-checklist.md
+
+      - name: Verify scripts parse
+        run: |
+          bash -n scripts/release/capture-prod-baseline.sh
+          bash -n scripts/release/backup-frontend.sh
+          bash -n scripts/release/create-rollback-file.sh
+
+  capture-baseline-preview:
+    name: Capture baseline preview
+    runs-on: ubuntu-latest
+    needs: validate-guardrails
+    if: github.event.inputs.run_live_capture == 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Capture baseline and rollback preview
+        env:
+          PANDA_BASELINE_SERVICES: ${{ github.event.inputs.service_filter }}
+        run: |
+          BASELINE_FILE="$(scripts/release/capture-prod-baseline.sh)"
+          ROLLBACK_FILE="$(scripts/release/create-rollback-file.sh "$BASELINE_FILE")"
+          echo "BASELINE_FILE=$BASELINE_FILE" >> "$GITHUB_ENV"
+          echo "ROLLBACK_FILE=$ROLLBACK_FILE" >> "$GITHUB_ENV"
+          echo "Baseline file: $BASELINE_FILE"
+          echo "Rollback file: $ROLLBACK_FILE"
+
+      - name: Upload baseline artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-guardrails-baseline
+          path: |
+            ${{ env.BASELINE_FILE }}
+            ${{ env.ROLLBACK_FILE }}
+          if-no-files-found: error
