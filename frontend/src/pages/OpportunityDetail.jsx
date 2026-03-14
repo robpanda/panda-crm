@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { opportunitiesApi, companyCamApi, scheduleApi, casesApi, emailsApi, notificationsApi, bamboogliApi, approvalsApi, measurementsApi, contactsApi, ringCentralApi, usersApi, quotesApi, invoicesApi, tasksApi, documentsApi } from '../services/api';
 import { useRingCentral } from '../context/RingCentralContext';
@@ -1616,6 +1616,7 @@ function ActivityTimelineTab({ activities = [], onActivityClick }) {
 export default function OpportunityDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const queryClient = useQueryClient();
   const { loadWidget, initiateCall, rcLoggedIn } = useRingCentral();
   const { user: currentUser } = useAuth();
@@ -1723,6 +1724,20 @@ export default function OpportunityDetail() {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  useEffect(() => {
+    if (!location.state?.openResultAppointmentWizard) return;
+
+    setShowResultAppointmentWizard(true);
+
+    const nextState = { ...(location.state || {}) };
+    delete nextState.openResultAppointmentWizard;
+
+    navigate(location.pathname, {
+      replace: true,
+      state: Object.keys(nextState).length > 0 ? nextState : null,
+    });
+  }, [location.pathname, location.state, navigate]);
 
   // Claim information editing state
   const [isEditingClaim, setIsEditingClaim] = useState(false);

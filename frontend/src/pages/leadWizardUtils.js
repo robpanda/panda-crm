@@ -44,4 +44,35 @@ export function hasLeadWizardRequiredFields({
   return hasValue(formData.leadSource);
 }
 
+export function isLeadWizardSalesRole({
+  roleName = '',
+  roleType = '',
+  isCallCenter = false,
+} = {}) {
+  if (isCallCenter) {
+    return false;
+  }
+
+  return roleName.includes('sales') || roleType.includes('sales');
+}
+
+export function shouldDefaultLeadSourceToSelfGen({
+  isNewLead = false,
+  isCallCenter = false,
+  isSalesRole = false,
+  leadSource = '',
+} = {}) {
+  return Boolean(isNewLead && !isCallCenter && isSalesRole && !hasValue(leadSource));
+}
+
+export function canLeadWizardConvert({
+  isNewLead = false,
+  lead = null,
+  hasRequiredFields = false,
+  canForceConvert = false,
+} = {}) {
+  const leadCanConvert = isNewLead || (lead && !lead.isConverted);
+  return Boolean(leadCanConvert && (hasRequiredFields || canForceConvert));
+}
+
 export const LEAD_WIZARD_SUBMIT_ICON = CheckCircle;

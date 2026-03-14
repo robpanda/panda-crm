@@ -39,10 +39,13 @@ import MentionTextarea from '../components/MentionTextarea';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { isValidPhoneFormat, isValidEmailFormat } from '../utils/formatters';
 import {
+  canLeadWizardConvert,
+  isLeadWizardSalesRole,
   LEAD_WIZARD_STEPS,
   LEAD_WIZARD_SUBMIT_ICON,
   hasLeadWizardContactMethod,
   hasLeadWizardRequiredFields,
+  shouldDefaultLeadSourceToSelfGen,
 } from './leadWizardUtils';
 
 const US_STATES = [
@@ -253,6 +256,7 @@ export default function LeadWizard() {
                        roleName.includes('call_center') ||
                        roleType.includes('call_center') ||
                        user?.department?.toLowerCase() === 'call center';
+  const isSalesRole = isLeadWizardSalesRole({ roleName, roleType, isCallCenter });
 
   const disableGuidedFlow = true;
 
@@ -1089,6 +1093,22 @@ export default function LeadWizard() {
     }
   }, [isNewLead, user]);
 
+  useEffect(() => {
+    if (!shouldDefaultLeadSourceToSelfGen({
+      isNewLead,
+      isCallCenter,
+      isSalesRole,
+      leadSource: formData.leadSource,
+    })) {
+      return;
+    }
+
+    setFormData(prev => ({
+      ...prev,
+      leadSource: 'Self-Gen',
+    }));
+  }, [formData.leadSource, isCallCenter, isNewLead, isSalesRole]);
+
   // Get navigation state to check if we just saved
   const location = useLocation();
 
@@ -1196,7 +1216,8 @@ export default function LeadWizard() {
     }
   };
 
-  const handleSave = async () => {
+  const handleSave = async (options = {}) => {
+    const { navigateAfterSave = true } = options;
     setIsSaving(true);
     try {
       const saveData = {
@@ -1235,7 +1256,9 @@ export default function LeadWizard() {
         // Set the lead state directly to avoid reload clearing form data
         setLead(newLead);
         // Navigate with replace and state to indicate we just saved
-        navigate(`/leads/${newLead.id}/wizard`, { replace: true, state: { justSaved: true } });
+        if (navigateAfterSave) {
+          navigate(`/leads/${newLead.id}/wizard`, { replace: true, state: { justSaved: true } });
+        }
         return newLead.id;
       } else {
         const updatedLead = await leadsApi.updateLead(id, saveData);
@@ -1289,6 +1312,16 @@ export default function LeadWizard() {
     };
 
     const result = await leadsApi.convertLead(targetLeadId, conversionData);
+
+    if (result.opportunity?.id) {
+      navigate(`/jobs/${result.opportunity.id}`, {
+        state: {
+          openResultAppointmentWizard: true,
+          fromLeadConversion: true,
+        },
+      });
+      return result;
+    }
 
     setConversionResult({
       accountId: result.account?.id,
@@ -1634,7 +1667,7 @@ export default function LeadWizard() {
     setIsConverting(true);
     setErrorMessage('');
     try {
-      const leadId = await handleSave();
+      const leadId = await handleSave({ navigateAfterSave: false });
       if (!leadId) return;
 
       let appointmentResult = null;
@@ -1742,6 +1775,11 @@ export default function LeadWizard() {
   const handleFinalStepSubmit = async () => {
     if (!hasRequiredFields) return;
 
+    if (shouldConvertOnFinalStep) {
+      await handleConvert();
+      return;
+    }
+
     if (!isCallCenter) {
       await handleSave();
       return;
@@ -1801,9 +1839,13 @@ export default function LeadWizard() {
   });
 
   // canConvert should match hasRequiredFields validation
-  const canConvert = lead &&
-    !lead.isConverted &&
-    (hasRequiredFields || canForceConvert);
+  const canConvert = canLeadWizardConvert({
+    isNewLead,
+    lead,
+    hasRequiredFields,
+    canForceConvert,
+  });
+  const shouldConvertOnFinalStep = !isCallCenter && canConvert;
 
   const getStatusStyle = (status) => {
     const found = LEAD_STATUSES.find(s => s.value === status);
@@ -2892,7 +2934,7 @@ export default function LeadWizard() {
                       { label: 'Phone or Email', check: !!(formData.phone || formData.mobilePhone || formData.email), step: 1, field: 'phone' },
                       { label: 'Work Type', check: !!formData.workType, step: 3, field: 'workType' },
                       { label: 'Lead Status', check: !!formData.status, step: 3, field: 'status' },
-                      { label: 'Lead Source', check: !!formData.leadSource, step: 4, field: 'leadSource' },
+                      { label: 'Lead Source', check: !!formData.leadSource, step: 3, field: 'leadSource' },
                       { label: 'Lead Set By', check: !!formData.leadSetById, optional: true, step: 3, field: 'leadSetBy' },
                       { label: 'Appointment Date/Time', check: hasCallCenterAppointment, step: 3, field: 'tentativeAppointmentDate' },
                     ] : [
@@ -2903,8 +2945,8 @@ export default function LeadWizard() {
                       { label: 'Company', check: !!formData.company, optional: true, step: 1, field: 'company' },
                       { label: 'Address', check: !!(formData.street && formData.city), optional: true, step: 2, field: 'street' },
                       { label: 'Lead Source', check: !!formData.leadSource, step: 3, field: 'leadSource' },
-                      { label: 'Project Type', check: !!formData.propertyType, optional: true, step: 4, field: 'propertyType' },
-                      { label: 'Work Type', check: !!formData.workType, optional: true, step: 4, field: 'workType' },
+                      { label: 'Project Type', check: !!formData.propertyType, optional: true, step: 3, field: 'propertyType' },
+                      { label: 'Work Type', check: !!formData.workType, optional: true, step: 3, field: 'workType' },
                     ]).map((item, idx) => (
                       <button
                         key={idx}
@@ -3063,22 +3105,35 @@ export default function LeadWizard() {
                 ) : (
                   <button
                     onClick={handleFinalStepSubmit}
-                    disabled={isSaving || !hasRequiredFields}
+                    disabled={shouldConvertOnFinalStep ? isConverting || !canConvert : isSaving || !hasRequiredFields}
                     className={`inline-flex items-center px-6 py-2 rounded-lg transition-colors ${
-                      isSaving || !hasRequiredFields
+                      (shouldConvertOnFinalStep ? isConverting || !canConvert : isSaving || !hasRequiredFields)
                         ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                         : 'bg-green-500 text-white hover:bg-green-600'
                     }`}
                   >
-                    {isSaving ? (
+                    {shouldConvertOnFinalStep && isConverting ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Converting...
+                      </>
+                    ) : isSaving ? (
                       <>
                         <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                         {isNewLead ? 'Creating...' : 'Saving...'}
                       </>
                     ) : (
                       <>
-                        <LEAD_WIZARD_SUBMIT_ICON className="w-5 h-5 mr-2" />
-                        {isNewLead ? 'Create Lead' : 'Save Lead'}
+                        {shouldConvertOnFinalStep ? (
+                          <Sparkles className="w-5 h-5 mr-2" />
+                        ) : (
+                          <LEAD_WIZARD_SUBMIT_ICON className="w-5 h-5 mr-2" />
+                        )}
+                        {shouldConvertOnFinalStep
+                          ? 'Convert to Job'
+                          : isNewLead
+                            ? 'Create Lead'
+                            : 'Save Lead'}
                       </>
                     )}
                   </button>

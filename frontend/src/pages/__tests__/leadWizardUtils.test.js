@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  canLeadWizardConvert,
   LEAD_WIZARD_STEPS,
   hasLeadWizardContactMethod,
   hasLeadWizardRequiredFields,
+  isLeadWizardSalesRole,
+  shouldDefaultLeadSourceToSelfGen,
 } from '../leadWizardUtils';
 
 describe('leadWizardUtils', () => {
@@ -41,6 +44,45 @@ describe('leadWizardUtils', () => {
         phone: '(410) 555-1234',
         mobilePhone: '',
       },
+    })).toBe(true);
+  });
+
+  it('defaults new sales leads to Self-Gen only when no source is already set', () => {
+    expect(shouldDefaultLeadSourceToSelfGen({
+      isNewLead: true,
+      isCallCenter: false,
+      isSalesRole: true,
+      leadSource: '',
+    })).toBe(true);
+
+    expect(shouldDefaultLeadSourceToSelfGen({
+      isNewLead: true,
+      isCallCenter: false,
+      isSalesRole: true,
+      leadSource: 'Referral',
+    })).toBe(false);
+  });
+
+  it('detects sales roles without treating call center as sales', () => {
+    expect(isLeadWizardSalesRole({
+      roleName: 'sales rep',
+      roleType: 'sales_rep',
+      isCallCenter: false,
+    })).toBe(true);
+
+    expect(isLeadWizardSalesRole({
+      roleName: 'call center',
+      roleType: 'call_center',
+      isCallCenter: true,
+    })).toBe(false);
+  });
+
+  it('allows conversion for new leads once required fields are complete', () => {
+    expect(canLeadWizardConvert({
+      isNewLead: true,
+      lead: null,
+      hasRequiredFields: true,
+      canForceConvert: false,
     })).toBe(true);
   });
 });
