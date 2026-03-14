@@ -1,0 +1,48 @@
+name: Build Leads AMD64 Hotfix
+
+on:
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-2
+  ECR_REGISTRY: 679128292059.dkr.ecr.us-east-2.amazonaws.com
+  ECR_REPOSITORY: panda-crm/leads
+
+jobs:
+  build-and-push:
+    name: Build and Push Leads AMD64 Image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push amd64 image
+        env:
+          IMAGE_TAG: amd64-${{ github.sha }}
+        run: |
+          BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          docker buildx build \
+            --platform linux/amd64 \
+            --build-arg BUILD_SHA=${{ github.sha }} \
+            --build-arg BUILD_TIME="$BUILD_TIME" \
+            --tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+            --push \
+            --file services/leads/Dockerfile \
+            .
+
+          echo "Built $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
