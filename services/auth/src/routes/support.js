@@ -29,6 +29,11 @@ function generateTicketNumber() {
   return `${prefix}-${timestamp}-${random}`;
 }
 
+function isAdminUser(user) {
+  return user?.roleType?.toLowerCase() === 'admin' ||
+    user?.role?.name?.toLowerCase()?.includes('admin');
+}
+
 // Helper to upload to S3
 async function uploadToS3(file, folder = 'support') {
   const key = `${folder}/${Date.now()}-${file.originalname}`;
@@ -84,11 +89,14 @@ router.get('/tickets', authMiddleware, async (req, res) => {
 // Get single ticket
 router.get('/tickets/:id', authMiddleware, async (req, res) => {
   try {
+    const isAdminRequest = isAdminUser(req.user);
     const ticket = await prisma.support_tickets.findFirst({
-      where: {
-        id: req.params.id,
-        user_id: req.user.id, // Users can only see their own tickets
-      },
+      where: isAdminRequest
+        ? { id: req.params.id }
+        : {
+            id: req.params.id,
+            user_id: req.user.id, // Users can only see their own tickets
+          },
       include: {
         user: {
           select: {
@@ -206,16 +214,19 @@ router.post('/tickets', authMiddleware, upload.fields([
 router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
   try {
     const { message, attachments } = req.body;
+    const isAdminRequest = isAdminUser(req.user);
 
-    // Verify ticket belongs to user or user is admin
+    // Verify ticket belongs to user, is assigned to the user, or the user is an admin
     const ticket = await prisma.support_tickets.findFirst({
-      where: {
-        id: req.params.id,
-        OR: [
-          { user_id: req.user.id },
-          { assigned_to_id: req.user.id },
-        ],
-      },
+      where: isAdminRequest
+        ? { id: req.params.id }
+        : {
+            id: req.params.id,
+            OR: [
+              { user_id: req.user.id },
+              { assigned_to_id: req.user.id },
+            ],
+          },
     });
 
     if (!ticket) {
@@ -265,9 +276,7 @@ router.post('/tickets/:id/messages', authMiddleware, async (req, res) => {
 // Admin: Get all tickets
 router.get('/admin/tickets', authMiddleware, async (req, res) => {
   try {
-    // Check if user is admin
-    const isAdmin = req.user.roleType?.toLowerCase() === 'admin' ||
-                    req.user.role?.name?.toLowerCase()?.includes('admin');
+    const isAdmin = isAdminUser(req.user);
     if (!isAdmin) {
       return res.status(403).json({ error: 'Unauthorized' });
     }
@@ -313,8 +322,7 @@ router.get('/admin/tickets', authMiddleware, async (req, res) => {
 // Admin: Get stats
 router.get('/admin/stats', authMiddleware, async (req, res) => {
   try {
-    const isAdmin = req.user.roleType?.toLowerCase() === 'admin' ||
-                    req.user.role?.name?.toLowerCase()?.includes('admin');
+    const isAdmin = isAdminUser(req.user);
     if (!isAdmin) {
       return res.status(403).json({ error: 'Unauthorized' });
     }
@@ -635,8 +643,7 @@ router.get('/tickets/similar', authMiddleware, async (req, res) => {
 // Admin: Update ticket status/priority/assignment
 router.patch('/admin/tickets/:id', authMiddleware, async (req, res) => {
   try {
-    const isAdmin = req.user.roleType?.toLowerCase() === 'admin' ||
-                    req.user.role?.name?.toLowerCase()?.includes('admin');
+    const isAdmin = isAdminUser(req.user);
     if (!isAdmin) {
       return res.status(403).json({ error: 'Unauthorized' });
     }

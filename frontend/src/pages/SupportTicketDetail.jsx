@@ -1,12 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import {
   ArrowLeft,
   Send,
   Paperclip,
   X,
-  Download,
   ExternalLink,
   Clock,
   CheckCircle,
@@ -41,6 +40,7 @@ const PRIORITY_CONFIG = {
 export default function SupportTicketDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useAuth();
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -52,18 +52,35 @@ export default function SupportTicketDetail() {
   const [newMessage, setNewMessage] = useState('');
   const [attachments, setAttachments] = useState([]);
   const [uploading, setUploading] = useState(false);
+  const [selectedStatus, setSelectedStatus] = useState('NEW');
+  const [selectedPriority, setSelectedPriority] = useState('MEDIUM');
+  const [isSavingAdminChanges, setIsSavingAdminChanges] = useState(false);
+  const [adminSaveError, setAdminSaveError] = useState('');
+  const [adminSaveSuccess, setAdminSaveSuccess] = useState('');
+
+  const isAdmin = user?.roleType?.toLowerCase() === 'admin' ||
+                  user?.role?.name?.toLowerCase()?.includes('admin');
+  const isAdminRoute = isAdmin && location.pathname.startsWith('/admin/support/ticket/');
+  const backPath = isAdminRoute ? '/admin/support/tickets' : '/support';
 
   useEffect(() => {
     loadTicketDetail();
-  }, [id]);
+  }, [id, isAdminRoute]);
 
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
 
+  useEffect(() => {
+    if (!ticket) return;
+    setSelectedStatus(ticket.status || 'NEW');
+    setSelectedPriority(ticket.priority || 'MEDIUM');
+  }, [ticket]);
+
   const loadTicketDetail = async () => {
     try {
       setLoading(true);
+      setAdminSaveError('');
       const response = await api.get(`/api/support/tickets/${id}`);
       setTicket(response.data.ticket);
       setMessages(response.data.messages || []);
@@ -148,6 +165,27 @@ export default function SupportTicketDetail() {
     setAttachments(attachments.filter((_, i) => i !== index));
   };
 
+  const handleAdminSave = async () => {
+    try {
+      setIsSavingAdminChanges(true);
+      setAdminSaveError('');
+      setAdminSaveSuccess('');
+
+      await api.patch(`/api/support/admin/tickets/${id}`, {
+        status: selectedStatus,
+        priority: selectedPriority,
+      });
+
+      await loadTicketDetail();
+      setAdminSaveSuccess('Ticket updated.');
+    } catch (error) {
+      console.error('Failed to update ticket:', error);
+      setAdminSaveError(error?.response?.data?.error || 'Failed to update ticket');
+    } finally {
+      setIsSavingAdminChanges(false);
+    }
+  };
+
   const formatTime = (date) => {
     if (!date) return '';
     const d = new Date(date);
@@ -160,9 +198,6 @@ export default function SupportTicketDetail() {
       hour12: true,
     });
   };
-
-  const isAdmin = user?.roleType?.toLowerCase() === 'admin' ||
-                  user?.role?.name?.toLowerCase()?.includes('admin');
 
   if (loading) {
     return (
@@ -178,7 +213,7 @@ export default function SupportTicketDetail() {
         <AlertCircle className="w-16 h-16 text-gray-300 mx-auto mb-4" />
         <h3 className="text-lg font-medium text-gray-900 mb-2">Ticket not found</h3>
         <button
-          onClick={() => navigate('/support')}
+          onClick={() => navigate(backPath)}
           className="text-panda-primary hover:underline"
         >
           Back to Support
@@ -195,7 +230,7 @@ export default function SupportTicketDetail() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <button
-          onClick={() => navigate('/support')}
+          onClick={() => navigate(backPath)}
           className="flex items-center gap-2 text-gray-600 hover:text-gray-900"
         >
           <ArrowLeft className="w-5 h-5" />
@@ -529,14 +564,66 @@ export default function SupportTicketDetail() {
           {isAdmin && (
             <div className="bg-white rounded-xl border border-gray-100 p-6">
               <h3 className="font-semibold text-gray-900 mb-4">Admin Actions</h3>
-              <div className="space-y-2">
-                <button
-                  onClick={() => navigate(`/admin/support/ticket/${id}`)}
-                  className="w-full px-4 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90 transition-colors text-sm"
-                >
-                  Manage Ticket
-                </button>
-              </div>
+              {isAdminRoute ? (
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm text-gray-500 mb-1">Status</label>
+                    <select
+                      value={selectedStatus}
+                      onChange={(e) => setSelectedStatus(e.target.value)}
+                      disabled={isSavingAdminChanges}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary disabled:bg-gray-50"
+                    >
+                      {Object.entries(STATUS_CONFIG).map(([value, config]) => (
+                        <option key={value} value={value}>{config.label}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm text-gray-500 mb-1">Priority</label>
+                    <select
+                      value={selectedPriority}
+                      onChange={(e) => setSelectedPriority(e.target.value)}
+                      disabled={isSavingAdminChanges}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary disabled:bg-gray-50"
+                    >
+                      {Object.entries(PRIORITY_CONFIG).map(([value, config]) => (
+                        <option key={value} value={value}>{config.label}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {adminSaveError && (
+                    <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                      {adminSaveError}
+                    </div>
+                  )}
+
+                  {adminSaveSuccess && (
+                    <div className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+                      {adminSaveSuccess}
+                    </div>
+                  )}
+
+                  <button
+                    onClick={handleAdminSave}
+                    disabled={isSavingAdminChanges || (selectedStatus === ticket.status && selectedPriority === (ticket.priority || 'MEDIUM'))}
+                    className="w-full px-4 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90 transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isSavingAdminChanges ? 'Saving...' : 'Save Ticket Changes'}
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <button
+                    onClick={() => navigate(`/admin/support/ticket/${id}`)}
+                    className="w-full px-4 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90 transition-colors text-sm"
+                  >
+                    Manage Ticket
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
