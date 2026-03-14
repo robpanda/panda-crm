@@ -1722,6 +1722,53 @@ export default function LeadWizard() {
     }
   };
 
+  const handleCallAction = async () => {
+    const phoneNumber = formData.phone || formData.mobilePhone;
+    if (!phoneNumber) return;
+
+    if (!isRingCentralReady) {
+      await loadWidget();
+    }
+
+    setRingCentralVisible(true);
+    clickToCall(phoneNumber);
+  };
+
+  const handleSmsAction = () => {
+    setSmsPhoneNumber(formData.mobilePhone || formData.phone || '');
+    setShowSmsPanel(true);
+  };
+
+  const handleFinalStepSubmit = async () => {
+    if (!hasRequiredFields) return;
+
+    if (!isCallCenter) {
+      await handleSave();
+      return;
+    }
+
+    if (!hasCallCenterAppointment) {
+      setShowAppointmentPrompt(true);
+      return;
+    }
+
+    if (!formData.leadSource) {
+      setShowLeadSourcePrompt(true);
+      return;
+    }
+
+    try {
+      const leadId = await handleSave();
+      if (!leadId) return;
+
+      await persistPromptCompletion({ leadId });
+      alert('Call Center Process Complete! The Sales Rep will take the lead from here.');
+    } catch (error) {
+      console.error('[LeadWizard] Final step submission failed:', error);
+      setErrorMessage(error.message || 'Failed to save lead. Please try again.');
+    }
+  };
+
   // Calculate completion score
   const calculateCompletionScore = () => {
     let score = 0;
@@ -2957,7 +3004,48 @@ export default function LeadWizard() {
                 Previous
               </button>
 
-              <div className="flex items-center space-x-2 sm:space-x-3">
+              <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3">
+                <button
+                  type="button"
+                  onClick={handleCallAction}
+                  disabled={!formData.phone && !formData.mobilePhone}
+                  className={`inline-flex items-center rounded-lg px-3 py-2 text-sm font-medium transition-all ${
+                    (formData.phone || formData.mobilePhone)
+                      ? currentCall
+                        ? 'bg-red-500 text-white hover:bg-red-600'
+                        : 'bg-green-500 text-white hover:bg-green-600'
+                      : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                  }`}
+                >
+                  {currentCall ? <PhoneCall className="w-4 h-4 sm:mr-2" /> : <Phone className="w-4 h-4 sm:mr-2" />}
+                  <span className="hidden sm:inline">{currentCall ? 'On Call' : 'Call'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSmsAction}
+                  disabled={!formData.phone && !formData.mobilePhone}
+                  className={`inline-flex items-center rounded-lg px-3 py-2 text-sm font-medium transition-all ${
+                    formData.phone || formData.mobilePhone
+                      ? 'bg-blue-500 text-white hover:bg-blue-600'
+                      : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                  }`}
+                >
+                  <MessageSquare className="w-4 h-4 sm:mr-2" />
+                  <span className="hidden sm:inline">SMS</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowEmailPanel(true)}
+                  disabled={!formData.email}
+                  className={`inline-flex items-center rounded-lg px-3 py-2 text-sm font-medium transition-all ${
+                    formData.email
+                      ? 'bg-purple-500 text-white hover:bg-purple-600'
+                      : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                  }`}
+                >
+                  <Mail className="w-4 h-4 sm:mr-2" />
+                  <span className="hidden sm:inline">Email</span>
+                </button>
                 <button
                   onClick={() => navigate(-1)}
                   className="px-4 py-2 text-gray-600 hover:text-gray-800 transition-colors"
@@ -2974,7 +3062,7 @@ export default function LeadWizard() {
                   </button>
                 ) : (
                   <button
-                    onClick={handleSave}
+                    onClick={handleFinalStepSubmit}
                     disabled={isSaving || !hasRequiredFields}
                     className={`inline-flex items-center px-6 py-2 rounded-lg transition-colors ${
                       isSaving || !hasRequiredFields
@@ -3263,17 +3351,16 @@ export default function LeadWizard() {
               <button
                 type="button"
                 onClick={async () => {
-                  const preferredDateTime = buildPreferredDateTime();
-                  if (!preferredDateTime) {
+                  if (!buildPreferredDateTime()) {
                     setAppointmentPromptError('Select a valid date and time before confirming.');
                     return;
                   }
-                  const result = await requestAppointmentSuggestion({ preferredDateTime, allowFallback: false });
-                  if (result?.ready) {
-                    setShowAppointmentPrompt(false);
-                    if (!formData.leadSource) {
-                      setShowLeadSourcePrompt(true);
-                    }
+                  setAppointmentPromptError('');
+                  setAppointmentPromptInfo('');
+                  setPendingSuggestedSlot(null);
+                  setShowAppointmentPrompt(false);
+                  if (!formData.leadSource) {
+                    setShowLeadSourcePrompt(true);
                   }
                 }}
                 disabled={isSuggestingAppointment}
@@ -3385,86 +3472,8 @@ export default function LeadWizard() {
         </div>
       )}
 
-      {/* Quick Actions Bar - Fixed at bottom of page */}
       {!conversionResult && (
         <>
-          {/* Quick Actions Bar */}
-          <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 shadow-lg z-40">
-            <div className="max-w-4xl mx-auto px-4 py-3">
-              <div className="flex items-center justify-center space-x-4">
-                {/* Call Button - RingCentral Integration */}
-                <button
-                  type="button"
-                  onClick={async () => {
-                    const phoneNumber = formData.phone || formData.mobilePhone;
-                    if (phoneNumber) {
-                      // Load widget first if not loaded, then show it and place call
-                      if (!isRingCentralReady) {
-                        await loadWidget();
-                      }
-                      setRingCentralVisible(true);
-                      clickToCall(phoneNumber);
-                    }
-                  }}
-                  disabled={!formData.phone && !formData.mobilePhone}
-                  className={`flex items-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all ${
-                    (formData.phone || formData.mobilePhone)
-                      ? currentCall
-                        ? 'bg-red-500 text-white hover:bg-red-600 animate-pulse'
-                        : 'bg-green-500 text-white hover:bg-green-600'
-                      : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                  }`}
-                >
-                  {currentCall ? (
-                    <>
-                      <PhoneCall className="w-5 h-5" />
-                      <span>On Call</span>
-                    </>
-                  ) : (
-                    <>
-                      <Phone className="w-5 h-5" />
-                      <span>Call</span>
-                    </>
-                  )}
-                </button>
-
-                {/* SMS Button */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    // Default to mobile phone, fall back to regular phone
-                    setSmsPhoneNumber(formData.mobilePhone || formData.phone || '');
-                    setShowSmsPanel(true);
-                  }}
-                  disabled={!formData.phone && !formData.mobilePhone}
-                  className={`flex items-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all ${
-                    formData.phone || formData.mobilePhone
-                      ? 'bg-blue-500 text-white hover:bg-blue-600'
-                      : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                  }`}
-                >
-                  <MessageSquare className="w-5 h-5" />
-                  <span>SMS</span>
-                </button>
-
-                {/* Email Button */}
-                <button
-                  type="button"
-                  onClick={() => setShowEmailPanel(true)}
-                  disabled={!formData.email}
-                  className={`flex items-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all ${
-                    formData.email
-                      ? 'bg-purple-500 text-white hover:bg-purple-600'
-                      : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                  }`}
-                >
-                  <Mail className="w-5 h-5" />
-                  <span>Email</span>
-                </button>
-              </div>
-            </div>
-          </div>
-
           {/* SMS Sliding Panel */}
           <div className={`fixed inset-x-0 bottom-0 transform transition-transform duration-300 ease-in-out z-50 ${
             showSmsPanel ? 'translate-y-0' : 'translate-y-full'
