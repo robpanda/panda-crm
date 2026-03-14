@@ -185,6 +185,7 @@ const handleSalesRabbitWebhook = async (req, res) => {
   }
 };
 
+router.post('', validateWebhookSecret, handleSalesRabbitWebhook);
 router.post('/', validateWebhookSecret, handleSalesRabbitWebhook);
 router.post('/webhook', validateWebhookSecret, handleSalesRabbitWebhook);
 
