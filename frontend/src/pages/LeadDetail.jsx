@@ -692,7 +692,12 @@ export default function LeadDetail() {
         result?.job?.id ||
         result?.jobId;
       if (opportunityId) {
-        navigate(`/jobs/${opportunityId}`);
+        navigate(`/jobs/${opportunityId}`, {
+          state: {
+            openResultAppointmentWizard: true,
+            fromLeadConversion: true,
+          },
+        });
       }
     },
     onError: (error) => {
