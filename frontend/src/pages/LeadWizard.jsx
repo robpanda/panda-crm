@@ -38,6 +38,12 @@ import AddressAutocomplete from '../components/AddressAutocomplete';
 import MentionTextarea from '../components/MentionTextarea';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { isValidPhoneFormat, isValidEmailFormat } from '../utils/formatters';
+import {
+  LEAD_WIZARD_STEPS,
+  LEAD_WIZARD_SUBMIT_ICON,
+  hasLeadWizardContactMethod,
+  hasLeadWizardRequiredFields,
+} from './leadWizardUtils';
 
 const US_STATES = [
   { value: 'AL', label: 'Alabama' }, { value: 'AK', label: 'Alaska' },
@@ -232,13 +238,6 @@ const CALL_CENTER_WORK_TYPES = [
 const INSPECTION_SUGGESTION_WINDOW_DAYS = 14;
 const APPOINTMENT_SLOT_TIMES = ['09:00', '11:00', '13:00', '15:00'];
 
-const steps = [
-  { id: 1, name: 'Info', icon: User, description: 'Contact details' },
-  { id: 2, name: 'Address', icon: MapPin, description: 'Location info' },
-  { id: 3, name: 'Qualify', icon: Target, description: 'Lead classification' },
-  { id: 4, name: 'Convert', icon: CheckCircle, description: 'Create opportunity' },
-];
-
 export default function LeadWizard() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -276,8 +275,8 @@ export default function LeadWizard() {
 
   // Call center users only see Inspection, others see all work types
   const WORK_TYPES = isCallCenter ? CALL_CENTER_WORK_TYPES : ALL_WORK_TYPES;
-  const totalSteps = isCallCenter ? 3 : steps.length;
-  const visibleSteps = isCallCenter ? steps.slice(0, 3) : steps;
+  const totalSteps = LEAD_WIZARD_STEPS.length;
+  const visibleSteps = LEAD_WIZARD_STEPS;
   const useLeadPromptFlow = true;
   const isSelfGenLeadSource = (value) => {
     if (!value) return false;
@@ -1422,10 +1421,10 @@ export default function LeadWizard() {
 
   // Call center workflow stops at step 3
   useEffect(() => {
-    if (isCallCenter && currentStep > 3) {
-      setCurrentStep(3);
+    if (currentStep > totalSteps) {
+      setCurrentStep(totalSteps);
     }
-  }, [isCallCenter, currentStep]);
+  }, [currentStep, totalSteps]);
 
   const handleGuidedProjectTypeNext = () => {
     if (!guidedProjectType) {
@@ -1706,54 +1705,13 @@ export default function LeadWizard() {
   };
 
   const goToStep = (step) => {
-    if (isCallCenter && step > 3) return;
     if (step >= 1 && step <= totalSteps) {
       setCurrentStep(step);
     }
   };
 
-  const handleNext = async () => {
-    if (currentStep === 3) {
-      try {
-        const leadId = await handleSave();
-        if (!leadId) return;
-
-        if (!hasCallCenterAppointment) {
-          setShowAppointmentPrompt(true);
-          return;
-        }
-
-        if (!formData.leadSource) {
-          setShowLeadSourcePrompt(true);
-          return;
-        }
-
-        const preferredDateTime = buildPreferredDateTime();
-
-        if (preferredDateTime && !hasManualAppointmentChange) {
-          const appointmentResult = await requestAppointmentSuggestion({
-            preferredDateTime,
-            allowFallback: false,
-          });
-          if (!appointmentResult?.ready) {
-            setShowAppointmentPrompt(true);
-            return;
-          }
-        }
-
-        if (isCallCenter) {
-          alert('Call Center Process Complete! The Sales Rep will take the lead from here.');
-          setCurrentStep(3);
-          return;
-        }
-
-        openGuidedFlowModal(leadId);
-        return;
-      } catch (err) {
-        console.error('[LeadWizard] Gating check failed:', err);
-        alert('Unable to validate lead gating rules. Please try again.');
-      }
-    } else if (currentStep < 4) {
+  const handleNext = () => {
+    if (currentStep < totalSteps) {
       setCurrentStep(currentStep + 1);
     }
   };
@@ -1789,18 +1747,11 @@ export default function LeadWizard() {
   // Validation differs for call center vs sales reps
   // Call center: firstName, lastName, phone/email, workType, status, leadSource, appointment
   // Sales reps: firstName, lastName, phone/email, leadSource
-  const hasRequiredFields = isCallCenter
-    ? (formData.firstName &&
-       formData.lastName &&
-       formData.workType &&
-       formData.status &&
-       formData.leadSource &&
-       hasCallCenterAppointment &&
-       (formData.phone || formData.mobilePhone || formData.email))
-    : (formData.firstName &&
-       formData.lastName &&
-       formData.leadSource &&
-       (formData.phone || formData.mobilePhone || formData.email));
+  const hasRequiredFields = hasLeadWizardRequiredFields({
+    isCallCenter,
+    formData,
+    hasCallCenterAppointment,
+  });
 
   // canConvert should match hasRequiredFields validation
   const canConvert = lead &&
@@ -2058,7 +2009,7 @@ export default function LeadWizard() {
             </div>
 
             {/* Validation Warning */}
-            {!(formData.firstName && formData.lastName && (formData.phone || formData.mobilePhone || formData.email)) && (
+            {!(formData.firstName && formData.lastName && hasLeadWizardContactMethod(formData)) && (
               <div className="flex items-center space-x-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
                 <AlertCircle className="w-5 h-5 text-yellow-600 flex-shrink-0" />
                 <p className="text-sm text-yellow-700">
@@ -3021,7 +2972,7 @@ export default function LeadWizard() {
                     Next
                     <ChevronRight className="w-5 h-5 ml-1" />
                   </button>
-                ) : isNewLead ? (
+                ) : (
                   <button
                     onClick={handleSave}
                     disabled={isSaving || !hasRequiredFields}
@@ -3034,16 +2985,16 @@ export default function LeadWizard() {
                     {isSaving ? (
                       <>
                         <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        Creating...
+                        {isNewLead ? 'Creating...' : 'Saving...'}
                       </>
                     ) : (
                       <>
-                        <CheckCircle className="w-5 h-5 mr-2" />
-                        Create Lead
+                        <LEAD_WIZARD_SUBMIT_ICON className="w-5 h-5 mr-2" />
+                        {isNewLead ? 'Create Lead' : 'Save Lead'}
                       </>
                     )}
                   </button>
-                ) : null}
+                )}
               </div>
             </div>
           </div>
