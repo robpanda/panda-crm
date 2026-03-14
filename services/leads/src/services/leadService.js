@@ -9,6 +9,22 @@ const lambdaClient = new LambdaClient({ region: 'us-east-2' });
 
 // Job ID starting number (first job ID will be YYYY-1000)
 const JOB_ID_STARTING_NUMBER = 999;
+const KNOWN_LEAD_STATUSES = ['NEW', 'CONTACTED', 'QUALIFIED', 'UNQUALIFIED', 'NURTURING', 'CONVERTED'];
+
+function prefixJobIdToAccountName(jobId, accountName) {
+  const trimmedJobId = typeof jobId === 'string' ? jobId.trim() : '';
+  const trimmedAccountName = typeof accountName === 'string' ? accountName.trim() : '';
+
+  if (!trimmedJobId || !trimmedAccountName) {
+    return trimmedAccountName;
+  }
+
+  if (trimmedAccountName === trimmedJobId || trimmedAccountName.startsWith(`${trimmedJobId} `)) {
+    return trimmedAccountName;
+  }
+
+  return `${trimmedJobId} ${trimmedAccountName}`;
+}
 
 // Audit logging helper
 const logAudit = async ({ tableName, recordId, action, oldValues, newValues, userId, userEmail, source = 'api' }) => {
@@ -220,7 +236,23 @@ class LeadService {
    * @param {string[]} ownerIds - Filter counts to multiple owner IDs
    */
   async getLeadCounts(currentUserId, ownerId = null, ownerIds = []) {
-    const counts = {};
+    const counts = {
+      total: 0,
+      mine: 0,
+      myLeads: 0,
+      new: 0,
+      contacted: 0,
+      qualified: 0,
+      unqualified: 0,
+      nurturing: 0,
+      converted: 0,
+      NEW: 0,
+      CONTACTED: 0,
+      QUALIFIED: 0,
+      UNQUALIFIED: 0,
+      NURTURING: 0,
+      CONVERTED: 0,
+    };
 
     // Resolve user ID if it's a Cognito ID (starts with uuid format)
     let resolvedUserId = currentUserId;
@@ -247,22 +279,44 @@ class LeadService {
       counts.mine = await prisma.lead.count({
         where: { isConverted: false, deleted_at: null, ownerId: resolvedUserId },
       });
+      counts.myLeads = counts.mine;
       logger.info(`getLeadCounts: mine=${counts.mine} for resolvedUserId=${resolvedUserId}`);
-    } else {
-      counts.mine = 0;
     }
 
-    // By status (with owner filter if specified)
-    const statusCounts = await prisma.lead.groupBy({
-      by: ['status'],
-      where: { isConverted: false, deleted_at: null, ...ownerWhere },
-      _count: { id: true },
-    });
+    const ownerStatusFilter =
+      ownerIds && ownerIds.length > 0
+        ? Prisma.sql` AND owner_id IN (${Prisma.join(ownerIds)})`
+        : ownerId
+          ? Prisma.sql` AND owner_id = ${ownerId}`
+          : Prisma.empty;
+
+    // Use raw SQL here so legacy enum values in production data cannot crash the counts endpoint.
+    const statusCounts = await prisma.$queryRaw(
+      Prisma.sql`
+        SELECT CAST(status AS TEXT) AS status, COUNT(*)::int AS count
+        FROM leads
+        WHERE is_converted = false
+          AND deleted_at IS NULL
+          ${ownerStatusFilter}
+        GROUP BY status
+      `
+    );
 
     for (const item of statusCounts) {
-      if (item.status) {
-        counts[item.status] = item._count.id;
+      const rawStatus = typeof item.status === 'string' ? item.status.toUpperCase() : null;
+      const count = Number(item.count) || 0;
+
+      if (!rawStatus) {
+        continue;
       }
+
+      if (!KNOWN_LEAD_STATUSES.includes(rawStatus)) {
+        logger.warn(`getLeadCounts: ignoring unsupported legacy status "${rawStatus}"`);
+        continue;
+      }
+
+      counts[rawStatus] = count;
+      counts[rawStatus.toLowerCase()] = count;
     }
 
     return counts;
@@ -755,6 +809,17 @@ class LeadService {
         } catch (err) {
           // Log error but don't fail the conversion - Job ID can be assigned later
           logger.warn(`Failed to generate Job ID: ${err.message}`);
+        }
+
+        if (jobId) {
+          const updatedAccountName = prefixJobIdToAccountName(jobId, account.name);
+          if (updatedAccountName && updatedAccountName !== account.name) {
+            await tx.account.update({
+              where: { id: account.id },
+              data: { name: updatedAccountName },
+            });
+            account.name = updatedAccountName;
+          }
         }
 
         opportunity = await tx.opportunity.create({

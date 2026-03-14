@@ -402,6 +402,7 @@ export default function Opportunities() {
             <div className="divide-y divide-gray-100">
               {opportunities.map((opp) => {
                 const isSelected = selectedJobs.includes(opp.id);
+                const accountName = opp.accountName || opp.account?.name || '';
 
                 // In selection mode, use div with onClick instead of Link
                 if (selectionMode) {
@@ -434,7 +435,7 @@ export default function Opportunities() {
                         <div>
                           <h3 className="font-medium text-gray-900">{opp.name}</h3>
                           <div className="flex items-center space-x-4 text-sm text-gray-500">
-                            {opp.account && <span>{opp.account.name}</span>}
+                            {accountName && <span>{accountName}</span>}
                             {opp.closeDate && (
                               <span className="flex items-center">
                                 <Calendar className="w-3 h-3 mr-1" />
@@ -478,7 +479,7 @@ export default function Opportunities() {
                       <div>
                         <h3 className="font-medium text-gray-900">{opp.name}</h3>
                         <div className="flex items-center space-x-4 text-sm text-gray-500">
-                          {opp.account && <span>{opp.account.name}</span>}
+                          {accountName && <span>{accountName}</span>}
                           {opp.closeDate && (
                             <span className="flex items-center">
                               <Calendar className="w-3 h-3 mr-1" />

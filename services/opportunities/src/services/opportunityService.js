@@ -37,6 +37,21 @@ const DISPOSITION_STAGE_MAP = {
   RETAIL_NOT_SOLD: 'CLOSED_LOST',
 };
 
+function prefixJobIdToAccountName(jobId, accountName) {
+  const trimmedJobId = typeof jobId === 'string' ? jobId.trim() : '';
+  const trimmedAccountName = typeof accountName === 'string' ? accountName.trim() : '';
+
+  if (!trimmedJobId || !trimmedAccountName) {
+    return trimmedAccountName;
+  }
+
+  if (trimmedAccountName === trimmedJobId || trimmedAccountName.startsWith(`${trimmedJobId} `)) {
+    return trimmedAccountName;
+  }
+
+  return `${trimmedJobId} ${trimmedAccountName}`;
+}
+
 function parseDate(value) {
   if (!value) return null;
   const parsed = new Date(value);
@@ -1835,6 +1850,33 @@ Be factual and professional. Highlight anything that needs attention.`;
         jobId = await this.generateJobId(tx);
       }
 
+      if (data.accountId && jobId) {
+        const existingAccount = await tx.account.findUnique({
+          where: { id: data.accountId },
+          select: { id: true, name: true },
+        });
+
+        if (existingAccount?.name) {
+          const linkedOpportunityCount = await tx.opportunity.count({
+            where: { accountId: data.accountId },
+          });
+
+          if (linkedOpportunityCount === 0) {
+            const nextAccountName = prefixJobIdToAccountName(jobId, existingAccount.name);
+            if (nextAccountName && nextAccountName !== existingAccount.name) {
+              await tx.account.update({
+                where: { id: data.accountId },
+                data: { name: nextAccountName },
+              });
+            }
+          } else {
+            logger.info(
+              `Skipped account rename during opportunity create because account ${data.accountId} already has ${linkedOpportunityCount} linked opportunities`
+            );
+          }
+        }
+      }
+
       const opp = await tx.opportunity.create({
         data: {
           name: data.name,
@@ -2185,7 +2227,13 @@ Be factual and professional. Highlight anything that needs attention.`;
   async assignJobId(id) {
     const opportunity = await prisma.opportunity.findUnique({
       where: { id },
-      select: { id: true, jobId: true, name: true },
+      select: {
+        id: true,
+        jobId: true,
+        name: true,
+        accountId: true,
+        account: { select: { id: true, name: true } },
+      },
     });
 
     if (!opportunity) {
@@ -2208,6 +2256,26 @@ Be factual and professional. Highlight anything that needs attention.`;
           where: { id },
           data: { jobId: newJobId },
         });
+
+        if (opportunity.accountId && opportunity.account?.name) {
+          const linkedOpportunityCount = await tx.opportunity.count({
+            where: { accountId: opportunity.accountId },
+          });
+
+          if (linkedOpportunityCount <= 1) {
+            const nextAccountName = prefixJobIdToAccountName(newJobId, opportunity.account.name);
+            if (nextAccountName && nextAccountName !== opportunity.account.name) {
+              await tx.account.update({
+                where: { id: opportunity.accountId },
+                data: { name: nextAccountName },
+              });
+            }
+          } else {
+            logger.info(
+              `Skipped account rename for opportunity ${id} because account ${opportunity.accountId} is shared by ${linkedOpportunityCount} opportunities`
+            );
+          }
+        }
       }
       return newJobId;
     });
