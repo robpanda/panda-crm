@@ -732,12 +732,24 @@ function CommunicationsTab({ phone, email, contactName, archivedActivities = [],
   });
 
   const isLoading = conversationLoading || messagesLoading || callsLoading;
-  const messages = messagesData?.data || messagesData || [];
-  const callLogs = callLogsData?.data || callLogsData || [];
+  const messages = useMemo(() => {
+    const raw = messagesData?.data || messagesData?.messages || messagesData?.items || messagesData || [];
+    return Array.isArray(raw) ? raw : [];
+  }, [messagesData]);
+  const callLogs = useMemo(() => {
+    const raw = callLogsData?.data || callLogsData?.records || callLogsData || [];
+    return Array.isArray(raw) ? raw : [];
+  }, [callLogsData]);
 
   // Separate messages by type
-  const smsMessages = Array.isArray(messages) ? messages.filter(m => m.type === 'sms' || m.channel === 'sms') : [];
-  const emailMessages = Array.isArray(messages) ? messages.filter(m => m.type === 'email' || m.channel === 'email') : [];
+  const smsMessages = messages.filter((m) => {
+    const channel = (m.channel || m.type || m.messageType || '').toLowerCase();
+    return channel === 'sms' || channel === 'mms' || channel === 'text';
+  });
+  const emailMessages = messages.filter((m) => {
+    const channel = (m.channel || m.type || m.messageType || '').toLowerCase();
+    return channel === 'email';
+  });
 
   // Combine all activity into a unified timeline
   const allActivity = [
@@ -1865,6 +1877,14 @@ export default function OpportunityDetail() {
     queryFn: () => documentsApi.getDocumentsByJob(id),
     enabled: !!id,
   });
+  const repositoryDocuments = useMemo(() => {
+    const raw = repositoryFiles?.data?.documents
+      || repositoryFiles?.documents
+      || repositoryFiles?.data
+      || repositoryFiles
+      || [];
+    return Array.isArray(raw) ? raw : [];
+  }, [repositoryFiles]);
 
   // Cases (linked via Account) - service not yet deployed, disable retries
   const { data: cases } = useQuery({
@@ -6748,9 +6768,9 @@ export default function OpportunityDetail() {
                         >
                           <FileText className="w-4 h-4" />
                           <span>Files</span>
-                          {(repositoryFiles?.data?.length || repositoryFiles?.length || 0) > 0 && (
+                          {repositoryDocuments.length > 0 && (
                             <span className="ml-1 px-2 py-0.5 bg-panda-primary/10 text-panda-primary text-xs rounded-full">
-                              {repositoryFiles?.data?.length || repositoryFiles?.length || 0}
+                              {repositoryDocuments.length}
                             </span>
                           )}
                         </button>
@@ -6990,7 +7010,7 @@ export default function OpportunityDetail() {
                     {documentsSubTab === 'files' && (
                       <div className="space-y-4">
                         {(() => {
-                          const files = repositoryFiles?.data || repositoryFiles || [];
+                          const files = repositoryDocuments;
                           if (files.length === 0) {
                             return (
                               <div className="text-center py-12">
@@ -7027,9 +7047,9 @@ export default function OpportunityDetail() {
                                     </div>
                                   </div>
                                   <div className="mt-3 flex space-x-2">
-                                    {file.contentUrl ? (
+                                    {(file.contentUrl || file.downloadUrl) ? (
                                       <a
-                                        href={file.contentUrl}
+                                        href={file.contentUrl || file.downloadUrl}
                                         target="_blank"
                                         rel="noopener noreferrer"
                                         className="flex-1 inline-flex items-center justify-center px-3 py-1.5 bg-panda-primary/10 text-panda-primary text-xs font-medium rounded-md hover:bg-panda-primary/20 transition-colors"

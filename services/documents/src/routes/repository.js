@@ -295,9 +295,12 @@ router.get('/by-job/:opportunityId', async (req, res, next) => {
     const transformedDocs = documents.map((doc) => ({
       id: doc.id,
       title: doc.title,
+      fileName: doc.title,
       fileType: doc.fileType,
       fileExtension: doc.fileExtension,
       contentSize: doc.contentSize,
+      contentUrl: doc.contentUrl,
+      downloadUrl: doc.contentUrl,
       createdAt: doc.createdAt,
       category: categorizeDocument(doc.title, doc.fileType),
       linkedVia: doc.links.map((link) => ({
