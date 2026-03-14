@@ -6,6 +6,39 @@ import { leadScoringService } from '../services/leadScoringService.js';
 
 const router = Router();
 
+const COMMENT_DEPARTMENTS = [
+  { value: 'general', label: 'General' },
+  { value: 'sales', label: 'Sales' },
+  { value: 'call-center', label: 'Call Center' },
+  { value: 'production', label: 'Production' },
+  { value: 'finance', label: 'Finance' },
+];
+
+const RESERVED_LEAD_ROUTE_IDS = new Set([
+  'deleted',
+  'statuses',
+  'sources',
+  'comment-departments',
+  'counts',
+  'my-pins',
+  'my-recent-pins',
+  'dropdown',
+  'suggest',
+  'scoreboard',
+  'ai-suggestions',
+  'test',
+  'salesrabbit',
+  'scoring',
+]);
+
+const sendCommentDepartments = (res) =>
+  res.json({
+    success: true,
+    data: COMMENT_DEPARTMENTS,
+  });
+
+const isReservedLeadRouteId = (id) => RESERVED_LEAD_ROUTE_IDS.has(String(id || '').toLowerCase());
+
 // Validation error handler
 const handleValidation = async (req, res, next) => {
   const { validationResult } = await import('express-validator');
@@ -68,30 +101,12 @@ router.get('/sources', (req, res) => {
 
 // Get internal comment departments for lead comments UI
 router.get('/comment-departments', (req, res) => {
-  res.json({
-    success: true,
-    data: [
-      { value: 'general', label: 'General' },
-      { value: 'sales', label: 'Sales' },
-      { value: 'call-center', label: 'Call Center' },
-      { value: 'production', label: 'Production' },
-      { value: 'finance', label: 'Finance' },
-    ],
-  });
+  sendCommentDepartments(res);
 });
 
 // Backward-compatible alias for clients that include lead id in path
 router.get('/:id/comment-departments', (req, res) => {
-  res.json({
-    success: true,
-    data: [
-      { value: 'general', label: 'General' },
-      { value: 'sales', label: 'Sales' },
-      { value: 'call-center', label: 'Call Center' },
-      { value: 'production', label: 'Production' },
-      { value: 'finance', label: 'Finance' },
-    ],
-  });
+  sendCommentDepartments(res);
 });
 
 // Get lead counts
@@ -539,6 +554,24 @@ router.post('/', validateCreate, handleValidation, async (req, res, next) => {
 // ============================================================================
 // DYNAMIC :id ROUTES - Must come AFTER static routes
 // ============================================================================
+
+// Guard against reserved static route segments accidentally falling into /:id handlers.
+router.use('/:id', (req, res, next) => {
+  const routeId = String(req.params.id || '').toLowerCase();
+
+  if (routeId === 'comment-departments' && req.method === 'GET' && (req.path === '' || req.path === '/')) {
+    return sendCommentDepartments(res);
+  }
+
+  if (isReservedLeadRouteId(routeId) && (req.path === '' || req.path === '/')) {
+    return res.status(404).json({
+      success: false,
+      error: { code: 'NOT_FOUND', message: `Route ${req.method} /api/leads/${req.params.id} not found` },
+    });
+  }
+
+  next();
+});
 
 // Get lead by ID
 router.get('/:id', async (req, res, next) => {
