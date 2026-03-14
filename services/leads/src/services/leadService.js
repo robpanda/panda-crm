@@ -125,6 +125,30 @@ class LeadService {
     return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
 
+  nextPrefixedSequenceValue(lastValue, prefix) {
+    const match = typeof lastValue === 'string'
+      ? lastValue.match(new RegExp(`^${prefix}-(\\d+)$`))
+      : null;
+    const nextNumber = match ? Number.parseInt(match[1], 10) + 1 : 1;
+    return `${prefix}-${String(nextNumber).padStart(6, '0')}`;
+  }
+
+  async generateWorkOrderNumber(tx = prisma) {
+    const lastWorkOrder = await tx.workOrder.findFirst({
+      orderBy: { createdAt: 'desc' },
+      select: { workOrderNumber: true },
+    });
+    return this.nextPrefixedSequenceValue(lastWorkOrder?.workOrderNumber, 'WO');
+  }
+
+  async generateAppointmentNumber(tx = prisma) {
+    const lastAppointment = await tx.serviceAppointment.findFirst({
+      orderBy: { createdAt: 'desc' },
+      select: { appointmentNumber: true },
+    });
+    return this.nextPrefixedSequenceValue(lastAppointment?.appointmentNumber, 'SA');
+  }
+
   /**
    * Get leads with filtering and pagination
    * Replicates: getLeads()
@@ -838,12 +862,31 @@ class LeadService {
       let serviceAppointment = null;
       let assignedResource = null;
       if (options.createServiceAppointment && options.tentativeAppointmentDate && opportunity) {
+        const serviceWorkType = this.normalizeOptionalText(options.workType) || 'Inspection';
+        const appointmentDate = new Date(options.tentativeAppointmentDate);
+        const endDate = new Date(appointmentDate);
+        endDate.setHours(endDate.getHours() + 2); // Default 2 hour duration
+
+        const [workOrderNumber, appointmentNumber, workTypeRecord] = await Promise.all([
+          this.generateWorkOrderNumber(tx),
+          this.generateAppointmentNumber(tx),
+          tx.workType.findFirst({
+            where: {
+              OR: [
+                { name: { equals: serviceWorkType, mode: 'insensitive' } },
+                { name: { contains: serviceWorkType, mode: 'insensitive' } },
+              ],
+            },
+            select: { id: true, estimatedDuration: true, name: true },
+          }),
+        ]);
+
         // First, find the best available resource based on territory and skills
         const bestResource = await this.findBestResource({
           state: lead.state,
           postalCode: lead.postalCode,
-          workType: options.workType || 'Inspection',
-          appointmentDate: new Date(options.tentativeAppointmentDate),
+          workType: serviceWorkType,
+          appointmentDate,
         }, tx);
 
         // Find or create territory based on state
@@ -862,36 +905,37 @@ class LeadService {
         // Create WorkOrder with territory
         const workOrder = await tx.workOrder.create({
           data: {
-            subject: `${options.workType || 'Inspection'} - ${account.name}`,
+            workOrderNumber,
+            subject: `${serviceWorkType} - ${account.name}`,
+            description: `Created from lead conversion for ${lead.firstName} ${lead.lastName}`,
             accountId: account.id,
-            contactId: contact.id,
             opportunityId: opportunity.id,
             status: 'NEW',
-            workType: options.workType || 'Inspection',
             priority: 'NORMAL',
-            territoryId: territory?.id,
+            territoryId: territory?.id || null,
+            workTypeId: workTypeRecord?.id || null,
+            startDate: appointmentDate,
+            endDate,
           },
         });
 
         // Then create the Service Appointment
-        const appointmentDate = new Date(options.tentativeAppointmentDate);
-        const endDate = new Date(appointmentDate);
-        endDate.setHours(endDate.getHours() + 2); // Default 2 hour duration
-
         serviceAppointment = await tx.serviceAppointment.create({
           data: {
-            subject: `${options.workType || 'Inspection'} - ${lead.firstName} ${lead.lastName}`,
+            appointmentNumber,
+            subject: `${serviceWorkType} - ${lead.firstName} ${lead.lastName}`,
+            description: `Created from lead conversion for ${lead.firstName} ${lead.lastName}`,
             workOrderId: workOrder.id,
-            accountId: account.id,
-            contactId: contact.id,
+            earliestStart: appointmentDate,
+            dueDate: endDate,
             scheduledStart: appointmentDate,
             scheduledEnd: endDate,
             status: 'SCHEDULED',
-            appointmentType: options.workType || 'Inspection',
             street: lead.street,
             city: lead.city,
             state: lead.state,
             postalCode: lead.postalCode,
+            duration: workTypeRecord?.estimatedDuration || 120,
           },
         });
 
@@ -1337,7 +1381,6 @@ class LeadService {
           },
         },
         orderBy: [
-          { lastAppointmentAssignedAt: 'asc' }, // Prefer resources who haven't been assigned recently
           { name: 'asc' },
         ],
       });
@@ -1348,9 +1391,6 @@ class LeadService {
       }
 
       // Step 4: Filter and score resources
-      const appointmentDay = appointmentDate.getDay();
-      const isWeekend = appointmentDay === 0 || appointmentDay === 6;
-
       const scoredResources = resources
         .filter(resource => {
           // Exclude resources with absences on the appointment date
@@ -1373,21 +1413,6 @@ class LeadService {
             score += 30;
           }
 
-          // Score: Not assigned recently (+20 points for each day since last assignment)
-          if (resource.lastAppointmentAssignedAt) {
-            const daysSinceAssigned = Math.floor(
-              (Date.now() - new Date(resource.lastAppointmentAssignedAt).getTime()) / (1000 * 60 * 60 * 24)
-            );
-            score += Math.min(daysSinceAssigned * 5, 20);
-          } else {
-            score += 20; // Never assigned = high priority
-          }
-
-          // Score: Prefers weekend work (if applicable) (+10 points)
-          if (isWeekend && resource.worksWeekends) {
-            score += 10;
-          }
-
           return { resource, score };
         })
         .sort((a, b) => b.score - a.score); // Sort by score descending
@@ -1399,12 +1424,6 @@ class LeadService {
 
       const bestResource = scoredResources[0].resource;
       logger.info(`Best resource found: ${bestResource.name} (score: ${scoredResources[0].score}) for ${workType} in ${territory?.name || state}`);
-
-      // Update last assigned timestamp
-      await tx.serviceResource.update({
-        where: { id: bestResource.id },
-        data: { lastAppointmentAssignedAt: new Date() },
-      });
 
       return bestResource;
     } catch (error) {
