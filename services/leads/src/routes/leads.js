@@ -6,6 +6,13 @@ import { leadScoringService } from '../services/leadScoringService.js';
 
 const router = Router();
 
+const getAuditContext = (req) => ({
+  userId: req.user?.id,
+  userEmail: req.user?.email,
+  ipAddress: req.ip || req.headers['x-forwarded-for']?.split(',')[0],
+  userAgent: req.headers['user-agent'],
+});
+
 // Validation error handler
 const handleValidation = async (req, res, next) => {
   const { validationResult } = await import('express-validator');
@@ -23,7 +30,16 @@ const handleValidation = async (req, res, next) => {
 const validateCreate = [
   body('firstName').trim().notEmpty().withMessage('First name is required'),
   body('lastName').trim().notEmpty().withMessage('Last name is required'),
-  body('email').optional().isEmail().withMessage('Invalid email format'),
+  body('email').optional({ checkFalsy: true }).isEmail().withMessage('Invalid email format'),
+  body('phone').custom((value, { req }) => {
+    const email = (req.body.email || '').trim();
+    const phone = (value || '').trim();
+    const mobilePhone = (req.body.mobilePhone || '').trim();
+    if (!email && !phone && !mobilePhone) {
+      throw new Error('Email or phone is required');
+    }
+    return true;
+  }),
 ];
 
 const validatePagination = [
@@ -494,13 +510,7 @@ router.post('/', validateCreate, handleValidation, async (req, res, next) => {
     const lead = await leadService.createLead({
       ...req.body,
       ownerId: req.body.ownerId || req.user?.id,
-      // Audit context
-      _auditContext: {
-        userId: req.user?.id,
-        userEmail: req.user?.email,
-        ipAddress: req.ip || req.headers['x-forwarded-for']?.split(',')[0],
-        userAgent: req.headers['user-agent'],
-      },
+      _auditContext: getAuditContext(req),
     });
     res.status(201).json({ success: true, data: lead });
   } catch (error) {
@@ -511,6 +521,52 @@ router.post('/', validateCreate, handleValidation, async (req, res, next) => {
 // ============================================================================
 // DYNAMIC :id ROUTES - Must come AFTER static routes
 // ============================================================================
+
+// Get lead gating state (sales path decision state + conversion blockers)
+router.get('/:id/gating/state', async (req, res, next) => {
+  try {
+    const state = await leadService.getGatingState(req.params.id);
+    res.json({ success: true, data: state });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Validate lead pre-conversion gating rules
+const handleValidatePreConversion = async (req, res, next) => {
+  try {
+    const result = await leadService.validatePreConversion(req.params.id);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+};
+router.post('/:id/gating/validate-pre-conversion', handleValidatePreConversion);
+router.get('/:id/gating/validate-pre-conversion', handleValidatePreConversion);
+
+// Select sales path (RETAIL/INSURANCE) for inspected leads
+router.post('/:id/gating/select-sales-path', async (req, res, next) => {
+  try {
+    const salesPath = req.body?.salesPath || req.body?.path || req.body?.opportunityType;
+    const result = await leadService.selectSalesPath(req.params.id, salesPath, getAuditContext(req));
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Apply gating transition (e.g. NO_INSPECTION, INSPECTED)
+const handleGatingTransition = async (req, res, next) => {
+  try {
+    const transition = req.body?.transition || req.body?.action || req.body?.target;
+    const result = await leadService.applyGatingTransition(req.params.id, transition, getAuditContext(req));
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+};
+router.post('/:id/gating/apply-transition', handleGatingTransition);
+router.post('/:id/gating/transition', handleGatingTransition);
 
 // Get lead by ID
 router.get('/:id', async (req, res, next) => {
@@ -527,12 +583,7 @@ router.put('/:id', async (req, res, next) => {
   try {
     const lead = await leadService.updateLead(req.params.id, {
       ...req.body,
-      _auditContext: {
-        userId: req.user?.id,
-        userEmail: req.user?.email,
-        ipAddress: req.ip || req.headers['x-forwarded-for']?.split(',')[0],
-        userAgent: req.headers['user-agent'],
-      },
+      _auditContext: getAuditContext(req),
     });
     res.json({ success: true, data: lead });
   } catch (error) {
@@ -544,12 +595,7 @@ router.patch('/:id', async (req, res, next) => {
   try {
     const lead = await leadService.updateLead(req.params.id, {
       ...req.body,
-      _auditContext: {
-        userId: req.user?.id,
-        userEmail: req.user?.email,
-        ipAddress: req.ip || req.headers['x-forwarded-for']?.split(',')[0],
-        userAgent: req.headers['user-agent'],
-      },
+      _auditContext: getAuditContext(req),
     });
     res.json({ success: true, data: lead });
   } catch (error) {
@@ -566,6 +612,13 @@ router.post('/:id/convert', async (req, res, next) => {
       opportunityType: req.body.opportunityType,
       closeDate: req.body.closeDate,
       createOpportunity: req.body.createOpportunity !== false,
+      workType: req.body.workType,
+      tentativeAppointmentDate: req.body.tentativeAppointmentDate,
+      tentativeAppointmentTime: req.body.tentativeAppointmentTime,
+      createServiceAppointment: req.body.createServiceAppointment !== false,
+      leadSetById: req.body.leadSetById,
+      leadStatus: req.body.leadStatus,
+      leadDisposition: req.body.leadDisposition,
     });
     res.json({ success: true, data: result });
   } catch (error) {

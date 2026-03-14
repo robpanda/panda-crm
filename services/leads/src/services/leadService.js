@@ -82,6 +82,50 @@ class LeadService {
   }
 
   /**
+   * Normalize optional text field to trimmed string or null
+   */
+  normalizeOptionalText(value) {
+    if (value === undefined || value === null) return null;
+    const trimmed = String(value).trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  /**
+   * Parse tentative appointment date/time into a stable Date.
+   * Accepts full ISO strings and date-only + time fallback.
+   */
+  parseTentativeAppointmentDate(dateValue, timeValue = null) {
+    if (!dateValue) return null;
+
+    let raw;
+    if (dateValue instanceof Date) {
+      if (Number.isNaN(dateValue.getTime())) return null;
+      raw = dateValue.toISOString();
+    } else {
+      raw = String(dateValue).trim();
+    }
+    if (!raw) return null;
+
+    const hasTime = raw.includes('T');
+    const hasTimezone = /(?:Z|[+-]\d{2}:\d{2})$/i.test(raw);
+
+    let normalized = raw;
+    if (!hasTime) {
+      const time = typeof timeValue === 'string' && /^\d{2}:\d{2}$/.test(timeValue.trim())
+        ? `${timeValue.trim()}:00`
+        : '00:00:00';
+      normalized = `${raw}T${time}`;
+    }
+
+    if (!hasTimezone) {
+      normalized = `${normalized}Z`;
+    }
+
+    const parsed = new Date(normalized);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  /**
    * Get leads with filtering and pagination
    * Replicates: getLeads()
    */
@@ -253,15 +297,24 @@ class LeadService {
     }
 
     // By status (with owner filter if specified)
-    const statusCounts = await prisma.lead.groupBy({
-      by: ['status'],
-      where: { isConverted: false, deleted_at: null, ...ownerWhere },
-      _count: { id: true },
-    });
+    // Use raw SQL here so legacy/non-enum status values do not crash Prisma enum decoding.
+    let statusQueryWhere = Prisma.sql`WHERE is_converted = false AND deleted_at IS NULL`;
+    if (ownerIds && ownerIds.length > 0) {
+      statusQueryWhere = Prisma.sql`${statusQueryWhere} AND owner_id IN (${Prisma.join(ownerIds)})`;
+    } else if (ownerId) {
+      statusQueryWhere = Prisma.sql`${statusQueryWhere} AND owner_id = ${ownerId}`;
+    }
+
+    const statusCounts = await prisma.$queryRaw`
+      SELECT status::text AS status, COUNT(*)::int AS count
+      FROM leads
+      ${statusQueryWhere}
+      GROUP BY status
+    `;
 
     for (const item of statusCounts) {
       if (item.status) {
-        counts[item.status] = item._count.id;
+        counts[item.status] = item.count;
       }
     }
 
@@ -388,9 +441,9 @@ class LeadService {
       data: {
         firstName: data.firstName,
         lastName: data.lastName,
-        email: data.email,
-        phone: data.phone,
-        mobilePhone: data.mobilePhone,
+        email: this.normalizeOptionalText(data.email),
+        phone: this.normalizeOptionalText(data.phone),
+        mobilePhone: this.normalizeOptionalText(data.mobilePhone),
         company: data.company,
         street: data.street,
         city: data.city,
@@ -413,8 +466,8 @@ class LeadService {
         selfGenRepId: data.selfGenRepId,
         salesforceId: data.salesforceId,
         // Call Center - Tentative Appointment fields (per Setting A Lead SOP)
-        tentativeAppointmentDate: data.tentativeAppointmentDate ? new Date(data.tentativeAppointmentDate) : null,
-        tentativeAppointmentTime: data.tentativeAppointmentTime,
+        tentativeAppointmentDate: this.parseTentativeAppointmentDate(data.tentativeAppointmentDate, data.tentativeAppointmentTime),
+        tentativeAppointmentTime: this.normalizeOptionalText(data.tentativeAppointmentTime),
         leadSetById: leadSetById,
         disposition: data.disposition,
       },
@@ -592,9 +645,9 @@ class LeadService {
 
     if (data.firstName !== undefined) updateData.firstName = data.firstName;
     if (data.lastName !== undefined) updateData.lastName = data.lastName;
-    if (data.email !== undefined) updateData.email = data.email || null;
-    if (data.phone !== undefined) updateData.phone = data.phone || null;
-    if (data.mobilePhone !== undefined) updateData.mobilePhone = data.mobilePhone || null;
+    if (data.email !== undefined) updateData.email = this.normalizeOptionalText(data.email);
+    if (data.phone !== undefined) updateData.phone = this.normalizeOptionalText(data.phone);
+    if (data.mobilePhone !== undefined) updateData.mobilePhone = this.normalizeOptionalText(data.mobilePhone);
     if (data.company !== undefined) updateData.company = data.company || null;
     if (data.street !== undefined) updateData.street = data.street || null;
     if (data.city !== undefined) updateData.city = data.city || null;
@@ -614,9 +667,14 @@ class LeadService {
     if (data.salesRabbitUser !== undefined) updateData.salesRabbitUser = data.salesRabbitUser || null;
     // Call Center - Tentative Appointment fields
     if (data.tentativeAppointmentDate !== undefined) {
-      updateData.tentativeAppointmentDate = data.tentativeAppointmentDate ? new Date(data.tentativeAppointmentDate) : null;
+      updateData.tentativeAppointmentDate = this.parseTentativeAppointmentDate(
+        data.tentativeAppointmentDate,
+        data.tentativeAppointmentTime,
+      );
     }
-    if (data.tentativeAppointmentTime !== undefined) updateData.tentativeAppointmentTime = data.tentativeAppointmentTime || null;
+    if (data.tentativeAppointmentTime !== undefined) {
+      updateData.tentativeAppointmentTime = this.normalizeOptionalText(data.tentativeAppointmentTime);
+    }
     if (data.disposition !== undefined) updateData.disposition = data.disposition || null;
 
     const lead = await prisma.lead.update({
@@ -871,6 +929,222 @@ class LeadService {
 
     logger.info(`Lead converted: ${id} -> Account: ${result.account.id}, Contact: ${result.contact.id}, Opportunity: ${result.opportunity?.id}${result.serviceAppointment ? `, ServiceAppointment: ${result.serviceAppointment.id}` : ''}${result.assignedResource ? `, AssignedResource: ${result.assignedResource.serviceResourceId}` : ''}`);
     return result;
+  }
+
+  // ============================================================================
+  // LEAD GATING / SALES PATH COMPATIBILITY
+  // ============================================================================
+
+  normalizeSalesPath(value) {
+    if (!value) return null;
+    const normalized = String(value).trim().toUpperCase().replace(/[\s-]+/g, '_');
+    if (normalized === 'RETAIL') return 'RETAIL';
+    if (normalized === 'INSURANCE') return 'INSURANCE';
+    return null;
+  }
+
+  deriveSalesPath(workType) {
+    if (!workType) return null;
+    const normalized = String(workType).trim().toUpperCase().replace(/[\s-]+/g, '_');
+    if (normalized.startsWith('RETAIL')) return 'RETAIL';
+    if (normalized.startsWith('INSURANCE')) return 'INSURANCE';
+    return null;
+  }
+
+  resolveGatingFunnelStatus(lead) {
+    if (!lead) return 'NEW';
+    if (lead.isConverted) return 'CONVERTED';
+
+    const disposition = lead.disposition ? String(lead.disposition).toUpperCase() : null;
+    const status = lead.status ? String(lead.status).toUpperCase() : null;
+
+    if (disposition === 'NO_INSPECTION' || status === 'NO_INSPECTION') return 'NO_INSPECTION';
+    if (disposition === 'INSPECTED' || status === 'INSPECTED') return 'INSPECTED';
+    return disposition || status || 'NEW';
+  }
+
+  mapSalesPathToWorkType(salesPath) {
+    if (salesPath === 'RETAIL') return 'Retail';
+    if (salesPath === 'INSURANCE') return 'Insurance';
+    return null;
+  }
+
+  async getGatingState(id) {
+    const lead = await prisma.lead.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        status: true,
+        disposition: true,
+        workType: true,
+        isConverted: true,
+        convertedOpportunityId: true,
+        updatedAt: true,
+      },
+    });
+
+    if (!lead) {
+      const error = new Error(`Lead not found: ${id}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const funnelStatus = this.resolveGatingFunnelStatus(lead);
+    const salesPath = this.deriveSalesPath(lead.workType);
+    const requiresSalesPath = funnelStatus === 'INSPECTED' && !salesPath;
+    const blocked = lead.isConverted || funnelStatus === 'NO_INSPECTION' || requiresSalesPath;
+
+    const blockers = [];
+    if (lead.isConverted) blockers.push('Lead has already been converted.');
+    if (funnelStatus === 'NO_INSPECTION') {
+      blockers.push('Lead is in No Inspection status and must be rescheduled or updated before conversion.');
+    }
+    if (requiresSalesPath) blockers.push('Sales path selection is required before conversion.');
+
+    return {
+      leadId: lead.id,
+      funnelStatus,
+      salesPath,
+      workType: lead.workType || null,
+      isConverted: lead.isConverted,
+      convertedOpportunityId: lead.convertedOpportunityId || null,
+      requiresSalesPath,
+      canConvert: !blocked,
+      blockers,
+      messages: blockers,
+      updatedAt: lead.updatedAt,
+    };
+  }
+
+  async validatePreConversion(id) {
+    const gatingState = await this.getGatingState(id);
+    const blockers = Array.isArray(gatingState.blockers) ? gatingState.blockers : [];
+
+    return {
+      leadId: id,
+      allowed: blockers.length === 0,
+      blocked: blockers.length > 0,
+      blockers,
+      messages: blockers,
+      funnelStatus: gatingState.funnelStatus,
+      salesPath: gatingState.salesPath,
+    };
+  }
+
+  async selectSalesPath(id, salesPath, auditContext = {}) {
+    const normalizedSalesPath = this.normalizeSalesPath(salesPath);
+    if (!normalizedSalesPath) {
+      const error = new Error('salesPath must be RETAIL or INSURANCE');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const lead = await prisma.lead.findUnique({
+      where: { id },
+      select: { id: true, isConverted: true, workType: true },
+    });
+
+    if (!lead) {
+      const error = new Error(`Lead not found: ${id}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    if (lead.isConverted) {
+      const error = new Error('Cannot select sales path for a converted lead');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const workType = this.mapSalesPathToWorkType(normalizedSalesPath);
+    const updatedLead = await prisma.lead.update({
+      where: { id },
+      data: { workType },
+      select: { id: true, workType: true, updatedAt: true },
+    });
+
+    await logAudit({
+      tableName: 'leads',
+      recordId: id,
+      action: 'UPDATE',
+      oldValues: { workType: lead.workType },
+      newValues: { workType: updatedLead.workType, salesPath: normalizedSalesPath },
+      userId: auditContext.userId,
+      userEmail: auditContext.userEmail,
+      source: 'web',
+    });
+
+    return {
+      success: true,
+      leadId: id,
+      salesPath: normalizedSalesPath,
+      workType: updatedLead.workType,
+      updatedAt: updatedLead.updatedAt,
+      state: await this.getGatingState(id),
+    };
+  }
+
+  async applyGatingTransition(id, transition, auditContext = {}) {
+    const normalizedTransition = String(transition || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
+    if (!normalizedTransition) {
+      const error = new Error('transition is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const lead = await prisma.lead.findUnique({
+      where: { id },
+      select: { id: true, status: true, disposition: true, isConverted: true },
+    });
+
+    if (!lead) {
+      const error = new Error(`Lead not found: ${id}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    if (lead.isConverted) {
+      const error = new Error('Cannot apply gating transition for a converted lead');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    let updateData = null;
+    if (normalizedTransition === 'NO_INSPECTION') {
+      updateData = { disposition: 'NO_INSPECTION' };
+    } else if (normalizedTransition === 'INSPECTED' || normalizedTransition === 'MARK_INSPECTED') {
+      updateData = { disposition: 'INSPECTED' };
+    }
+
+    if (!updateData) {
+      const error = new Error(`Unsupported transition: ${transition}`);
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const updatedLead = await prisma.lead.update({
+      where: { id },
+      data: updateData,
+      select: { id: true, status: true, disposition: true, updatedAt: true },
+    });
+
+    await logAudit({
+      tableName: 'leads',
+      recordId: id,
+      action: 'UPDATE',
+      oldValues: { status: lead.status, disposition: lead.disposition },
+      newValues: { status: updatedLead.status, disposition: updatedLead.disposition, transition: normalizedTransition },
+      userId: auditContext.userId,
+      userEmail: auditContext.userEmail,
+      source: 'web',
+    });
+
+    return {
+      success: true,
+      leadId: id,
+      transition: normalizedTransition,
+      state: await this.getGatingState(id),
+    };
   }
 
   /**
