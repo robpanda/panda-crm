@@ -56,7 +56,18 @@ const handleValidation = async (req, res, next) => {
 const validateCreate = [
   body('firstName').trim().notEmpty().withMessage('First name is required'),
   body('lastName').trim().notEmpty().withMessage('Last name is required'),
-  body('email').optional().isEmail().withMessage('Invalid email format'),
+  body('email').optional({ values: 'falsy' }).isEmail().withMessage('Invalid email format'),
+  body().custom((payload = {}) => {
+    const hasPhone = Boolean(String(payload.phone || '').trim());
+    const hasMobilePhone = Boolean(String(payload.mobilePhone || '').trim());
+    const hasEmail = Boolean(String(payload.email || '').trim());
+
+    if (!hasPhone && !hasMobilePhone && !hasEmail) {
+      throw new Error('Email or phone is required');
+    }
+
+    return true;
+  }),
 ];
 
 const validatePagination = [

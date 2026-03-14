@@ -551,13 +551,17 @@ class LeadService {
     const assignedById = await this.resolveUserId(rawAssignedById);
     const leadSetById = await this.resolveUserId(rawLeadSetById);
 
+    const normalizedEmail = String(data.email || '').trim() || null;
+    const normalizedPhone = String(data.phone || '').trim() || null;
+    const normalizedMobilePhone = String(data.mobilePhone || '').trim() || null;
+
     const lead = await prisma.lead.create({
       data: {
         firstName: data.firstName,
         lastName: data.lastName,
-        email: data.email,
-        phone: data.phone,
-        mobilePhone: data.mobilePhone,
+        email: normalizedEmail,
+        phone: normalizedPhone,
+        mobilePhone: normalizedMobilePhone,
         company: data.company,
         street: data.street,
         city: data.city,
