@@ -253,17 +253,51 @@ class LeadService {
     }
 
     // By status (with owner filter if specified)
-    const statusCounts = await prisma.lead.groupBy({
-      by: ['status'],
-      where: { isConverted: false, deleted_at: null, ...ownerWhere },
-      _count: { id: true },
-    });
+    // Use raw SQL here because production still contains legacy rows whose status
+    // values no longer conform to the current Prisma enum. Prisma groupBy throws on
+    // those rows and takes down the Leads count tabs. We preserve the existing
+    // response shape while safely surfacing whatever status buckets still exist.
+    const whereClauses = [
+      '"is_converted" = false',
+      '"deleted_at" IS NULL',
+    ];
+    const statusQueryParams = [];
+
+    if (ownerIds && ownerIds.length > 0) {
+      const placeholders = ownerIds.map((_, index) => `$${index + 1}`).join(', ');
+      whereClauses.push(`"owner_id" IN (${placeholders})`);
+      statusQueryParams.push(...ownerIds);
+    } else if (ownerId) {
+      whereClauses.push('"owner_id" = $1');
+      statusQueryParams.push(ownerId);
+    }
+
+    const statusCounts = await prisma.$queryRawUnsafe(
+      `
+        SELECT CAST("status" AS TEXT) AS "status", COUNT(*)::int AS "count"
+        FROM "leads"
+        WHERE ${whereClauses.join(' AND ')}
+        GROUP BY "status"
+      `,
+      ...statusQueryParams,
+    );
 
     for (const item of statusCounts) {
-      if (item.status) {
-        counts[item.status] = item._count.id;
+      if (!item?.status) continue;
+      counts[item.status] = item.count;
+      const normalizedKey = String(item.status).toLowerCase();
+      if (!counts[normalizedKey]) {
+        counts[normalizedKey] = item.count;
       }
     }
+
+    counts.new = counts.new || counts.NEW || 0;
+    counts.contacted = counts.contacted || counts.CONTACTED || 0;
+    counts.qualified = counts.qualified || counts.QUALIFIED || 0;
+    counts.unqualified = counts.unqualified || counts.UNQUALIFIED || 0;
+    counts.nurturing = counts.nurturing || counts.NURTURING || 0;
+    counts.converted = counts.converted || counts.CONVERTED || 0;
+    counts.myLeads = counts.myLeads || counts.mine || 0;
 
     return counts;
   }

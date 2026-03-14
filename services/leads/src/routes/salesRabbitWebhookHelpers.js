@@ -1,6 +1,9 @@
 export const pickFirstValue = (...values) => {
   for (const value of values) {
     if (value !== undefined && value !== null) {
+      if (typeof value === 'object') {
+        continue;
+      }
       const text = String(value).trim();
       if (text) {
         return text;
@@ -128,9 +131,21 @@ export const isTrustedSalesRabbitAppRequest = (req = {}, env = process.env) => {
 };
 
 export const buildSalesRabbitLeadInput = (rawData = {}) => {
-  const formData = rawData.formData || {};
-  const metaData = rawData.leadMetaData || rawData.leadMetadata || {};
-  const data = { ...metaData, ...formData, ...rawData };
+  const envelope = rawData.payload || rawData.data || {};
+  const formData = rawData.formData || envelope.formData || envelope.form_data || {};
+  const metaData = rawData.leadMetaData || rawData.leadMetadata || envelope.leadMetaData || envelope.leadMetadata || {};
+  const leadData = rawData.lead || envelope.lead || rawData.prospect || envelope.prospect || {};
+  const contactData = rawData.contact || envelope.contact || rawData.customer || envelope.customer || rawData.person || envelope.person || {};
+  const addressData = rawData.address || envelope.address || contactData.address || leadData.address || {};
+  const data = {
+    ...addressData,
+    ...contactData,
+    ...leadData,
+    ...metaData,
+    ...formData,
+    ...envelope,
+    ...rawData,
+  };
 
   let firstName = pickFirstValue(
     data.firstName,
@@ -138,9 +153,15 @@ export const buildSalesRabbitLeadInput = (rawData = {}) => {
     data.First_Name,
     data.contactFirstName,
     data.first_name,
+    data.first,
+    data.givenName,
+    data.given_name,
+    data.customerFirstName,
     data?.contact?.firstName,
     data?.contact?.first_name,
     data?.person?.firstName,
+    data?.customer?.firstName,
+    data?.lead?.firstName,
   );
   let lastName = pickFirstValue(
     data.lastName,
@@ -148,9 +169,16 @@ export const buildSalesRabbitLeadInput = (rawData = {}) => {
     data.Last_Name,
     data.contactLastName,
     data.last_name,
+    data.last,
+    data.surname,
+    data.familyName,
+    data.family_name,
+    data.customerLastName,
     data?.contact?.lastName,
     data?.contact?.last_name,
     data?.person?.lastName,
+    data?.customer?.lastName,
+    data?.lead?.lastName,
   );
 
   if (!firstName && !lastName) {
@@ -159,7 +187,12 @@ export const buildSalesRabbitLeadInput = (rawData = {}) => {
       data.Name,
       data.fullName,
       data.FullName,
+      data.full_name,
       data.contactName,
+      data.contactFullName,
+      data.customerName,
+      data?.contact?.fullName,
+      data?.customer?.fullName,
     );
     if (fullName) {
       const parts = fullName.split(/\s+/);
@@ -177,9 +210,13 @@ export const buildSalesRabbitLeadInput = (rawData = {}) => {
       data.email,
       data.Email,
       data.emailAddress,
+      data.email_address,
       data.EmailAddress,
       data?.contact?.email,
+      data?.contact?.emailAddress,
       data?.person?.email,
+      data?.customer?.email,
+      data?.lead?.email,
     ),
   );
 
@@ -188,11 +225,15 @@ export const buildSalesRabbitLeadInput = (rawData = {}) => {
       data.phonePrimary,
       data.phone,
       data.Phone,
+      data.phone1,
+      data.primary_phone,
       data.phoneNumber,
       data.primaryPhone,
       data.homePhone,
       data?.contact?.phone,
       data?.contact?.phoneNumber,
+      data?.customer?.phone,
+      data?.lead?.phone,
     ),
   );
 
@@ -202,18 +243,28 @@ export const buildSalesRabbitLeadInput = (rawData = {}) => {
       data.mobilePhone,
       data.MobilePhone,
       data.Mobile_Phone,
+      data.phone2,
+      data.secondary_phone,
       data.cell,
       data.cellPhone,
+      data.cell_phone,
       data.mobile,
       data?.contact?.mobilePhone,
       data?.contact?.mobile,
+      data?.customer?.mobilePhone,
+      data?.lead?.mobilePhone,
     ),
   );
 
   const salesRabbitId = pickFirstValue(
     rawData.leadId,
+    rawData.LeadId,
+    rawData.lead_id,
     data.leadId,
+    data.LeadId,
+    data.lead_id,
     data.salesRabbitId,
+    data.salesRabbitLeadId,
     data.id,
     data.iD,
   );
@@ -301,19 +352,26 @@ export const buildSalesRabbitLeadInput = (rawData = {}) => {
         data.addressLine1,
         data.address_line_1,
         data.address1,
+        data.line1,
+        data?.address?.street1,
+        data?.address?.line1,
       ),
     ),
-    city: normalizeOptionalValue(pickFirstValue(data.city, data.City, data.addressCity)),
-    state: normalizeOptionalValue(pickFirstValue(data.state, data.State, data.addressState, data.stateProvince)),
+    city: normalizeOptionalValue(pickFirstValue(data.city, data.City, data.addressCity, data.town, data?.address?.city)),
+    state: normalizeOptionalValue(pickFirstValue(data.state, data.State, data.addressState, data.stateProvince, data.province, data?.address?.state)),
     postalCode: normalizeOptionalValue(
       pickFirstValue(
         data.postalCode,
         data.PostalCode,
         data.Postal_Code,
+        data.postal_code,
+        data.postal,
         data.zip,
         data.Zip,
         data.zipCode,
         data.zipcode,
+        data?.address?.postalCode,
+        data?.address?.zip,
       ),
     ),
     source: normalizeOptionalValue(pickFirstValue(data.source, data.Source, data.leadSource)) || 'SalesRabbit',
@@ -331,6 +389,9 @@ export const buildSalesRabbitLeadInput = (rawData = {}) => {
         data.userEmail,
         data.assignedTo,
         data.createdBy,
+        data?.owner?.email,
+        data?.rep?.email,
+        data?.user?.email,
         metaData.ownerEmail,
       ),
     ),

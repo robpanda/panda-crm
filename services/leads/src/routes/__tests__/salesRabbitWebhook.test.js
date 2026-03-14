@@ -134,6 +134,40 @@ test('buildSalesRabbitLeadInput normalizes common SalesRabbit payload variants',
   assert.match(payload.leadNotes, /Door knock lead/);
 });
 
+test('buildSalesRabbitLeadInput handles nested payload, contact, and address variants', () => {
+  const payload = buildSalesRabbitLeadInput({
+    payload: {
+      lead: {
+        lead_id: 'sr-456',
+        first: 'Rob',
+        surname: 'Rabbit',
+        email_address: 'rob.rabbit@example.com',
+        phone1: '555-2222',
+      },
+      address: {
+        line1: '456 Elm St',
+        city: 'Laurel',
+        state: 'MD',
+        postal_code: '20708',
+      },
+      owner: {
+        email: 'owner@example.com',
+      },
+    },
+  });
+
+  assert.equal(payload.salesRabbitId, 'sr-456');
+  assert.equal(payload.firstName, 'Rob');
+  assert.equal(payload.lastName, 'Rabbit');
+  assert.equal(payload.email, 'rob.rabbit@example.com');
+  assert.equal(payload.phone, '555-2222');
+  assert.equal(payload.street, '456 Elm St');
+  assert.equal(payload.city, 'Laurel');
+  assert.equal(payload.state, 'MD');
+  assert.equal(payload.postalCode, '20708');
+  assert.equal(payload.salesRabbitUser, 'owner@example.com');
+});
+
 test('validateSalesRabbitLeadInput requires name and at least one contact method', () => {
   assert.equal(
     validateSalesRabbitLeadInput({ firstName: null, lastName: null, email: null, phone: null, mobilePhone: null }),
