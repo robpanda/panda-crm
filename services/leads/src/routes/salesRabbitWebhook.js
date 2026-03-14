@@ -14,7 +14,10 @@ import {
 const prisma = new PrismaClient();
 const router = express.Router();
 
-const isSalesRabbitPath = (req) => req?.path === '/webhook' && req?.method === 'POST';
+const isSalesRabbitPath = (req) => (
+  req?.method === 'POST'
+  && (req?.path === '/webhook' || req?.path === '/' || req?.path === '')
+);
 
 const secretsMatch = (providedSecret, expectedSecret) => {
   if (!providedSecret || !expectedSecret) return false;
@@ -60,7 +63,7 @@ const validateWebhookSecret = (req, res, next) => {
   });
 };
 
-router.post('/webhook', validateWebhookSecret, async (req, res) => {
+const handleSalesRabbitWebhook = async (req, res) => {
   try {
     const payload = buildSalesRabbitLeadInput(req.body || {});
     logger.info('SalesRabbit webhook received');
@@ -180,7 +183,10 @@ router.post('/webhook', validateWebhookSecret, async (req, res) => {
       error: { code: 'INTERNAL_ERROR', message: 'Failed to process webhook' },
     });
   }
-});
+};
+
+router.post('/', validateWebhookSecret, handleSalesRabbitWebhook);
+router.post('/webhook', validateWebhookSecret, handleSalesRabbitWebhook);
 
 router.get('/test', (req, res) => {
   res.json({

@@ -5,6 +5,7 @@ import {
   extractProvidedSecret,
   getExpectedSecrets,
   isTrustedSalesRabbitAppRequest,
+  pickFirstValue,
   shouldRequireSalesRabbitSecret,
   validateSalesRabbitLeadInput,
 } from '../salesRabbitWebhookHelpers.js';
@@ -89,6 +90,10 @@ test('generic headerless requests are still rejected by trusted app detection', 
   });
 
   assert.equal(trusted, false);
+});
+
+test('pickFirstValue handles empty path alias checks without treating blanks as valid', () => {
+  assert.equal(pickFirstValue('', '  ', '/webhook'), '/webhook');
 });
 
 test('buildSalesRabbitLeadInput normalizes common SalesRabbit payload variants', () => {
