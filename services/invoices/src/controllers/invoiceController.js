@@ -296,6 +296,9 @@ export async function updateInvoice(req, res, next) {
         ...updateData,
         invoiceDate: data.invoiceDate ? new Date(data.invoiceDate) : undefined,
         dueDate: updateData.dueDate,
+        // Force the next PDF fetch to regenerate from the saved invoice data.
+        pdfUrl: null,
+        pdfKey: null,
       },
       include: {
         account: { select: { id: true, name: true } },
