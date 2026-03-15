@@ -8,6 +8,24 @@ import { authMiddleware, requireRole } from '../middleware/auth.js';
 const router = Router();
 const prisma = new PrismaClient();
 
+function requirePandaSignAdmin(req, res, next) {
+  const role = String(req.user?.role || '').toLowerCase();
+
+  if (
+    role === 'super_admin' ||
+    role === 'admin' ||
+    role.includes('admin') ||
+    role === 'executive'
+  ) {
+    return next();
+  }
+
+  return res.status(403).json({
+    success: false,
+    error: { code: 'FORBIDDEN', message: 'Insufficient permissions' },
+  });
+}
+
 /**
  * GET /agreements - List agreements (authenticated)
  */
@@ -77,13 +95,13 @@ async function handleUpdateTerritoryProfiles(req, res, next) {
 
 // Keep the dedicated admin routes as the preferred surface and preserve the
 // nested /templates/admin/* paths as compatibility aliases for older clients.
-router.get('/admin/resources', authMiddleware, requireRole('admin', 'super_admin'), handleAdminResources);
-router.get('/templates/admin/resources', authMiddleware, requireRole('admin', 'super_admin'), handleAdminResources);
+router.get('/admin/resources', authMiddleware, requirePandaSignAdmin, handleAdminResources);
+router.get('/templates/admin/resources', authMiddleware, requirePandaSignAdmin, handleAdminResources);
 
-router.put('/admin/territory-profiles', authMiddleware, requireRole('admin', 'super_admin'), handleUpdateTerritoryProfiles);
-router.put('/templates/admin/territory-profiles', authMiddleware, requireRole('admin', 'super_admin'), handleUpdateTerritoryProfiles);
+router.put('/admin/territory-profiles', authMiddleware, requirePandaSignAdmin, handleUpdateTerritoryProfiles);
+router.put('/templates/admin/territory-profiles', authMiddleware, requirePandaSignAdmin, handleUpdateTerritoryProfiles);
 
-router.get('/branding', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
+router.get('/branding', authMiddleware, requirePandaSignAdmin, async (req, res, next) => {
   try {
     const items = await pandaSignService.listBrandingItems(req.query);
     res.json({ success: true, data: items });
@@ -92,7 +110,7 @@ router.get('/branding', authMiddleware, requireRole('admin', 'super_admin'), asy
   }
 });
 
-router.post('/branding', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
+router.post('/branding', authMiddleware, requirePandaSignAdmin, async (req, res, next) => {
   try {
     const item = await pandaSignService.upsertBrandingItem(req.body, req.user.id);
     res.status(201).json({ success: true, data: item });
@@ -101,7 +119,7 @@ router.post('/branding', authMiddleware, requireRole('admin', 'super_admin'), as
   }
 });
 
-router.put('/branding/:id', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
+router.put('/branding/:id', authMiddleware, requirePandaSignAdmin, async (req, res, next) => {
   try {
     const item = await pandaSignService.upsertBrandingItem(
       { ...req.body, id: req.params.id },
@@ -113,7 +131,7 @@ router.put('/branding/:id', authMiddleware, requireRole('admin', 'super_admin'),
   }
 });
 
-router.get('/dynamic-content', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
+router.get('/dynamic-content', authMiddleware, requirePandaSignAdmin, async (req, res, next) => {
   try {
     const items = await pandaSignService.listDynamicContentItems(req.query);
     res.json({ success: true, data: items });
@@ -122,7 +140,7 @@ router.get('/dynamic-content', authMiddleware, requireRole('admin', 'super_admin
   }
 });
 
-router.post('/dynamic-content', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
+router.post('/dynamic-content', authMiddleware, requirePandaSignAdmin, async (req, res, next) => {
   try {
     const item = await pandaSignService.upsertDynamicContentItem(req.body, req.user.id);
     res.status(201).json({ success: true, data: item });
@@ -131,7 +149,7 @@ router.post('/dynamic-content', authMiddleware, requireRole('admin', 'super_admi
   }
 });
 
-router.put('/dynamic-content/:id', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
+router.put('/dynamic-content/:id', authMiddleware, requirePandaSignAdmin, async (req, res, next) => {
   try {
     const item = await pandaSignService.upsertDynamicContentItem(
       { ...req.body, id: req.params.id },
@@ -167,7 +185,7 @@ router.get('/templates/:id', authMiddleware, async (req, res, next) => {
   }
 });
 
-router.post('/templates', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
+router.post('/templates', authMiddleware, requirePandaSignAdmin, async (req, res, next) => {
   try {
     const template = await pandaSignService.upsertTemplate(req.body);
     logger.info(`Agreement template created: ${template.id} by ${req.user.email}`);
@@ -177,7 +195,7 @@ router.post('/templates', authMiddleware, requireRole('admin', 'super_admin'), a
   }
 });
 
-router.put('/templates/:id', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
+router.put('/templates/:id', authMiddleware, requirePandaSignAdmin, async (req, res, next) => {
   try {
     const template = await pandaSignService.upsertTemplate({
       ...req.body,
@@ -190,7 +208,7 @@ router.put('/templates/:id', authMiddleware, requireRole('admin', 'super_admin')
   }
 });
 
-router.post('/templates/:id/publish', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
+router.post('/templates/:id/publish', authMiddleware, requirePandaSignAdmin, async (req, res, next) => {
   try {
     const template = await pandaSignService.publishTemplate(req.params.id);
     logger.info(`Agreement template published: ${template.id} by ${req.user.email}`);
@@ -210,7 +228,7 @@ router.post('/templates/:id/publish', authMiddleware, requireRole('admin', 'supe
   }
 });
 
-router.post('/templates/:id/archive', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
+router.post('/templates/:id/archive', authMiddleware, requirePandaSignAdmin, async (req, res, next) => {
   try {
     const template = await pandaSignService.archiveTemplate(req.params.id);
     logger.info(`Agreement template archived: ${template.id} by ${req.user.email}`);
@@ -598,7 +616,7 @@ router.post('/sign/:token', async (req, res, next) => {
 /**
  * DELETE /agreements/templates/:id - Delete template (admin)
  */
-router.delete('/templates/:id', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
+router.delete('/templates/:id', authMiddleware, requirePandaSignAdmin, async (req, res, next) => {
   try {
     // Check if template is in use
     const inUse = await prisma.agreement.count({
