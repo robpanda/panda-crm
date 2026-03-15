@@ -7,6 +7,12 @@ import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { logger } from '../middleware/logger.js';
 import crypto from 'crypto';
+import {
+  DISPOSITION_CATEGORIES,
+  FOLLOW_UP_TYPES,
+  parseDateTimeParts,
+  validateAppointmentResultPayload,
+} from './appointmentResultValidation.js';
 
 const prisma = new PrismaClient();
 
@@ -17,16 +23,6 @@ const S3_BUCKET = process.env.S3_BUCKET || 'pandasign-documents';
 // SES client for email notifications
 const sesClient = new SESClient({ region: process.env.AWS_REGION || 'us-east-2' });
 const FROM_EMAIL = process.env.SES_FROM_EMAIL || 'notifications@pandaexteriors.com';
-
-const DISPOSITION_CATEGORIES = {
-  INSPECTION_NOT_COMPLETED: 'INSPECTION_NOT_COMPLETED',
-  RESCHEDULED: 'RESCHEDULED',
-  FOLLOW_UP_SCHEDULED: 'FOLLOW_UP_SCHEDULED',
-  INSURANCE_CLAIM_FILED: 'INSURANCE_CLAIM_FILED',
-  INSURANCE_NO_CLAIM: 'INSURANCE_NO_CLAIM',
-  RETAIL_SOLD: 'RETAIL_SOLD',
-  RETAIL_NOT_SOLD: 'RETAIL_NOT_SOLD',
-};
 
 const DISPOSITION_STAGE_MAP = {
   INSPECTION_NOT_COMPLETED: 'SCHEDULED',
@@ -44,41 +40,43 @@ function parseDate(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-function validateAppointmentResultPayload(payload = {}) {
-  const errors = [];
-  const category = payload.dispositionCategory;
+const DEFAULT_IN_PERSON_DURATION_MINUTES = 120;
 
-  if (!category || !Object.values(DISPOSITION_CATEGORIES).includes(category)) {
-    errors.push({ field: 'dispositionCategory', message: 'Valid dispositionCategory is required' });
+function normalizeOpportunityType(value) {
+  if (!value) return null;
+  const normalizedValue = `${value}`.trim().toUpperCase();
+  return ['INSURANCE', 'RETAIL', 'COMMERCIAL'].includes(normalizedValue)
+    ? normalizedValue
+    : null;
+}
+
+function deriveOpportunityTypeFromAppointmentResult(payload = {}) {
+  const answers = payload.answers || {};
+  const stormDamage = `${answers.stormDamage || ''}`.toLowerCase();
+  const pitchRetail = `${answers.pitchRetail || ''}`.toLowerCase();
+
+  if (stormDamage === 'no' || pitchRetail === 'yes') {
+    return 'RETAIL';
   }
 
-  if (
-    (category === DISPOSITION_CATEGORIES.RESCHEDULED || category === DISPOSITION_CATEGORIES.FOLLOW_UP_SCHEDULED)
-    && !payload.followUpAt
-  ) {
-    errors.push({ field: 'followUpAt', message: 'Follow-up date is required' });
+  if (stormDamage === 'yes') {
+    return 'INSURANCE';
   }
 
-  if (category === DISPOSITION_CATEGORIES.INSPECTION_NOT_COMPLETED && !payload.dispositionReason) {
-    errors.push({ field: 'dispositionReason', message: 'Reason is required for inspection not completed' });
+  return null;
+}
+
+function deriveWorkTypeFromAppointmentResult(payload = {}, fallbackType = null) {
+  const explicitWorkType = `${payload.workType || ''}`.trim();
+  if (explicitWorkType) {
+    return explicitWorkType;
   }
 
-  if (category === DISPOSITION_CATEGORIES.INSURANCE_NO_CLAIM && !payload.dispositionReason) {
-    errors.push({ field: 'dispositionReason', message: 'Reason is required for no claim filed' });
-  }
-
-  if (category === DISPOSITION_CATEGORIES.RETAIL_NOT_SOLD && !payload.dispositionReason) {
-    errors.push({ field: 'dispositionReason', message: 'Reason is required for retail not sold' });
-  }
-
-  if (category === DISPOSITION_CATEGORIES.INSURANCE_CLAIM_FILED) {
-    const hasClaimInfo = payload.insuranceCompany || payload.claimNumber;
-    if (!hasClaimInfo) {
-      errors.push({ field: 'claimNumber', message: 'Claim number or insurance company is required' });
-    }
-  }
-
-  return { valid: errors.length === 0, errors };
+  const normalizedType = normalizeOpportunityType(fallbackType);
+  if (normalizedType === 'INSURANCE') return 'Insurance';
+  if (normalizedType === 'RETAIL') return 'Retail';
+  if (normalizedType === 'COMMERCIAL') return 'Commercial';
+  return null;
 }
 
 /**
@@ -1849,7 +1847,7 @@ Be factual and professional. Highlight anything that needs attention.`;
           appointmentDate: data.appointmentDate ? new Date(data.appointmentDate) : null,
           amount: data.amount,
           contractTotal: data.contractTotal,
-          type: data.type || 'INSURANCE',
+          type: data.type || undefined,
           workType: data.workType,
           leadSource: data.leadSource,
           isSelfGen: data.isSelfGen || false,
@@ -2123,14 +2121,71 @@ Be factual and professional. Highlight anything that needs attention.`;
       throw error;
     }
 
-    const followUpAt = parseDate(payload.followUpAt);
+    let followUpAt = parseDate(payload.followUpAt);
     const claimFiledDate = parseDate(payload.claimFiledDate);
     const dateOfLoss = parseDate(payload.dateOfLoss);
+    const createdById = userContext?.userId || null;
+    const resolvedOpportunityType = deriveOpportunityTypeFromAppointmentResult(payload);
+    const resolvedWorkType = deriveWorkTypeFromAppointmentResult(payload, resolvedOpportunityType);
+
+    let createdTask = null;
+    if (payload.followUpType === FOLLOW_UP_TYPES.VIRTUAL) {
+      const virtualTask = payload.virtualTask || {};
+      const dueAt = parseDateTimeParts(virtualTask.dueDate, virtualTask.dueTime);
+      followUpAt = followUpAt || dueAt;
+
+      createdTask = await prisma.task.create({
+        data: {
+          subject: `Virtual Follow-up (${virtualTask.taskType || 'CALL'})`,
+          description:
+            virtualTask.notes ||
+            payload.notes ||
+            'Virtual follow-up created from appointment result wizard',
+          status: 'NOT_STARTED',
+          priority: 'NORMAL',
+          dueDate: dueAt,
+          assignedToId: opportunity.ownerId || null,
+          opportunityId: id,
+        },
+      });
+    }
+
+    let createdAppointment = null;
+    if (payload.followUpType === FOLLOW_UP_TYPES.IN_PERSON) {
+      const inPerson = payload.inPersonAppointment || {};
+      const scheduledStart = parseDateTimeParts(inPerson.date, inPerson.time);
+      if (!scheduledStart) {
+        const error = new Error('In-person appointment date/time is invalid');
+        error.name = 'ValidationError';
+        error.details = [
+          {
+            field: 'inPersonAppointment.time',
+            message: 'In-person appointment date/time is invalid',
+          },
+        ];
+        throw error;
+      }
+
+      const durationMinutes = Number(inPerson.durationMinutes) > 0
+        ? Number(inPerson.durationMinutes)
+        : DEFAULT_IN_PERSON_DURATION_MINUTES;
+      const scheduledEnd = new Date(scheduledStart.getTime() + durationMinutes * 60 * 1000);
+
+      const bookingResult = await this.bookAppointment(id, {
+        scheduledStart: scheduledStart.toISOString(),
+        scheduledEnd: scheduledEnd.toISOString(),
+        notes: inPerson.notes || payload.notes || null,
+        bookedBy: createdById,
+      });
+
+      createdAppointment = bookingResult?.serviceAppointment || null;
+      followUpAt = followUpAt || scheduledStart;
+    }
 
     const appointmentResult = await prisma.appointmentResult.create({
       data: {
         opportunityId: id,
-        appointmentId: payload.appointmentId || null,
+        appointmentId: createdAppointment?.id || payload.appointmentId || null,
         payload,
         dispositionCategory: payload.dispositionCategory,
         dispositionReason: payload.dispositionReason || null,
@@ -2140,7 +2195,7 @@ Be factual and professional. Highlight anything that needs attention.`;
         claimFiledDate,
         dateOfLoss,
         damageLocation: payload.damageLocation || null,
-        createdById: userContext?.userId || null,
+        createdById,
       },
     });
 
@@ -2154,6 +2209,14 @@ Be factual and professional. Highlight anything that needs attention.`;
       dateOfLoss: dateOfLoss || undefined,
       damageLocation: payload.damageLocation || undefined,
     };
+
+    if (resolvedOpportunityType) {
+      updateData.type = resolvedOpportunityType;
+    }
+
+    if (resolvedWorkType) {
+      updateData.workType = resolvedWorkType;
+    }
 
     if (payload.autoStageUpdate !== false) {
       const stage = DISPOSITION_STAGE_MAP[payload.dispositionCategory];
@@ -2170,12 +2233,29 @@ Be factual and professional. Highlight anything that needs attention.`;
         contact: { select: { id: true, firstName: true, lastName: true } },
         owner: { select: { id: true, firstName: true, lastName: true } },
         lineItems: { include: { product: true } },
+        tasks: true,
       },
     });
 
     return {
       opportunity: this.createOpportunityWrapper(updatedOpportunity, true),
       appointmentResult,
+      sideEffects: {
+        task: createdTask
+          ? {
+              id: createdTask.id,
+              subject: createdTask.subject,
+              dueDate: createdTask.dueDate,
+            }
+          : null,
+        appointment: createdAppointment
+          ? {
+              id: createdAppointment.id,
+              scheduledStart: createdAppointment.scheduledStart,
+              scheduledEnd: createdAppointment.scheduledEnd,
+            }
+          : null,
+      },
     };
   }
 

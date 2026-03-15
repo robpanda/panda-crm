@@ -3218,9 +3218,11 @@ export default function OpportunityDetail() {
                       : getOpportunityDisplayName(opportunity.name)}
                   </h1>
                   <div className="flex items-center gap-2 mt-1 flex-wrap">
-                    <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-blue-100 text-blue-700">
-                      {opportunity.workType || 'Insurance'}
-                    </span>
+                    {opportunity.workType && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-blue-100 text-blue-700">
+                        {opportunity.workType}
+                      </span>
+                    )}
                     <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-emerald-100 text-emerald-700">
                       {opportunity.stage?.replace(/_/g, ' ') || 'Lead'}
                     </span>
@@ -3746,7 +3748,9 @@ export default function OpportunityDetail() {
                               <option value="Interior">Interior</option>
                             </select>
                           ) : (
-                            <p className="font-medium text-gray-900">{opportunity.workType || 'Insurance Roofing'}</p>
+                            <p className={`font-medium ${opportunity.workType ? 'text-gray-900' : 'text-gray-400'}`}>
+                              {opportunity.workType || '\u00A0'}
+                            </p>
                           )}
                         </div>
                         <div className={`bg-gray-50 p-4 rounded-lg border-l-4 border-blue-400 ${isEditMode ? 'ring-2 ring-blue-200' : ''}`}>
@@ -3826,6 +3830,7 @@ export default function OpportunityDetail() {
                         const isInsurance = workType.includes('insurance') || opportunity.type === 'INSURANCE';
                         const isRetail = workType.includes('retail') || opportunity.type === 'RETAIL';
                         const isInspection = workType.includes('inspection');
+                        const hasSalesPath = isInsurance || isRetail || isInspection;
 
                         // Define the paths
                         const insurancePath = [
@@ -3863,6 +3868,21 @@ export default function OpportunityDetail() {
                         // Find current step based on stage
                         const stageOrder = ['LEAD_UNASSIGNED', 'LEAD_ASSIGNED', 'SCHEDULED', 'INSPECTED', 'CLAIM_FILED', 'ADJUSTER_MEETING_COMPLETE', 'APPROVED', 'CONTRACT_SIGNED', 'IN_PRODUCTION', 'COMPLETED', 'CLOSED_WON'];
                         const currentStageIndex = stageOrder.indexOf(opportunity.stage);
+
+                        if (!hasSalesPath) {
+                          return (
+                            <div className="space-y-3">
+                              <div className="flex items-center gap-2 mb-3">
+                                <span className="px-3 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-600">
+                                  Path Pending
+                                </span>
+                              </div>
+                              <p className="text-sm text-gray-500">
+                                Result Appointment will set Insurance or Retail after the inspection outcome is recorded.
+                              </p>
+                            </div>
+                          );
+                        }
 
                         return (
                           <div className="space-y-3">
@@ -7378,7 +7398,9 @@ export default function OpportunityDetail() {
                 <div className="grid grid-cols-2 gap-x-8 gap-y-4">
                   <div>
                     <label className="text-sm text-gray-500">Work Type</label>
-                    <p className="font-medium text-gray-900">{opportunity.workType || 'Insurance Roofing'}</p>
+                    <p className={`font-medium ${opportunity.workType ? 'text-gray-900' : 'text-gray-400'}`}>
+                      {opportunity.workType || '\u00A0'}
+                    </p>
                   </div>
                   <div>
                     <label className="text-sm text-gray-500">Lead Source</label>

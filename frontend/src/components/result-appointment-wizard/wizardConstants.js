@@ -9,6 +9,10 @@ export const STEPS = {
   RETAIL_QUOTE: 'retail_quote',
   CLAIM_INFO: 'claim_info',
   RETAIL_OUTCOME: 'retail_outcome',
+  RETAIL_NOT_SOLD_REASON: 'retail_not_sold_reason',
+  FOLLOW_UP_MODE: 'follow_up_mode',
+  VIRTUAL_FOLLOW_UP: 'virtual_follow_up',
+  IN_PERSON_FOLLOW_UP: 'in_person_follow_up',
   CONFIRM: 'confirm',
 };
 
@@ -55,6 +59,19 @@ export const RETAIL_NOT_SOLD_REASONS = [
   { value: 'OTHER', label: 'Other' },
 ];
 
+export const FOLLOW_UP_MODES = [
+  { value: 'VIRTUAL', label: 'Virtual', description: 'Creates a task follow-up without booking a calendar visit.' },
+  { value: 'IN_PERSON', label: 'In Person', description: 'Books another appointment with a date and time.' },
+];
+
+export const VIRTUAL_TASK_TYPES = [
+  { value: 'CALL', label: 'Call' },
+  { value: 'EMAIL', label: 'Email' },
+  { value: 'OTHER', label: 'Other' },
+];
+
+export const DEFAULT_FOLLOW_UP_DURATION_MINUTES = 120;
+
 export const STEP_TITLES = {
   [STEPS.ROOF_INSPECTED]: 'Was the roof inspected?',
   [STEPS.INSPECTION_NOT_COMPLETED]: 'Inspection did not occur',
@@ -66,5 +83,9 @@ export const STEP_TITLES = {
   [STEPS.RETAIL_QUOTE]: 'Quote builder',
   [STEPS.CLAIM_INFO]: 'Enter claim information',
   [STEPS.RETAIL_OUTCOME]: 'Is customer moving forward?',
+  [STEPS.RETAIL_NOT_SOLD_REASON]: 'Why did it not sell?',
+  [STEPS.FOLLOW_UP_MODE]: 'Follow-up type',
+  [STEPS.VIRTUAL_FOLLOW_UP]: 'Virtual follow-up task',
+  [STEPS.IN_PERSON_FOLLOW_UP]: 'In-person follow-up appointment',
   [STEPS.CONFIRM]: 'Confirm result',
 };

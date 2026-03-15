@@ -942,6 +942,13 @@ class LeadService {
 
     // Use transaction for conversion
     const result = await prisma.$transaction(async (tx) => {
+      const normalizedOpportunityType = ['INSURANCE', 'RETAIL', 'COMMERCIAL'].includes(
+        `${options.opportunityType || ''}`.trim().toUpperCase()
+      )
+        ? `${options.opportunityType}`.trim().toUpperCase()
+        : null;
+      const normalizedWorkType = this.normalizeOptionalText(options.workType);
+
       // Create Account
       const account = await tx.account.create({
         data: {
@@ -1025,13 +1032,13 @@ class LeadService {
             accountId: account.id,
             contactId: contact.id,
             stage: 'LEAD_ASSIGNED',
-            type: options.opportunityType || 'INSURANCE',
+            type: normalizedOpportunityType || undefined,
             leadSource: lead.source,
             isSelfGen: lead.isSelfGen,
             ownerId: lead.ownerId,
             closeDate: options.closeDate ? new Date(options.closeDate) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
             // Store work type and appointment date on opportunity
-            workType: options.workType,
+            workType: normalizedWorkType || undefined,
             appointmentDate: options.tentativeAppointmentDate ? new Date(options.tentativeAppointmentDate) : null,
           },
         });
@@ -1041,7 +1048,7 @@ class LeadService {
       let serviceAppointment = null;
       let assignedResource = null;
       if (options.createServiceAppointment && options.tentativeAppointmentDate && opportunity) {
-        const serviceWorkType = this.normalizeOptionalText(options.workType) || 'Inspection';
+        const serviceWorkType = normalizedWorkType || 'Inspection';
         const appointmentDate = new Date(options.tentativeAppointmentDate);
         const endDate = new Date(appointmentDate);
         endDate.setHours(endDate.getHours() + 2); // Default 2 hour duration
