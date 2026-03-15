@@ -5,6 +5,7 @@ import { leadsApi, bamboogliApi, usersApi } from '../services/api';
 import AuthContext from '../context/AuthContext';
 import { useRingCentral } from '../context/RingCentralContext';
 import { addRecentItem } from '../utils/recentItems';
+import { formatDateMDY, formatTime12Hour } from '../utils/formatters';
 import {
   UserPlus, ArrowLeft, Phone, Mail, Building2, Edit, ArrowRight,
   Save, X, MapPin, Calendar, Star, FileText, Clock, User, Tag,
@@ -1639,13 +1640,13 @@ export default function LeadDetail() {
                 <span className="text-gray-500">Tentative Date</span>
                 <span className="text-gray-900">
                   {lead.tentativeAppointmentDate
-                    ? lead.tentativeAppointmentDate.split('T')[0]
+                    ? formatDateMDY(lead.tentativeAppointmentDate)
                     : '-'}
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">Tentative Time</span>
-                <span className="text-gray-900">{lead.tentativeAppointmentTime || '-'}</span>
+                <span className="text-gray-900">{formatTime12Hour(lead.tentativeAppointmentTime)}</span>
               </div>
             </div>
           )}

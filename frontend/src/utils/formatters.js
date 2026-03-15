@@ -139,6 +139,18 @@ export function formatPhoneNumber(phone) {
  */
 export function formatDateMDY(value) {
   if (!value) return '-';
+  if (typeof value === 'string') {
+    const dateOnlyMatch = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (dateOnlyMatch) {
+      const [, year, month, day] = dateOnlyMatch;
+      const dateOnly = new Date(Number(year), Number(month) - 1, Number(day));
+      return dateOnly.toLocaleDateString('en-US', {
+        month: '2-digit',
+        day: '2-digit',
+        year: 'numeric',
+      });
+    }
+  }
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
   return date.toLocaleDateString('en-US', {
@@ -146,6 +158,57 @@ export function formatDateMDY(value) {
     day: '2-digit',
     year: 'numeric',
   });
+}
+
+/**
+ * Format a time value as h:mm AM/PM
+ * Accepts HH:mm, HH:mm:ss, ISO datetime strings, or Date objects
+ * @param {string|Date} value
+ * @returns {string}
+ */
+export function formatTime12Hour(value) {
+  if (!value) return '-';
+
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return String(value);
+    return value.toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  }
+
+  const trimmedValue = String(value).trim();
+  const timeMatch = trimmedValue.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (timeMatch) {
+    const [, hours, minutes, seconds = '00'] = timeMatch;
+    const parsedTime = new Date(`1970-01-01T${hours.padStart(2, '0')}:${minutes}:${seconds}`);
+    if (!Number.isNaN(parsedTime.getTime())) {
+      return parsedTime.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+      });
+    }
+  }
+
+  const parsedDate = new Date(trimmedValue);
+  if (Number.isNaN(parsedDate.getTime())) return trimmedValue;
+  return parsedDate.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+/**
+ * Format separate date + time values as MM/DD/YYYY h:mm AM/PM
+ * @param {string|Date} dateValue
+ * @param {string|Date} timeValue
+ * @returns {string}
+ */
+export function formatDateTimeMDY12Hour(dateValue, timeValue) {
+  if (!dateValue && !timeValue) return '-';
+  const dateLabel = dateValue ? formatDateMDY(dateValue) : '';
+  const timeLabel = timeValue ? formatTime12Hour(timeValue) : '';
+  return [dateLabel, timeLabel].filter(Boolean).join(' ').trim() || '-';
 }
 
 export default {
@@ -158,4 +221,6 @@ export default {
   isValidEmailFormat,
   formatPhoneNumber,
   formatDateMDY,
+  formatTime12Hour,
+  formatDateTimeMDY12Hour,
 };
