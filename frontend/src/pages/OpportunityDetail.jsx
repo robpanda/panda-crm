@@ -1843,11 +1843,16 @@ export default function OpportunityDetail() {
     enabled: !!id,
   });
 
-  const { data: appointments } = useQuery({
+  const { data: appointmentsData } = useQuery({
     queryKey: ['opportunityAppointments', id],
     queryFn: () => opportunitiesApi.getAppointments(id),
     enabled: !!id,
   });
+  const appointments = Array.isArray(appointmentsData)
+    ? appointmentsData
+    : Array.isArray(appointmentsData?.appointments)
+      ? appointmentsData.appointments
+      : [];
 
   const { data: contract } = useQuery({
     queryKey: ['opportunityContract', id],
