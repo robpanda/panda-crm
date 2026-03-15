@@ -5,6 +5,13 @@ import express from 'express';
 import router from '../leads.js';
 import { leadService } from '../../services/leadService.js';
 
+test('lead service exposes the internal comment handlers used by the router', () => {
+  assert.equal(typeof leadService.getLeadInternalComments, 'function');
+  assert.equal(typeof leadService.createLeadInternalComment, 'function');
+  assert.equal(typeof leadService.updateLeadInternalComment, 'function');
+  assert.equal(typeof leadService.deleteLeadInternalComment, 'function');
+});
+
 const createTestServer = async () => {
   const app = express();
   app.use(express.json());

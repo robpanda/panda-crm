@@ -7,9 +7,15 @@ import crypto from 'crypto';
 
 const prisma = new PrismaClient();
 const lambdaClient = new LambdaClient({ region: 'us-east-2' });
+const CRM_BASE_URL = (process.env.CRM_BASE_URL || process.env.FRONTEND_URL || 'https://crm.pandaadmin.com').replace(/\/+$/, '');
+const BAMBOOGLI_SERVICE_URL = process.env.BAMBOOGLI_SERVICE_URL || 'http://localhost:3012';
+const BAMBOOGLI_PUBLIC_URL = process.env.BAMBOOGLI_PUBLIC_URL || 'https://bamboo.pandaadmin.com';
+const BAMBOOGLI_INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || null;
+const BAMBOOGLI_REQUEST_TIMEOUT_MS = Number(process.env.BAMBOOGLI_REQUEST_TIMEOUT_MS || 10000);
 
 // Job ID starting number (first job ID will be YYYY-1000)
 const JOB_ID_STARTING_NUMBER = 999;
+const INTERNAL_COMMENT_TITLE_PREFIX = 'INTERNAL_COMMENT|';
 
 // Audit logging helper
 const logAudit = async ({ tableName, recordId, action, oldValues, newValues, userId, userEmail, source = 'api' }) => {
@@ -51,7 +57,179 @@ const logAudit = async ({ tableName, recordId, action, oldValues, newValues, use
 const SALESFORCE_SYNC_ENABLED = process.env.SALESFORCE_SYNC_ENABLED !== 'false';
 const SYNC_LAMBDA_NAME = 'panda-crm-sync';
 
+function normalizeDepartmentTag(value) {
+  const normalized = String(value || 'general')
+    .trim()
+    .toLowerCase()
+    .replace(/\|/g, '')
+    .replace(/\s+/g, '_');
+  return normalized || 'general';
+}
+
+function toInternalCommentTitle(departmentTag = 'general', isResolved = false) {
+  return `${INTERNAL_COMMENT_TITLE_PREFIX}${normalizeDepartmentTag(departmentTag)}|${isResolved ? '1' : '0'}`;
+}
+
+function parseInternalCommentTitle(title) {
+  if (typeof title !== 'string' || !title.startsWith(INTERNAL_COMMENT_TITLE_PREFIX)) {
+    return null;
+  }
+
+  const remainder = title.slice(INTERNAL_COMMENT_TITLE_PREFIX.length);
+  const [departmentTagRaw = 'general', resolvedRaw = '0'] = remainder.split('|');
+  return {
+    departmentTag: normalizeDepartmentTag(departmentTagRaw),
+    isResolved: resolvedRaw === '1' || String(resolvedRaw).toLowerCase() === 'true',
+  };
+}
+
+function extractMentionUserId(mention) {
+  if (!mention) return null;
+  if (typeof mention === 'string') return mention;
+  return mention.userId || mention.id || null;
+}
+
+function toAbsoluteCrmUrl(actionPath = '/') {
+  if (typeof actionPath === 'string' && /^https?:\/\//i.test(actionPath)) {
+    return actionPath;
+  }
+
+  const normalizedPath = String(actionPath || '/').startsWith('/')
+    ? String(actionPath)
+    : `/${String(actionPath)}`;
+  return `${CRM_BASE_URL}${normalizedPath}`;
+}
+
+function getBamboogliBaseUrls() {
+  const candidates = [
+    process.env.BAMBOOGLI_SERVICE_URL,
+    process.env.BAMBOOGLI_INTERNAL_URL,
+    process.env.BAMBOOGLI_URL,
+    'http://bamboogli-service:3012',
+    'http://panda-crm-bamboogli:3012',
+    'http://bamboogli:3012',
+    BAMBOOGLI_SERVICE_URL,
+    BAMBOOGLI_PUBLIC_URL,
+  ].filter(Boolean);
+
+  return [...new Set(candidates.map((url) => String(url).replace(/\/+$/, '')))];
+}
+
+async function postToBamboogli(path, payload) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (BAMBOOGLI_INTERNAL_API_KEY) {
+    headers.Authorization = `ApiKey ${BAMBOOGLI_INTERNAL_API_KEY}`;
+    headers['x-api-key'] = BAMBOOGLI_INTERNAL_API_KEY;
+  }
+
+  const attempts = [];
+  for (const baseUrl of getBamboogliBaseUrls()) {
+    const requestUrl = `${baseUrl}${path}`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), BAMBOOGLI_REQUEST_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(requestUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+
+      if (response.ok) return response;
+
+      const errorBody = await response.text().catch(() => '');
+      attempts.push(`${response.status} ${requestUrl} ${errorBody}`.trim());
+    } catch (error) {
+      attempts.push(`NETWORK ${requestUrl} ${error.message}`.trim());
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  throw new Error(`Bamboogli request failed: ${attempts.join(' | ')}`);
+}
+
 class LeadService {
+  async resolveActorUserId(actor = null) {
+    if (!actor) return null;
+
+    const idCandidates = [
+      actor.id,
+      actor.userId,
+      actor.sub,
+      actor.username,
+    ].filter(Boolean);
+
+    for (const candidate of idCandidates) {
+      const found = await prisma.user.findUnique({
+        where: { id: String(candidate) },
+        select: { id: true },
+      });
+      if (found?.id) return found.id;
+
+      const foundByCognito = await prisma.user.findFirst({
+        where: { cognitoId: String(candidate) },
+        select: { id: true },
+      });
+      if (foundByCognito?.id) return foundByCognito.id;
+    }
+
+    if (actor.email) {
+      const rawEmail = String(actor.email).trim().toLowerCase();
+      const emailCandidates = new Set([rawEmail]);
+      const [local = '', domain = ''] = rawEmail.split('@');
+
+      if (local && domain) {
+        emailCandidates.add(`${local}@${domain.replace('panda-exteriors.com', 'pandaexteriors.com')}`);
+        emailCandidates.add(`${local}@${domain.replace('pandaexteriors.com', 'panda-exteriors.com')}`);
+      }
+
+      for (const email of emailCandidates) {
+        const foundByEmail = await prisma.user.findFirst({
+          where: { email: { equals: email, mode: 'insensitive' } },
+          select: { id: true },
+        });
+        if (foundByEmail?.id) return foundByEmail.id;
+      }
+
+      if (local && domain) {
+        const normalizedLocal = local.replace(/[._-]/g, '');
+        const domainCandidates = new Set([
+          domain,
+          domain.replace('panda-exteriors.com', 'pandaexteriors.com'),
+          domain.replace('pandaexteriors.com', 'panda-exteriors.com'),
+        ]);
+
+        for (const domainCandidate of domainCandidates) {
+          const possibleUsers = await prisma.user.findMany({
+            where: {
+              email: {
+                endsWith: `@${domainCandidate}`,
+                mode: 'insensitive',
+              },
+            },
+            select: { id: true, email: true },
+            take: 25,
+          });
+
+          const normalizedMatches = possibleUsers.filter((candidate) => {
+            const [candidateLocal = ''] = String(candidate.email || '').toLowerCase().split('@');
+            return candidateLocal.replace(/[._-]/g, '') === normalizedLocal;
+          });
+
+          if (normalizedMatches.length === 1) {
+            return normalizedMatches[0].id;
+          }
+        }
+      }
+    }
+
+    return null;
+  }
+
   /**
    * Normalize status to uppercase for Prisma enum (NEW, CONTACTED, etc.)
    */
@@ -2097,6 +2275,337 @@ class LeadService {
       updatedAt: updatedNote.updatedAt,
       createdBy: updatedNote.createdBy,
     };
+  }
+
+  async notifyLeadMentions({
+    leadId,
+    content,
+    mentions = [],
+    actor = null,
+    actorUserId = null,
+    leadName = null,
+    actionPath = null,
+  }) {
+    const mentionUserIds = [...new Set((mentions || []).map(extractMentionUserId).filter(Boolean))];
+
+    if (mentionUserIds.length === 0) {
+      return 0;
+    }
+
+    const users = await prisma.user.findMany({
+      where: { id: { in: mentionUserIds } },
+      select: { id: true, mobilePhone: true, firstName: true, lastName: true, email: true },
+    });
+    const userById = new Map(users.map((user) => [user.id, user]));
+    const actorRecord = actorUserId
+      ? await prisma.user.findUnique({
+          where: { id: actorUserId },
+          select: { firstName: true, lastName: true, email: true },
+        })
+      : null;
+    const actorName = `${actorRecord?.firstName || actor?.firstName || ''} ${actorRecord?.lastName || actor?.lastName || ''}`.trim()
+      || actorRecord?.email
+      || actor?.email
+      || 'Someone';
+    const preview = (content || '').substring(0, 100);
+    const targetName = leadName || 'a lead';
+    const resolvedActionPath = actionPath || `/leads/${leadId}`;
+    const absoluteActionUrl = toAbsoluteCrmUrl(resolvedActionPath);
+
+    for (const userId of mentionUserIds) {
+      const mentionedUser = userById.get(userId);
+      if (!mentionedUser) continue;
+      if (actorUserId && mentionedUser.id === actorUserId) continue;
+
+      await prisma.notification.create({
+        data: {
+          userId,
+          type: 'MENTION',
+          title: `${actorName} mentioned you`,
+          message: `You were mentioned on ${targetName}: "${preview}${(content || '').length > 100 ? '...' : ''}"`,
+          leadId,
+          actionUrl: resolvedActionPath,
+          actionLabel: 'View Lead',
+          sourceType: 'LEAD',
+          sourceId: leadId,
+          status: 'UNREAD',
+        },
+      });
+
+      if (mentionedUser.mobilePhone) {
+        this.sendMentionSms({
+          toPhone: mentionedUser.mobilePhone,
+          mentionerName: actorName,
+          leadName: targetName,
+          actionUrl: absoluteActionUrl,
+        }).catch((error) => logger.warn(`Failed to send lead mention SMS to ${mentionedUser.mobilePhone}: ${error.message}`));
+      }
+
+      if (mentionedUser.email) {
+        this.sendMentionEmail({
+          toEmail: mentionedUser.email,
+          mentionerName: actorName,
+          leadName: targetName,
+          actionUrl: absoluteActionUrl,
+          messagePreview: preview,
+        }).catch((error) => logger.warn(`Failed to send lead mention email to ${mentionedUser.email}: ${error.message}`));
+      }
+    }
+
+    return mentionUserIds.length;
+  }
+
+  async sendMentionSms({ toPhone, mentionerName, leadName, actionUrl }) {
+    const smsBody = `${mentionerName} mentioned you on ${leadName}. View: ${toAbsoluteCrmUrl(actionUrl || '/leads')}`;
+    const response = await postToBamboogli('/api/messages/send/sms', {
+      to: toPhone,
+      body: smsBody,
+      sentById: 'system',
+    });
+
+    if (!response.ok) throw new Error(`SMS delivery failed with status ${response.status}`);
+  }
+
+  async sendMentionEmail({ toEmail, mentionerName, leadName, actionUrl, messagePreview }) {
+    const subject = `${mentionerName} mentioned you on ${leadName}`;
+    const leadUrl = toAbsoluteCrmUrl(actionUrl || '/leads');
+    const body = `${mentionerName} mentioned you on ${leadName}: "${messagePreview || ''}"\n\nView: ${leadUrl}`;
+    const bodyHtml = `
+      <div style="font-family: Arial, sans-serif; max-width: 640px; margin: 0 auto;">
+        <h2 style="margin: 0 0 12px 0; color: #111827;">You were mentioned</h2>
+        <p style="margin: 0 0 10px 0; color: #1f2937;"><strong>${mentionerName}</strong> mentioned you on <strong>${leadName}</strong>.</p>
+        ${messagePreview ? `<blockquote style="margin: 0 0 14px 0; padding: 10px 12px; border-left: 4px solid #6366f1; background: #f8fafc; color: #334155;">${messagePreview}</blockquote>` : ''}
+        <p style="margin: 0;"><a href="${leadUrl}" style="display: inline-block; padding: 10px 14px; background: #4f46e5; color: #fff; text-decoration: none; border-radius: 6px;">Open in CRM</a></p>
+      </div>
+    `;
+
+    const response = await postToBamboogli('/api/messages/send/email', {
+      to: toEmail,
+      subject,
+      body,
+      bodyHtml,
+      sentById: 'system',
+    });
+
+    if (!response.ok) throw new Error(`Email delivery failed with status ${response.status}`);
+  }
+
+  async getLeadInternalComments(leadId) {
+    const comments = await prisma.note.findMany({
+      where: {
+        leadId,
+        title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return comments.map((comment) => {
+      const meta = parseInternalCommentTitle(comment.title) || {
+        departmentTag: 'general',
+        isResolved: false,
+      };
+      return {
+        id: comment.id,
+        content: comment.body,
+        body: comment.body,
+        departmentTag: meta.departmentTag,
+        isResolved: meta.isResolved,
+        createdAt: comment.createdAt,
+        updatedAt: comment.updatedAt,
+        author: comment.createdBy
+          ? {
+              id: comment.createdBy.id,
+              firstName: comment.createdBy.firstName,
+              lastName: comment.createdBy.lastName,
+              email: comment.createdBy.email,
+            }
+          : null,
+        replies: [],
+        attachmentUrls: [],
+      };
+    });
+  }
+
+  async createLeadInternalComment(leadId, payload = {}, actor = null) {
+    const content = String(payload.content || payload.body || '').trim();
+    if (!content) {
+      const error = new Error('Comment content is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const actorUserId = await this.resolveActorUserId(actor);
+    if (!actorUserId) {
+      const error = new Error('Unable to resolve the logged-in user for this internal comment');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const lead = await prisma.lead.findUnique({
+      where: { id: leadId },
+      select: { id: true, firstName: true, lastName: true },
+    });
+    if (!lead) {
+      const error = new Error(`Lead not found: ${leadId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const departmentTag = normalizeDepartmentTag(payload.departmentTag || payload.department || 'general');
+    const isResolved = Boolean(payload.isResolved);
+
+    const comment = await prisma.note.create({
+      data: {
+        leadId,
+        title: toInternalCommentTitle(departmentTag, isResolved),
+        body: content,
+        createdById: actorUserId,
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+    });
+
+    const mentionsNotified = await this.notifyLeadMentions({
+      leadId,
+      content,
+      mentions: payload.mentions || [],
+      actor,
+      actorUserId,
+      leadName: `${lead.firstName || ''} ${lead.lastName || ''}`.trim(),
+      actionPath: `/leads/${leadId}?tab=internalComments&internalCommentId=${comment.id}`,
+    });
+
+    return {
+      id: comment.id,
+      content: comment.body,
+      body: comment.body,
+      departmentTag,
+      isResolved,
+      createdAt: comment.createdAt,
+      updatedAt: comment.updatedAt,
+      author: comment.createdBy
+        ? {
+            id: comment.createdBy.id,
+            firstName: comment.createdBy.firstName,
+            lastName: comment.createdBy.lastName,
+            email: comment.createdBy.email,
+          }
+        : null,
+      replies: [],
+      attachmentUrls: [],
+      mentionsNotified,
+    };
+  }
+
+  async updateLeadInternalComment(leadId, commentId, payload = {}, actor = null) {
+    const existing = await prisma.note.findFirst({
+      where: {
+        id: commentId,
+        leadId,
+        title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+    });
+
+    if (!existing) {
+      const error = new Error(`Internal comment not found: ${commentId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const has = (key) => Object.prototype.hasOwnProperty.call(payload, key);
+    const meta = parseInternalCommentTitle(existing.title) || {
+      departmentTag: 'general',
+      isResolved: false,
+    };
+    const nextDepartment = has('departmentTag') || has('department')
+      ? normalizeDepartmentTag(payload.departmentTag || payload.department)
+      : meta.departmentTag;
+    const nextResolved = has('isResolved')
+      ? Boolean(payload.isResolved)
+      : meta.isResolved;
+    const nextContent = has('content') || has('body')
+      ? String(payload.content || payload.body || '').trim()
+      : existing.body;
+
+    if (!nextContent) {
+      const error = new Error('Comment content is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const updated = await prisma.note.update({
+      where: { id: commentId },
+      data: {
+        title: toInternalCommentTitle(nextDepartment, nextResolved),
+        body: nextContent,
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+    });
+
+    const mentionsNotified = await this.notifyLeadMentions({
+      leadId,
+      content: nextContent,
+      mentions: payload.mentions || [],
+      actor,
+    });
+
+    return {
+      id: updated.id,
+      content: updated.body,
+      body: updated.body,
+      departmentTag: nextDepartment,
+      isResolved: nextResolved,
+      createdAt: updated.createdAt,
+      updatedAt: updated.updatedAt,
+      author: updated.createdBy
+        ? {
+            id: updated.createdBy.id,
+            firstName: updated.createdBy.firstName,
+            lastName: updated.createdBy.lastName,
+            email: updated.createdBy.email,
+          }
+        : null,
+      replies: [],
+      attachmentUrls: [],
+      mentionsNotified,
+    };
+  }
+
+  async deleteLeadInternalComment(leadId, commentId) {
+    const existing = await prisma.note.findFirst({
+      where: {
+        id: commentId,
+        leadId,
+        title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+      },
+      select: { id: true },
+    });
+
+    if (!existing) {
+      const error = new Error(`Internal comment not found: ${commentId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    await prisma.note.delete({ where: { id: commentId } });
+    return { success: true, deletedId: commentId };
   }
 
   // ============================================================================
