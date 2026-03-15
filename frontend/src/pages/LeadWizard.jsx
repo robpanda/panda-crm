@@ -39,6 +39,12 @@ import MentionTextarea from '../components/MentionTextarea';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { isValidPhoneFormat, isValidEmailFormat } from '../utils/formatters';
 import {
+  buildMessageMergeContext,
+  htmlToPlainText,
+  interpolateMessageTemplate,
+  templateLooksLikeHtml,
+} from '../utils/messageTemplateUtils';
+import {
   canLeadWizardConvert,
   isLeadWizardSalesRole,
   LEAD_WIZARD_STEPS,
@@ -313,6 +319,7 @@ export default function LeadWizard() {
   const [smsPhoneNumber, setSmsPhoneNumber] = useState(''); // Selected phone number for SMS
   const [emailSubject, setEmailSubject] = useState('');
   const [emailBody, setEmailBody] = useState('');
+  const [showEmailHtmlPreview, setShowEmailHtmlPreview] = useState(false);
   const [selectedSmsTemplate, setSelectedSmsTemplate] = useState('');
   const [selectedEmailTemplate, setSelectedEmailTemplate] = useState('');
 
@@ -780,16 +787,22 @@ export default function LeadWizard() {
 
   // Replace merge fields in template with actual values
   const replaceMergeFields = (content) => {
-    if (!content) return '';
-    return content
-      .replace(/\{\{firstName\}\}/gi, formData.firstName || '')
-      .replace(/\{\{lastName\}\}/gi, formData.lastName || '')
-      .replace(/\{\{fullName\}\}/gi, `${formData.firstName || ''} ${formData.lastName || ''}`.trim())
-      .replace(/\{\{company\}\}/gi, formData.company || '')
-      .replace(/\{\{phone\}\}/gi, formData.phone || formData.mobilePhone || '')
-      .replace(/\{\{email\}\}/gi, formData.email || '')
-      .replace(/\{\{city\}\}/gi, formData.city || '')
-      .replace(/\{\{state\}\}/gi, formData.state || '');
+    return interpolateMessageTemplate(
+      content,
+      buildMessageMergeContext(
+        {
+          ...formData,
+          company: formData.company,
+          phone: formData.mobilePhone || formData.phone || '',
+          email: formData.email,
+          tentativeAppointmentDate: formData.tentativeAppointmentDate,
+          tentativeAppointmentTime: formData.tentativeAppointmentTime,
+        },
+        {
+          recipientName: `${formData.firstName || ''} ${formData.lastName || ''}`.trim(),
+        },
+      ),
+    );
   };
 
   // Get templates array (API returns array directly, not { templates: [...] })
@@ -816,7 +829,9 @@ export default function LeadWizard() {
       if (template) {
         setEmailSubject(replaceMergeFields(template.subject || template.name));
         // Template content is in 'body' field
-        setEmailBody(replaceMergeFields(template.body || template.content || ''));
+        const interpolatedBody = replaceMergeFields(template.body || template.content || '');
+        setEmailBody(interpolatedBody);
+        setShowEmailHtmlPreview(templateLooksLikeHtml(interpolatedBody));
       }
     }
   };
@@ -860,6 +875,7 @@ export default function LeadWizard() {
     onSuccess: () => {
       setEmailSubject('');
       setEmailBody('');
+      setShowEmailHtmlPreview(false);
       setShowEmailPanel(false);
     },
   });
@@ -3077,7 +3093,10 @@ export default function LeadWizard() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setShowEmailPanel(true)}
+                  onClick={() => {
+                    setShowEmailPanel(true);
+                    setShowEmailHtmlPreview(false);
+                  }}
                   disabled={!formData.email}
                   className={`inline-flex items-center rounded-lg px-3 py-2 text-sm font-medium transition-all ${
                     formData.email
@@ -3652,7 +3671,10 @@ export default function LeadWizard() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setShowEmailPanel(false)}
+                  onClick={() => {
+                    setShowEmailPanel(false);
+                    setShowEmailHtmlPreview(false);
+                  }}
                   className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
                 >
                   <ChevronDown className="w-5 h-5 text-gray-500" />
@@ -3683,24 +3705,50 @@ export default function LeadWizard() {
                   placeholder="Subject"
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                 />
-                <textarea
-                  value={emailBody}
-                  onChange={(e) => {
-                    setEmailBody(e.target.value);
-                    setSelectedEmailTemplate(''); // Clear template selection when manually editing
-                  }}
-                  placeholder="Compose your email or select a template..."
-                  rows={6}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none"
-                />
+                <div>
+                  <div className="mb-1 flex items-center justify-between">
+                    <label className="block text-sm font-medium text-gray-700">Message</label>
+                    {templateLooksLikeHtml(emailBody) && (
+                      <button
+                        type="button"
+                        onClick={() => setShowEmailHtmlPreview((current) => !current)}
+                        className="text-xs font-medium text-purple-600 hover:text-purple-700"
+                      >
+                        {showEmailHtmlPreview ? 'Edit HTML' : 'Preview HTML'}
+                      </button>
+                    )}
+                  </div>
+                  {templateLooksLikeHtml(emailBody) && showEmailHtmlPreview ? (
+                    <div className="max-h-72 overflow-y-auto rounded-lg border border-gray-300 bg-gray-50 p-4">
+                      <div className="mb-3 text-xs font-medium uppercase tracking-wide text-gray-500">
+                        Rendered HTML Preview
+                      </div>
+                      <div className="text-sm text-gray-900" dangerouslySetInnerHTML={{ __html: emailBody }} />
+                    </div>
+                  ) : (
+                    <textarea
+                      value={emailBody}
+                      onChange={(e) => {
+                        setEmailBody(e.target.value);
+                        setSelectedEmailTemplate(''); // Clear template selection when manually editing
+                      }}
+                      placeholder="Compose your email or select a template..."
+                      rows={6}
+                      className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none"
+                    />
+                  )}
+                </div>
                 <div className="flex justify-end">
                   <button
                     type="button"
                     onClick={() => {
+                      const trimmedBody = emailBody.trim();
+                      const isHtmlBody = templateLooksLikeHtml(trimmedBody);
                       sendEmailMutation.mutate({
                         to: formData.email,
                         subject: emailSubject,
-                        body: emailBody,
+                        body: isHtmlBody ? htmlToPlainText(trimmedBody) : trimmedBody,
+                        bodyHtml: isHtmlBody ? trimmedBody : undefined,
                         leadId: id,
                       });
                     }}
@@ -3726,6 +3774,7 @@ export default function LeadWizard() {
               onClick={() => {
                 setShowSmsPanel(false);
                 setShowEmailPanel(false);
+                setShowEmailHtmlPreview(false);
               }}
             />
           )}

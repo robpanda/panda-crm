@@ -8,6 +8,12 @@ import CrewSelector from '../components/CrewSelector';
 import { formatDistanceToNow, format, parseISO, startOfDay, startOfWeek, startOfMonth, endOfDay, endOfWeek, endOfMonth, addDays } from 'date-fns';
 import { formatNumber, formatDateMDY, formatTime12Hour, formatDateTimeMDY12Hour } from '../utils/formatters';
 import {
+  buildMessageMergeContext,
+  htmlToPlainText,
+  interpolateMessageTemplate,
+  templateLooksLikeHtml,
+} from '../utils/messageTemplateUtils';
+import {
   Phone,
   UserPlus,
   Clock,
@@ -129,23 +135,11 @@ function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {
 
     const template = templates.find((t) => t.id === templateId);
     if (template) {
-      // Interpolate merge fields
-      let interpolated = template.body || '';
-      const data = {
-        firstName: mergeData.firstName || '',
-        lastName: mergeData.lastName || '',
-        fullName: mergeData.fullName || `${mergeData.firstName || ''} ${mergeData.lastName || ''}`.trim(),
-        company: mergeData.company || '',
-        phone: mergeData.phone || phone,
-        ...mergeData,
-      };
-
-      // Replace {{variable}} and {variable} patterns
-      interpolated = interpolated.replace(/\{\{?(\w+)\}?\}/g, (match, key) => {
-        return data[key] !== undefined && data[key] !== '' ? data[key] : match;
+      const data = buildMessageMergeContext(mergeData, {
+        phone,
+        recipientName,
       });
-
-      setMessage(interpolated);
+      setMessage(interpolateMessageTemplate(template.body || template.content || '', data));
     }
   };
 
@@ -280,6 +274,7 @@ function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {
 function EmailModal({ isOpen, onClose, email, recipientName, onSent, mergeData = {} }) {
   const [subject, setSubject] = useState('');
   const [body, setBody] = useState('');
+  const [showHtmlPreview, setShowHtmlPreview] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState('');
   const [templates, setTemplates] = useState([]);
@@ -294,6 +289,7 @@ function EmailModal({ isOpen, onClose, email, recipientName, onSent, mergeData =
       setBody('');
       setSelectedTemplate('');
       setError('');
+      setShowHtmlPreview(false);
     }
   }, [isOpen]);
 
@@ -317,29 +313,16 @@ function EmailModal({ isOpen, onClose, email, recipientName, onSent, mergeData =
 
     const template = templates.find((t) => t.id === templateId);
     if (template) {
-      const data = {
-        firstName: mergeData.firstName || '',
-        lastName: mergeData.lastName || '',
-        fullName: mergeData.fullName || `${mergeData.firstName || ''} ${mergeData.lastName || ''}`.trim(),
-        company: mergeData.company || '',
-        email: mergeData.email || email,
-        ...mergeData,
-      };
-
-      // Interpolate subject
-      let interpolatedSubject = template.subject || '';
-      interpolatedSubject = interpolatedSubject.replace(/\{\{?(\w+)\}?\}/g, (match, key) => {
-        return data[key] !== undefined && data[key] !== '' ? data[key] : match;
+      const data = buildMessageMergeContext(mergeData, {
+        email,
+        recipientName,
       });
-
-      // Interpolate body
-      let interpolatedBody = template.body || '';
-      interpolatedBody = interpolatedBody.replace(/\{\{?(\w+)\}?\}/g, (match, key) => {
-        return data[key] !== undefined && data[key] !== '' ? data[key] : match;
-      });
+      const interpolatedSubject = interpolateMessageTemplate(template.subject || template.name || '', data);
+      const interpolatedBody = interpolateMessageTemplate(template.body || template.content || '', data);
 
       setSubject(interpolatedSubject);
       setBody(interpolatedBody);
+      setShowHtmlPreview(templateLooksLikeHtml(interpolatedBody));
     }
   };
 
@@ -350,15 +333,19 @@ function EmailModal({ isOpen, onClose, email, recipientName, onSent, mergeData =
     setError('');
 
     try {
+      const trimmedBody = body.trim();
+      const isHtmlBody = templateLooksLikeHtml(trimmedBody);
       await bamboogliApi.sendEmail({
         to: email,
         subject: subject.trim(),
-        body: body.trim(),
+        body: isHtmlBody ? htmlToPlainText(trimmedBody) : trimmedBody,
+        bodyHtml: isHtmlBody ? trimmedBody : undefined,
         recipientName,
       });
       setSubject('');
       setBody('');
       setSelectedTemplate('');
+      setShowHtmlPreview(false);
       onSent?.();
       onClose();
     } catch (err) {
@@ -369,6 +356,8 @@ function EmailModal({ isOpen, onClose, email, recipientName, onSent, mergeData =
   };
 
   if (!isOpen) return null;
+
+  const isHtmlBody = templateLooksLikeHtml(body);
 
   // Group templates by category
   const templatesByCategory = templates.reduce((acc, t) => {
@@ -438,14 +427,34 @@ function EmailModal({ isOpen, onClose, email, recipientName, onSent, mergeData =
           </div>
 
           <div className="mb-4">
-            <label className="block text-sm font-medium text-gray-700 mb-1">Message</label>
-            <textarea
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              rows={8}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none"
-              placeholder="Type your message or select a template..."
-            />
+            <div className="mb-1 flex items-center justify-between">
+              <label className="block text-sm font-medium text-gray-700">Message</label>
+              {isHtmlBody && (
+                <button
+                  type="button"
+                  onClick={() => setShowHtmlPreview((current) => !current)}
+                  className="text-xs font-medium text-purple-600 hover:text-purple-700"
+                >
+                  {showHtmlPreview ? 'Edit HTML' : 'Preview HTML'}
+                </button>
+              )}
+            </div>
+            {isHtmlBody && showHtmlPreview ? (
+              <div className="max-h-80 overflow-y-auto rounded-lg border border-gray-300 bg-gray-50 p-4">
+                <div className="mb-3 text-xs font-medium uppercase tracking-wide text-gray-500">
+                  Rendered HTML Preview
+                </div>
+                <div className="text-sm text-gray-900" dangerouslySetInnerHTML={{ __html: body }} />
+              </div>
+            ) : (
+              <textarea
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+                rows={8}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none"
+                placeholder="Type your message or select a template..."
+              />
+            )}
           </div>
 
           {error && (
@@ -2506,6 +2515,8 @@ export default function CallCenterDashboard() {
           city: record.city,
           state: record.state,
           status: record.status,
+          tentativeAppointmentDate: record.tentativeAppointmentDate,
+          tentativeAppointmentTime: record.tentativeAppointmentTime,
         }
       : {
           firstName: record.contact?.firstName || record.account?.name?.split(' ')[0] || '',
@@ -2517,7 +2528,7 @@ export default function CallCenterDashboard() {
           email: record.contact?.email || record.account?.email,
           projectAddress: getProjectAddress(),
           status: record.stage || record.status,
-          appointmentDate: record.scheduledStart ? new Date(record.scheduledStart).toLocaleDateString() : '',
+          scheduledStart: record.scheduledStart || '',
         };
     setSmsModal({ open: true, phone, recipientName, mergeData });
   };
@@ -2557,6 +2568,8 @@ export default function CallCenterDashboard() {
           city: record.city,
           state: record.state,
           status: record.status,
+          tentativeAppointmentDate: record.tentativeAppointmentDate,
+          tentativeAppointmentTime: record.tentativeAppointmentTime,
         }
       : {
           firstName: record.contact?.firstName || record.account?.name?.split(' ')[0] || '',
@@ -2568,7 +2581,7 @@ export default function CallCenterDashboard() {
           email: record.contact?.email || record.account?.email,
           projectAddress: getProjectAddress(),
           status: record.stage || record.status,
-          appointmentDate: record.scheduledStart ? new Date(record.scheduledStart).toLocaleDateString() : '',
+          scheduledStart: record.scheduledStart || '',
         };
     setEmailModal({ open: true, email, recipientName, mergeData });
   };
