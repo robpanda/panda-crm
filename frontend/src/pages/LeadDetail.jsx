@@ -523,13 +523,31 @@ export default function LeadDetail() {
     enabled: !!id,
   });
 
-  const leadSetByIdForManager = (isEditing ? formData.leadSetById : lead?.leadSetById) || null;
+  const isSalesRabbitLead = (source) =>
+    String(source || '').replace(/\s+/g, '').toLowerCase().includes('salesrabbit');
+
+  const readOnlyLeadSetById =
+    lead?.leadSetById ||
+    ((isSalesRabbitLead(lead?.source || lead?.leadSource) && lead?.ownerId) ? lead.ownerId : null);
+
+  const leadSetByIdForManager = (isEditing ? formData.leadSetById : readOnlyLeadSetById) || null;
   const { data: leadSetByUserData } = useQuery({
     queryKey: ['lead-set-by-user', leadSetByIdForManager],
     queryFn: () => usersApi.getUser(leadSetByIdForManager),
     enabled: !!leadSetByIdForManager,
     staleTime: 60000,
   });
+
+  const leadSetByDisplayName = isEditing
+    ? (formData.leadSetByName || '')
+    : (
+        leadSetByUserData
+          ? `${leadSetByUserData.firstName || ''} ${leadSetByUserData.lastName || ''}`.trim()
+          : lead?.leadSetBy
+            ? `${lead.leadSetBy.firstName || ''} ${lead.leadSetBy.lastName || ''}`.trim()
+            : lead?.leadSetByName ||
+              (isSalesRabbitLead(lead?.source || lead?.leadSource) ? lead?.salesRabbitUser || lead?.ownerName || '' : '')
+      );
 
   const leadSetByManagerId =
     leadSetByUserData?.managerId ||
@@ -643,14 +661,14 @@ export default function LeadDetail() {
         salesRabbitUser: lead.salesRabbitUser || '',
         tentativeAppointmentDate: lead.tentativeAppointmentDate ? lead.tentativeAppointmentDate.split('T')[0] : '',
         tentativeAppointmentTime: lead.tentativeAppointmentTime || '',
-        leadSetById: lead.leadSetById || '',
+        leadSetById: readOnlyLeadSetById || '',
         disposition: lead.disposition || '',
         ownerId: lead.ownerId || '',
         ownerName: lead.owner ? `${lead.owner.firstName || ''} ${lead.owner.lastName || ''}`.trim() : '',
-        leadSetByName: lead.leadSetBy ? `${lead.leadSetBy.firstName || ''} ${lead.leadSetBy.lastName || ''}`.trim() : '',
+        leadSetByName: leadSetByDisplayName || '',
       });
     }
-  }, [lead]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [lead, readOnlyLeadSetById, leadSetByDisplayName]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const updateMutation = useMutation({
     mutationFn: (data) => leadsApi.updateLead(id, data),
@@ -818,8 +836,8 @@ export default function LeadDetail() {
       salesRabbitUser: lead.salesRabbitUser || '',
       tentativeAppointmentDate: lead.tentativeAppointmentDate ? lead.tentativeAppointmentDate.split('T')[0] : '',
       tentativeAppointmentTime: lead.tentativeAppointmentTime || '',
-      leadSetById: lead.leadSetById || '',
-      leadSetByName: lead.leadSetBy ? `${lead.leadSetBy.firstName || ''} ${lead.leadSetBy.lastName || ''}`.trim() : '',
+      leadSetById: readOnlyLeadSetById || '',
+      leadSetByName: leadSetByDisplayName || '',
       disposition: lead.disposition || '',
       ownerId: lead.ownerId || '',
       ownerName: lead.owner ? `${lead.owner.firstName || ''} ${lead.owner.lastName || ''}`.trim() : '',
@@ -850,8 +868,8 @@ export default function LeadDetail() {
       salesRabbitUser: lead.salesRabbitUser || '',
       tentativeAppointmentDate: lead.tentativeAppointmentDate ? lead.tentativeAppointmentDate.split('T')[0] : '',
       tentativeAppointmentTime: lead.tentativeAppointmentTime || '',
-      leadSetById: lead.leadSetById || '',
-      leadSetByName: lead.leadSetBy ? `${lead.leadSetBy.firstName || ''} ${lead.leadSetBy.lastName || ''}`.trim() : '',
+      leadSetById: readOnlyLeadSetById || '',
+      leadSetByName: leadSetByDisplayName || '',
       disposition: lead.disposition || '',
       ownerId: lead.ownerId || '',
       ownerName: lead.owner ? `${lead.owner.firstName || ''} ${lead.owner.lastName || ''}`.trim() : '',
@@ -1627,9 +1645,7 @@ export default function LeadDetail() {
               <div className="flex justify-between">
                 <span className="text-gray-500">Lead Set By</span>
                 <span className="text-gray-900">
-                  {lead.leadSetBy
-                    ? `${lead.leadSetBy.firstName} ${lead.leadSetBy.lastName}`
-                    : lead.leadSetByName || '-'}
+                  {leadSetByDisplayName || '-'}
                 </span>
               </div>
               <div className="flex justify-between">
