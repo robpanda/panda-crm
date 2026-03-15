@@ -1519,6 +1519,28 @@ export default function LeadDetail() {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
                 />
               </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Lead Set By</label>
+                <UserSearchDropdown
+                  value={formData.leadSetByName || ''}
+                  onChange={(name, user) => {
+                    setFormData(prev => ({ ...prev, leadSetById: user ? user.id : '', leadSetByName: name }));
+                  }}
+                  placeholder="Search for a user..."
+                  showClear
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Manager</label>
+                <input
+                  type="text"
+                  value={leadSetByManagerName || 'Unassigned'}
+                  readOnly
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
+                />
+              </div>
             </div>
           ) : (
             <div className="space-y-3">
@@ -1562,6 +1584,16 @@ export default function LeadDetail() {
                 <span className="text-gray-500">SalesRabbit User</span>
                 <span className="text-gray-900">{lead.salesRabbitUser || '-'}</span>
               </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Lead Set By</span>
+                <span className="text-gray-900">
+                  {leadSetByDisplayName || '-'}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Manager</span>
+                <span className="text-gray-900">{leadSetByManagerName || '-'}</span>
+              </div>
             </div>
           )}
         </div>
@@ -1584,28 +1616,6 @@ export default function LeadDetail() {
                   }}
                   placeholder="Search for a user..."
                   showClear
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Lead Set By</label>
-                <UserSearchDropdown
-                  value={formData.leadSetByName || ''}
-                  onChange={(name, user) => {
-                    setFormData(prev => ({ ...prev, leadSetById: user ? user.id : '', leadSetByName: name }));
-                  }}
-                  placeholder="Search for a user..."
-                  showClear
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Manager</label>
-                <input
-                  type="text"
-                  value={leadSetByManagerName || 'Unassigned'}
-                  readOnly
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                 />
               </div>
 
@@ -1641,16 +1651,6 @@ export default function LeadDetail() {
                     ? `${lead.owner.firstName} ${lead.owner.lastName}`
                     : lead.ownerName || 'Unassigned'}
                 </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Lead Set By</span>
-                <span className="text-gray-900">
-                  {leadSetByDisplayName || '-'}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Manager</span>
-                <span className="text-gray-900">{leadSetByManagerName || '-'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">Tentative Date</span>
