@@ -728,6 +728,8 @@ export default function LeadDetail() {
       const salesPath = preConversion?.salesPath || (lead?.workType?.toLowerCase().startsWith('retail') ? 'RETAIL' : lead?.workType?.toLowerCase().startsWith('insurance') ? 'INSURANCE' : null);
       const salesPathOnlyBlocked = blockers.length > 0 && blockers.every((message) => message.toLowerCase().includes('sales path'));
       const noInspectionBlocked = blockers.some((message) => message.toLowerCase().includes('no inspection'));
+      const sourceValue = `${lead?.source || lead?.leadSource || ''}`.toLowerCase().replace(/[^a-z]/g, '');
+      const inferredSalesPath = salesPath || (lead?.isSelfGen || sourceValue === 'selfgen' ? 'RETAIL' : 'INSURANCE');
 
       if (!gatingResult?.success || (preConversion?.allowed === false && !salesPathOnlyBlocked)) {
         if (noInspectionBlocked) {
@@ -738,13 +740,13 @@ export default function LeadDetail() {
       }
 
       if (!salesPath) {
-        setLeadActionStep('salesPath');
-        return;
+        await leadsApi.selectSalesPath(id, inferredSalesPath);
+        queryClient.invalidateQueries(['lead', id]);
       }
 
       await handleConvert({
-        opportunityType: salesPath,
-        workType: salesPath === 'RETAIL' ? 'Retail' : 'Insurance',
+        opportunityType: inferredSalesPath,
+        workType: inferredSalesPath === 'RETAIL' ? 'Retail' : 'Insurance',
       });
     } catch (error) {
       alert(error?.message || 'Unable to convert lead.');
