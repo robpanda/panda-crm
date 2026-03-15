@@ -3,10 +3,14 @@
 
 import express from 'express';
 import { PrismaClient } from '@prisma/client';
+import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { logger } from '../middleware/logger.js';
 
 const router = express.Router();
 const prisma = new PrismaClient();
+const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-east-2' });
+const defaultBucket = process.env.DOCUMENTS_BUCKET || 'panda-crm-documents';
 
 /**
  * GET /api/documents/repository
@@ -292,22 +296,26 @@ router.get('/by-job/:opportunityId', async (req, res, next) => {
     });
 
     // Transform and categorize
-    const transformedDocs = documents.map((doc) => ({
-      id: doc.id,
-      title: doc.title,
-      fileName: doc.title,
-      fileType: doc.fileType,
-      fileExtension: doc.fileExtension,
-      contentSize: doc.contentSize,
-      contentUrl: doc.contentUrl,
-      downloadUrl: doc.contentUrl,
-      createdAt: doc.createdAt,
-      category: categorizeDocument(doc.title, doc.fileType),
-      linkedVia: doc.links.map((link) => ({
-        type: link.linkedRecordType,
-        accountId: link.accountId,
-        opportunityId: link.opportunityId,
-      })),
+    const transformedDocs = await Promise.all(documents.map(async (doc) => {
+      const signedContentUrl = await getDocumentAccessUrl(doc);
+
+      return {
+        id: doc.id,
+        title: doc.title,
+        fileName: doc.title,
+        fileType: doc.fileType,
+        fileExtension: doc.fileExtension,
+        contentSize: doc.contentSize,
+        contentUrl: signedContentUrl,
+        downloadUrl: signedContentUrl,
+        createdAt: doc.createdAt,
+        category: categorizeDocument(doc.title, doc.fileType),
+        linkedVia: doc.links.map((link) => ({
+          type: link.linkedRecordType,
+          accountId: link.accountId,
+          opportunityId: link.opportunityId,
+        })),
+      };
     }));
 
     res.json({
@@ -374,6 +382,63 @@ function categorizeDocument(title, fileType) {
   }
 
   return 'other';
+}
+
+async function getDocumentAccessUrl(doc) {
+  if (!doc?.contentUrl) return null;
+
+  const existingUrl = String(doc.contentUrl);
+  if (existingUrl.includes('X-Amz-Signature=')) {
+    return existingUrl;
+  }
+
+  const location = getS3Location(doc);
+  if (!location?.key) {
+    return existingUrl;
+  }
+
+  try {
+    return await getSignedUrl(
+      s3Client,
+      new GetObjectCommand({
+        Bucket: location.bucket || defaultBucket,
+        Key: location.key,
+      }),
+      { expiresIn: 60 * 60 }
+    );
+  } catch (error) {
+    logger.warn(`Failed to sign repository document ${doc.id}: ${error.message}`);
+    return existingUrl;
+  }
+}
+
+function getS3Location(doc) {
+  if (doc?.storageKey) {
+    return { bucket: defaultBucket, key: String(doc.storageKey) };
+  }
+
+  const rawUrl = String(doc?.contentUrl || '');
+  if (!rawUrl.startsWith('http')) {
+    return { bucket: defaultBucket, key: rawUrl || null };
+  }
+
+  try {
+    const parsed = new URL(rawUrl);
+    const pathKey = parsed.pathname.replace(/^\/+/, '');
+
+    if (parsed.hostname === `${defaultBucket}.s3.amazonaws.com`) {
+      return { bucket: defaultBucket, key: pathKey };
+    }
+
+    const hostParts = parsed.hostname.split('.');
+    if (hostParts.length >= 4 && hostParts[1] === 's3') {
+      return { bucket: hostParts[0], key: pathKey };
+    }
+  } catch {
+    return { bucket: defaultBucket, key: null };
+  }
+
+  return { bucket: defaultBucket, key: null };
 }
 
 /**
