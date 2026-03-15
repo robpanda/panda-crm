@@ -4742,9 +4742,61 @@ export const agreementsApi = {
     return response.data;
   },
 
+  async publishTemplate(id) {
+    const response = await api.post(`/api/documents/agreements/templates/${id}/publish`);
+    return response.data;
+  },
+
+  async archiveTemplate(id) {
+    const response = await api.post(`/api/documents/agreements/templates/${id}/archive`);
+    return response.data;
+  },
+
   // Delete template (admin)
   async deleteTemplate(id) {
     const response = await api.delete(`/api/documents/agreements/templates/${id}`);
+    return response.data;
+  },
+
+  async getAdminResources() {
+    const response = await api.get('/api/documents/agreements/templates/admin/resources');
+    return response.data;
+  },
+
+  async updateTerritoryProfiles(territoryProfiles) {
+    const response = await api.put('/api/documents/agreements/templates/admin/territory-profiles', {
+      territoryProfiles,
+    });
+    return response.data;
+  },
+
+  async getBrandingItems(params = {}) {
+    const response = await api.get('/api/documents/agreements/branding', { params });
+    return response.data;
+  },
+
+  async createBrandingItem(data) {
+    const response = await api.post('/api/documents/agreements/branding', data);
+    return response.data;
+  },
+
+  async updateBrandingItem(id, data) {
+    const response = await api.put(`/api/documents/agreements/branding/${id}`, data);
+    return response.data;
+  },
+
+  async getDynamicContentItems(params = {}) {
+    const response = await api.get('/api/documents/agreements/dynamic-content', { params });
+    return response.data;
+  },
+
+  async createDynamicContentItem(data) {
+    const response = await api.post('/api/documents/agreements/dynamic-content', data);
+    return response.data;
+  },
+
+  async updateDynamicContentItem(id, data) {
+    const response = await api.put(`/api/documents/agreements/dynamic-content/${id}`, data);
     return response.data;
   },
 

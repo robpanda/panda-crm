@@ -73,6 +73,7 @@ export default function More() {
         { path: '/admin/commissions', icon: DollarSign, label: 'Commissions' },
         { path: '/admin/commission-engine', icon: DollarSign, label: 'Commission Engine' },
         { path: '/admin/payment-engine', icon: Receipt, label: 'Payment Center' },
+        { path: '/admin/pandasign-v2', icon: FileSignature, label: 'PandaSign V2' },
         { path: '/admin/google-calendar', icon: CalendarDays, label: 'Google Calendar' },
         { path: '/admin/service-admin', icon: Wrench, label: 'Service Admin' },
         { path: '/admin/integrations', icon: Camera, label: 'Integrations' },

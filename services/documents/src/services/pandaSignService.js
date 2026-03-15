@@ -15,6 +15,346 @@ const sesClient = new SESClient({ region: process.env.AWS_REGION || 'us-east-2' 
 
 const S3_BUCKET = process.env.DOCUMENTS_BUCKET || 'panda-crm-documents';
 const SIGNING_BASE_URL = process.env.SIGNING_BASE_URL || 'https://sign.pandaexteriors.com';
+const PANDASIGN_V2_SETTINGS_CATEGORY = 'pandasign_v2';
+const PANDASIGN_V2_SETTING_KEYS = {
+  BRANDING_ITEMS: 'pandasign_v2.branding_items',
+  DYNAMIC_CONTENT_ITEMS: 'pandasign_v2.dynamic_content_items',
+  TERRITORY_PROFILES: 'pandasign_v2.territory_profiles',
+};
+const PANDASIGN_V2_TERRITORIES = ['DE', 'MD', 'NJ', 'PA', 'NC', 'VA', 'FL', 'DEFAULT'];
+const PANDASIGN_V2_DOCUMENT_TYPES = ['CONTRACT', 'CHANGE_ORDER', 'WORK_ORDER', 'FINANCING', 'OTHER'];
+const DEFAULT_TEMPLATE_STATUS = 'DRAFT';
+const DEFAULT_SIGNER_ROLES = [
+  { role: 'CUSTOMER', label: 'Customer', required: true, order: 1 },
+  { role: 'AGENT', label: 'Agent', required: true, order: 2 },
+];
+
+function deepCloneJson(value, fallback) {
+  if (value === null || value === undefined) return fallback;
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeTerritory(value) {
+  const normalized = String(value || 'DEFAULT').trim().toUpperCase();
+  return PANDASIGN_V2_TERRITORIES.includes(normalized) ? normalized : 'DEFAULT';
+}
+
+function normalizeTemplateStatus(value) {
+  const normalized = String(value || DEFAULT_TEMPLATE_STATUS).trim().toUpperCase();
+  if (normalized === 'PUBLISHED' || normalized === 'ARCHIVED') return normalized;
+  return DEFAULT_TEMPLATE_STATUS;
+}
+
+function normalizeDocumentType(value, fallback = 'CONTRACT') {
+  const normalized = String(value || fallback || 'CONTRACT').trim().toUpperCase();
+  return PANDASIGN_V2_DOCUMENT_TYPES.includes(normalized) ? normalized : 'OTHER';
+}
+
+function getDefaultTerritoryProfiles() {
+  return PANDASIGN_V2_TERRITORIES.map((territory) => ({
+    id: `territory-${territory.toLowerCase()}`,
+    territory,
+    company_name: territory === 'DEFAULT' ? 'Panda Exteriors' : '',
+    company_phone: '',
+    company_address: '',
+    company_email: '',
+    company_license: '',
+  }));
+}
+
+function parseJsonSettingValue(setting, fallback) {
+  if (!setting?.value) return deepCloneJson(fallback, fallback);
+  try {
+    return JSON.parse(setting.value);
+  } catch {
+    return deepCloneJson(fallback, fallback);
+  }
+}
+
+function decodeHtmlEntities(text) {
+  if (!text) return text;
+
+  return text
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&#x27;/gi, "'");
+}
+
+function renderHtmlToDocumentText(content) {
+  if (!content) return '';
+
+  const normalizedInput = String(content).replace(/\r\n?/g, '\n');
+  const hasMarkup = /<[^>]+>/.test(normalizedInput);
+
+  if (!hasMarkup) {
+    return decodeHtmlEntities(normalizedInput)
+      .replace(/[ \t]+\n/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  return decodeHtmlEntities(normalizedInput)
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|section|article|header|footer|blockquote|h[1-6])>/gi, '\n\n')
+    .replace(/<(p|div|section|article|header|footer|blockquote|h[1-6])[^>]*>/gi, '')
+    .replace(/<\/li>/gi, '\n')
+    .replace(/<li[^>]*>/gi, '• ')
+    .replace(/<\/(ul|ol)>/gi, '\n')
+    .replace(/<(ul|ol)[^>]*>/gi, '\n')
+    .replace(/<\/tr>/gi, '\n')
+    .replace(/<tr[^>]*>/gi, '')
+    .replace(/<\/t[dh]>/gi, ' ')
+    .replace(/<t[dh][^>]*>/gi, '')
+    .replace(/<hr\s*\/?>/gi, '\n--------------------\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function extractTemplateMetadata(signatureFields) {
+  if (Array.isArray(signatureFields)) {
+    return {
+      schemaVersion: 1,
+      status: 'PUBLISHED',
+      territory: 'DEFAULT',
+      documentType: 'CONTRACT',
+      signerRoles: deepCloneJson(DEFAULT_SIGNER_ROLES, []),
+      requiredFieldsConfig: [],
+      branding: { headerId: '', footerId: '' },
+      dynamicContentRefs: [],
+      signingOrder: 'SEQUENTIAL',
+      fields: deepCloneJson(signatureFields, []),
+    };
+  }
+
+  if (signatureFields && typeof signatureFields === 'object') {
+    const fields = Array.isArray(signatureFields.fields)
+      ? signatureFields.fields
+      : Array.isArray(signatureFields.signatureFields)
+        ? signatureFields.signatureFields
+        : [];
+
+    return {
+      schemaVersion: signatureFields.schemaVersion || 2,
+      status: normalizeTemplateStatus(signatureFields.status),
+      territory: normalizeTerritory(signatureFields.territory),
+      documentType: normalizeDocumentType(signatureFields.documentType || signatureFields.category),
+      signerRoles: normalizeSignerRoles(signatureFields.signerRoles),
+      requiredFieldsConfig: normalizeRequiredFieldsConfig(signatureFields.requiredFieldsConfig),
+      branding: normalizeBrandingSelection(signatureFields.branding),
+      dynamicContentRefs: normalizeDynamicContentRefs(signatureFields.dynamicContentRefs),
+      signingOrder: String(signatureFields.signingOrder || 'SEQUENTIAL').toUpperCase(),
+      fields: normalizeSignatureFieldLayout(fields, signatureFields.signerRoles),
+    };
+  }
+
+  return {
+    schemaVersion: 2,
+    status: DEFAULT_TEMPLATE_STATUS,
+    territory: 'DEFAULT',
+    documentType: 'CONTRACT',
+    signerRoles: deepCloneJson(DEFAULT_SIGNER_ROLES, []),
+    requiredFieldsConfig: [],
+    branding: { headerId: '', footerId: '' },
+    dynamicContentRefs: [],
+    signingOrder: 'SEQUENTIAL',
+    fields: buildDefaultSignatureFieldLayout(DEFAULT_SIGNER_ROLES),
+  };
+}
+
+function normalizeSignerRoles(signerRoles) {
+  const roles = Array.isArray(signerRoles) && signerRoles.length > 0 ? signerRoles : DEFAULT_SIGNER_ROLES;
+  return roles.map((role, index) => ({
+    role: String(role?.role || role || '').trim().toUpperCase() || `SIGNER_${index + 1}`,
+    label: String(role?.label || role?.role || role || `Signer ${index + 1}`).trim(),
+    required: role?.required !== false,
+    order: Number.isFinite(Number(role?.order)) ? Number(role.order) : index + 1,
+  }));
+}
+
+function normalizeRequiredFieldsConfig(requiredFieldsConfig) {
+  if (!Array.isArray(requiredFieldsConfig)) return [];
+  return requiredFieldsConfig
+    .map((field, index) => {
+      if (!field || typeof field !== 'object') return null;
+      const role = String(field.role || '').trim().toUpperCase();
+      const type = String(field.type || '').trim().toUpperCase();
+      const label = String(field.label || field.name || '').trim();
+      if (!role || !type || !label) return null;
+      return {
+        id: field.id || `required-field-${index + 1}`,
+        role,
+        type,
+        label,
+        required: field.required !== false,
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeBrandingSelection(branding) {
+  return {
+    headerId: String(branding?.headerId || '').trim(),
+    footerId: String(branding?.footerId || '').trim(),
+  };
+}
+
+function normalizeDynamicContentRefs(dynamicContentRefs) {
+  if (!Array.isArray(dynamicContentRefs)) return [];
+  return [...new Set(dynamicContentRefs.map((value) => String(value || '').trim()).filter(Boolean))];
+}
+
+function buildDefaultSignatureFieldLayout(signerRoles) {
+  const normalizedRoles = normalizeSignerRoles(signerRoles);
+  const baseY = 150;
+  return normalizedRoles.flatMap((signer, index) => {
+    const isAgent = signer.role === 'AGENT';
+    const signatureName = isAgent ? 'host_signature' : `${signer.role.toLowerCase()}_signature`;
+    const initialName = isAgent ? 'host_initials' : `${signer.role.toLowerCase()}_initials`;
+    const x = isAgent ? 350 : 100;
+    const y = baseY - (index > 1 ? (index - 1) * 70 : 0);
+
+    return [
+      {
+        name: signatureName,
+        role: signer.role,
+        type: 'SIGNATURE',
+        page: 1,
+        x,
+        y,
+        width: 200,
+        height: 50,
+      },
+      {
+        name: initialName,
+        role: signer.role,
+        type: 'INITIAL',
+        page: 1,
+        x,
+        y: y - 35,
+        width: 80,
+        height: 24,
+      },
+    ];
+  });
+}
+
+function normalizeSignatureFieldLayout(fields, signerRoles) {
+  if (!Array.isArray(fields) || fields.length === 0) {
+    return buildDefaultSignatureFieldLayout(signerRoles);
+  }
+
+  return fields.map((field, index) => ({
+    name: field.name || `signature_field_${index + 1}`,
+    role: String(field.role || 'CUSTOMER').trim().toUpperCase(),
+    type: String(field.type || 'SIGNATURE').trim().toUpperCase(),
+    page: Number.isFinite(Number(field.page)) ? Number(field.page) : 1,
+    x: Number.isFinite(Number(field.x)) ? Number(field.x) : 100,
+    y: Number.isFinite(Number(field.y)) ? Number(field.y) : 150,
+    width: Number.isFinite(Number(field.width)) ? Number(field.width) : 200,
+    height: Number.isFinite(Number(field.height)) ? Number(field.height) : 50,
+  }));
+}
+
+function getTemplateSignatureFields(templateOrSignatureFields) {
+  const signatureFields = templateOrSignatureFields?.signatureFields ?? templateOrSignatureFields;
+  return extractTemplateMetadata(signatureFields).fields;
+}
+
+function extractMergeFieldsFromContent(content) {
+  const matches = String(content || '').match(/\{\{[^}]+\}\}/g) || [];
+  return [...new Set(matches.map((match) => match.slice(2, -2).trim()).filter(Boolean))];
+}
+
+function normalizeBrandingItem(item, kind) {
+  return {
+    id: item?.id || crypto.randomUUID(),
+    kind: String(item?.kind || kind || 'HEADER').trim().toUpperCase(),
+    name: String(item?.name || '').trim(),
+    territory: normalizeTerritory(item?.territory),
+    content: String(item?.content || '').trim(),
+    description: String(item?.description || '').trim(),
+    isActive: item?.isActive !== false,
+    createdAt: item?.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function normalizeDynamicContentItem(item) {
+  return {
+    id: item?.id || crypto.randomUUID(),
+    key: String(item?.key || '').trim(),
+    name: String(item?.name || item?.key || '').trim(),
+    territory: normalizeTerritory(item?.territory),
+    content: String(item?.content || '').trim(),
+    description: String(item?.description || '').trim(),
+    isActive: item?.isActive !== false,
+    createdAt: item?.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function mapTerritoryProfileValues(profile) {
+  return {
+    territory: normalizeTerritory(profile?.territory),
+    company_name: String(profile?.company_name || '').trim(),
+    company_phone: String(profile?.company_phone || '').trim(),
+    company_address: String(profile?.company_address || '').trim(),
+    company_email: String(profile?.company_email || '').trim(),
+    company_license: String(profile?.company_license || '').trim(),
+  };
+}
+
+function normalizeTerritoryProfiles(profiles) {
+  const byTerritory = new Map(
+    getDefaultTerritoryProfiles().map((profile) => [profile.territory, profile])
+  );
+
+  if (Array.isArray(profiles)) {
+    profiles.forEach((profile) => {
+      const normalized = mapTerritoryProfileValues(profile);
+      byTerritory.set(normalized.territory, {
+        ...byTerritory.get(normalized.territory),
+        ...normalized,
+      });
+    });
+  }
+
+  return PANDASIGN_V2_TERRITORIES.map((territory) => ({
+    id: byTerritory.get(territory)?.id || `territory-${territory.toLowerCase()}`,
+    ...byTerritory.get(territory),
+  }));
+}
+
+function serializeTemplate(template) {
+  const metadata = extractTemplateMetadata(template.signatureFields);
+  const signatureFields = metadata.fields;
+  return {
+    ...template,
+    category: metadata.documentType || template.category,
+    documentType: metadata.documentType || template.category || 'CONTRACT',
+    territory: metadata.territory,
+    status: metadata.status,
+    signerRoles: metadata.signerRoles,
+    requiredFieldsConfig: metadata.requiredFieldsConfig,
+    branding: metadata.branding,
+    dynamicContentRefs: metadata.dynamicContentRefs,
+    signingOrder: metadata.signingOrder,
+    signatureFields,
+    templateConfig: metadata,
+  };
+}
 
 /**
  * PandaSign Service - Custom e-signature solution
@@ -45,6 +385,8 @@ export const pandaSignService = {
       throw new Error('Template not found');
     }
 
+    const resolvedMergeData = await this.buildTemplateMergeData(template, mergeData);
+
     // Generate agreement number
     const agreementNumber = `AGR-${Date.now()}-${uuidv4().slice(0, 4).toUpperCase()}`;
 
@@ -55,7 +397,7 @@ export const pandaSignService = {
     const agreement = await prisma.agreement.create({
       data: {
         agreementNumber,
-        name: this.interpolateText(template.name, mergeData),
+        name: this.interpolateText(template.name, resolvedMergeData),
         status: 'DRAFT',
         templateId,
         opportunityId,
@@ -66,13 +408,13 @@ export const pandaSignService = {
         signingToken,
         signingUrl: `${SIGNING_BASE_URL}/sign/${signingToken}`,
         expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
-        mergeData,
+        mergeData: resolvedMergeData,
         createdById: userId,
       },
     });
 
     // Generate PDF document
-    const pdfUrl = await this.generateDocument(agreement, template, mergeData);
+    const pdfUrl = await this.generateDocument(agreement, template, resolvedMergeData);
 
     // Update agreement with document URL
     await prisma.agreement.update({
@@ -99,10 +441,11 @@ export const pandaSignService = {
    */
   async generateDocument(agreement, template, mergeData) {
     let pdfDoc;
+    const templateDocumentUrl = template.documentUrl;
 
-    if (template.pdfTemplateUrl) {
+    if (templateDocumentUrl) {
       // Load existing PDF template
-      const response = await fetch(template.pdfTemplateUrl);
+      const response = await fetch(templateDocumentUrl);
       const pdfBytes = await response.arrayBuffer();
       pdfDoc = await PDFDocument.load(pdfBytes);
     } else {
@@ -114,8 +457,8 @@ export const pandaSignService = {
     const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
 
     // If no template, create basic document
-    if (!template.pdfTemplateUrl) {
-      const page = pdfDoc.addPage([612, 792]); // Letter size
+    if (!templateDocumentUrl) {
+      let page = pdfDoc.addPage([612, 792]); // Letter size
       const { width, height } = page.getSize();
 
       // Header
@@ -136,22 +479,24 @@ export const pandaSignService = {
       });
 
       // Add document content from template
-      const content = this.interpolateText(template.content || '', mergeData);
+      const content = await this.buildTemplateDocumentText(template, mergeData);
       const lines = this.wrapText(content, 80);
       let y = height - 120;
 
       for (const line of lines) {
         if (y < 100) {
           // Add new page if needed
-          const newPage = pdfDoc.addPage([612, 792]);
-          y = newPage.getSize().height - 50;
+          page = pdfDoc.addPage([612, 792]);
+          y = page.getSize().height - 50;
         }
-        page.drawText(line, {
-          x: 50,
-          y,
-          size: 10,
-          font,
-        });
+        if (line) {
+          page.drawText(line, {
+            x: 50,
+            y,
+            size: 10,
+            font,
+          });
+        }
         y -= 14;
       }
 
@@ -179,7 +524,7 @@ export const pandaSignService = {
     }
 
     // Add signature fields metadata
-    const signatureFields = template.signatureFields || [
+    const signatureFields = getTemplateSignatureFields(template) || [
       { name: 'primary_signature', page: 1, x: 100, y: 150, width: 200, height: 50 },
     ];
 
@@ -529,7 +874,7 @@ Panda Exteriors
     const page = pages[0];
 
     // Add signature at the signature field location
-    const signatureFields = agreement.template?.signatureFields || [
+    const signatureFields = getTemplateSignatureFields(agreement.template) || [
       { x: 100, y: 150, width: 200, height: 50 },
     ];
 
@@ -720,23 +1065,167 @@ ${agreement.signedDocumentUrl}
     });
   },
 
+  async getJsonSetting(key, fallback) {
+    const setting = await prisma.systemSetting.findUnique({ where: { key } });
+    return parseJsonSettingValue(setting, fallback);
+  },
+
+  async upsertJsonSetting(key, value, userId, description = null) {
+    const serialized = JSON.stringify(value);
+    await prisma.systemSetting.upsert({
+      where: { key },
+      update: {
+        value: serialized,
+        description: description || undefined,
+        category: PANDASIGN_V2_SETTINGS_CATEGORY,
+        updatedById: userId || undefined,
+      },
+      create: {
+        key,
+        value: serialized,
+        description: description || undefined,
+        category: PANDASIGN_V2_SETTINGS_CATEGORY,
+        createdById: userId || undefined,
+        updatedById: userId || undefined,
+      },
+    });
+  },
+
+  async getBrandingItems() {
+    const items = await this.getJsonSetting(PANDASIGN_V2_SETTING_KEYS.BRANDING_ITEMS, []);
+    return Array.isArray(items)
+      ? items.map((item) => normalizeBrandingItem(item, item?.kind))
+      : [];
+  },
+
+  async getDynamicContentItems() {
+    const items = await this.getJsonSetting(PANDASIGN_V2_SETTING_KEYS.DYNAMIC_CONTENT_ITEMS, []);
+    return Array.isArray(items)
+      ? items.map((item) => normalizeDynamicContentItem(item))
+      : [];
+  },
+
+  getSignatureFields(templateOrSignatureFields) {
+    return getTemplateSignatureFields(templateOrSignatureFields);
+  },
+
+  async getTerritoryProfiles() {
+    const profiles = await this.getJsonSetting(
+      PANDASIGN_V2_SETTING_KEYS.TERRITORY_PROFILES,
+      getDefaultTerritoryProfiles()
+    );
+    return normalizeTerritoryProfiles(profiles);
+  },
+
+  async buildTemplateMergeData(template, mergeData = {}) {
+    const metadata = extractTemplateMetadata(template.signatureFields);
+    const [brandingItems, dynamicContentItems, territoryProfiles] = await Promise.all([
+      this.getBrandingItems(),
+      this.getDynamicContentItems(),
+      this.getTerritoryProfiles(),
+    ]);
+
+    const territory = metadata.territory || 'DEFAULT';
+    const territoryProfile =
+      territoryProfiles.find((profile) => profile.territory === territory) ||
+      territoryProfiles.find((profile) => profile.territory === 'DEFAULT') ||
+      {};
+
+    const dynamicContent = {};
+    const activeItems = dynamicContentItems.filter((item) => item.isActive !== false);
+    const referencedKeys = metadata.dynamicContentRefs.length > 0
+      ? metadata.dynamicContentRefs
+      : activeItems.map((item) => item.key);
+
+    referencedKeys.forEach((key) => {
+      const match = activeItems.find((item) => item.key === key && item.territory === territory)
+        || activeItems.find((item) => item.key === key && item.territory === 'DEFAULT')
+        || null;
+      if (match) {
+        dynamicContent[key] = this.interpolateText(match.content, mergeData);
+      }
+    });
+
+    const territoryData = {
+      company_name: territoryProfile.company_name || '',
+      company_phone: territoryProfile.company_phone || '',
+      company_address: territoryProfile.company_address || '',
+      company_email: territoryProfile.company_email || '',
+      company_license: territoryProfile.company_license || '',
+    };
+
+    return {
+      ...deepCloneJson(mergeData, {}),
+      territory: territoryData,
+      dynamic: dynamicContent,
+      job: {
+        ...(mergeData.job || {}),
+        customer: {
+          ...((mergeData.job && mergeData.job.customer) || {}),
+          name_full:
+            mergeData.job?.customer?.name_full ||
+            mergeData.customerName ||
+            mergeData.customer_name ||
+            '',
+        },
+      },
+      _pandaSignBranding: brandingItems.filter((item) => item.isActive !== false),
+      _pandaSignTemplateMeta: metadata,
+    };
+  },
+
+  async buildTemplateDocumentText(template, mergeData = {}) {
+    const metadata = extractTemplateMetadata(template.signatureFields);
+    const [brandingItems, resolvedMergeData] = await Promise.all([
+      this.getBrandingItems(),
+      this.buildTemplateMergeData(template, mergeData),
+    ]);
+
+    const activeBranding = brandingItems.filter((item) => item.isActive !== false);
+    const header = activeBranding.find(
+      (item) => item.id === metadata.branding.headerId && item.kind === 'HEADER'
+    );
+    const footer = activeBranding.find(
+      (item) => item.id === metadata.branding.footerId && item.kind === 'FOOTER'
+    );
+
+    return [
+      header ? renderHtmlToDocumentText(this.interpolateText(header.content, resolvedMergeData)) : '',
+      renderHtmlToDocumentText(this.interpolateText(template.content || '', resolvedMergeData)),
+      footer ? renderHtmlToDocumentText(this.interpolateText(footer.content, resolvedMergeData)) : '',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+  },
+
   /**
    * Wrap text for PDF rendering
    */
   wrapText(text, maxCharsPerLine) {
-    const words = text.split(' ');
     const lines = [];
-    let currentLine = '';
+    const paragraphs = String(text || '').split('\n');
 
-    for (const word of words) {
-      if ((currentLine + word).length <= maxCharsPerLine) {
-        currentLine += (currentLine ? ' ' : '') + word;
-      } else {
-        if (currentLine) lines.push(currentLine);
-        currentLine = word;
+    for (const paragraph of paragraphs) {
+      const trimmedParagraph = paragraph.trim();
+      if (!trimmedParagraph) {
+        lines.push('');
+        continue;
       }
+
+      const words = trimmedParagraph.split(/\s+/);
+      let currentLine = '';
+
+      for (const word of words) {
+        if ((currentLine + word).length <= maxCharsPerLine) {
+          currentLine += (currentLine ? ' ' : '') + word;
+        } else {
+          if (currentLine) lines.push(currentLine);
+          currentLine = word;
+        }
+      }
+
+      if (currentLine) lines.push(currentLine);
     }
-    if (currentLine) lines.push(currentLine);
 
     return lines;
   },
@@ -1406,7 +1895,7 @@ ${agreement.signedDocumentUrl}
 
     // Add host signature at second signature field location
     // (positioned to the right or below customer signature)
-    const signatureFields = agreement.template?.signatureFields || [];
+    const signatureFields = getTemplateSignatureFields(agreement.template) || [];
     const hostField = signatureFields.find(f => f.name === 'host_signature') || {
       x: 350, // Right side of page
       y: 150,
@@ -1585,45 +2074,282 @@ ${agreement.signedDocumentUrl}
   /**
    * Get agreement templates (admin)
    */
-  async getTemplates(category = null) {
-    const where = category ? { category } : {};
-    return prisma.agreementTemplate.findMany({
-      where,
+  async getTemplates(filters = {}) {
+    const templates = await prisma.agreementTemplate.findMany({
       orderBy: [{ category: 'asc' }, { name: 'asc' }],
     });
+
+    return templates
+      .map((template) => serializeTemplate(template))
+      .filter((template) => {
+        if (filters.category && template.category !== filters.category) return false;
+        if (filters.documentType && template.documentType !== normalizeDocumentType(filters.documentType, template.documentType)) return false;
+        if (filters.territory && template.territory !== normalizeTerritory(filters.territory)) return false;
+        if (filters.status && template.status !== normalizeTemplateStatus(filters.status)) return false;
+        if (filters.isActive !== undefined && template.isActive !== (String(filters.isActive) === 'true')) return false;
+        if (filters.q) {
+          const query = String(filters.q).toLowerCase();
+          const haystack = [template.name, template.description, template.category, template.documentType, template.territory]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase();
+          if (!haystack.includes(query)) return false;
+        }
+        return true;
+      });
+  },
+
+  async getTemplateById(id) {
+    const template = await prisma.agreementTemplate.findUnique({
+      where: { id },
+    });
+
+    if (!template) {
+      throw new Error('Template not found');
+    }
+
+    return serializeTemplate(template);
+  },
+
+  async getAdminResources() {
+    const [brandingItems, dynamicContentItems, territoryProfiles] = await Promise.all([
+      this.getBrandingItems(),
+      this.getDynamicContentItems(),
+      this.getTerritoryProfiles(),
+    ]);
+
+    return {
+      brandingItems,
+      dynamicContentItems,
+      territoryProfiles,
+      territories: PANDASIGN_V2_TERRITORIES,
+      documentTypes: PANDASIGN_V2_DOCUMENT_TYPES,
+    };
+  },
+
+  async updateTerritoryProfiles(profiles, userId) {
+    const normalizedProfiles = normalizeTerritoryProfiles(profiles);
+    await this.upsertJsonSetting(
+      PANDASIGN_V2_SETTING_KEYS.TERRITORY_PROFILES,
+      normalizedProfiles,
+      userId,
+      'PandaSign V2 territory merge values'
+    );
+    return normalizedProfiles;
+  },
+
+  async listBrandingItems(filters = {}) {
+    return (await this.getBrandingItems()).filter((item) => {
+      if (filters.kind && item.kind !== String(filters.kind).trim().toUpperCase()) return false;
+      if (filters.territory && item.territory !== normalizeTerritory(filters.territory)) return false;
+      if (filters.isActive !== undefined && item.isActive !== (String(filters.isActive) === 'true')) return false;
+      return true;
+    });
+  },
+
+  async upsertBrandingItem(data, userId) {
+    const kind = String(data?.kind || '').trim().toUpperCase();
+    if (kind !== 'HEADER' && kind !== 'FOOTER') {
+      throw new Error('Branding item kind must be HEADER or FOOTER');
+    }
+
+    const normalizedItem = normalizeBrandingItem(data, kind);
+    if (!normalizedItem.name) {
+      throw new Error('Branding item name is required');
+    }
+    if (!normalizedItem.content) {
+      throw new Error('Branding item content is required');
+    }
+
+    const items = await this.getBrandingItems();
+    const nextItems = items.some((item) => item.id === normalizedItem.id)
+      ? items.map((item) => (item.id === normalizedItem.id ? { ...item, ...normalizedItem } : item))
+      : [...items, normalizedItem];
+
+    await this.upsertJsonSetting(
+      PANDASIGN_V2_SETTING_KEYS.BRANDING_ITEMS,
+      nextItems,
+      userId,
+      'PandaSign V2 reusable branding items'
+    );
+
+    return normalizedItem;
+  },
+
+  async listDynamicContentItems(filters = {}) {
+    return (await this.getDynamicContentItems()).filter((item) => {
+      if (filters.territory && item.territory !== normalizeTerritory(filters.territory)) return false;
+      if (filters.isActive !== undefined && item.isActive !== (String(filters.isActive) === 'true')) return false;
+      if (filters.key && item.key !== String(filters.key).trim()) return false;
+      return true;
+    });
+  },
+
+  async upsertDynamicContentItem(data, userId) {
+    const normalizedItem = normalizeDynamicContentItem(data);
+    if (!normalizedItem.key) {
+      throw new Error('Dynamic content key is required');
+    }
+    if (!normalizedItem.content) {
+      throw new Error('Dynamic content content is required');
+    }
+
+    const items = await this.getDynamicContentItems();
+    const nextItems = items.some((item) => item.id === normalizedItem.id)
+      ? items.map((item) => (item.id === normalizedItem.id ? { ...item, ...normalizedItem } : item))
+      : [...items, normalizedItem];
+
+    await this.upsertJsonSetting(
+      PANDASIGN_V2_SETTING_KEYS.DYNAMIC_CONTENT_ITEMS,
+      nextItems,
+      userId,
+      'PandaSign V2 dynamic content blocks'
+    );
+
+    return normalizedItem;
+  },
+
+  async validateTemplateForPublish(templateLike) {
+    const template = serializeTemplate(templateLike);
+    const [brandingItems] = await Promise.all([
+      this.getBrandingItems(),
+    ]);
+
+    const errors = [];
+
+    if (!template.name?.trim()) errors.push('Template name is required.');
+    if (!template.content?.trim()) errors.push('Template body content is required.');
+    if (!template.documentType) errors.push('Document type is required.');
+    if (!template.territory) errors.push('Territory is required.');
+    if (!Array.isArray(template.signerRoles) || template.signerRoles.length === 0) {
+      errors.push('At least one signer role is required.');
+    }
+    if (!Array.isArray(template.requiredFieldsConfig)) {
+      errors.push('Required field configuration is invalid.');
+    }
+    if (!template.branding?.headerId || !template.branding?.footerId) {
+      errors.push('A header and footer must be selected before publishing.');
+    }
+
+    const activeBrandingItems = brandingItems.filter((item) => item.isActive !== false);
+    if (
+      template.branding?.headerId &&
+      !activeBrandingItems.find((item) => item.id === template.branding.headerId && item.kind === 'HEADER')
+    ) {
+      errors.push('Selected header is not valid.');
+    }
+    if (
+      template.branding?.footerId &&
+      !activeBrandingItems.find((item) => item.id === template.branding.footerId && item.kind === 'FOOTER')
+    ) {
+      errors.push('Selected footer is not valid.');
+    }
+
+    return {
+      valid: errors.length === 0,
+      errors,
+    };
   },
 
   /**
    * Create or update agreement template (admin)
    */
   async upsertTemplate(data) {
+    const existing = data.id
+      ? await prisma.agreementTemplate.findUnique({ where: { id: data.id } })
+      : null;
+    const existingMetadata = extractTemplateMetadata(existing?.signatureFields);
+
+    const signerRoles = normalizeSignerRoles(data.signerRoles || existingMetadata.signerRoles);
+    const normalizedMetadata = {
+      schemaVersion: 2,
+      status: normalizeTemplateStatus(data.status || existingMetadata.status || DEFAULT_TEMPLATE_STATUS),
+      territory: normalizeTerritory(data.territory || existingMetadata.territory),
+      documentType: normalizeDocumentType(data.documentType || data.category || existingMetadata.documentType),
+      signerRoles,
+      requiredFieldsConfig: normalizeRequiredFieldsConfig(
+        data.requiredFieldsConfig !== undefined ? data.requiredFieldsConfig : existingMetadata.requiredFieldsConfig
+      ),
+      branding: normalizeBrandingSelection(data.branding || existingMetadata.branding),
+      dynamicContentRefs: normalizeDynamicContentRefs(
+        data.dynamicContentRefs !== undefined ? data.dynamicContentRefs : existingMetadata.dynamicContentRefs
+      ),
+      signingOrder: String(data.signingOrder || existingMetadata.signingOrder || 'SEQUENTIAL').toUpperCase(),
+      fields: normalizeSignatureFieldLayout(data.signatureFields || existingMetadata.fields, signerRoles),
+    };
+
+    const payload = {
+      name: data.name,
+      description: data.description || '',
+      category: normalizedMetadata.documentType,
+      content: data.content,
+      documentUrl: data.documentUrl || data.pdfTemplateUrl || existing?.documentUrl || null,
+      signatureFields: normalizedMetadata,
+      mergeFields: data.mergeFields || extractMergeFieldsFromContent(data.content),
+      isActive: normalizedMetadata.status !== 'ARCHIVED',
+    };
+
     if (data.id) {
-      return prisma.agreementTemplate.update({
+      const updated = await prisma.agreementTemplate.update({
         where: { id: data.id },
-        data: {
-          name: data.name,
-          category: data.category,
-          content: data.content,
-          pdfTemplateUrl: data.pdfTemplateUrl,
-          signatureFields: data.signatureFields,
-          mergeFields: data.mergeFields,
-          isActive: data.isActive,
-          updatedAt: new Date(),
-        },
+        data: payload,
       });
+      return serializeTemplate(updated);
     }
 
-    return prisma.agreementTemplate.create({
+    const created = await prisma.agreementTemplate.create({
+      data: payload,
+    });
+    return serializeTemplate(created);
+  },
+
+  async publishTemplate(id) {
+    const existing = await prisma.agreementTemplate.findUnique({ where: { id } });
+    if (!existing) {
+      throw new Error('Template not found');
+    }
+
+    const validation = await this.validateTemplateForPublish(existing);
+    if (!validation.valid) {
+      const error = new Error('Template validation failed');
+      error.validationErrors = validation.errors;
+      throw error;
+    }
+
+    const metadata = extractTemplateMetadata(existing.signatureFields);
+    const updated = await prisma.agreementTemplate.update({
+      where: { id },
       data: {
-        name: data.name,
-        category: data.category,
-        content: data.content,
-        pdfTemplateUrl: data.pdfTemplateUrl,
-        signatureFields: data.signatureFields || [],
-        mergeFields: data.mergeFields || [],
-        isActive: data.isActive ?? true,
+        isActive: true,
+        signatureFields: {
+          ...metadata,
+          status: 'PUBLISHED',
+        },
       },
     });
+
+    return serializeTemplate(updated);
+  },
+
+  async archiveTemplate(id) {
+    const existing = await prisma.agreementTemplate.findUnique({ where: { id } });
+    if (!existing) {
+      throw new Error('Template not found');
+    }
+
+    const metadata = extractTemplateMetadata(existing.signatureFields);
+    const updated = await prisma.agreementTemplate.update({
+      where: { id },
+      data: {
+        isActive: false,
+        signatureFields: {
+          ...metadata,
+          status: 'ARCHIVED',
+        },
+      },
+    });
+
+    return serializeTemplate(updated);
   },
 };
 

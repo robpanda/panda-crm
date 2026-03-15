@@ -64,6 +64,7 @@ const adminNavItems = [
   { path: '/admin/help', icon: HelpCircle, label: 'Help Admin' },
   { path: '/admin/integrations', icon: Settings, label: 'Integrations' },
   { path: '/admin/payment-engine', icon: CreditCard, label: 'Payment Center' },
+  { path: '/admin/pandasign-v2', icon: FileSignature, label: 'PandaSign V2' },
   { path: '/admin/referral', icon: Gift, label: 'Referral Program' },
   { path: '/admin/ringcentral', icon: Phone, label: 'RingCentral' },
   { path: '/admin/roles', icon: Settings, label: 'Roles & Permissions' },

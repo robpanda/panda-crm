@@ -89,6 +89,7 @@ import GoogleCalendar from './pages/admin/GoogleCalendar';
 import DeletedRecords from './pages/admin/DeletedRecords';
 import OrphanedRecords from './pages/admin/OrphanedRecords';
 import Referral from './pages/admin/Referral';
+import PandaSignV2 from './pages/admin/PandaSignV2';
 
 // Help
 import Help from './pages/Help';
@@ -252,6 +253,7 @@ export default function App() {
         <Route path="admin/commissions" element={<Commissions />} />
         <Route path="admin/commission-engine" element={<CommissionEngine />} />
         <Route path="admin/payment-engine" element={<PaymentEngine />} />
+        <Route path="admin/pandasign-v2" element={<PandaSignV2 />} />
         <Route path="admin/templates" element={<Navigate to="/admin/bamboogli?tab=templates" replace />} />
         <Route path="admin/integrations" element={<Integrations />} />
         <Route path="admin/users" element={<Users />} />
