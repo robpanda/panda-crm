@@ -4759,15 +4759,35 @@ export const agreementsApi = {
   },
 
   async getAdminResources() {
-    const response = await api.get('/api/documents/agreements/templates/admin/resources');
-    return response.data;
+    try {
+      const response = await api.get('/api/documents/agreements/admin/resources');
+      return response.data;
+    } catch (error) {
+      if (error?.response?.status !== 404) {
+        throw error;
+      }
+
+      const response = await api.get('/api/documents/agreements/templates/admin/resources');
+      return response.data;
+    }
   },
 
   async updateTerritoryProfiles(territoryProfiles) {
-    const response = await api.put('/api/documents/agreements/templates/admin/territory-profiles', {
-      territoryProfiles,
-    });
-    return response.data;
+    try {
+      const response = await api.put('/api/documents/agreements/admin/territory-profiles', {
+        territoryProfiles,
+      });
+      return response.data;
+    } catch (error) {
+      if (error?.response?.status !== 404) {
+        throw error;
+      }
+
+      const response = await api.put('/api/documents/agreements/templates/admin/territory-profiles', {
+        territoryProfiles,
+      });
+      return response.data;
+    }
   },
 
   async getBrandingItems(params = {}) {

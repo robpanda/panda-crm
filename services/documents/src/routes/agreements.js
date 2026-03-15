@@ -57,23 +57,31 @@ router.get('/', authMiddleware, async (req, res, next) => {
 // Agreement Templates + PandaSign V2 Admin Resources
 // ==========================================
 
-router.get('/templates/admin/resources', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
+async function handleAdminResources(req, res, next) {
   try {
     const resources = await pandaSignService.getAdminResources();
     res.json({ success: true, data: resources });
   } catch (error) {
     next(error);
   }
-});
+}
 
-router.put('/templates/admin/territory-profiles', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
+async function handleUpdateTerritoryProfiles(req, res, next) {
   try {
     const profiles = await pandaSignService.updateTerritoryProfiles(req.body?.territoryProfiles, req.user.id);
     res.json({ success: true, data: profiles });
   } catch (error) {
     next(error);
   }
-});
+}
+
+// Keep the dedicated admin routes as the preferred surface and preserve the
+// nested /templates/admin/* paths as compatibility aliases for older clients.
+router.get('/admin/resources', authMiddleware, requireRole('admin', 'super_admin'), handleAdminResources);
+router.get('/templates/admin/resources', authMiddleware, requireRole('admin', 'super_admin'), handleAdminResources);
+
+router.put('/admin/territory-profiles', authMiddleware, requireRole('admin', 'super_admin'), handleUpdateTerritoryProfiles);
+router.put('/templates/admin/territory-profiles', authMiddleware, requireRole('admin', 'super_admin'), handleUpdateTerritoryProfiles);
 
 router.get('/branding', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
   try {
