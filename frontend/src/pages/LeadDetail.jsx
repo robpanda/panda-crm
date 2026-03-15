@@ -720,6 +720,37 @@ export default function LeadDetail() {
     setLeadActionStep(null);
   };
 
+  const handleSavedLeadConvert = async () => {
+    try {
+      const gatingResult = await leadsApi.validatePreConversion(id);
+      const preConversion = gatingResult?.data || gatingResult || {};
+      const blockers = Array.isArray(preConversion?.blockers) ? preConversion.blockers : [];
+      const salesPath = preConversion?.salesPath || (lead?.workType?.toLowerCase().startsWith('retail') ? 'RETAIL' : lead?.workType?.toLowerCase().startsWith('insurance') ? 'INSURANCE' : null);
+      const salesPathOnlyBlocked = blockers.length > 0 && blockers.every((message) => message.toLowerCase().includes('sales path'));
+      const noInspectionBlocked = blockers.some((message) => message.toLowerCase().includes('no inspection'));
+
+      if (!gatingResult?.success || (preConversion?.allowed === false && !salesPathOnlyBlocked)) {
+        if (noInspectionBlocked) {
+          setLeadActionStep('noInspection');
+          return;
+        }
+        throw new Error((blockers.length > 0 ? blockers : ['Lead cannot be converted. Please check all gating requirements.']).join('\n'));
+      }
+
+      if (!salesPath) {
+        setLeadActionStep('salesPath');
+        return;
+      }
+
+      await handleConvert({
+        opportunityType: salesPath,
+        workType: salesPath === 'RETAIL' ? 'Retail' : 'Insurance',
+      });
+    } catch (error) {
+      alert(error?.message || 'Unable to convert lead.');
+    }
+  };
+
   const handleMarkInspected = async () => {
     await leadsApi.updateLead(id, {
       disposition: 'INSPECTED',
@@ -1023,7 +1054,7 @@ export default function LeadDetail() {
               {/* Convert to Job Button */}
               {lead.status !== 'CONVERTED' && !lead.isConverted && (
                 <button
-                  onClick={() => setLeadActionStep('inspection')}
+                  onClick={handleSavedLeadConvert}
                   disabled={convertMutation.isPending || !isOwner}
                   className={`flex items-center space-x-2 px-4 py-2 rounded-lg ${
                     convertMutation.isPending || !isOwner
@@ -1732,7 +1763,7 @@ export default function LeadDetail() {
               </button>
               <button
                 type="button"
-                onClick={() => setLeadActionStep('inspection')}
+                onClick={handleSavedLeadConvert}
                 disabled={!isOwner}
                 className={`w-full px-4 py-2 rounded-lg ${
                   isOwner
