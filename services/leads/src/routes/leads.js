@@ -6,6 +6,39 @@ import { leadScoringService } from '../services/leadScoringService.js';
 
 const router = Router();
 
+const COMMENT_DEPARTMENTS = [
+  { value: 'general', label: 'General' },
+  { value: 'sales', label: 'Sales' },
+  { value: 'call-center', label: 'Call Center' },
+  { value: 'production', label: 'Production' },
+  { value: 'finance', label: 'Finance' },
+];
+
+const RESERVED_LEAD_ROUTE_IDS = new Set([
+  'deleted',
+  'statuses',
+  'sources',
+  'comment-departments',
+  'counts',
+  'my-pins',
+  'my-recent-pins',
+  'dropdown',
+  'suggest',
+  'scoreboard',
+  'ai-suggestions',
+  'test',
+  'salesrabbit',
+  'scoring',
+]);
+
+const sendCommentDepartments = (res) =>
+  res.json({
+    success: true,
+    data: COMMENT_DEPARTMENTS,
+  });
+
+const isReservedLeadRouteId = (id) => RESERVED_LEAD_ROUTE_IDS.has(String(id || '').toLowerCase());
+
 const getAuditContext = (req) => ({
   userId: req.user?.id,
   userEmail: req.user?.email,
@@ -80,6 +113,16 @@ router.get('/statuses', (req, res) => {
 // Get lead sources
 router.get('/sources', (req, res) => {
   res.json({ success: true, data: leadService.getLeadSources() });
+});
+
+// Get internal comment departments for lead comments UI
+router.get('/comment-departments', (req, res) => {
+  sendCommentDepartments(res);
+});
+
+// Backward-compatible alias for clients that include lead id in path
+router.get('/:id/comment-departments', (req, res) => {
+  sendCommentDepartments(res);
 });
 
 // Get lead counts
@@ -522,6 +565,24 @@ router.post('/', validateCreate, handleValidation, async (req, res, next) => {
 // DYNAMIC :id ROUTES - Must come AFTER static routes
 // ============================================================================
 
+// Guard against reserved static route segments accidentally falling into /:id handlers.
+router.use('/:id', (req, res, next) => {
+  const routeId = String(req.params.id || '').toLowerCase();
+
+  if (routeId === 'comment-departments' && req.method === 'GET' && (req.path === '' || req.path === '/')) {
+    return sendCommentDepartments(res);
+  }
+
+  if (isReservedLeadRouteId(routeId) && (req.path === '' || req.path === '/')) {
+    return res.status(404).json({
+      success: false,
+      error: { code: 'NOT_FOUND', message: `Route ${req.method} /api/leads/${req.params.id} not found` },
+    });
+  }
+
+  next();
+});
+
 // Get lead gating state (sales path decision state + conversion blockers)
 router.get('/:id/gating/state', async (req, res, next) => {
   try {
@@ -701,6 +762,51 @@ router.delete('/:id/notes/:noteId', async (req, res, next) => {
 router.post('/:id/notes/:noteId/pin', async (req, res, next) => {
   try {
     const result = await leadService.toggleLeadNotePin(req.params.id, req.params.noteId);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Get internal comments for a lead
+router.get('/:id/internal-comments', async (req, res, next) => {
+  try {
+    const comments = await leadService.getLeadInternalComments(req.params.id);
+    res.json({ success: true, data: comments });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Create internal comment for a lead
+router.post('/:id/internal-comments', async (req, res, next) => {
+  try {
+    const comment = await leadService.createLeadInternalComment(req.params.id, req.body, req.user);
+    res.status(201).json({ success: true, data: comment });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Update internal comment for a lead
+router.put('/:id/internal-comments/:commentId', async (req, res, next) => {
+  try {
+    const comment = await leadService.updateLeadInternalComment(
+      req.params.id,
+      req.params.commentId,
+      req.body,
+      req.user
+    );
+    res.json({ success: true, data: comment });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Delete internal comment for a lead
+router.delete('/:id/internal-comments/:commentId', async (req, res, next) => {
+  try {
+    const result = await leadService.deleteLeadInternalComment(req.params.id, req.params.commentId);
     res.json({ success: true, data: result });
   } catch (error) {
     next(error);
