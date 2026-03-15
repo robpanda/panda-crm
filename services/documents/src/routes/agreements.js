@@ -8,16 +8,50 @@ import { authMiddleware, requireRole } from '../middleware/auth.js';
 const router = Router();
 const prisma = new PrismaClient();
 
-function requirePandaSignAdmin(req, res, next) {
-  const role = String(req.user?.role || '').toLowerCase();
+function isAdminLikeRole(roleName, roleType) {
+  const normalizedRoleName = String(roleName || '').toLowerCase();
+  const normalizedRoleType = String(roleType || '').toLowerCase();
 
-  if (
-    role === 'super_admin' ||
-    role === 'admin' ||
-    role.includes('admin') ||
-    role === 'executive'
-  ) {
+  return (
+    normalizedRoleName === 'super_admin' ||
+    normalizedRoleName === 'admin' ||
+    normalizedRoleName.includes('admin') ||
+    normalizedRoleType === 'admin' ||
+    normalizedRoleType === 'super_admin' ||
+    normalizedRoleType === 'executive'
+  );
+}
+
+async function requirePandaSignAdmin(req, res, next) {
+  if (isAdminLikeRole(req.user?.role, req.user?.roleType)) {
     return next();
+  }
+
+  try {
+    const user = await prisma.user.findFirst({
+      where: {
+        OR: [
+          req.user?.cognitoId ? { cognitoId: req.user.cognitoId } : null,
+          req.user?.email ? { email: req.user.email } : null,
+        ].filter(Boolean),
+      },
+      include: {
+        role: {
+          select: {
+            name: true,
+            roleType: true,
+          },
+        },
+      },
+    });
+
+    if (isAdminLikeRole(user?.role?.name, user?.role?.roleType)) {
+      req.user.role = user.role.name || req.user.role;
+      req.user.roleType = user.role.roleType || req.user.roleType;
+      return next();
+    }
+  } catch (error) {
+    logger.error('PandaSign admin role resolution failed:', error);
   }
 
   return res.status(403).json({
