@@ -782,17 +782,16 @@ class LeadService {
       // Calculate rank
       const rank = score >= 80 ? 'A' : score >= 60 ? 'B' : score >= 40 ? 'C' : score >= 20 ? 'D' : 'F';
 
-      // Update lead with score
-      // Note: Using underscore field names from schema (lead_rank, lead_score, etc.)
+      // Update lead with score using current Prisma field names.
       await prisma.lead.update({
         where: { id: leadId },
         data: {
-          score: score,
-          lead_score: score,
-          lead_rank: rank,
-          score_factors: factors,
-          scored_at: new Date(),
-          score_version: 1,
+          score,
+          leadScore: score,
+          leadRank: rank,
+          scoreFactors: factors,
+          scoredAt: new Date(),
+          scoreVersion: 1,
         },
       });
 
@@ -1384,6 +1383,13 @@ class LeadService {
    * Create lead wrapper with computed fields
    */
   createLeadWrapper(lead) {
+    const normalizedLeadScore = lead.leadScore ?? lead.lead_score ?? lead.score ?? null;
+    const normalizedLeadRank = lead.leadRank
+      ?? lead.lead_rank
+      ?? (typeof normalizedLeadScore === 'number' ? this.scoreToRank(normalizedLeadScore) : null);
+    const normalizedScoreFactors = lead.scoreFactors ?? lead.score_factors ?? null;
+    const normalizedScoredAt = lead.scoredAt ?? lead.scored_at ?? null;
+
     const wrapper = {
       id: lead.id,
       name: `${lead.firstName} ${lead.lastName}`,
@@ -1406,7 +1412,7 @@ class LeadService {
       postalCode: lead.postalCode,
       rating: lead.rating,
       industry: lead.industry,
-      score: lead.score,
+      score: lead.score ?? normalizedLeadScore,
       isSelfGen: lead.isSelfGen,
       isConverted: lead.isConverted,
       formattedPhone: lead.mobilePhone || lead.phone,
@@ -1428,10 +1434,10 @@ class LeadService {
       leadSetById: lead.leadSetById,
       leadSetByName: lead.leadSetBy ? `${lead.leadSetBy.firstName} ${lead.leadSetBy.lastName}` : null,
       // Lead Intelligence / Scoring fields (snake_case in DB)
-      leadScore: lead.lead_score,
-      leadRank: lead.lead_rank,
-      scoreFactors: lead.score_factors,
-      scoredAt: lead.scored_at,
+      leadScore: normalizedLeadScore,
+      leadRank: normalizedLeadRank,
+      scoreFactors: normalizedScoreFactors,
+      scoredAt: normalizedScoredAt,
       // Demographic enrichment (snake_case in DB)
       medianHouseholdIncome: lead.median_household_income,
       medianHomeValue: lead.median_home_value,

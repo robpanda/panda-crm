@@ -103,17 +103,16 @@ class LeadScoringService {
       ...mlScore.factors,
     ].sort((a, b) => Math.abs(b.impact) - Math.abs(a.impact));
 
-    // Update lead with score
-    // Note: Using underscore field names from schema (lead_rank, lead_score, etc.)
+    // Update lead with score using current Prisma field names.
     await prisma.lead.update({
       where: { id: leadId },
       data: {
         score: combinedScore,
-        lead_score: combinedScore,
-        lead_rank: rank,
-        score_factors: allFactors,
-        scored_at: new Date(),
-        score_version: 1,
+        leadScore: combinedScore,
+        leadRank: rank,
+        scoreFactors: allFactors,
+        scoredAt: new Date(),
+        scoreVersion: 1,
       },
     });
 
@@ -195,12 +194,11 @@ class LeadScoringService {
    * Score all unscored leads
    */
   async scoreUnscoredLeads(limit = 100) {
-    // Using underscore field names from schema
     const unscoredLeads = await prisma.lead.findMany({
       where: {
         OR: [
-          { scored_at: null },
-          { lead_score: null },
+          { scoredAt: null },
+          { leadScore: null },
         ],
         isConverted: false,
       },
