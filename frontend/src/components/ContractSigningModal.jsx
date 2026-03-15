@@ -1789,7 +1789,7 @@ export default function ContractSigningModal({
                   <div className="text-center py-12">
                     <FileText className="w-12 h-12 text-gray-300 mx-auto mb-3" />
                     <p className="text-gray-500">No published contract templates available</p>
-                    <p className="text-sm text-gray-400 mt-1">Create templates in Admin &gt; PandaSign &gt; WYSIWYG Templates</p>
+                    <p className="text-sm text-gray-400 mt-1">Publish a contract template before sending for signature</p>
                   </div>
                 ) : (
                   Object.entries(templatesByCategory).map(([category, categoryTemplates]) => (

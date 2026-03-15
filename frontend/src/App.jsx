@@ -76,7 +76,6 @@ import PaymentEngine from './pages/admin/PaymentEngine';
 import Integrations from './pages/admin/Integrations';
 import Users from './pages/admin/Users';
 import AuditLogs from './pages/admin/AuditLogs';
-import PandaSign from './pages/admin/PandaSign';
 import Bamboogli from './pages/admin/Bamboogli';
 import ServiceAdmin from './pages/admin/ServiceAdmin';
 import TrainingBotAnalytics from './pages/admin/TrainingBotAnalytics';
@@ -257,7 +256,6 @@ export default function App() {
         <Route path="admin/integrations" element={<Integrations />} />
         <Route path="admin/users" element={<Users />} />
         <Route path="admin/audit" element={<AuditLogs />} />
-        <Route path="admin/pandasign" element={<PandaSign />} />
         <Route path="admin/bamboogli" element={<Bamboogli />} />
         <Route path="admin/service-admin" element={<ServiceAdmin />} />
         <Route path="admin/training-bot" element={<TrainingBotAnalytics />} />

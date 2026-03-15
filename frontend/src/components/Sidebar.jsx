@@ -63,7 +63,6 @@ const adminNavItems = [
   { path: '/admin/google-calendar', icon: CalendarDays, label: 'Google Calendar' },
   { path: '/admin/help', icon: HelpCircle, label: 'Help Admin' },
   { path: '/admin/integrations', icon: Settings, label: 'Integrations' },
-  { path: '/admin/pandasign', icon: FileSignature, label: 'PandaSign' },
   { path: '/admin/payment-engine', icon: CreditCard, label: 'Payment Center' },
   { path: '/admin/referral', icon: Gift, label: 'Referral Program' },
   { path: '/admin/ringcentral', icon: Phone, label: 'RingCentral' },
