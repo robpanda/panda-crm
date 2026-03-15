@@ -77,6 +77,7 @@ export default function ContractSigningModal({
   const [v2HostSigningToken, setV2HostSigningToken] = useState(null);
   const [v2CustomerSignSession, setV2CustomerSignSession] = useState(null);
   const [v2AgentSignSession, setV2AgentSignSession] = useState(null);
+  const [v2SendToSignAgentLink, setV2SendToSignAgentLink] = useState(null);
   const [v2CompletionData, setV2CompletionData] = useState(null);
   const [v2SignatureMode, setV2SignatureMode] = useState('DRAW');
   const [v2TypedSignature, setV2TypedSignature] = useState('');
@@ -151,6 +152,7 @@ export default function ContractSigningModal({
     setV2HostSigningToken(null);
     setV2CustomerSignSession(null);
     setV2AgentSignSession(null);
+    setV2SendToSignAgentLink(null);
     setV2CompletionData(null);
     resetV2SignerTransientState();
   };
@@ -365,6 +367,46 @@ export default function ContractSigningModal({
     },
   });
 
+  const startV2SendToSignMutation = useMutation({
+    mutationFn: async () => {
+      const customerName = getCustomerDisplayName(contact);
+      const created = unwrapApiEnvelope(await agreementsApi.createAgreement({
+        templateId: v2TemplateId,
+        opportunityId: opportunity?.id,
+        accountId: account?.id || opportunity?.accountId,
+        contactId: contact?.id || opportunity?.contactId,
+        recipientEmail: v2CustomerEmail,
+        recipientName: customerName,
+        mergeData: {},
+      }));
+
+      const agreementId = getAgreementId(created);
+      if (!agreementId) {
+        throw new Error('Send To Sign could not create an agreement.');
+      }
+
+      const sent = unwrapApiEnvelope(await agreementsApi.sendAgreement(agreementId));
+      return {
+        created,
+        sent,
+        agreementId,
+      };
+    },
+    onSuccess: ({ created, sent }) => {
+      const nextAgreement = mergeAgreementState(created, sent);
+      setV2AgreementData(nextAgreement);
+      setV2CompletionData(null);
+      setV2HostSigningToken(null);
+      setV2SendToSignAgentLink(null);
+      setV2SignError(null);
+      setV2Step(3);
+      queryClient.invalidateQueries(['opportunityDocuments', opportunity?.id]);
+    },
+    onError: (err) => {
+      setV2SignError(err?.response?.data?.error?.message || err?.message || 'Unable to send the customer agreement.');
+    },
+  });
+
   const submitV2CustomerSignatureMutation = useMutation({
     mutationFn: async (signatureData) => {
       if (!v2CustomerSigningToken) {
@@ -443,6 +485,108 @@ export default function ContractSigningModal({
       setV2SignError(err?.response?.data?.error?.message || err?.message || 'Unable to submit agent signature.');
     },
   });
+
+  const initiateV2SendToSignAgentMutation = useMutation({
+    mutationFn: async () => {
+      const agreementId = getAgreementId(v2AgreementData);
+      if (!agreementId) {
+        throw new Error('Agreement id is unavailable for the agent signing step.');
+      }
+
+      const hostName = getAgentDisplayName(currentUser, v2AgentEmail);
+      const hostInit = unwrapApiEnvelope(await agreementsApi.initiateHostSigning(agreementId, {
+        name: hostName,
+        email: v2AgentEmail || currentUser?.email,
+      }));
+      const hostToken = extractHostSigningToken(hostInit);
+
+      return {
+        ...hostInit,
+        agreementId,
+        hostToken,
+      };
+    },
+    onSuccess: (hostInit) => {
+      setV2HostSigningToken(hostInit.hostToken || null);
+      setV2SendToSignAgentLink(hostInit);
+      setV2SignError(null);
+      setV2Step(4);
+    },
+    onError: (err) => {
+      setV2SignError(err?.response?.data?.error?.message || err?.message || 'Unable to prepare the agent signing step.');
+    },
+  });
+
+  const resendV2CustomerAgreementMutation = useMutation({
+    mutationFn: async () => {
+      const agreementId = getAgreementId(v2AgreementData);
+      if (!agreementId) {
+        throw new Error('Agreement id is unavailable for resend.');
+      }
+      return agreementsApi.resendAgreement(agreementId);
+    },
+    onSuccess: () => {
+      setV2SignError(null);
+    },
+    onError: (err) => {
+      setV2SignError(err?.response?.data?.error?.message || err?.message || 'Unable to resend the customer agreement.');
+    },
+  });
+
+  const v2AgreementId = getAgreementId(v2AgreementData);
+  const v2AgreementStatusQuery = useQuery({
+    queryKey: ['pandasign-v2-agreement-status', v2AgreementId],
+    queryFn: async () => unwrapApiEnvelope(await agreementsApi.getAgreement(v2AgreementId)),
+    enabled:
+      FEATURE_PANDASIGN_V2 &&
+      isOpen &&
+      v2Mode === 'SEND_TO_SIGN' &&
+      Boolean(v2AgreementId) &&
+      (v2Step === 3 || v2Step === 4),
+    refetchInterval: 5000,
+  });
+
+  useEffect(() => {
+    if (!FEATURE_PANDASIGN_V2 || v2Mode !== 'SEND_TO_SIGN') return;
+
+    const agreement = v2AgreementStatusQuery.data;
+    if (!agreement || typeof agreement !== 'object') return;
+
+    setV2AgreementData((prev) => mergeAgreementState(prev, agreement));
+
+    const normalizedStatus = normalizeAgreementStatus(agreement.status);
+    if (normalizedStatus === 'COMPLETED') {
+      setV2CompletionData((prev) => prev || agreement);
+      if (v2Step !== 5) {
+        setV2Step(5);
+        setV2SignError(null);
+        queryClient.invalidateQueries(['opportunityDocuments', opportunity?.id]);
+        if (onSuccess) {
+          onSuccess(agreement);
+        }
+      }
+      return;
+    }
+
+    if (
+      (normalizedStatus === 'SIGNED' || normalizedStatus === 'PARTIALLY_SIGNED') &&
+      !v2SendToSignAgentLink &&
+      !initiateV2SendToSignAgentMutation.isPending &&
+      v2Step === 3
+    ) {
+      initiateV2SendToSignAgentMutation.mutate();
+    }
+  }, [
+    FEATURE_PANDASIGN_V2,
+    v2Mode,
+    v2AgreementStatusQuery.data,
+    v2SendToSignAgentLink,
+    initiateV2SendToSignAgentMutation,
+    v2Step,
+    queryClient,
+    opportunity?.id,
+    onSuccess,
+  ]);
 
   useEffect(() => {
     if (!(v2Step === 3 || v2Step === 4) || v2SignatureMode !== 'DRAW' || !v2CanvasRef.current) return;
@@ -618,6 +762,16 @@ export default function ContractSigningModal({
     startV2SignNowMutation.mutate();
   };
 
+  const handleStartV2SendToSign = () => {
+    if (!validateV2StepOneInputs()) return;
+    if (v2Mode !== 'SEND_TO_SIGN') {
+      setV2SignError('Switch to Send To Sign to use the remote signing flow.');
+      return;
+    }
+    setV2SignError(null);
+    startV2SendToSignMutation.mutate();
+  };
+
   const currentV2SignerRole = v2Step === 4 ? 'AGENT' : 'CUSTOMER';
   const currentV2SignSession = v2Step === 4 ? v2AgentSignSession : v2CustomerSignSession;
   const currentV2RequiredFields = getSignerRequiredFields(currentV2SignSession, currentV2SignerRole);
@@ -699,8 +853,18 @@ export default function ContractSigningModal({
       (placeholderSummary.OTHER?.total || 0) > 0;
     const showPreviewUnavailable = v2Step === 2 && !previewBusy && !hasPreviewSource;
     const signNowBusy = startV2SignNowMutation.isPending;
+    const sendToSignBusy = startV2SendToSignMutation.isPending;
     const customerSubmitBusy = submitV2CustomerSignatureMutation.isPending;
     const agentSubmitBusy = submitV2AgentSignatureMutation.isPending;
+    const pollErrorMessage = v2AgreementStatusQuery.error?.response?.data?.error?.message || v2AgreementStatusQuery.error?.message || null;
+    const v2AgreementStatus = normalizeAgreementStatus(v2AgreementData?.status);
+    const v2AgreementDocumentUrl = getAgreementDocumentUrl(v2CompletionData) || getAgreementDocumentUrl(v2AgreementData);
+    const customerLink = v2AgreementData?.signingUrl;
+    const agentLink = v2SendToSignAgentLink?.hostSigningUrl || v2SendToSignAgentLink?.embeddedSigningUrl || null;
+    const customerPolling = v2Mode === 'SEND_TO_SIGN' && v2Step === 3 && v2AgreementStatusQuery.isFetching;
+    const agentPolling = v2Mode === 'SEND_TO_SIGN' && v2Step === 4 && v2AgreementStatusQuery.isFetching;
+    const customerResendBusy = resendV2CustomerAgreementMutation.isPending;
+    const agentLinkBusy = initiateV2SendToSignAgentMutation.isPending;
 
     return (
       <div className="fixed inset-0 z-50">
@@ -721,9 +885,9 @@ export default function ContractSigningModal({
                   <p className="text-sm text-gray-500">
                     {v2Step === 1 && 'Step 1: Template, mode, and required-field verification'}
                     {v2Step === 2 && 'Step 2: Preview and checklist'}
-                    {v2Step === 3 && 'Step 3A: Customer Signature'}
-                    {v2Step === 4 && 'Step 3A: Agent Signature'}
-                    {v2Step === 5 && 'Step 3A: Completed'}
+                    {v2Step === 3 && (v2Mode === 'SEND_TO_SIGN' ? 'Step 3: Customer Sent' : 'Step 3A: Customer Signature')}
+                    {v2Step === 4 && (v2Mode === 'SEND_TO_SIGN' ? 'Step 4: Agent Sent' : 'Step 3A: Agent Signature')}
+                    {v2Step === 5 && (v2Mode === 'SEND_TO_SIGN' ? 'Step 5: Completed' : 'Step 3A: Completed')}
                   </p>
                 </div>
               </div>
@@ -737,10 +901,10 @@ export default function ContractSigningModal({
 
             <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 sm:px-6 py-4 pb-32 sm:pb-36">
               <div className="space-y-6">
-                {(v2VerificationError || v2PreviewError || v2SignError || error) && (
+                {(v2VerificationError || v2PreviewError || v2SignError || pollErrorMessage || error) && (
                   <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-start">
                     <AlertCircle className="w-5 h-5 text-red-500 mr-3 flex-shrink-0 mt-0.5" />
-                    <p className="text-sm text-red-700">{v2VerificationError || v2PreviewError || v2SignError || error}</p>
+                    <p className="text-sm text-red-700">{v2VerificationError || v2PreviewError || v2SignError || pollErrorMessage || error}</p>
                   </div>
                 )}
 
@@ -989,17 +1153,18 @@ export default function ContractSigningModal({
                       </div>
                     </section>
 
-                    {v2Mode !== 'SIGN_NOW' && (
+                    {v2Mode === 'SEND_TO_SIGN' && (
                       <section className="rounded-lg border border-blue-200 bg-blue-50 p-3">
-                        <p className="text-sm text-blue-700">
-                          Send To Sign is not part of this phase yet. Switch mode to <strong>Sign Now</strong> to continue.
+                        <p className="text-sm text-blue-700 font-medium">Send To Sign sequence</p>
+                        <p className="text-xs text-blue-700 mt-1">
+                          We will send the customer first. After the customer signs, the wizard will generate the agent signing link and keep polling until the agreement is completed.
                         </p>
                       </section>
                     )}
                   </>
                 )}
 
-                {(v2Step === 3 || v2Step === 4) && (
+                {v2Mode === 'SIGN_NOW' && (v2Step === 3 || v2Step === 4) && (
                   <>
                     <section className="rounded-lg border border-gray-200 bg-gray-50 p-3">
                       <p className="text-xs text-gray-500">Current signer</p>
@@ -1137,18 +1302,163 @@ export default function ContractSigningModal({
                   </>
                 )}
 
+                {v2Mode === 'SEND_TO_SIGN' && v2Step === 3 && (
+                  <>
+                    <section className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-xs text-gray-500">Agreement</p>
+                          <p className="text-sm font-medium text-gray-900">
+                            {v2AgreementData?.name || selectedV2Template?.name || 'Customer Agreement'}
+                          </p>
+                          <p className="text-xs text-gray-500 mt-1">Customer: {v2CustomerEmail}</p>
+                        </div>
+                        <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${getAgreementStatusClasses(v2AgreementStatus)}`}>
+                          {formatAgreementStatusLabel(v2AgreementStatus)}
+                        </span>
+                      </div>
+                    </section>
+
+                    <section className="rounded-lg border border-gray-200 p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <h3 className="text-sm font-semibold text-gray-700">Customer Signing Link</h3>
+                        {customerPolling && (
+                          <span className="inline-flex items-center text-xs text-gray-500">
+                            <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+                            Checking status
+                          </span>
+                        )}
+                      </div>
+                      {customerLink ? (
+                        <div className="flex items-center rounded-lg border border-gray-200 bg-gray-50 p-3">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs text-gray-500">Sent to customer</p>
+                            <p className="text-xs text-gray-700 truncate mt-1">{customerLink}</p>
+                          </div>
+                          <div className="ml-2 flex items-center space-x-1">
+                            <button
+                              type="button"
+                              onClick={() => handleCopyLink(customerLink)}
+                              className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-200 rounded"
+                              title="Copy customer link"
+                            >
+                              {copiedLink === customerLink ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+                            </button>
+                            <a
+                              href={customerLink}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="p-1.5 text-gray-400 hover:text-panda-primary hover:bg-gray-200 rounded"
+                              title="Open customer link"
+                            >
+                              <ExternalLink className="w-4 h-4" />
+                            </a>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-gray-500">The agreement was sent, but no customer signing URL was returned.</p>
+                      )}
+                      <p className="text-xs text-gray-500 mt-3">
+                        The wizard polls agreement status every few seconds. When the customer signs, the agent signing step will begin automatically.
+                      </p>
+                    </section>
+
+                    <section className="rounded-lg border border-gray-200 p-3 bg-white">
+                      <h3 className="text-sm font-semibold text-gray-700 mb-2">Current Status</h3>
+                      {v2AgreementStatus === 'SIGNED' || v2AgreementStatus === 'PARTIALLY_SIGNED' ? (
+                        <div className="inline-flex items-center text-sm text-green-700">
+                          <CheckCircle className="w-4 h-4 mr-2" />
+                          Customer signature received. Preparing agent signing step...
+                        </div>
+                      ) : (
+                        <div className="inline-flex items-center text-sm text-amber-700">
+                          <Clock className="w-4 h-4 mr-2" />
+                          Waiting for the customer to sign.
+                        </div>
+                      )}
+                    </section>
+                  </>
+                )}
+
+                {v2Mode === 'SEND_TO_SIGN' && v2Step === 4 && (
+                  <>
+                    <section className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-xs text-gray-500">Agreement</p>
+                          <p className="text-sm font-medium text-gray-900">
+                            {v2AgreementData?.name || selectedV2Template?.name || 'Agent Signing'}
+                          </p>
+                          <p className="text-xs text-gray-500 mt-1">Agent: {v2AgentEmail}</p>
+                        </div>
+                        <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${getAgreementStatusClasses(v2AgreementStatus)}`}>
+                          {formatAgreementStatusLabel(v2AgreementStatus)}
+                        </span>
+                      </div>
+                    </section>
+
+                    <section className="rounded-lg border border-gray-200 p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <h3 className="text-sm font-semibold text-gray-700">Agent Signing Link</h3>
+                        {(agentPolling || agentLinkBusy) && (
+                          <span className="inline-flex items-center text-xs text-gray-500">
+                            <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+                            {agentLinkBusy ? 'Preparing link' : 'Checking status'}
+                          </span>
+                        )}
+                      </div>
+                      {agentLink ? (
+                        <div className="flex items-center rounded-lg border border-gray-200 bg-gray-50 p-3">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs text-gray-500">Ready for the agent to sign</p>
+                            <p className="text-xs text-gray-700 truncate mt-1">{agentLink}</p>
+                          </div>
+                          <div className="ml-2 flex items-center space-x-1">
+                            <button
+                              type="button"
+                              onClick={() => handleCopyLink(agentLink)}
+                              className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-200 rounded"
+                              title="Copy agent link"
+                            >
+                              {copiedLink === agentLink ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+                            </button>
+                            <a
+                              href={agentLink}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="p-1.5 text-gray-400 hover:text-panda-primary hover:bg-gray-200 rounded"
+                              title="Open agent link"
+                            >
+                              <ExternalLink className="w-4 h-4" />
+                            </a>
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-gray-500">We are preparing the agent signing step.</p>
+                      )}
+                      <p className="text-xs text-gray-500 mt-3">
+                        The agreement will move to complete as soon as the agent finishes signing from this link.
+                      </p>
+                    </section>
+                  </>
+                )}
+
                 {v2Step === 5 && (
                   <section className="text-center py-6">
                     <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-4">
                       <CheckCircle className="w-8 h-8 text-green-500" />
                     </div>
-                    <h3 className="text-lg font-semibold text-gray-900 mb-2">Sign Now completed</h3>
+                    <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                      {v2Mode === 'SEND_TO_SIGN' ? 'Send To Sign completed' : 'Sign Now completed'}
+                    </h3>
                     <p className="text-sm text-gray-500 mb-4">
-                      Customer and agent signatures were submitted successfully.
+                      {v2Mode === 'SEND_TO_SIGN'
+                        ? 'Customer and agent signatures were completed successfully.'
+                        : 'Customer and agent signatures were submitted successfully.'}
                     </p>
-                    {(v2CompletionData?.signedDocumentUrl || v2AgreementData?.signedDocumentUrl || v2AgreementData?.documentUrl) && (
+                    {v2AgreementDocumentUrl && (
                       <a
-                        href={v2CompletionData?.signedDocumentUrl || v2AgreementData?.signedDocumentUrl || v2AgreementData?.documentUrl}
+                        href={v2AgreementDocumentUrl}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex items-center px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50"
@@ -1233,7 +1543,7 @@ export default function ContractSigningModal({
                     <button
                       type="button"
                       onClick={handleOpenV2Preview}
-                      disabled={previewBusy || signNowBusy}
+                      disabled={previewBusy || signNowBusy || sendToSignBusy}
                       className="w-full sm:w-auto inline-flex items-center justify-center px-5 py-3 rounded-lg border border-panda-primary text-panda-primary hover:bg-panda-primary/5 disabled:opacity-50"
                     >
                       {previewBusy ? (
@@ -1247,23 +1557,93 @@ export default function ContractSigningModal({
                     </button>
                     <button
                       type="button"
-                      onClick={handleStartV2SignNow}
-                      disabled={previewBusy || signNowBusy || v2Mode !== 'SIGN_NOW'}
+                      onClick={v2Mode === 'SEND_TO_SIGN' ? handleStartV2SendToSign : handleStartV2SignNow}
+                      disabled={previewBusy || signNowBusy || sendToSignBusy}
                       className="w-full sm:w-auto inline-flex items-center justify-center px-5 py-3 rounded-lg bg-gradient-to-r from-panda-primary to-panda-secondary text-white disabled:opacity-50"
                     >
-                      {signNowBusy ? (
+                      {(signNowBusy || sendToSignBusy) ? (
                         <>
                           <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                          Starting...
+                          {v2Mode === 'SEND_TO_SIGN' ? 'Sending...' : 'Starting...'}
                         </>
                       ) : (
-                        'Start Sign Now'
+                        v2Mode === 'SEND_TO_SIGN' ? 'Send Customer Link' : 'Start Sign Now'
                       )}
                     </button>
                   </>
                 )}
 
-                {v2Step === 3 && (
+                {v2Mode === 'SEND_TO_SIGN' && v2Step === 3 && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => v2AgreementStatusQuery.refetch()}
+                      disabled={customerResendBusy || customerPolling}
+                      className="w-full sm:w-auto inline-flex items-center justify-center px-5 py-3 rounded-lg border border-panda-primary text-panda-primary hover:bg-panda-primary/5 disabled:opacity-50"
+                    >
+                      {customerPolling ? (
+                        <>
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          Checking...
+                        </>
+                      ) : (
+                        'Refresh Status'
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => resendV2CustomerAgreementMutation.mutate()}
+                      disabled={customerResendBusy}
+                      className="w-full sm:w-auto inline-flex items-center justify-center px-5 py-3 rounded-lg bg-gradient-to-r from-panda-primary to-panda-secondary text-white disabled:opacity-50"
+                    >
+                      {customerResendBusy ? (
+                        <>
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          Resending...
+                        </>
+                      ) : (
+                        'Resend Customer Email'
+                      )}
+                    </button>
+                  </>
+                )}
+
+                {v2Mode === 'SEND_TO_SIGN' && v2Step === 4 && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => v2AgreementStatusQuery.refetch()}
+                      disabled={agentPolling || agentLinkBusy}
+                      className="w-full sm:w-auto inline-flex items-center justify-center px-5 py-3 rounded-lg border border-panda-primary text-panda-primary hover:bg-panda-primary/5 disabled:opacity-50"
+                    >
+                      {(agentPolling || agentLinkBusy) ? (
+                        <>
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          Checking...
+                        </>
+                      ) : (
+                        'Refresh Status'
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => initiateV2SendToSignAgentMutation.mutate()}
+                      disabled={agentLinkBusy}
+                      className="w-full sm:w-auto inline-flex items-center justify-center px-5 py-3 rounded-lg bg-gradient-to-r from-panda-primary to-panda-secondary text-white disabled:opacity-50"
+                    >
+                      {agentLinkBusy ? (
+                        <>
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          Preparing...
+                        </>
+                      ) : (
+                        'Generate New Agent Link'
+                      )}
+                    </button>
+                  </>
+                )}
+
+                {v2Mode === 'SIGN_NOW' && v2Step === 3 && (
                   <button
                     type="button"
                     onClick={handleSubmitV2CurrentSigner}
@@ -1281,7 +1661,7 @@ export default function ContractSigningModal({
                   </button>
                 )}
 
-                {v2Step === 4 && (
+                {v2Mode === 'SIGN_NOW' && v2Step === 4 && (
                   <button
                     type="button"
                     onClick={handleSubmitV2CurrentSigner}
@@ -2034,6 +2414,52 @@ function unwrapApiEnvelope(payload) {
   if (!payload || typeof payload !== 'object') return payload ?? null;
   if (payload.data && typeof payload.data === 'object') return payload.data;
   return payload;
+}
+
+function getAgreementId(agreement) {
+  if (!agreement || typeof agreement !== 'object') return null;
+  return agreement.id || agreement.agreementId || null;
+}
+
+function mergeAgreementState(previousAgreement, nextAgreement) {
+  if (!previousAgreement || typeof previousAgreement !== 'object') {
+    return nextAgreement || null;
+  }
+  if (!nextAgreement || typeof nextAgreement !== 'object') {
+    return previousAgreement;
+  }
+  return {
+    ...previousAgreement,
+    ...nextAgreement,
+  };
+}
+
+function normalizeAgreementStatus(status) {
+  if (!status) return 'DRAFT';
+  return String(status).trim().toUpperCase() || 'DRAFT';
+}
+
+function formatAgreementStatusLabel(status) {
+  return normalizeAgreementStatus(status)
+    .toLowerCase()
+    .split('_')
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(' ');
+}
+
+function getAgreementStatusClasses(status) {
+  const normalized = normalizeAgreementStatus(status);
+  if (normalized === 'COMPLETED') return 'bg-green-100 text-green-700';
+  if (normalized === 'SIGNED' || normalized === 'PARTIALLY_SIGNED') return 'bg-blue-100 text-blue-700';
+  if (normalized === 'VIEWED') return 'bg-amber-100 text-amber-700';
+  if (normalized === 'SENT') return 'bg-indigo-100 text-indigo-700';
+  if (normalized === 'VOIDED') return 'bg-red-100 text-red-700';
+  return 'bg-gray-100 text-gray-700';
+}
+
+function getAgreementDocumentUrl(agreement) {
+  if (!agreement || typeof agreement !== 'object') return null;
+  return agreement.signedDocumentUrl || agreement.documentUrl || null;
 }
 
 function extractSigningToken(payload) {
