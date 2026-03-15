@@ -40,6 +40,7 @@ const SETUP_CATEGORIES = [
   { id: 'integrations', name: 'Integrations', icon: Link2, description: 'Third-party integrations', path: '/admin/integrations' },
   { id: 'modules', name: 'Module Manager', icon: Layers, description: 'Configure system modules', path: '/admin/setup' },
   { id: 'payment', name: 'Payment Center', icon: CreditCard, description: 'Payments and invoice workflows', path: '/admin/payment-engine' },
+  { id: 'pandasign-v2', name: 'PandaSign V2', icon: FileText, description: 'Agreement templates and branding', path: '/admin/pandasign-v2' },
   { id: 'referral', name: 'Referral Program', icon: Gift, description: 'Referral settings and payouts', path: '/admin/referral' },
   { id: 'ringcentral', name: 'RingCentral', icon: PhoneCall, description: 'Phone system integration', path: '/admin/ringcentral' },
   { id: 'roles', name: 'Roles & Permissions', icon: Shield, description: 'Access control and roles', path: '/admin/roles' },

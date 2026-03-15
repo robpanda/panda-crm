@@ -53,6 +53,165 @@ router.get('/', authMiddleware, async (req, res, next) => {
   }
 });
 
+// ==========================================
+// Agreement Templates + PandaSign V2 Admin Resources
+// ==========================================
+
+router.get('/templates/admin/resources', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
+  try {
+    const resources = await pandaSignService.getAdminResources();
+    res.json({ success: true, data: resources });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/templates/admin/territory-profiles', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
+  try {
+    const profiles = await pandaSignService.updateTerritoryProfiles(req.body?.territoryProfiles, req.user.id);
+    res.json({ success: true, data: profiles });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/branding', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
+  try {
+    const items = await pandaSignService.listBrandingItems(req.query);
+    res.json({ success: true, data: items });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/branding', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
+  try {
+    const item = await pandaSignService.upsertBrandingItem(req.body, req.user.id);
+    res.status(201).json({ success: true, data: item });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/branding/:id', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
+  try {
+    const item = await pandaSignService.upsertBrandingItem(
+      { ...req.body, id: req.params.id },
+      req.user.id
+    );
+    res.json({ success: true, data: item });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/dynamic-content', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
+  try {
+    const items = await pandaSignService.listDynamicContentItems(req.query);
+    res.json({ success: true, data: items });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/dynamic-content', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
+  try {
+    const item = await pandaSignService.upsertDynamicContentItem(req.body, req.user.id);
+    res.status(201).json({ success: true, data: item });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/dynamic-content/:id', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
+  try {
+    const item = await pandaSignService.upsertDynamicContentItem(
+      { ...req.body, id: req.params.id },
+      req.user.id
+    );
+    res.json({ success: true, data: item });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/templates', authMiddleware, async (req, res, next) => {
+  try {
+    const templates = await pandaSignService.getTemplates(req.query);
+    res.json({ success: true, data: templates });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/templates/:id', authMiddleware, async (req, res, next) => {
+  try {
+    const template = await pandaSignService.getTemplateById(req.params.id);
+    res.json({ success: true, data: template });
+  } catch (error) {
+    if (error.message === 'Template not found') {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: error.message },
+      });
+    }
+    next(error);
+  }
+});
+
+router.post('/templates', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
+  try {
+    const template = await pandaSignService.upsertTemplate(req.body);
+    logger.info(`Agreement template created: ${template.id} by ${req.user.email}`);
+    res.status(201).json({ success: true, data: template });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/templates/:id', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
+  try {
+    const template = await pandaSignService.upsertTemplate({
+      ...req.body,
+      id: req.params.id,
+    });
+    logger.info(`Agreement template updated: ${template.id} by ${req.user.email}`);
+    res.json({ success: true, data: template });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/templates/:id/publish', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
+  try {
+    const template = await pandaSignService.publishTemplate(req.params.id);
+    logger.info(`Agreement template published: ${template.id} by ${req.user.email}`);
+    res.json({ success: true, data: template });
+  } catch (error) {
+    if (Array.isArray(error.validationErrors) && error.validationErrors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Template validation failed',
+          details: error.validationErrors,
+        },
+      });
+    }
+    next(error);
+  }
+});
+
+router.post('/templates/:id/archive', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
+  try {
+    const template = await pandaSignService.archiveTemplate(req.params.id);
+    logger.info(`Agreement template archived: ${template.id} by ${req.user.email}`);
+    res.json({ success: true, data: template });
+  } catch (error) {
+    next(error);
+  }
+});
+
 /**
  * GET /agreements/:id - Get single agreement (authenticated)
  */
@@ -314,7 +473,7 @@ router.get('/host-sign/:token', async (req, res, next) => {
         status: agreement.status,
         hostSignerName: agreement.hostSignerName,
         documentUrl: agreement.signedDocumentUrl || agreement.documentUrl,
-        signatureFields: agreement.template?.signatureFields,
+        signatureFields: pandaSignService.getSignatureFields(agreement.template),
         customerSignedAt: agreement.signedAt,
         customerName: agreement.recipientName,
       },
@@ -382,7 +541,7 @@ router.get('/sign/:token', async (req, res, next) => {
         status: agreement.status,
         recipientName: agreement.recipientName,
         documentUrl: agreement.documentUrl,
-        signatureFields: agreement.template?.signatureFields,
+        signatureFields: pandaSignService.getSignatureFields(agreement.template),
         expiresAt: agreement.expiresAt,
       },
     });
@@ -423,87 +582,6 @@ router.post('/sign/:token', async (req, res, next) => {
         signedDocumentUrl: result.agreement.signedDocumentUrl,
       },
     });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// ==========================================
-// Agreement Templates (Admin)
-// ==========================================
-
-/**
- * GET /agreements/templates - List templates (authenticated)
- */
-router.get('/templates', authMiddleware, async (req, res, next) => {
-  try {
-    const { category, isActive } = req.query;
-
-    const where = {};
-    if (category) where.category = category;
-    if (isActive !== undefined) where.isActive = isActive === 'true';
-
-    const templates = await prisma.agreementTemplate.findMany({
-      where,
-      orderBy: [{ category: 'asc' }, { name: 'asc' }],
-    });
-
-    res.json({ success: true, data: templates });
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * GET /agreements/templates/:id - Get single template (authenticated)
- */
-router.get('/templates/:id', authMiddleware, async (req, res, next) => {
-  try {
-    const template = await prisma.agreementTemplate.findUnique({
-      where: { id: req.params.id },
-    });
-
-    if (!template) {
-      return res.status(404).json({
-        success: false,
-        error: { code: 'NOT_FOUND', message: 'Template not found' },
-      });
-    }
-
-    res.json({ success: true, data: template });
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * POST /agreements/templates - Create template (admin)
- */
-router.post('/templates', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
-  try {
-    const template = await pandaSignService.upsertTemplate(req.body);
-
-    logger.info(`Agreement template created: ${template.id} by ${req.user.email}`);
-
-    res.status(201).json({ success: true, data: template });
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * PUT /agreements/templates/:id - Update template (admin)
- */
-router.put('/templates/:id', authMiddleware, requireRole('admin', 'super_admin'), async (req, res, next) => {
-  try {
-    const template = await pandaSignService.upsertTemplate({
-      ...req.body,
-      id: req.params.id,
-    });
-
-    logger.info(`Agreement template updated: ${template.id} by ${req.user.email}`);
-
-    res.json({ success: true, data: template });
   } catch (error) {
     next(error);
   }

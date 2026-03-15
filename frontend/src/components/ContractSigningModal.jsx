@@ -50,6 +50,7 @@ import {
 
 const FEATURE_PANDASIGN_V2 = String(import.meta.env.VITE_FEATURE_PANDASIGN_V2 || '').toLowerCase() === 'true';
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PANDASIGN_TEMPLATE_TERRITORIES = new Set(['DE', 'MD', 'NJ', 'PA', 'NC', 'VA', 'FL']);
 
 /**
  * ContractSigningModal - PandaSign V2 contract signing modal
@@ -120,20 +121,55 @@ export default function ContractSigningModal({
     (Array.isArray(templatesData) ? templatesData : []) ||
     [];
 
+  const v2TemplateTerritory = useMemo(() => {
+    const candidates = [
+      opportunity?.state,
+      opportunity?.propertyState,
+      account?.billingState,
+      account?.shippingState,
+      contact?.mailingState,
+      contact?.state,
+    ];
+
+    const match = candidates
+      .map((value) => String(value || '').trim().toUpperCase())
+      .find((value) => PANDASIGN_TEMPLATE_TERRITORIES.has(value));
+
+    return match || 'DEFAULT';
+  }, [
+    opportunity?.state,
+    opportunity?.propertyState,
+    account?.billingState,
+    account?.shippingState,
+    contact?.mailingState,
+    contact?.state,
+  ]);
+
+  const territoryScopedTemplates = useMemo(() => {
+    const matchingTemplates = templates.filter((template) => {
+      const templateTerritory = String(template?.territory || 'DEFAULT').trim().toUpperCase();
+      return templateTerritory === v2TemplateTerritory || templateTerritory === 'DEFAULT';
+    });
+
+    return matchingTemplates.length > 0 ? matchingTemplates : templates;
+  }, [templates, v2TemplateTerritory]);
+
   // Group templates by category
   const templatesByCategory = useMemo(() => {
-    const list = Array.isArray(templates) ? templates : [];
+    const list = Array.isArray(territoryScopedTemplates) ? territoryScopedTemplates : [];
     return list.reduce((acc, template) => {
-      const category = template.category || 'Other';
+      const category = template.documentType || template.category || 'Other';
       if (!acc[category]) acc[category] = [];
       acc[category].push(template);
       return acc;
     }, {});
-  }, [templates]);
+  }, [territoryScopedTemplates]);
 
   const selectedV2Template = useMemo(
-    () => templates.find((template) => template.id === v2TemplateId) || null,
-    [templates, v2TemplateId]
+    () => territoryScopedTemplates.find((template) => template.id === v2TemplateId)
+      || templates.find((template) => template.id === v2TemplateId)
+      || null,
+    [territoryScopedTemplates, templates, v2TemplateId]
   );
 
   // Extract signer roles from selected template
@@ -943,15 +979,21 @@ export default function ContractSigningModal({
                         className="w-full px-3 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary"
                       >
                         <option value="">Select a published template...</option>
-                        {templates.map((template) => (
+                        {territoryScopedTemplates.map((template) => (
                           <option key={template.id} value={template.id}>
                             {template.name}
-                            {template.category ? ` (${template.category})` : ''}
+                            {template.documentType || template.category ? ` (${template.documentType || template.category})` : ''}
+                            {template.territory ? ` - ${template.territory}` : ''}
                           </option>
                         ))}
                       </select>
                       {templatesLoading && (
                         <p className="text-xs text-gray-500">Loading templates...</p>
+                      )}
+                      {!templatesLoading && territoryScopedTemplates.length > 0 && (
+                        <p className="text-xs text-gray-500">
+                          Showing templates for <span className="font-semibold text-gray-700">{v2TemplateTerritory}</span> and <span className="font-semibold text-gray-700">DEFAULT</span>.
+                        </p>
                       )}
                     </section>
 
@@ -1807,7 +1849,7 @@ export default function ContractSigningModal({
                   <div className="flex items-center justify-center py-12">
                     <Loader2 className="w-8 h-8 text-panda-primary animate-spin" />
                   </div>
-                ) : templates.length === 0 ? (
+                ) : territoryScopedTemplates.length === 0 ? (
                   <div className="text-center py-12">
                     <FileText className="w-12 h-12 text-gray-300 mx-auto mb-3" />
                     <p className="text-gray-500">No published contract templates available</p>
@@ -1839,6 +1881,9 @@ export default function ContractSigningModal({
                                   {template.description && (
                                     <p className="text-sm text-gray-500 truncate">{template.description}</p>
                                   )}
+                                  <span className="inline-flex items-center text-xs text-gray-400">
+                                    {template.territory || 'DEFAULT'}
+                                  </span>
                                   <span className="inline-flex items-center text-xs text-gray-400">
                                     <Users className="w-3 h-3 mr-1" />
                                     {roleCount} signer{roleCount !== 1 ? 's' : ''}
