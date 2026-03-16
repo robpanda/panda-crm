@@ -23,7 +23,9 @@
     "@aws-sdk/s3-request-presigner": "^3.515.0",
     "@aws-sdk/client-ses": "^3.515.0",
     "stripe": "^14.14.0",
-    "@sendgrid/mail": "^8.1.1"
+    "@sendgrid/mail": "^8.1.1",
+    "pdf-lib": "^1.17.1",
+    "uuid": "^11.1.0"
   },
   "devDependencies": {
     "eslint": "^8.56.0",
