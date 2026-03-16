@@ -337,6 +337,43 @@ function normalizeTerritoryProfiles(profiles) {
   }));
 }
 
+function buildFullName(...values) {
+  return values
+    .flatMap((value) => (Array.isArray(value) ? value : [value]))
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+}
+
+function joinAddress(parts) {
+  return parts
+    .map((part) => String(part || '').trim())
+    .filter(Boolean)
+    .join(', ');
+}
+
+function getMergeValueByPath(data, fieldPath) {
+  const parts = String(fieldPath || '').trim().split('.').filter(Boolean);
+  let value = data;
+
+  for (const part of parts) {
+    if (value === null || value === undefined) {
+      return undefined;
+    }
+    value = value[part];
+  }
+
+  return value;
+}
+
+function isMissingMergeValue(value) {
+  if (value === null || value === undefined) return true;
+  if (typeof value === 'string') return value.trim() === '';
+  if (Array.isArray(value)) return value.length === 0;
+  return false;
+}
+
 function serializeTemplate(template) {
   const metadata = extractTemplateMetadata(template.signatureFields);
   const signatureFields = metadata.fields;
@@ -385,7 +422,15 @@ export const pandaSignService = {
       throw new Error('Template not found');
     }
 
-    const resolvedMergeData = await this.buildTemplateMergeData(template, mergeData);
+    const runtimeMergeData = await this.buildRuntimeMergeData({
+      opportunityId,
+      accountId,
+      contactId,
+      recipientEmail,
+      recipientName,
+      mergeData,
+    });
+    const resolvedMergeData = await this.buildTemplateMergeData(template, runtimeMergeData);
 
     // Generate agreement number
     const agreementNumber = `AGR-${Date.now()}-${uuidv4().slice(0, 4).toUpperCase()}`;
@@ -1117,6 +1162,155 @@ ${agreement.signedDocumentUrl}
     return normalizeTerritoryProfiles(profiles);
   },
 
+  async buildRuntimeMergeData({
+    opportunityId,
+    accountId,
+    contactId,
+    recipientEmail,
+    recipientName,
+    mergeData = {},
+  } = {}) {
+    let opportunity = null;
+    let account = null;
+    let contact = null;
+
+    if (opportunityId) {
+      opportunity = await prisma.opportunity.findUnique({
+        where: { id: opportunityId },
+        include: {
+          account: true,
+          contact: true,
+        },
+      });
+    }
+
+    account = opportunity?.account || null;
+    contact = opportunity?.contact || null;
+
+    if (!account && accountId) {
+      account = await prisma.account.findUnique({
+        where: { id: accountId },
+      });
+    }
+
+    if (!contact && contactId) {
+      contact = await prisma.contact.findUnique({
+        where: { id: contactId },
+      });
+    }
+
+    if (!account && contact?.accountId) {
+      account = await prisma.account.findUnique({
+        where: { id: contact.accountId },
+      });
+    }
+
+    const opportunityState = String(
+      opportunity?.state ||
+      account?.billingState ||
+      contact?.mailingState ||
+      mergeData?.territory ||
+      'DEFAULT'
+    ).trim().toUpperCase();
+
+    const customerName = buildFullName(
+      recipientName,
+      mergeData?.job?.customer?.name_full,
+      mergeData?.customerName,
+      mergeData?.customer_name,
+      contact?.fullName,
+      buildFullName(contact?.firstName, contact?.lastName),
+      account?.name
+    );
+
+    const customerEmail = recipientEmail || contact?.email || account?.email || mergeData?.customerEmail || '';
+    const customerPhone =
+      contact?.mobilePhone ||
+      contact?.phone ||
+      account?.phone ||
+      mergeData?.customerPhone ||
+      '';
+
+    const accountAddress = joinAddress([
+      account?.billingStreet,
+      account?.billingCity,
+      account?.billingState,
+      account?.billingPostalCode,
+    ]);
+    const contactAddress = joinAddress([
+      contact?.mailingStreet,
+      contact?.mailingCity,
+      contact?.mailingState,
+      contact?.mailingPostalCode,
+    ]);
+    const jobAddress = joinAddress([
+      opportunity?.street,
+      opportunity?.city,
+      opportunity?.state,
+      opportunity?.postalCode,
+    ]);
+
+    return {
+      ...deepCloneJson(mergeData, {}),
+      territory: opportunityState || 'DEFAULT',
+      organization: {
+        name: 'Panda Exteriors',
+        phone: account?.phone || '',
+        address: accountAddress || contactAddress || jobAddress || '',
+        ...(deepCloneJson(mergeData?.organization, {}) || {}),
+      },
+      account: {
+        id: account?.id || accountId || mergeData?.account?.id || null,
+        name: account?.name || mergeData?.account?.name || '',
+        email: account?.email || mergeData?.account?.email || '',
+        phone: account?.phone || mergeData?.account?.phone || '',
+        address: accountAddress || mergeData?.account?.address || '',
+        ...(deepCloneJson(mergeData?.account, {}) || {}),
+      },
+      contact: {
+        id: contact?.id || contactId || mergeData?.contact?.id || null,
+        firstName: contact?.firstName || mergeData?.contact?.firstName || '',
+        lastName: contact?.lastName || mergeData?.contact?.lastName || '',
+        name_full: customerName,
+        email: contact?.email || customerEmail,
+        phone: contact?.phone || contact?.mobilePhone || customerPhone,
+        ...(deepCloneJson(mergeData?.contact, {}) || {}),
+      },
+      job: {
+        ...(deepCloneJson(mergeData?.job, {}) || {}),
+        id: opportunity?.id || mergeData?.job?.id || opportunityId || null,
+        number: opportunity?.jobId || mergeData?.job?.number || '',
+        name: opportunity?.name || mergeData?.job?.name || '',
+        address: {
+          ...(deepCloneJson(mergeData?.job?.address, {}) || {}),
+          full: mergeData?.job?.address?.full || jobAddress || accountAddress || contactAddress || '',
+          street: opportunity?.street || mergeData?.job?.address?.street || '',
+          city: opportunity?.city || mergeData?.job?.address?.city || '',
+          state: opportunity?.state || account?.billingState || contact?.mailingState || mergeData?.job?.address?.state || '',
+          postal_code: opportunity?.postalCode || account?.billingPostalCode || contact?.mailingPostalCode || mergeData?.job?.address?.postal_code || '',
+        },
+        customer: {
+          ...(deepCloneJson(mergeData?.job?.customer, {}) || {}),
+          name_full: mergeData?.job?.customer?.name_full || customerName,
+          email: mergeData?.job?.customer?.email || customerEmail,
+          phone: mergeData?.job?.customer?.phone || customerPhone,
+        },
+      },
+      opportunity: {
+        ...(deepCloneJson(mergeData?.opportunity, {}) || {}),
+        id: opportunity?.id || opportunityId || mergeData?.opportunity?.id || null,
+        name: opportunity?.name || mergeData?.opportunity?.name || '',
+        stage: opportunity?.stage || mergeData?.opportunity?.stage || '',
+        amount: opportunity?.amount || mergeData?.opportunity?.amount || null,
+        state: opportunity?.state || mergeData?.opportunity?.state || '',
+      },
+      customerName,
+      customerEmail,
+      customerPhone,
+      customer_name: customerName,
+    };
+  },
+
   async buildTemplateMergeData(template, mergeData = {}) {
     const metadata = extractTemplateMetadata(template.signatureFields);
     const [brandingItems, dynamicContentItems, territoryProfiles] = await Promise.all([
@@ -1171,6 +1365,206 @@ ${agreement.signedDocumentUrl}
       },
       _pandaSignBranding: brandingItems.filter((item) => item.isActive !== false),
       _pandaSignTemplateMeta: metadata,
+    };
+  },
+
+  async verifyRequiredFields({
+    templateId,
+    customerEmail,
+    agentEmail,
+    emails = {},
+    context = {},
+    mergeData = {},
+  } = {}) {
+    if (!templateId) {
+      throw new Error('templateId is required');
+    }
+
+    const template = await prisma.agreementTemplate.findUnique({
+      where: { id: templateId },
+    });
+
+    if (!template) {
+      throw new Error('Template not found');
+    }
+
+    const metadata = extractTemplateMetadata(template.signatureFields);
+    const activeBrandingItems = (await this.getBrandingItems()).filter((item) => item.isActive !== false);
+    const runtimeMergeData = await this.buildRuntimeMergeData({
+      opportunityId: context?.opportunityId,
+      accountId: context?.accountId,
+      contactId: context?.contactId,
+      recipientEmail: customerEmail || emails.customer,
+      mergeData,
+    });
+    const resolvedMergeData = await this.buildTemplateMergeData(template, runtimeMergeData);
+
+    const checklist = [];
+    const requiredFieldFailures = [];
+    const warnings = [];
+
+    checklist.push('Template selected');
+
+    if (template.content?.trim()) {
+      checklist.push('Template body present');
+    } else {
+      requiredFieldFailures.push({ field: 'template.content', message: 'Template body content is required.' });
+    }
+
+    if (metadata.territory) {
+      checklist.push(`Territory: ${metadata.territory}`);
+    }
+
+    if (metadata.branding?.headerId) {
+      const header = activeBrandingItems.find((item) => item.id === metadata.branding.headerId && item.kind === 'HEADER');
+      if (header) {
+        checklist.push('Header selected');
+      } else {
+        requiredFieldFailures.push({ field: 'branding.headerId', message: 'Selected header is not valid.' });
+      }
+    } else {
+      requiredFieldFailures.push({ field: 'branding.headerId', message: 'A header must be selected.' });
+    }
+
+    if (metadata.branding?.footerId) {
+      const footer = activeBrandingItems.find((item) => item.id === metadata.branding.footerId && item.kind === 'FOOTER');
+      if (footer) {
+        checklist.push('Footer selected');
+      } else {
+        requiredFieldFailures.push({ field: 'branding.footerId', message: 'Selected footer is not valid.' });
+      }
+    } else {
+      requiredFieldFailures.push({ field: 'branding.footerId', message: 'A footer must be selected.' });
+    }
+
+    if (Array.isArray(metadata.signerRoles) && metadata.signerRoles.length > 0) {
+      checklist.push('Signer roles configured');
+    } else {
+      requiredFieldFailures.push({ field: 'signerRoles', message: 'At least one signer role is required.' });
+    }
+
+    if (Array.isArray(metadata.requiredFieldsConfig)) {
+      checklist.push('Required field configuration loaded');
+    } else {
+      requiredFieldFailures.push({ field: 'requiredFieldsConfig', message: 'Required field configuration is invalid.' });
+    }
+
+    metadata.signerRoles.forEach((role) => {
+      if (!role?.required) return;
+      const normalizedRole = String(role.role || '').toUpperCase();
+
+      if (normalizedRole === 'CUSTOMER') {
+        const value = customerEmail || emails.customer || resolvedMergeData.customerEmail || resolvedMergeData.contact?.email;
+        if (value) {
+          checklist.push('Customer email confirmed');
+        } else {
+          requiredFieldFailures.push({ field: 'customer.email', message: 'Customer email is required.' });
+        }
+      }
+
+      if (normalizedRole === 'AGENT') {
+        const value = agentEmail || emails.agent;
+        if (value) {
+          checklist.push('Agent email confirmed');
+        } else {
+          requiredFieldFailures.push({ field: 'agent.email', message: 'Agent email is required.' });
+        }
+      }
+    });
+
+    const templateSource = [
+      template.content || '',
+      ...activeBrandingItems
+        .filter((item) => item.id === metadata.branding.headerId || item.id === metadata.branding.footerId)
+        .map((item) => item.content || ''),
+    ].join('\n');
+
+    const missingTokens = extractMergeFieldsFromContent(templateSource)
+      .filter((token) => !token.startsWith('signatures.'))
+      .filter((token) => isMissingMergeValue(getMergeValueByPath(resolvedMergeData, token)))
+      .map((token) => ({ token }));
+
+    if (metadata.status !== 'PUBLISHED') {
+      warnings.push(`Template status is ${metadata.status}.`);
+    }
+
+    return {
+      checklist,
+      requiredFieldFailures,
+      missingTokens,
+      warnings,
+      fieldMapReport: {
+        fields: metadata.fields,
+        missingTokens,
+        warnings,
+      },
+      previewReport: {
+        missingTokens,
+        warnings,
+      },
+    };
+  },
+
+  async previewTemplate({
+    templateId,
+    customerEmail,
+    agentEmail,
+    emails = {},
+    context = {},
+    mergeData = {},
+  } = {}) {
+    if (!templateId) {
+      throw new Error('templateId is required');
+    }
+
+    const template = await prisma.agreementTemplate.findUnique({
+      where: { id: templateId },
+    });
+
+    if (!template) {
+      throw new Error('Template not found');
+    }
+
+    const runtimeMergeData = await this.buildRuntimeMergeData({
+      opportunityId: context?.opportunityId,
+      accountId: context?.accountId,
+      contactId: context?.contactId,
+      recipientEmail: customerEmail || emails.customer,
+      mergeData,
+    });
+    const resolvedMergeData = await this.buildTemplateMergeData(template, runtimeMergeData);
+
+    const previewAgreement = {
+      id: `preview-${uuidv4()}`,
+      agreementNumber: `PREVIEW-${Date.now()}`,
+      name: this.interpolateText(template.name || 'Agreement Preview', resolvedMergeData),
+      recipientName: resolvedMergeData.customerName || resolvedMergeData.job?.customer?.name_full || 'Customer Preview',
+      recipientEmail: customerEmail || emails.customer || resolvedMergeData.customerEmail || '',
+    };
+
+    const previewUrl = await this.generateDocument(previewAgreement, template, resolvedMergeData);
+    const diagnostics = await this.verifyRequiredFields({
+      templateId,
+      customerEmail,
+      agentEmail,
+      emails,
+      context,
+      mergeData,
+    });
+
+    return {
+      previewUrl,
+      documentUrl: previewUrl,
+      previewHash: crypto
+        .createHash('sha256')
+        .update(JSON.stringify({
+          templateId,
+          agreementNumber: previewAgreement.agreementNumber,
+          recipientEmail: previewAgreement.recipientEmail,
+          mergeData: resolvedMergeData,
+        }))
+        .digest('hex'),
+      ...diagnostics,
     };
   },
 
