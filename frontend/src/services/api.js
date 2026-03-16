@@ -281,7 +281,7 @@ export const contactsApi = {
 
   async getContact(id) {
     const response = await api.get(`/api/contacts/${id}`);
-    return response.data.data;
+    return response.data.data?.contact || response.data.data;
   },
 
   async createContact(data) {
