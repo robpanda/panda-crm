@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { photocamApi } from '../../services/api';
+import { photocamApi, companyCamApi } from '../../services/api';
 import {
   Camera,
   Upload,
@@ -105,6 +105,18 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
     queryKey: ['photocam-photos', project?.id, typeFilter],
     queryFn: () => photocamApi.getPhotos(project.id, { type: typeFilter !== 'all' ? typeFilter : undefined }),
     enabled: !!project?.id,
+  });
+
+  const {
+    data: legacyPhotosData,
+    isLoading: legacyPhotosLoading,
+    refetch: refetchLegacyPhotos,
+  } = useQuery({
+    queryKey: ['companycam-opportunity-photos', opportunityId],
+    queryFn: () => companyCamApi.getOpportunityPhotos(opportunityId),
+    enabled: !!opportunityId && activeSubTab === 'photos',
+    retry: 1,
+    staleTime: 5 * 60 * 1000,
   });
 
   // Fetch checklists for the project
@@ -271,10 +283,17 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
         setUploadProgress(pct);
         return { ...prev, currentFileName: '', queued: 0 };
       });
-      await queryClient.invalidateQueries(['photocam-photos', project?.id]);
-      await queryClient.invalidateQueries(['photocam-galleries', project?.id]);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['photocam-photos', project?.id] }),
+        queryClient.invalidateQueries({ queryKey: ['companycam-opportunity-photos', opportunityId] }),
+        queryClient.invalidateQueries({ queryKey: ['photocam-galleries', project?.id] }),
+      ]);
+      await Promise.all([
+        refetchPhotos(),
+        refetchLegacyPhotos(),
+      ]);
     }
-  }, [compressImageToJpeg, project?.id, queryClient]);
+  }, [compressImageToJpeg, opportunityId, project?.id, queryClient, refetchLegacyPhotos, refetchPhotos]);
 
   const enqueueUploadFiles = useCallback((incomingFiles, type, source = 'upload') => {
     if (!project?.id) {
@@ -490,7 +509,52 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
     },
   });
 
-  const photos = photosData?.photos || photosData?.data?.photos || [];
+  const projectPhotos = useMemo(() => {
+    const rawPhotos = photosData?.photos || photosData?.data?.photos || [];
+    if (!Array.isArray(rawPhotos)) return [];
+
+    return rawPhotos.map((photo) => ({
+      ...photo,
+      isLegacy: false,
+      displayUrl: photo.displayUrl || photo.photoUrl || photo.url || photo.thumbnailUrl || '',
+      thumbnailUrl: photo.thumbnailUrl || photo.displayUrl || photo.photoUrl || photo.url || '',
+    }));
+  }, [photosData]);
+
+  const legacyPhotos = useMemo(() => {
+    const rawPhotos = legacyPhotosData?.photos || legacyPhotosData?.data?.photos || [];
+    if (!Array.isArray(rawPhotos)) return [];
+
+    return rawPhotos.map((photo) => ({
+      ...photo,
+      id: `legacy-${photo.id}`,
+      legacyPhotoId: photo.id,
+      isLegacy: true,
+      displayUrl: photo.photoUrl || photo.displayUrl || photo.url || photo.thumbnailUrl || '',
+      thumbnailUrl: photo.thumbnailUrl || photo.photoUrl || photo.displayUrl || photo.url || '',
+      fileName: photo.fileName || photo.filename || `Legacy Photo ${photo.id}`,
+      createdAt: photo.takenAt || photo.createdAt,
+      type: photo.type || 'OTHER',
+      tags: Array.isArray(photo.tags) ? photo.tags : [],
+    }));
+  }, [legacyPhotosData]);
+
+  const photos = useMemo(() => {
+    const mergedPhotos = [];
+    const seen = new Set();
+
+    [...projectPhotos, ...legacyPhotos].forEach((photo) => {
+      const dedupeKey = photo.isLegacy
+        ? `legacy:${photo.legacyPhotoId || photo.id}`
+        : `project:${photo.id || photo.displayUrl || photo.thumbnailUrl}`;
+
+      if (!dedupeKey || seen.has(dedupeKey)) return;
+      seen.add(dedupeKey);
+      mergedPhotos.push(photo);
+    });
+
+    return mergedPhotos;
+  }, [legacyPhotos, projectPhotos]);
 
   const galleryItems = Array.isArray(galleriesData?.data)
     ? galleriesData.data
@@ -545,6 +609,18 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
       photo.tags?.some(t => t.toLowerCase().includes(term))
     );
   });
+
+  const isPhotosLoading = photosLoading || legacyPhotosLoading;
+
+  const getPhotoImageUrl = useCallback((photo) => (
+    photo?.thumbnailUrl || photo?.displayUrl || photo?.photoUrl || photo?.url || ''
+  ), []);
+
+  const getPhotoFallbackUrl = useCallback((photo) => (
+    photo?.displayUrl || photo?.photoUrl || photo?.url || photo?.thumbnailUrl || ''
+  ), []);
+
+  const isSelectablePhoto = useCallback((photo) => !photo?.isLegacy, []);
 
   useEffect(() => {
     if (selectedPhotos.length === 0) {
@@ -649,11 +725,13 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
   };
 
   // Toggle photo selection
-  const togglePhotoSelection = (photoId) => {
+  const togglePhotoSelection = (photo) => {
+    if (!isSelectablePhoto(photo)) return;
+
     setSelectedPhotos(prev =>
-      prev.includes(photoId)
-        ? prev.filter(id => id !== photoId)
-        : [...prev, photoId]
+      prev.includes(photo.id)
+        ? prev.filter(id => id !== photo.id)
+        : [...prev, photo.id]
     );
   };
 
@@ -664,12 +742,13 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
     }
   };
 
-  const handlePhotoTouchStart = (photoId) => {
+  const handlePhotoTouchStart = (photo) => {
+    if (!isSelectablePhoto(photo)) return;
     if (selectionMode) return;
     clearLongPressTimer();
     longPressTimerRef.current = setTimeout(() => {
       setSelectionMode(true);
-      setSelectedPhotos((prev) => (prev.includes(photoId) ? prev : [...prev, photoId]));
+      setSelectedPhotos((prev) => (prev.includes(photo.id) ? prev : [...prev, photo.id]));
     }, 450);
   };
 
@@ -679,7 +758,7 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
 
   const handlePhotoActivate = (photo, index) => {
     if (selectionMode) {
-      togglePhotoSelection(photo.id);
+      togglePhotoSelection(photo);
       return;
     }
     openLightbox(photo, index);
@@ -687,7 +766,7 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
 
   const selectAllVisible = () => {
     setSelectionMode(true);
-    setSelectedPhotos(filteredPhotos.map((photo) => photo.id));
+    setSelectedPhotos(filteredPhotos.filter(isSelectablePhoto).map((photo) => photo.id));
   };
 
   const clearSelection = () => {
@@ -950,14 +1029,14 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
           </div>
 
           {/* Photos Loading */}
-          {photosLoading && (
+          {isPhotosLoading && (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="w-6 h-6 text-panda-primary animate-spin" />
             </div>
           )}
 
           {/* Empty State */}
-          {!photosLoading && filteredPhotos.length === 0 && (
+          {!isPhotosLoading && filteredPhotos.length === 0 && (
             <div
               className="border-2 border-dashed border-gray-200 rounded-xl p-12 text-center cursor-pointer hover:border-panda-primary/50 transition-colors"
               onDrop={handleDrop}
@@ -977,7 +1056,7 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
           )}
 
           {/* Photo Grid */}
-          {!photosLoading && filteredPhotos.length > 0 && viewMode === 'grid' && (
+          {!isPhotosLoading && filteredPhotos.length > 0 && viewMode === 'grid' && (
             <div className={`grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 ${selectionMode ? 'pb-40 md:pb-28' : ''}`}>
               {filteredPhotos.map((photo, index) => (
                 <div
@@ -988,36 +1067,48 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
                       : 'border-transparent hover:border-gray-300'
                   }`}
                   onClick={() => handlePhotoActivate(photo, index)}
-                  onTouchStart={() => handlePhotoTouchStart(photo.id)}
+                  onTouchStart={() => handlePhotoTouchStart(photo)}
                   onTouchEnd={handlePhotoTouchEnd}
                   onTouchCancel={handlePhotoTouchEnd}
                 >
                   {/* Photo Image */}
                   <img
-                    src={photo.thumbnailUrl || photo.displayUrl || photo.url}
+                    src={getPhotoImageUrl(photo)}
                     alt={photo.caption || 'Photo'}
                     className="w-full h-full object-cover"
                     loading="lazy"
+                    onError={(e) => {
+                      const fallbackUrl = getPhotoFallbackUrl(photo);
+                      if (fallbackUrl && e.currentTarget.src !== fallbackUrl) {
+                        e.currentTarget.src = fallbackUrl;
+                      }
+                    }}
                   />
 
                   {/* Selection checkbox */}
-                  <div
-                    className="absolute top-2 left-2 z-10"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      togglePhotoSelection(photo.id);
-                    }}
-                  >
-                    <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
-                      selectedPhotos.includes(photo.id)
-                        ? 'bg-panda-primary border-panda-primary'
-                        : 'bg-white/80 border-white/80 group-hover:border-gray-400'
-                    }`}>
-                      {selectedPhotos.includes(photo.id) && (
-                        <CheckCircle className="w-3 h-3 text-white" />
-                      )}
+                  {isSelectablePhoto(photo) ? (
+                    <div
+                      className="absolute top-2 left-2 z-10"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        togglePhotoSelection(photo);
+                      }}
+                    >
+                      <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
+                        selectedPhotos.includes(photo.id)
+                          ? 'bg-panda-primary border-panda-primary'
+                          : 'bg-white/80 border-white/80 group-hover:border-gray-400'
+                      }`}>
+                        {selectedPhotos.includes(photo.id) && (
+                          <CheckCircle className="w-3 h-3 text-white" />
+                        )}
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="absolute top-2 left-2 z-10 rounded-full bg-white/90 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-600">
+                      Legacy
+                    </div>
+                  )}
 
                   {/* Type Badge */}
                   {photo.type && (
@@ -1047,7 +1138,7 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
           )}
 
           {/* Photo List View */}
-          {!photosLoading && filteredPhotos.length > 0 && viewMode === 'list' && (
+          {!isPhotosLoading && filteredPhotos.length > 0 && viewMode === 'list' && (
             <div className={`divide-y divide-gray-100 ${selectionMode ? 'pb-40 md:pb-28' : ''}`}>
               {filteredPhotos.map((photo, index) => (
                 <div
@@ -1056,29 +1147,41 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
                     selectedPhotos.includes(photo.id) ? 'bg-panda-primary/5' : ''
                   }`}
                   onClick={() => handlePhotoActivate(photo, index)}
-                  onTouchStart={() => handlePhotoTouchStart(photo.id)}
+                  onTouchStart={() => handlePhotoTouchStart(photo)}
                   onTouchEnd={handlePhotoTouchEnd}
                   onTouchCancel={handlePhotoTouchEnd}
                 >
                   {/* Checkbox */}
-                  <div onClick={(e) => { e.stopPropagation(); togglePhotoSelection(photo.id); }}>
-                    <div className={`w-5 h-5 rounded border-2 flex items-center justify-center ${
-                      selectedPhotos.includes(photo.id)
-                        ? 'bg-panda-primary border-panda-primary'
-                        : 'border-gray-300'
-                    }`}>
-                      {selectedPhotos.includes(photo.id) && (
-                        <CheckCircle className="w-3 h-3 text-white" />
-                      )}
+                  {isSelectablePhoto(photo) ? (
+                    <div onClick={(e) => { e.stopPropagation(); togglePhotoSelection(photo); }}>
+                      <div className={`w-5 h-5 rounded border-2 flex items-center justify-center ${
+                        selectedPhotos.includes(photo.id)
+                          ? 'bg-panda-primary border-panda-primary'
+                          : 'border-gray-300'
+                      }`}>
+                        {selectedPhotos.includes(photo.id) && (
+                          <CheckCircle className="w-3 h-3 text-white" />
+                        )}
+                      </div>
                     </div>
-                  </div>
+                  ) : (
+                    <span className="rounded-full bg-gray-100 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-gray-600">
+                      Legacy
+                    </span>
+                  )}
 
                   {/* Thumbnail */}
                   <div className="w-16 h-16 rounded-lg overflow-hidden bg-gray-100 flex-shrink-0">
                     <img
-                      src={photo.thumbnailUrl || photo.displayUrl || photo.url}
+                      src={getPhotoImageUrl(photo)}
                       alt={photo.caption || 'Photo'}
                       className="w-full h-full object-cover"
+                      onError={(e) => {
+                        const fallbackUrl = getPhotoFallbackUrl(photo);
+                        if (fallbackUrl && e.currentTarget.src !== fallbackUrl) {
+                          e.currentTarget.src = fallbackUrl;
+                        }
+                      }}
                     />
                   </div>
 
@@ -1787,9 +1890,15 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
           {/* Image */}
           <div className="max-w-4xl max-h-[80vh] p-4" onClick={(e) => e.stopPropagation()}>
             <img
-              src={lightboxPhoto.displayUrl || lightboxPhoto.url}
+              src={getPhotoFallbackUrl(lightboxPhoto)}
               alt={lightboxPhoto.caption || 'Photo'}
               className="max-w-full max-h-full object-contain"
+              onError={(e) => {
+                const fallbackUrl = getPhotoFallbackUrl(lightboxPhoto);
+                if (fallbackUrl && e.currentTarget.src !== fallbackUrl) {
+                  e.currentTarget.src = fallbackUrl;
+                }
+              }}
             />
             {lightboxPhoto.caption && (
               <p className="text-white text-center mt-4">{lightboxPhoto.caption}</p>

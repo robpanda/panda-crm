@@ -1683,6 +1683,11 @@ export default function OpportunityDetail() {
   const [selectedAppointmentDetail, setSelectedAppointmentDetail] = useState(null);
   const [showAppointmentDetailModal, setShowAppointmentDetailModal] = useState(false);
   const [selectedCrewId, setSelectedCrewId] = useState('');
+  const [showTeamAssignmentModal, setShowTeamAssignmentModal] = useState(false);
+  const [teamAssignmentRole, setTeamAssignmentRole] = useState(null);
+  const [teamAssignmentSearch, setTeamAssignmentSearch] = useState('');
+  const [selectedTeamAssignmentIds, setSelectedTeamAssignmentIds] = useState([]);
+  const [teamAssignmentSaving, setTeamAssignmentSaving] = useState(false);
 
   // Activity detail modal state
   const [selectedActivity, setSelectedActivity] = useState(null);
@@ -1909,6 +1914,16 @@ export default function OpportunityDetail() {
     staleTime: 5 * 60 * 1000, // Cache for 5 minutes
   });
   const users = usersForDropdown || [];
+  const dropdownUsers = useMemo(() => (
+    Array.isArray(usersForDropdown?.data)
+      ? usersForDropdown.data
+      : Array.isArray(usersForDropdown)
+        ? usersForDropdown
+        : []
+  ), [usersForDropdown]);
+  const activeUsers = useMemo(() => (
+    dropdownUsers.filter((user) => user?.id && user.isActive !== false)
+  ), [dropdownUsers]);
 
   const { data: activityData } = useQuery({
     queryKey: ['opportunityActivity', id],
@@ -1923,7 +1938,7 @@ export default function OpportunityDetail() {
   });
 
   // Repository files (misc documents uploaded to the job)
-  const { data: repositoryFiles } = useQuery({
+  const { data: repositoryFiles, refetch: refetchRepositoryFiles } = useQuery({
     queryKey: ['opportunityRepositoryFiles', id],
     queryFn: () => documentsApi.getDocumentsByJob(id),
     enabled: !!id,
@@ -1966,7 +1981,21 @@ export default function OpportunityDetail() {
       });
     });
   }, [appointments]);
+  const primaryCrewAssignmentAppointment = useMemo(() => {
+    const activeAppointment = appointments.find((appointment) => !['COMPLETED', 'CANCELED'].includes(appointment?.status));
+    return activeAppointment || appointments[0] || null;
+  }, [appointments]);
+  const primaryCrewMembers = useMemo(() => {
+    if (!primaryCrewAssignmentAppointment) return [];
 
+    const crewList = Array.isArray(primaryCrewAssignmentAppointment.crew)
+      ? primaryCrewAssignmentAppointment.crew
+      : primaryCrewAssignmentAppointment.assignedResource
+        ? [primaryCrewAssignmentAppointment.assignedResource]
+        : [];
+
+    return crewList.filter((member) => member?.id);
+  }, [primaryCrewAssignmentAppointment]);
   // Cases (linked via Account) - service not yet deployed, disable retries
   const { data: cases } = useQuery({
     queryKey: ['opportunityCases', id],
@@ -2262,14 +2291,23 @@ export default function OpportunityDetail() {
   const { data: crews = [] } = useQuery({
     queryKey: ['crews'],
     queryFn: () => scheduleApi.getResources({ resourceType: 'CREW' }),
-    enabled: showCrewModal,
+    enabled: showCrewModal || (showTeamAssignmentModal && teamAssignmentRole === 'crew'),
   });
+  const availableCrewResources = useMemo(() => {
+    const rawResources = Array.isArray(crews?.data)
+      ? crews.data
+      : Array.isArray(crews)
+        ? crews
+        : [];
+
+    return rawResources.filter((resource) => resource?.id && resource.isActive !== false);
+  }, [crews]);
 
   // Assign crew mutation
   const assignCrewMutation = useMutation({
     mutationFn: ({ appointmentId, resourceId }) => scheduleApi.assignResource(appointmentId, resourceId, true),
     onSuccess: () => {
-      queryClient.invalidateQueries(['opportunityAppointments', id]);
+      queryClient.invalidateQueries({ queryKey: ['opportunityAppointments', id] });
       setActionSuccess('Crew assigned successfully');
       setShowCrewModal(false);
       setSelectedAppointmentForCrew(null);
@@ -2293,8 +2331,11 @@ export default function OpportunityDetail() {
         linkedRecordType: 'OPPORTUNITY',
       });
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries(['opportunityRepositoryFiles', id]);
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['opportunityRepositoryFiles', id] }),
+        refetchRepositoryFiles(),
+      ]);
       setActionSuccess('File uploaded successfully');
       setTimeout(() => setActionSuccess(null), 3000);
     },
@@ -2302,6 +2343,137 @@ export default function OpportunityDetail() {
       setActionError(error.message || 'Failed to upload file');
     },
   });
+
+  const formatTeamMemberName = useCallback((person) => (
+    person?.fullName
+    || [person?.firstName, person?.lastName].filter(Boolean).join(' ')
+    || person?.name
+    || person?.email
+    || 'Unassigned'
+  ), []);
+
+  const closeTeamAssignmentModal = useCallback(() => {
+    setShowTeamAssignmentModal(false);
+    setTeamAssignmentRole(null);
+    setTeamAssignmentSearch('');
+    setSelectedTeamAssignmentIds([]);
+  }, []);
+
+  const openTeamAssignmentModal = useCallback((role) => {
+    setTeamAssignmentRole(role);
+    setTeamAssignmentSearch('');
+
+    if (role === 'owner') {
+      setSelectedTeamAssignmentIds(opportunity?.ownerId ? [opportunity.ownerId] : []);
+    } else if (role === 'projectManager') {
+      setSelectedTeamAssignmentIds(opportunity?.projectManagerId ? [opportunity.projectManagerId] : []);
+    } else if (role === 'crew') {
+      setSelectedTeamAssignmentIds(primaryCrewMembers.map((member) => member.id));
+    } else {
+      setSelectedTeamAssignmentIds([]);
+    }
+
+    setShowTeamAssignmentModal(true);
+  }, [opportunity?.ownerId, opportunity?.projectManagerId, primaryCrewMembers]);
+
+  const filteredTeamAssignmentOptions = useMemo(() => {
+    const term = teamAssignmentSearch.trim().toLowerCase();
+    const options = teamAssignmentRole === 'crew' ? availableCrewResources : activeUsers;
+
+    if (!term) return options;
+
+    return options.filter((option) => {
+      const text = [
+        option?.fullName,
+        option?.name,
+        option?.firstName,
+        option?.lastName,
+        option?.email,
+        option?.title,
+        option?.department,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+
+      return text.includes(term);
+    });
+  }, [activeUsers, availableCrewResources, teamAssignmentRole, teamAssignmentSearch]);
+
+  const handleTeamAssignmentOptionToggle = useCallback((optionId) => {
+    if (teamAssignmentRole === 'crew') {
+      setSelectedTeamAssignmentIds((prev) => (
+        prev.includes(optionId)
+          ? prev.filter((id) => id !== optionId)
+          : [...prev, optionId]
+      ));
+      return;
+    }
+
+    setSelectedTeamAssignmentIds(optionId ? [optionId] : []);
+  }, [teamAssignmentRole]);
+
+  const submitTeamAssignment = useCallback(async () => {
+    try {
+      setTeamAssignmentSaving(true);
+
+      if (teamAssignmentRole === 'owner') {
+        await updateMutation.mutateAsync({
+          ownerId: selectedTeamAssignmentIds[0] || null,
+        });
+        setActionSuccess(selectedTeamAssignmentIds[0] ? 'Owner updated successfully' : 'Owner cleared successfully');
+        closeTeamAssignmentModal();
+        return;
+      }
+
+      if (teamAssignmentRole === 'projectManager') {
+        await updateMutation.mutateAsync({
+          projectManagerId: selectedTeamAssignmentIds[0] || null,
+        });
+        setActionSuccess(selectedTeamAssignmentIds[0] ? 'Project manager updated successfully' : 'Project manager cleared successfully');
+        closeTeamAssignmentModal();
+        return;
+      }
+
+      if (teamAssignmentRole === 'crew') {
+        if (!primaryCrewAssignmentAppointment?.id) {
+          throw new Error('Schedule an appointment before assigning crew.');
+        }
+
+        const currentIds = primaryCrewMembers.map((member) => member.id);
+        const desiredIds = [...new Set(selectedTeamAssignmentIds)];
+        const toRemove = currentIds.filter((resourceId) => !desiredIds.includes(resourceId));
+        const toAdd = desiredIds.filter((resourceId) => !currentIds.includes(resourceId));
+
+        await Promise.all(toRemove.map((resourceId) => (
+          scheduleApi.unassignResource(primaryCrewAssignmentAppointment.id, resourceId)
+        )));
+
+        for (const [index, resourceId] of toAdd.entries()) {
+          const isPrimary = currentIds.length === 0 && index === 0;
+          await scheduleApi.assignResource(primaryCrewAssignmentAppointment.id, resourceId, isPrimary);
+        }
+
+        await queryClient.refetchQueries({ queryKey: ['opportunityAppointments', id] });
+        setActionSuccess('Crew updated successfully');
+        closeTeamAssignmentModal();
+      }
+    } catch (error) {
+      setActionError(error?.message || 'Failed to update job team');
+    } finally {
+      setTeamAssignmentSaving(false);
+      setTimeout(() => setActionSuccess(null), 3000);
+    }
+  }, [
+    closeTeamAssignmentModal,
+    id,
+    primaryCrewAssignmentAppointment,
+    primaryCrewMembers,
+    queryClient,
+    selectedTeamAssignmentIds,
+    teamAssignmentRole,
+    updateMutation,
+  ]);
 
   // Update appointment mutation
   const updateAppointmentMutation = useMutation({
@@ -4947,42 +5119,75 @@ export default function OpportunityDetail() {
                       <h3 className="text-sm font-semibold text-gray-900">Job Team</h3>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                        <label className="block text-xs text-gray-500 uppercase tracking-wide mb-2">Owner / Transfer Job</label>
-                        <select
-                          value={opportunity?.ownerId || ''}
-                          onChange={async (e) => {
-                            await updateMutation.mutateAsync({ ownerId: e.target.value || null });
-                          }}
-                          disabled={updateMutation.isPending}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary disabled:opacity-50"
+                    <div className="border border-gray-200 rounded-xl bg-white overflow-hidden">
+                      <div className="grid grid-cols-[90px_minmax(0,1fr)_auto] items-start gap-4 px-4 py-4 border-b border-gray-100">
+                        <div className="pt-1">
+                          <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Owner</span>
+                        </div>
+                        <div className="min-w-0">
+                          {opportunity?.owner ? (
+                            <>
+                              <p className="text-sm font-medium text-gray-900">{formatTeamMemberName(opportunity.owner)}</p>
+                              <p className="text-sm text-gray-500">{opportunity.owner.email || opportunity.owner.phone || 'Assigned'}</p>
+                            </>
+                          ) : (
+                            <p className="text-sm text-gray-400">No owner assigned</p>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => openTeamAssignmentModal('owner')}
+                          className="inline-flex items-center rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
                         >
-                          <option value="">-- Select Owner --</option>
-                          {(usersForDropdown?.data || usersForDropdown || []).map((user) => (
-                            <option key={user.id} value={user.id}>
-                              {user.firstName} {user.lastName}
-                            </option>
-                          ))}
-                        </select>
+                          {opportunity?.owner ? 'Transfer' : 'Assign'}
+                        </button>
                       </div>
-                      <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                        <label className="block text-xs text-gray-500 uppercase tracking-wide mb-2">Project Manager</label>
-                        <select
-                          value={opportunity?.projectManagerId || ''}
-                          onChange={async (e) => {
-                            await updateMutation.mutateAsync({ projectManagerId: e.target.value || null });
-                          }}
-                          disabled={updateMutation.isPending}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary disabled:opacity-50"
+                      <div className="grid grid-cols-[90px_minmax(0,1fr)_auto] items-start gap-4 px-4 py-4 border-b border-gray-100">
+                        <div className="pt-1">
+                          <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">PM</span>
+                        </div>
+                        <div className="min-w-0">
+                          {opportunity?.projectManager ? (
+                            <>
+                              <p className="text-sm font-medium text-gray-900">{formatTeamMemberName(opportunity.projectManager)}</p>
+                              <p className="text-sm text-gray-500">{opportunity.projectManager.email || opportunity.projectManager.phone || 'Assigned'}</p>
+                            </>
+                          ) : (
+                            <p className="text-sm text-gray-400">No project manager assigned</p>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => openTeamAssignmentModal('projectManager')}
+                          className="inline-flex items-center rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
                         >
-                          <option value="">-- Select Project Manager --</option>
-                          {(usersForDropdown?.data || usersForDropdown || []).map((user) => (
-                            <option key={user.id} value={user.id}>
-                              {user.firstName} {user.lastName}
-                            </option>
-                          ))}
-                        </select>
+                          {opportunity?.projectManager ? 'Transfer' : 'Assign'}
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-[90px_minmax(0,1fr)_auto] items-start gap-4 px-4 py-4">
+                        <div className="pt-1">
+                          <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Crew</span>
+                        </div>
+                        <div className="min-w-0">
+                          {currentCrewMembers.length > 0 ? (
+                            <div className="flex flex-wrap gap-2">
+                              {currentCrewMembers.map((crewMember) => (
+                                <span key={crewMember.id} className="inline-flex items-center rounded-full bg-sky-50 px-3 py-1 text-sm font-medium text-sky-700">
+                                  {crewMember.name}
+                                </span>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-sm text-gray-400">
+                              {primaryCrewAssignmentAppointment ? 'No crew assigned yet' : 'Schedule an appointment before assigning crew'}
+                            </p>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => openTeamAssignmentModal('crew')}
+                          disabled={!primaryCrewAssignmentAppointment}
+                          className="inline-flex items-center rounded-lg border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {currentCrewMembers.length > 0 ? 'Transfer' : 'Assign'}
+                        </button>
                       </div>
                     </div>
 
@@ -9972,6 +10177,125 @@ export default function OpportunityDetail() {
                   </div>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showTeamAssignmentModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[85vh] overflow-hidden">
+            <div className="flex items-center justify-between p-4 border-b">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">
+                  {teamAssignmentRole === 'owner'
+                    ? `${opportunity?.owner ? 'Transfer' : 'Assign'} Owner`
+                    : teamAssignmentRole === 'projectManager'
+                      ? `${opportunity?.projectManager ? 'Transfer' : 'Assign'} Project Manager`
+                      : `${currentCrewMembers.length > 0 ? 'Transfer' : 'Assign'} Crew`}
+                </h3>
+                <p className="text-sm text-gray-500 mt-1">
+                  {teamAssignmentRole === 'crew'
+                    ? 'Search active crews and select one or more assignments for the current job appointment.'
+                    : 'Search active users and choose the person to assign to this job.'}
+                </p>
+              </div>
+              <button
+                onClick={closeTeamAssignmentModal}
+                className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-4 border-b bg-gray-50">
+              <div className="relative">
+                <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={teamAssignmentSearch}
+                  onChange={(e) => setTeamAssignmentSearch(e.target.value)}
+                  placeholder={teamAssignmentRole === 'crew' ? 'Search active crews' : 'Search active users'}
+                  className="w-full rounded-lg border border-gray-300 bg-white py-2 pl-10 pr-4 text-sm focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                />
+              </div>
+              {teamAssignmentRole === 'crew' && primaryCrewAssignmentAppointment && (
+                <p className="mt-2 text-xs text-gray-500">
+                  Updating crew for {primaryCrewAssignmentAppointment.appointmentNumber || primaryCrewAssignmentAppointment.subject || 'the current appointment'}.
+                </p>
+              )}
+            </div>
+
+            <div className="max-h-[50vh] overflow-y-auto p-4 space-y-2">
+              {filteredTeamAssignmentOptions.length > 0 ? filteredTeamAssignmentOptions.map((option) => {
+                const optionName = teamAssignmentRole === 'crew'
+                  ? option.name
+                  : formatTeamMemberName(option);
+                const isSelected = selectedTeamAssignmentIds.includes(option.id);
+
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    onClick={() => handleTeamAssignmentOptionToggle(option.id)}
+                    className={`w-full rounded-xl border px-4 py-3 text-left transition-colors ${
+                      isSelected
+                        ? 'border-panda-primary bg-panda-primary/5'
+                        : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-gray-900">{optionName}</p>
+                        <p className="text-xs text-gray-500 mt-1">
+                          {teamAssignmentRole === 'crew'
+                            ? [option.territory?.name, option.resourceType].filter(Boolean).join(' • ') || 'Crew resource'
+                            : [option.email, option.title || option.department].filter(Boolean).join(' • ') || 'Active user'}
+                        </p>
+                      </div>
+                      <div className={`mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border ${
+                        isSelected ? 'border-panda-primary bg-panda-primary text-white' : 'border-gray-300'
+                      }`}>
+                        {teamAssignmentRole === 'crew'
+                          ? (isSelected ? <CheckSquare className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5 text-gray-400" />)
+                          : (isSelected ? <CheckCircle className="w-3.5 h-3.5" /> : null)}
+                      </div>
+                    </div>
+                  </button>
+                );
+              }) : (
+                <div className="rounded-xl border border-dashed border-gray-200 p-8 text-center text-sm text-gray-500">
+                  No active {teamAssignmentRole === 'crew' ? 'crews' : 'users'} matched your search.
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between gap-3 p-4 border-t bg-gray-50">
+              <button
+                type="button"
+                onClick={() => setSelectedTeamAssignmentIds([])}
+                className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800"
+              >
+                Clear Selection
+              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={closeTeamAssignmentModal}
+                  className="px-4 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-100"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={submitTeamAssignment}
+                  disabled={teamAssignmentSaving || (teamAssignmentRole !== 'crew' && selectedTeamAssignmentIds.length === 0)}
+                  className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-panda-primary text-white rounded-lg hover:bg-panda-dark disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {teamAssignmentSaving && <Loader2 className="w-4 h-4 animate-spin" />}
+                  <span>{teamAssignmentRole === 'crew' ? 'Save Crew' : 'Save Assignment'}</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
