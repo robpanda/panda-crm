@@ -670,7 +670,10 @@ export default function OpportunityList() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {opportunities.map((opp) => (
+                {opportunities.map((opp) => {
+                  const displayType = opp.currentDispositionCategory ? opp.type : null;
+
+                  return (
                   <tr key={opp.id} className={`hover:bg-gray-50 ${selectedJobs.includes(opp.id) ? 'bg-panda-primary/5' : ''}`}>
                     {selectionMode && (
                       <td className="px-4 py-4">
@@ -733,7 +736,7 @@ export default function OpportunityList() {
                     )}
                     {isColumnVisible('type') && (
                       <td className="px-6 py-4 text-sm text-gray-600">
-                        {opp.type || '-'}
+                        {displayType || '-'}
                       </td>
                     )}
                     {isColumnVisible('closeDate') && (
@@ -772,7 +775,8 @@ export default function OpportunityList() {
                       </Link>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
