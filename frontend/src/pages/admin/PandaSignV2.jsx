@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FileSignature, LayoutTemplate, Palette, Scale, Sparkles } from 'lucide-react';
 import AdminLayout from '../../components/AdminLayout';
@@ -28,6 +28,7 @@ const EMPTY_FILTERS = {
 
 export default function PandaSignV2() {
   const queryClient = useQueryClient();
+  const editorRef = useRef(null);
   const [activeTab, setActiveTab] = useState('templates');
   const [filters, setFilters] = useState(EMPTY_FILTERS);
   const [editingTemplate, setEditingTemplate] = useState(null);
@@ -218,6 +219,12 @@ export default function PandaSignV2() {
   const loading = loadingTemplates || loadingAdminResources;
   const pageError = templatesError || adminResourcesError;
 
+  useEffect(() => {
+    if (activeTab === 'templates' && editingTemplate && editorRef.current) {
+      editorRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [activeTab, editingTemplate]);
+
   return (
     <AdminLayout>
       <div className="p-6 lg:p-8">
@@ -296,6 +303,20 @@ export default function PandaSignV2() {
 
           {!loading && !pageError && activeTab === 'templates' && (
             <div className="space-y-6">
+              {editingTemplate && (
+                <div ref={editorRef}>
+                  <PandaSignTemplateEditor
+                    template={editingTemplate}
+                    resources={resources}
+                    onClose={() => setEditingTemplate(null)}
+                    onSave={handleSaveTemplate}
+                    onPublish={handlePublishTemplate}
+                    saving={createTemplateMutation.isPending || updateTemplateMutation.isPending}
+                    publishing={publishTemplateMutation.isPending}
+                  />
+                </div>
+              )}
+
               <PandaSignTemplateList
                 filters={filters}
                 onFiltersChange={setFilters}
@@ -307,18 +328,6 @@ export default function PandaSignV2() {
                 isPublishingId={publishingTemplateId}
                 isArchivingId={archivingTemplateId}
               />
-
-              {editingTemplate && (
-                <PandaSignTemplateEditor
-                  template={editingTemplate}
-                  resources={resources}
-                  onClose={() => setEditingTemplate(null)}
-                  onSave={handleSaveTemplate}
-                  onPublish={handlePublishTemplate}
-                  saving={createTemplateMutation.isPending || updateTemplateMutation.isPending}
-                  publishing={publishTemplateMutation.isPending}
-                />
-              )}
             </div>
           )}
 
