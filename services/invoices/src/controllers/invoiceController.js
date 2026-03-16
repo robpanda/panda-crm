@@ -61,6 +61,14 @@ const updateInvoiceSchema = z.object({
   terms: z.number().int().positive().optional(),
   tax: z.number().nonnegative().optional(),
   status: z.enum(['DRAFT', 'PENDING', 'SENT', 'PARTIAL', 'PAID', 'OVERDUE', 'VOID']).optional(),
+  notes: z.string().nullable().optional(),
+  insuranceCarrier: z.string().nullable().optional(),
+  claimNumber: z.string().nullable().optional(),
+  lineItems: z.array(z.object({
+    description: z.string().min(1),
+    quantity: z.number().positive().default(1),
+    unitPrice: z.number(),
+  })).optional(),
 });
 
 // Generate invoice number
@@ -269,7 +277,12 @@ export async function updateInvoice(req, res, next) {
     const { id } = req.params;
     const data = updateInvoiceSchema.parse(req.body);
 
-    const existing = await prisma.invoice.findUnique({ where: { id } });
+    const existing = await prisma.invoice.findUnique({
+      where: { id },
+      include: {
+        lineItems: true,
+      },
+    });
     if (!existing) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
@@ -290,12 +303,58 @@ export async function updateInvoice(req, res, next) {
       updateData.dueDate = addDays(invoiceDate, terms);
     }
 
+    const taxAmount = data.tax !== undefined ? data.tax : Number(existing.tax || 0);
+    let totals = null;
+    let normalizedLineItems = null;
+
+    if (data.lineItems) {
+      normalizedLineItems = data.lineItems
+        .map((item) => ({
+          description: String(item.description || '').trim(),
+          quantity: Number(item.quantity || 1),
+          unitPrice: Number(item.unitPrice || 0),
+        }))
+        .filter((item) => item.description && Number.isFinite(item.quantity) && Number.isFinite(item.unitPrice) && item.quantity > 0);
+
+      if (normalizedLineItems.length === 0) {
+        return res.status(400).json({ error: 'Invoice must contain at least one line item' });
+      }
+
+      totals = calculateTotals(normalizedLineItems, taxAmount);
+      const amountPaid = Number(existing.amountPaid || 0);
+      const nextBalanceDue = Math.max(0, totals.total - amountPaid);
+
+      updateData.subtotal = totals.subtotal;
+      updateData.tax = totals.tax;
+      updateData.total = totals.total;
+      updateData.balanceDue = nextBalanceDue;
+
+      if (!data.status) {
+        if (amountPaid > 0 && nextBalanceDue <= 0) {
+          updateData.status = 'PAID';
+        } else if (amountPaid > 0) {
+          updateData.status = 'PARTIAL';
+        }
+      }
+    }
+
     const invoice = await prisma.invoice.update({
       where: { id },
       data: {
         ...updateData,
         invoiceDate: data.invoiceDate ? new Date(data.invoiceDate) : undefined,
         dueDate: updateData.dueDate,
+        lineItems: normalizedLineItems
+          ? {
+              deleteMany: {},
+              create: totals.lineItems.map((item) => ({
+                description: item.description,
+                quantity: item.quantity,
+                unitPrice: item.unitPrice,
+                totalPrice: item.totalPrice,
+              })),
+            }
+          : undefined,
         // Force the next PDF fetch to regenerate from the saved invoice data.
         pdfUrl: null,
         pdfKey: null,
