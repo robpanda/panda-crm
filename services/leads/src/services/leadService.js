@@ -17,6 +17,57 @@ const BAMBOOGLI_REQUEST_TIMEOUT_MS = Number(process.env.BAMBOOGLI_REQUEST_TIMEOU
 const JOB_ID_STARTING_NUMBER = 999;
 const INTERNAL_COMMENT_TITLE_PREFIX = 'INTERNAL_COMMENT|';
 
+function tokenizeSearch(search) {
+  return [...new Set(String(search || '')
+    .trim()
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean))];
+}
+
+function phoneSearchVariants(search) {
+  const digits = String(search || '').replace(/\D/g, '');
+  if (digits.length < 4) return [];
+
+  const base = digits.length === 11 && digits.startsWith('1') ? digits.slice(1) : digits;
+  const variants = new Set([search, digits, base]);
+
+  if (base.length === 10) {
+    variants.add(`(${base.slice(0, 3)}) ${base.slice(3, 6)}-${base.slice(6)}`);
+    variants.add(`${base.slice(0, 3)}-${base.slice(3, 6)}-${base.slice(6)}`);
+    variants.add(`${base.slice(0, 3)} ${base.slice(3, 6)} ${base.slice(6)}`);
+    variants.add(`+1${base}`);
+    variants.add(`1${base}`);
+  }
+
+  return [...variants].filter(Boolean);
+}
+
+function buildLeadSearchFilters(search) {
+  const rawSearch = String(search || '').trim();
+  const tokens = tokenizeSearch(rawSearch);
+  const phoneVariants = phoneSearchVariants(rawSearch);
+
+  return tokens.map((token, index) => ({
+    OR: [
+      { firstName: { contains: token, mode: 'insensitive' } },
+      { lastName: { contains: token, mode: 'insensitive' } },
+      { email: { contains: token, mode: 'insensitive' } },
+      { company: { contains: token, mode: 'insensitive' } },
+      { street: { contains: token, mode: 'insensitive' } },
+      { city: { contains: token, mode: 'insensitive' } },
+      { state: { contains: token, mode: 'insensitive' } },
+      { postalCode: { contains: token, mode: 'insensitive' } },
+      ...(index === 0
+        ? phoneVariants.flatMap((variant) => ([
+            { phone: { contains: variant } },
+            { mobilePhone: { contains: variant } },
+          ]))
+        : []),
+    ],
+  }));
+}
+
 // Audit logging helper
 const logAudit = async ({ tableName, recordId, action, oldValues, newValues, userId, userEmail, source = 'api' }) => {
   try {
@@ -408,14 +459,7 @@ class LeadService {
     }
 
     if (search) {
-      where.OR = [
-        { firstName: { contains: search, mode: 'insensitive' } },
-        { lastName: { contains: search, mode: 'insensitive' } },
-        { email: { contains: search, mode: 'insensitive' } },
-        { phone: { contains: search } },
-        { mobilePhone: { contains: search } },
-        { company: { contains: search, mode: 'insensitive' } },
-      ];
+      where.AND = [...(where.AND || []), ...buildLeadSearchFilters(search)];
     }
 
     // Handle sorting - ownerName is a computed field, need to sort by relation

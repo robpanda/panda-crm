@@ -1,13 +1,14 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { accountsApi, contactsApi, leadsApi, opportunitiesApi } from '../services/api';
+import { accountsApi, contactsApi, leadsApi, opportunitiesApi, invoicesApi } from '../services/api';
 import {
   Search as SearchIcon,
   Building2,
   Users,
   UserPlus,
   Target,
+  Receipt,
   ArrowRight,
   Loader2,
 } from 'lucide-react';
@@ -41,7 +42,12 @@ function normalizeCollectionResponse(response, fallbackKeys = []) {
 export default function Search() {
   const [searchParams] = useSearchParams();
   const query = searchParams.get('q') || '';
-  const [activeTab, setActiveTab] = useState('all');
+  const moduleParam = searchParams.get('module') || 'all';
+  const [activeTab, setActiveTab] = useState(moduleParam);
+
+  useEffect(() => {
+    setActiveTab(moduleParam);
+  }, [moduleParam]);
 
   // Search accounts
   const { data: accountsData, isLoading: accountsLoading } = useQuery({
@@ -71,14 +77,21 @@ export default function Search() {
     enabled: !!query,
   });
 
-  const isLoading = accountsLoading || contactsLoading || leadsLoading || opportunitiesLoading;
+  const { data: invoicesData, isLoading: invoicesLoading } = useQuery({
+    queryKey: ['searchInvoices', query],
+    queryFn: () => invoicesApi.getInvoices({ search: query, limit: 20 }),
+    enabled: !!query,
+  });
+
+  const isLoading = accountsLoading || contactsLoading || leadsLoading || opportunitiesLoading || invoicesLoading;
 
   const accounts = normalizeCollectionResponse(accountsData, ['accounts']);
   const contacts = normalizeCollectionResponse(contactsData, ['contacts']);
   const leads = normalizeCollectionResponse(leadsData, ['leads']);
   const opportunities = normalizeCollectionResponse(opportunitiesData, ['opportunities']);
+  const invoices = normalizeCollectionResponse(invoicesData, ['invoices']);
 
-  const totalResults = accounts.length + contacts.length + leads.length + opportunities.length;
+  const totalResults = accounts.length + contacts.length + leads.length + opportunities.length + invoices.length;
 
   const tabs = [
     { id: 'all', label: 'All', count: totalResults },
@@ -86,6 +99,7 @@ export default function Search() {
     { id: 'contacts', label: 'Contacts', count: contacts.length, icon: Users },
     { id: 'leads', label: 'Leads', count: leads.length, icon: UserPlus },
     { id: 'opportunities', label: 'Jobs', count: opportunities.length, icon: Target },
+    { id: 'invoices', label: 'Invoices', count: invoices.length, icon: Receipt },
   ];
 
   if (!query) {
@@ -258,6 +272,36 @@ export default function Search() {
                     <div>
                       <p className="font-medium text-gray-900">{opp.name}</p>
                       <p className="text-sm text-gray-500">{opp.stageName || opp.stage}</p>
+                    </div>
+                  </div>
+                  <ArrowRight className="w-4 h-4 text-gray-400" />
+                </Link>
+              )}
+            />
+          )}
+
+          {(activeTab === 'all' || activeTab === 'invoices') && invoices.length > 0 && (
+            <ResultSection
+              title="Invoices"
+              icon={Receipt}
+              items={invoices}
+              renderItem={(invoice) => (
+                <Link
+                  key={invoice.id}
+                  to={invoice.opportunityId ? `/jobs/${invoice.opportunityId}` : '/management/invoices'}
+                  className="flex items-center justify-between p-4 hover:bg-gray-50 rounded-lg transition-colors"
+                >
+                  <div className="flex items-center space-x-4">
+                    <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center">
+                      <Receipt className="w-5 h-5 text-amber-700" />
+                    </div>
+                    <div>
+                      <p className="font-medium text-gray-900">
+                        {invoice.invoiceNumber || `Invoice ${invoice.id?.slice?.(-6) || ''}`}
+                      </p>
+                      <p className="text-sm text-gray-500">
+                        {invoice.account?.name || invoice.accountName || 'No account'} • {invoice.status || 'DRAFT'}
+                      </p>
                     </div>
                   </div>
                   <ArrowRight className="w-4 h-4 text-gray-400" />

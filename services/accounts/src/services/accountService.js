@@ -4,6 +4,53 @@ import { logger } from '../middleware/logger.js';
 
 const prisma = new PrismaClient();
 
+function tokenizeSearch(search) {
+  return [...new Set(String(search || '')
+    .trim()
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean))];
+}
+
+function phoneSearchVariants(search) {
+  const digits = String(search || '').replace(/\D/g, '');
+  if (digits.length < 4) return [];
+
+  const base = digits.length === 11 && digits.startsWith('1') ? digits.slice(1) : digits;
+  const variants = new Set([search, digits, base]);
+
+  if (base.length === 10) {
+    variants.add(`(${base.slice(0, 3)}) ${base.slice(3, 6)}-${base.slice(6)}`);
+    variants.add(`${base.slice(0, 3)}-${base.slice(3, 6)}-${base.slice(6)}`);
+    variants.add(`${base.slice(0, 3)} ${base.slice(3, 6)} ${base.slice(6)}`);
+    variants.add(`+1${base}`);
+    variants.add(`1${base}`);
+  }
+
+  return [...variants].filter(Boolean);
+}
+
+function buildAccountSearchFilters(search) {
+  const rawSearch = String(search || '').trim();
+  const tokens = tokenizeSearch(rawSearch);
+  const phoneVariants = phoneSearchVariants(rawSearch);
+
+  return tokens.map((token, index) => ({
+    OR: [
+      { name: { contains: token, mode: 'insensitive' } },
+      { accountNumber: { contains: token, mode: 'insensitive' } },
+      { email: { contains: token, mode: 'insensitive' } },
+      { billingStreet: { contains: token, mode: 'insensitive' } },
+      { billingCity: { contains: token, mode: 'insensitive' } },
+      { billingState: { contains: token, mode: 'insensitive' } },
+      { billingPostalCode: { contains: token, mode: 'insensitive' } },
+      ...(index === 0
+        ? phoneVariants.map((variant) => ({ phone: { contains: variant } }))
+        : []),
+    ],
+  }));
+}
+
 // Workflows service URL for triggering automations
 const WORKFLOWS_SERVICE_URL = process.env.WORKFLOWS_SERVICE_URL || 'http://workflows-service:3008';
 
@@ -73,12 +120,7 @@ class AccountService {
     if (isPandaClaims !== undefined) where.isPandaClaims = isPandaClaims === 'true';
 
     if (search) {
-      where.OR = [
-        { name: { contains: search, mode: 'insensitive' } },
-        { accountNumber: { contains: search, mode: 'insensitive' } },
-        { email: { contains: search, mode: 'insensitive' } },
-        { phone: { contains: search } },
-      ];
+      where.AND = [...(where.AND || []), ...buildAccountSearchFilters(search)];
     }
 
     // Execute query with count

@@ -35,6 +35,64 @@ const DISPOSITION_STAGE_MAP = {
   RETAIL_NOT_SOLD: 'CLOSED_LOST',
 };
 
+function tokenizeSearch(search) {
+  return [...new Set(String(search || '')
+    .trim()
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean))];
+}
+
+function phoneSearchVariants(search) {
+  const digits = String(search || '').replace(/\D/g, '');
+  if (digits.length < 4) return [];
+
+  const base = digits.length === 11 && digits.startsWith('1') ? digits.slice(1) : digits;
+  const variants = new Set([search, digits, base]);
+
+  if (base.length === 10) {
+    variants.add(`(${base.slice(0, 3)}) ${base.slice(3, 6)}-${base.slice(6)}`);
+    variants.add(`${base.slice(0, 3)}-${base.slice(3, 6)}-${base.slice(6)}`);
+    variants.add(`${base.slice(0, 3)} ${base.slice(3, 6)} ${base.slice(6)}`);
+    variants.add(`+1${base}`);
+    variants.add(`1${base}`);
+  }
+
+  return [...variants].filter(Boolean);
+}
+
+function buildOpportunitySearchFilters(search) {
+  const rawSearch = String(search || '').trim();
+  const tokens = tokenizeSearch(rawSearch);
+  const phoneVariants = phoneSearchVariants(rawSearch);
+
+  return tokens.map((token, index) => ({
+    OR: [
+      { name: { contains: token, mode: 'insensitive' } },
+      { jobId: { contains: token, mode: 'insensitive' } },
+      { street: { contains: token, mode: 'insensitive' } },
+      { city: { contains: token, mode: 'insensitive' } },
+      { state: { contains: token, mode: 'insensitive' } },
+      { postalCode: { contains: token, mode: 'insensitive' } },
+      { account: { name: { contains: token, mode: 'insensitive' } } },
+      { account: { billingStreet: { contains: token, mode: 'insensitive' } } },
+      { account: { billingCity: { contains: token, mode: 'insensitive' } } },
+      { account: { billingState: { contains: token, mode: 'insensitive' } } },
+      { account: { billingPostalCode: { contains: token, mode: 'insensitive' } } },
+      { contact: { firstName: { contains: token, mode: 'insensitive' } } },
+      { contact: { lastName: { contains: token, mode: 'insensitive' } } },
+      { contact: { fullName: { contains: token, mode: 'insensitive' } } },
+      { contact: { email: { contains: token, mode: 'insensitive' } } },
+      ...(index === 0
+        ? phoneVariants.flatMap((variant) => ([
+            { contact: { phone: { contains: variant } } },
+            { contact: { mobilePhone: { contains: variant } } },
+          ]))
+        : []),
+    ],
+  }));
+}
+
 function parseDate(value) {
   if (!value) return null;
   const parsed = new Date(value);
@@ -377,10 +435,7 @@ class OpportunityService {
     }
 
     if (search) {
-      where.OR = [
-        { name: { contains: search, mode: 'insensitive' } },
-        { account: { name: { contains: search, mode: 'insensitive' } } },
-      ];
+      where.AND = [...(where.AND || []), ...buildOpportunitySearchFilters(search)];
     }
 
     // Invoice workflow status filter (for Finance team "Invoice Ready" view)
