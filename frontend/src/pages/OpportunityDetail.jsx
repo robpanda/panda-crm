@@ -30,6 +30,7 @@ import SendInvoiceModal from '../components/SendInvoiceModal';
 import ResultAppointmentWizard from '../components/result-appointment-wizard/ResultAppointmentWizard';
 import SuperTabNav, { SubTabNav, CATEGORIES } from '../components/SuperTabNav';
 import PhotoCamTab from '../components/photocam/PhotoCamTab';
+import CommunicationsTab from '../components/CommunicationsTab';
 import useJobCategories from '../hooks/useJobCategories';
 import WorkflowSidebar from '../components/WorkflowSidebar';
 import NotesSidebar from '../components/NotesSidebar';
@@ -672,7 +673,7 @@ function InvoiceDetailModal({ invoice, onClose }) {
 }
 
 // Communications Tab Component - Shows SMS, Email, and Phone call history
-function CommunicationsTab({ phone, email, contactName, archivedActivities = [], onActivityClick, opportunityId }) {
+function LegacyCommunicationsTab({ phone, email, contactName, archivedActivities = [], onActivityClick, opportunityId }) {
   const [filter, setFilter] = useState('all'); // all, sms, email, phone
   const [activeSubTab, setActiveSubTab] = useState('live'); // live, archive
   const [collapsedThreads, setCollapsedThreads] = useState(new Set());
