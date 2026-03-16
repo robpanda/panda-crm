@@ -668,6 +668,7 @@ router.patch('/:id', async (req, res, next) => {
 router.post('/:id/convert', async (req, res, next) => {
   try {
     const result = await leadService.convertLead(req.params.id, {
+      convertedByUserId: req.user?.id,
       accountName: req.body.accountName,
       opportunityName: req.body.opportunityName,
       opportunityType: req.body.opportunityType,

@@ -986,6 +986,7 @@ class LeadService {
 
     // Use transaction for conversion
     const result = await prisma.$transaction(async (tx) => {
+      const convertedByUserId = await this.resolveUserId(options.convertedByUserId || null);
       const normalizedOpportunityType = ['INSURANCE', 'RETAIL', 'COMMERCIAL'].includes(
         `${options.opportunityType || ''}`.trim().toUpperCase()
       )
@@ -1079,7 +1080,7 @@ class LeadService {
             type: normalizedOpportunityType || undefined,
             leadSource: lead.source,
             isSelfGen: lead.isSelfGen,
-            ownerId: lead.ownerId,
+            ownerId: convertedByUserId || lead.ownerId,
             closeDate: options.closeDate ? new Date(options.closeDate) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
             // Store work type and appointment date on opportunity
             workType: normalizedWorkType || undefined,

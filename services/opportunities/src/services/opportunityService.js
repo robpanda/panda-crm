@@ -560,8 +560,23 @@ class OpportunityService {
         throw error;
       }
 
+      const sourceLead = await prisma.lead.findFirst({
+        where: { convertedOpportunityId: id },
+        select: {
+          id: true,
+          leadSetById: true,
+          ownerId: true,
+          leadSetBy: {
+            select: { id: true, firstName: true, lastName: true, email: true },
+          },
+          owner: {
+            select: { id: true, firstName: true, lastName: true, email: true },
+          },
+        },
+      });
+
       console.log(`[getOpportunityDetails] Found opportunity: ${opportunity.name}`);
-      const wrapper = this.createOpportunityWrapper(opportunity, true);
+      const wrapper = this.createOpportunityWrapper({ ...opportunity, sourceLead }, true);
       console.log(`[getOpportunityDetails] Wrapper created successfully`);
       return wrapper;
     } catch (error) {
@@ -2447,6 +2462,11 @@ Be factual and professional. Highlight anything that needs attention.`;
    * Create opportunity wrapper with computed fields
    */
   createOpportunityWrapper(opp, includeDetails = false) {
+    const sourceLeadUser = opp.sourceLead?.leadSetBy || opp.sourceLead?.owner || null;
+    const sourceLeadDisplayName = sourceLeadUser
+      ? `${sourceLeadUser.firstName || ''} ${sourceLeadUser.lastName || ''}`.trim() || sourceLeadUser.email || null
+      : null;
+
     const wrapper = {
       id: opp.id,
       name: opp.name,
@@ -2493,6 +2513,9 @@ Be factual and professional. Highlight anything that needs attention.`;
       onboardedBy: opp.onboardedBy || null,
       approvedById: opp.approvedById || null,
       approvedBy: opp.approvedBy || null,
+      leadCreditor: sourceLeadDisplayName || null,
+      leadSetById: opp.sourceLead?.leadSetById || opp.sourceLead?.ownerId || null,
+      leadSetByName: sourceLeadDisplayName || null,
       // Timestamps
       createdAt: opp.createdAt,
       updatedAt: opp.updatedAt,

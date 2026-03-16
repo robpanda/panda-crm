@@ -530,8 +530,8 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
       id: `legacy-${photo.id}`,
       legacyPhotoId: photo.id,
       isLegacy: true,
-      displayUrl: photo.photoUrl || photo.displayUrl || photo.url || photo.thumbnailUrl || '',
-      thumbnailUrl: photo.thumbnailUrl || photo.photoUrl || photo.displayUrl || photo.url || '',
+      displayUrl: photo.originalPhotoUrl || photo.photoUrl || photo.displayUrl || photo.url || photo.originalThumbnailUrl || photo.thumbnailUrl || '',
+      thumbnailUrl: photo.originalThumbnailUrl || photo.thumbnailUrl || photo.originalPhotoUrl || photo.photoUrl || photo.displayUrl || photo.url || '',
       fileName: photo.fileName || photo.filename || `Legacy Photo ${photo.id}`,
       createdAt: photo.takenAt || photo.createdAt,
       type: photo.type || 'OTHER',
@@ -613,11 +613,23 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
   const isPhotosLoading = photosLoading || legacyPhotosLoading;
 
   const getPhotoImageUrl = useCallback((photo) => (
-    photo?.thumbnailUrl || photo?.displayUrl || photo?.photoUrl || photo?.url || ''
+    photo?.thumbnailUrl
+      || photo?.originalThumbnailUrl
+      || photo?.displayUrl
+      || photo?.originalPhotoUrl
+      || photo?.photoUrl
+      || photo?.url
+      || ''
   ), []);
 
   const getPhotoFallbackUrl = useCallback((photo) => (
-    photo?.displayUrl || photo?.photoUrl || photo?.url || photo?.thumbnailUrl || ''
+    photo?.displayUrl
+      || photo?.originalPhotoUrl
+      || photo?.photoUrl
+      || photo?.url
+      || photo?.originalThumbnailUrl
+      || photo?.thumbnailUrl
+      || ''
   ), []);
 
   const isSelectablePhoto = useCallback((photo) => !photo?.isLegacy, []);
