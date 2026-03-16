@@ -2526,7 +2526,9 @@ export default function OpportunityDetail() {
     queryFn: () => paymentsApi.getPayments({ opportunityId: id }),
     enabled: !!id,
   });
-  const payments = paymentsData?.data?.payments || paymentsData?.payments || [];
+  const payments = Array.isArray(paymentsData?.data)
+    ? paymentsData.data
+    : paymentsData?.data?.payments || paymentsData?.payments || [];
 
   const { data: commissionsData } = useQuery({
     queryKey: ['opportunityCommissions', id],
