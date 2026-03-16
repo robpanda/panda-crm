@@ -84,6 +84,7 @@ export default function NotesSidebar({ opportunityId }) {
       title: newNoteTitle.trim() || null,
       body: newNoteBody.trim(),
       isPinned: false,
+      mentions: newNoteMentions,
     });
   };
 
@@ -94,6 +95,7 @@ export default function NotesSidebar({ opportunityId }) {
       data: {
         title: editTitle.trim() || null,
         body: editBody.trim(),
+        mentions: editMentions,
       },
     });
   };

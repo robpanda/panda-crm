@@ -1513,56 +1513,95 @@ Be factual and professional. Highlight anything that needs attention.`;
       },
     });
 
-    // Send notifications to mentioned users
-    if (mentions && mentions.length > 0) {
-      const opportunity = await prisma.opportunity.findUnique({
-        where: { id: opportunityId },
-        select: { name: true, jobId: true },
-      });
-
-      const notificationPromises = mentions.map(async (mention) => {
-        // Create in-app notification
-        await prisma.notification.create({
-          data: {
-            userId: mention.userId,
-            type: 'MENTION',
-            title: `${user?.firstName || 'Someone'} mentioned you`,
-            message: `You were mentioned in a reply on ${opportunity?.name || opportunity?.jobId || 'an opportunity'}: "${content.substring(0, 100)}${content.length > 100 ? '...' : ''}"`,
-            opportunityId: opportunityId,
-            actionUrl: `/jobs/${opportunityId}`,
-            actionLabel: 'View Job',
-            sourceType: 'OPPORTUNITY',
-            sourceId: opportunityId,
-            status: 'UNREAD',
-          },
-        });
-
-        // Get user email for email notification
-        const mentionedUser = await prisma.user.findUnique({
-          where: { id: mention.userId },
-          select: { email: true, firstName: true },
-        });
-
-        if (mentionedUser?.email) {
-          // Send email notification (fire and forget)
-          this.sendMentionEmail({
-            toEmail: mentionedUser.email,
-            toName: mentionedUser.firstName,
-            mentionerName: `${user?.firstName} ${user?.lastName}`,
-            opportunityName: opportunity?.name || opportunity?.jobId,
-            opportunityId,
-            messagePreview: content.substring(0, 200),
-          }).catch(err => console.error('Failed to send mention email:', err));
-        }
-      });
-
-      await Promise.all(notificationPromises);
-    }
+    const mentionsNotified = await this.notifyOpportunityMentions(
+      opportunityId,
+      mentions,
+      user,
+      content
+    );
 
     return {
       ...note,
-      mentionsNotified: mentions?.length || 0,
+      mentionsNotified,
     };
+  }
+
+  normalizeMentionTargets(mentions = []) {
+    const normalizedMentions = [];
+    const seenUserIds = new Set();
+
+    for (const mention of Array.isArray(mentions) ? mentions : []) {
+      const userId = mention?.userId || mention?.id || null;
+      if (!userId || seenUserIds.has(userId)) continue;
+      seenUserIds.add(userId);
+      normalizedMentions.push({
+        userId,
+        name: mention?.name || null,
+        email: mention?.email || null,
+      });
+    }
+
+    return normalizedMentions;
+  }
+
+  async notifyOpportunityMentions(opportunityId, mentions, actor, messagePreview = '') {
+    const normalizedMentions = this
+      .normalizeMentionTargets(mentions)
+      .filter((mention) => mention.userId !== actor?.id);
+
+    if (normalizedMentions.length === 0) {
+      return 0;
+    }
+
+    const opportunity = await prisma.opportunity.findUnique({
+      where: { id: opportunityId },
+      select: { name: true, jobId: true },
+    });
+
+    const mentionerName = `${actor?.firstName || ''} ${actor?.lastName || ''}`.trim()
+      || actor?.email
+      || 'Someone';
+    const safePreview = String(messagePreview || '').trim();
+    const truncatedPreview = safePreview
+      ? `${safePreview.substring(0, 100)}${safePreview.length > 100 ? '...' : ''}`
+      : 'You were mentioned in a job note.';
+
+    await Promise.all(normalizedMentions.map(async (mention) => {
+      await prisma.notification.create({
+        data: {
+          userId: mention.userId,
+          type: 'MENTION',
+          title: `${mentionerName} mentioned you`,
+          message: `You were mentioned on ${opportunity?.name || opportunity?.jobId || 'a job'}: "${truncatedPreview}"`,
+          opportunityId,
+          actionUrl: `/jobs/${opportunityId}`,
+          actionLabel: 'View Job',
+          sourceType: 'OPPORTUNITY',
+          sourceId: opportunityId,
+          status: 'UNREAD',
+        },
+      });
+
+      const mentionedUser = mention.email
+        ? { email: mention.email, firstName: mention.name?.split(' ')[0] || null }
+        : await prisma.user.findUnique({
+            where: { id: mention.userId },
+            select: { email: true, firstName: true },
+          });
+
+      if (mentionedUser?.email) {
+        this.sendMentionEmail({
+          toEmail: mentionedUser.email,
+          toName: mentionedUser.firstName || mention.name,
+          mentionerName,
+          opportunityName: opportunity?.name || opportunity?.jobId,
+          opportunityId,
+          messagePreview: safePreview.substring(0, 200),
+        }).catch((error) => console.error('Failed to send mention email:', error));
+      }
+    }));
+
+    return normalizedMentions.length;
   }
 
   /**
@@ -1570,7 +1609,7 @@ Be factual and professional. Highlight anything that needs attention.`;
    */
   async sendMentionEmail({ toEmail, toName, mentionerName, opportunityName, opportunityId, messagePreview }) {
     try {
-      const opportunityUrl = `https://bamboo.pandaadmin.com/opportunities/${opportunityId}`;
+      const opportunityUrl = `https://bamboo.pandaadmin.com/jobs/${opportunityId}`;
 
       await sesClient.send(new SendEmailCommand({
         Source: FROM_EMAIL,
@@ -3894,6 +3933,12 @@ Be factual and professional. Highlight anything that needs attention.`;
     });
 
     logger.info(`Note created: ${note.id}`);
+    const mentionsNotified = await this.notifyOpportunityMentions(
+      opportunityId,
+      data.mentions,
+      data.actor,
+      data.body
+    );
     return {
       id: note.id,
       title: note.title,
@@ -3901,6 +3946,7 @@ Be factual and professional. Highlight anything that needs attention.`;
       isPinned: note.isPinned,
       pinnedAt: note.pinnedAt,
       createdAt: note.createdAt,
+      mentionsNotified,
       createdBy: note.createdBy
         ? {
             id: note.createdBy.id,
@@ -3950,6 +3996,13 @@ Be factual and professional. Highlight anything that needs attention.`;
       },
     });
 
+    const mentionsNotified = await this.notifyOpportunityMentions(
+      existingNote.opportunityId,
+      data.mentions,
+      data.actor,
+      note.body
+    );
+
     return {
       id: note.id,
       title: note.title,
@@ -3958,6 +4011,7 @@ Be factual and professional. Highlight anything that needs attention.`;
       pinnedAt: note.pinnedAt,
       createdAt: note.createdAt,
       updatedAt: note.updatedAt,
+      mentionsNotified,
       createdBy: note.createdBy
         ? {
             id: note.createdBy.id,
@@ -4122,6 +4176,13 @@ Be factual and professional. Highlight anything that needs attention.`;
       },
     });
 
+    const mentionsNotified = await this.notifyOpportunityMentions(
+      opportunityId,
+      payload.mentions,
+      actor,
+      content
+    );
+
     return {
       id: comment.id,
       content: comment.body,
@@ -4140,11 +4201,11 @@ Be factual and professional. Highlight anything that needs attention.`;
         : null,
       replies: [],
       attachmentUrls: [],
-      mentionsNotified: 0,
+      mentionsNotified,
     };
   }
 
-  async updateOpportunityInternalComment(opportunityId, commentId, payload = {}) {
+  async updateOpportunityInternalComment(opportunityId, commentId, payload = {}, actor = null) {
     const existing = await prisma.note.findFirst({
       where: {
         id: commentId,
@@ -4198,6 +4259,13 @@ Be factual and professional. Highlight anything that needs attention.`;
       },
     });
 
+    const mentionsNotified = await this.notifyOpportunityMentions(
+      opportunityId,
+      payload.mentions,
+      actor,
+      updated.body
+    );
+
     return {
       id: updated.id,
       content: updated.body,
@@ -4216,7 +4284,7 @@ Be factual and professional. Highlight anything that needs attention.`;
         : null,
       replies: [],
       attachmentUrls: [],
-      mentionsNotified: 0,
+      mentionsNotified,
     };
   }
 
