@@ -142,6 +142,33 @@ export default function ReportDetail() {
     }
   };
 
+  const safeReport = report || {};
+  const emptyStateContext = {
+    title: safeReport.name,
+    source: deriveDataSource(safeReport),
+    verifiedStatus: verification.status,
+    verifiedReason: verification.reason,
+    failedChecks: verification.failedChecks || [],
+    rowCount: 0,
+    filters: {
+      'Date Range': dateRangeLabel,
+      Tables: getReportTablesUsed(safeReport).join(', '),
+    },
+  };
+
+  const normalizedResult = useMemo(
+    () => normalizeReportRunResult(safeReport, payload),
+    [payload, safeReport]
+  );
+
+  const tableColumns = useMemo(() => {
+    const sample = normalizedResult.rows?.[0] || {};
+    return Object.keys(sample).map((key) => ({
+      key,
+      label: formatReportFieldLabel(key),
+    }));
+  }, [normalizedResult.rows]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -163,32 +190,6 @@ export default function ReportDetail() {
       </div>
     );
   }
-
-  const emptyStateContext = {
-    title: report.name,
-    source: deriveDataSource(report),
-    verifiedStatus: verification.status,
-    verifiedReason: verification.reason,
-    failedChecks: verification.failedChecks || [],
-    rowCount: 0,
-    filters: {
-      'Date Range': dateRangeLabel,
-      Tables: getReportTablesUsed(report).join(', '),
-    },
-  };
-
-  const normalizedResult = useMemo(
-    () => normalizeReportRunResult(report, payload),
-    [payload, report]
-  );
-
-  const tableColumns = useMemo(() => {
-    const sample = normalizedResult.rows?.[0] || {};
-    return Object.keys(sample).map((key) => ({
-      key,
-      label: formatReportFieldLabel(key),
-    }));
-  }, [normalizedResult.rows]);
 
   return (
     <div className="space-y-6">
