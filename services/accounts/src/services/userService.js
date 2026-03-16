@@ -245,12 +245,21 @@ export const userService = {
       where.department = { contains: department, mode: 'insensitive' };
     }
 
-    if (search) {
-      where.OR = [
-        { firstName: { contains: search, mode: 'insensitive' } },
-        { lastName: { contains: search, mode: 'insensitive' } },
-        { fullName: { contains: search, mode: 'insensitive' } },
-      ];
+    const trimmedSearch = typeof search === 'string' ? search.trim() : '';
+    if (trimmedSearch) {
+      const searchTokens = trimmedSearch.split(/\s+/).filter(Boolean);
+      const tokenFilters = searchTokens.map((token) => ({
+        OR: [
+          { firstName: { contains: token, mode: 'insensitive' } },
+          { lastName: { contains: token, mode: 'insensitive' } },
+          { fullName: { contains: token, mode: 'insensitive' } },
+          { email: { contains: token, mode: 'insensitive' } },
+          { title: { contains: token, mode: 'insensitive' } },
+          { department: { contains: token, mode: 'insensitive' } },
+        ],
+      }));
+
+      where.AND = [...(where.AND || []), ...tokenFilters];
     }
 
     const users = await prisma.user.findMany({
@@ -261,12 +270,13 @@ export const userService = {
         firstName: true,
         lastName: true,
         email: true,
+        isActive: true,
         title: true,
         department: true,
         officeAssignment: true,
       },
       orderBy: { lastName: 'asc' },
-      take: 100,
+      take: 500,
     });
 
     return users;
