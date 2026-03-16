@@ -38,6 +38,60 @@ const PHOTO_TYPES = [
 const MAX_BULK_UPLOAD_FILES = 100;
 const UPLOAD_IMAGE_MAX_DIMENSION = 2400;
 const UPLOAD_IMAGE_QUALITY = 0.82;
+const PHOTOCAM_PRIVATE_S3_HOST = 'pandacam-photos-prod.s3.us-east-2.amazonaws.com';
+const PHOTOCAM_CDN_BASE_URL = 'https://d2nv1ditkq7acr.cloudfront.net';
+
+const normalizePhotoUrl = (value) => {
+  if (typeof value !== 'string') return '';
+  const url = value.trim();
+  if (!url) return '';
+
+  try {
+    const parsed = new URL(url);
+    if (parsed.host === PHOTOCAM_PRIVATE_S3_HOST) {
+      const path = parsed.pathname.replace(/^\/+/, '');
+      return path ? `${PHOTOCAM_CDN_BASE_URL}/${path}` : '';
+    }
+  } catch {
+    return '';
+  }
+
+  return url;
+};
+
+const buildPhotoUrlCandidates = (photo, { legacy = false } = {}) => {
+  const orderedCandidates = legacy
+    ? [
+        photo.thumbnailUrl,
+        photo.photoUrl,
+        photo.originalThumbnailUrl,
+        photo.originalCompanyCamUrl,
+        photo.originalPhotoUrl,
+        photo.displayUrl,
+        photo.originalUrl,
+        photo.url,
+      ]
+    : [
+        photo.displayUrl,
+        photo.thumbnailUrl,
+        photo.originalUrl,
+        photo.photoUrl,
+        photo.originalCompanyCamUrl,
+        photo.originalPhotoUrl,
+        photo.originalThumbnailUrl,
+        photo.url,
+      ];
+
+  const seen = new Set();
+
+  return orderedCandidates
+    .map(normalizePhotoUrl)
+    .filter((url) => {
+      if (!url || seen.has(url)) return false;
+      seen.add(url);
+      return true;
+    });
+};
 
 export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) {
   const queryClient = useQueryClient();
@@ -513,30 +567,38 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
     const rawPhotos = photosData?.photos || photosData?.data?.photos || [];
     if (!Array.isArray(rawPhotos)) return [];
 
-    return rawPhotos.map((photo) => ({
-      ...photo,
-      isLegacy: false,
-      displayUrl: photo.displayUrl || photo.photoUrl || photo.url || photo.thumbnailUrl || '',
-      thumbnailUrl: photo.thumbnailUrl || photo.displayUrl || photo.photoUrl || photo.url || '',
-    }));
+    return rawPhotos.map((photo) => {
+      const photoUrlCandidates = buildPhotoUrlCandidates(photo);
+      return {
+        ...photo,
+        isLegacy: false,
+        photoUrlCandidates,
+        displayUrl: photoUrlCandidates[0] || '',
+        thumbnailUrl: photoUrlCandidates[0] || '',
+      };
+    });
   }, [photosData]);
 
   const legacyPhotos = useMemo(() => {
     const rawPhotos = legacyPhotosData?.photos || legacyPhotosData?.data?.photos || [];
     if (!Array.isArray(rawPhotos)) return [];
 
-    return rawPhotos.map((photo) => ({
-      ...photo,
-      id: `legacy-${photo.id}`,
-      legacyPhotoId: photo.id,
-      isLegacy: true,
-      displayUrl: photo.originalPhotoUrl || photo.photoUrl || photo.displayUrl || photo.url || photo.originalThumbnailUrl || photo.thumbnailUrl || '',
-      thumbnailUrl: photo.originalThumbnailUrl || photo.thumbnailUrl || photo.originalPhotoUrl || photo.photoUrl || photo.displayUrl || photo.url || '',
-      fileName: photo.fileName || photo.filename || `Legacy Photo ${photo.id}`,
-      createdAt: photo.takenAt || photo.createdAt,
-      type: photo.type || 'OTHER',
-      tags: Array.isArray(photo.tags) ? photo.tags : [],
-    }));
+    return rawPhotos.map((photo) => {
+      const photoUrlCandidates = buildPhotoUrlCandidates(photo, { legacy: true });
+      return {
+        ...photo,
+        id: `legacy-${photo.id}`,
+        legacyPhotoId: photo.id,
+        isLegacy: true,
+        photoUrlCandidates,
+        displayUrl: photoUrlCandidates[0] || '',
+        thumbnailUrl: photoUrlCandidates[0] || '',
+        fileName: photo.fileName || photo.filename || `Legacy Photo ${photo.id}`,
+        createdAt: photo.takenAt || photo.createdAt,
+        type: photo.type || 'OTHER',
+        tags: Array.isArray(photo.tags) ? photo.tags : [],
+      };
+    });
   }, [legacyPhotosData]);
 
   const photos = useMemo(() => {
@@ -612,25 +674,28 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
 
   const isPhotosLoading = photosLoading || legacyPhotosLoading;
 
-  const getPhotoImageUrl = useCallback((photo) => (
-    photo?.thumbnailUrl
-      || photo?.originalThumbnailUrl
-      || photo?.displayUrl
-      || photo?.originalPhotoUrl
-      || photo?.photoUrl
-      || photo?.url
-      || ''
+  const getPhotoUrlCandidates = useCallback((photo) => (
+    Array.isArray(photo?.photoUrlCandidates) ? photo.photoUrlCandidates : []
   ), []);
 
-  const getPhotoFallbackUrl = useCallback((photo) => (
-    photo?.displayUrl
-      || photo?.originalPhotoUrl
-      || photo?.photoUrl
-      || photo?.url
-      || photo?.originalThumbnailUrl
-      || photo?.thumbnailUrl
-      || ''
-  ), []);
+  const getPhotoImageUrl = useCallback((photo) => getPhotoUrlCandidates(photo)[0] || '', [getPhotoUrlCandidates]);
+
+  const getPhotoFallbackUrl = useCallback((photo, currentIndex = 0) => (
+    getPhotoUrlCandidates(photo)[currentIndex + 1] || ''
+  ), [getPhotoUrlCandidates]);
+
+  const advancePhotoFallback = useCallback((target, photo) => {
+    const currentIndex = Number(target.dataset.photoCandidateIndex || '0');
+    const fallbackUrl = getPhotoFallbackUrl(photo, currentIndex);
+
+    if (fallbackUrl && target.src !== fallbackUrl) {
+      target.dataset.photoCandidateIndex = String(currentIndex + 1);
+      target.src = fallbackUrl;
+      return;
+    }
+
+    target.onerror = null;
+  }, [getPhotoFallbackUrl]);
 
   const isSelectablePhoto = useCallback((photo) => !photo?.isLegacy, []);
 
@@ -1089,11 +1154,9 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
                     alt={photo.caption || 'Photo'}
                     className="w-full h-full object-cover"
                     loading="lazy"
+                    data-photo-candidate-index="0"
                     onError={(e) => {
-                      const fallbackUrl = getPhotoFallbackUrl(photo);
-                      if (fallbackUrl && e.currentTarget.src !== fallbackUrl) {
-                        e.currentTarget.src = fallbackUrl;
-                      }
+                      advancePhotoFallback(e.currentTarget, photo);
                     }}
                   />
 
@@ -1188,11 +1251,9 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
                       src={getPhotoImageUrl(photo)}
                       alt={photo.caption || 'Photo'}
                       className="w-full h-full object-cover"
+                      data-photo-candidate-index="0"
                       onError={(e) => {
-                        const fallbackUrl = getPhotoFallbackUrl(photo);
-                        if (fallbackUrl && e.currentTarget.src !== fallbackUrl) {
-                          e.currentTarget.src = fallbackUrl;
-                        }
+                        advancePhotoFallback(e.currentTarget, photo);
                       }}
                     />
                   </div>
@@ -1902,14 +1963,12 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
           {/* Image */}
           <div className="max-w-4xl max-h-[80vh] p-4" onClick={(e) => e.stopPropagation()}>
             <img
-              src={getPhotoFallbackUrl(lightboxPhoto)}
+              src={getPhotoImageUrl(lightboxPhoto)}
               alt={lightboxPhoto.caption || 'Photo'}
               className="max-w-full max-h-full object-contain"
+              data-photo-candidate-index="0"
               onError={(e) => {
-                const fallbackUrl = getPhotoFallbackUrl(lightboxPhoto);
-                if (fallbackUrl && e.currentTarget.src !== fallbackUrl) {
-                  e.currentTarget.src = fallbackUrl;
-                }
+                advancePhotoFallback(e.currentTarget, lightboxPhoto);
               }}
             />
             {lightboxPhoto.caption && (
