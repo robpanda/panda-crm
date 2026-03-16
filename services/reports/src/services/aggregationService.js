@@ -591,13 +591,18 @@ export async function getStateMetrics(options = {}) {
       { state: { not: null } }
     );
 
-    const grouped = await model.groupBy({
+    const groupByArgs = {
       by: ['state'],
       where,
       _count: { _all: true },
-      _sum: metric === 'sum' ? { amount: true } : undefined,
       orderBy: { _count: { [GROUP_COUNT_ORDER_FIELD]: 'desc' } },
-    });
+    };
+
+    if (metric === 'sum') {
+      groupByArgs._sum = { amount: true };
+    }
+
+    const grouped = await model.groupBy(groupByArgs);
 
     return {
       period: range.label,

@@ -5,6 +5,32 @@ import { logger } from '../middleware/logger.js';
 
 const router = Router();
 
+router.get('/health', async (req, res, next) => {
+  try {
+    res.json({
+      success: true,
+      data: {
+        ok: true,
+        status: 'healthy',
+        summary: {
+          lastRunAt: new Date().toISOString(),
+        },
+        checks: [
+          {
+            id: 'analytics_routes',
+            status: 'healthy',
+            details: {
+              routes: ['pipeline', 'time-series', 'revenue', 'performance', 'leads', 'states', 'aggregate'],
+            },
+          },
+        ],
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 /**
  * GET /api/analytics/pipeline
  * Get pipeline metrics with groupings
