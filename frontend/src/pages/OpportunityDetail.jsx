@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useParams, Link, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { opportunitiesApi, companyCamApi, scheduleApi, casesApi, emailsApi, notificationsApi, bamboogliApi, approvalsApi, measurementsApi, contactsApi, ringCentralApi, usersApi, quotesApi, invoicesApi, tasksApi, documentsApi } from '../services/api';
+import { opportunitiesApi, companyCamApi, scheduleApi, casesApi, emailsApi, notificationsApi, bamboogliApi, approvalsApi, measurementsApi, contactsApi, ringCentralApi, usersApi, quotesApi, invoicesApi, paymentsApi, tasksApi, documentsApi } from '../services/api';
 import { useRingCentral } from '../context/RingCentralContext';
 import { useAuth } from '../context/AuthContext';
 import { addRecentItem } from '../utils/recentItems';
@@ -545,7 +545,14 @@ function EmailModal({ isOpen, onClose, email, recipientName, onSent, mergeData =
 }
 
 // Invoice Detail Modal Component - Shows invoice details with payment history
-function InvoiceDetailModal({ invoice, onClose }) {
+function InvoiceDetailModal({
+  invoice,
+  onClose,
+  onDownload,
+  onSend,
+  onPay,
+  onEdit,
+}) {
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -581,6 +588,19 @@ function InvoiceDetailModal({ invoice, onClose }) {
     }).format(amount);
   };
 
+  const activityItems = [
+    invoice.createdAt ? { label: 'Created', value: invoice.createdAt } : null,
+    invoice.sentAt ? { label: 'Sent', value: invoice.sentAt } : null,
+    invoice.updatedAt ? { label: 'Updated', value: invoice.updatedAt } : null,
+    invoice.paidAt ? { label: 'Paid', value: invoice.paidAt } : null,
+  ].filter(Boolean);
+
+  const canSendInvoice = invoice.status !== 'PAID' && invoice.status !== 'VOID';
+  const canCollectPayment =
+    invoice.status !== 'PAID' &&
+    (parseFloat(invoice.balanceDue || 0) > 0 ||
+      parseFloat(invoice.totalAmount || 0) > parseFloat(invoice.amountPaid || 0));
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-xl max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col">
@@ -605,6 +625,45 @@ function InvoiceDetailModal({ invoice, onClose }) {
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => onDownload(invoice)}
+              className="flex items-center gap-1 px-3 py-1.5 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-black transition-colors"
+            >
+              <Download className="w-4 h-4" />
+              Download
+            </button>
+            {canSendInvoice && (
+              <button
+                type="button"
+                onClick={() => onSend(invoice)}
+                className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                <Mail className="w-4 h-4" />
+                {invoice.status === 'SENT' ? 'Resend' : 'Send'}
+              </button>
+            )}
+            {canCollectPayment && (
+              <button
+                type="button"
+                onClick={() => onPay(invoice)}
+                className="flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 transition-colors"
+              >
+                <CreditCard className="w-4 h-4" />
+                Pay
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => onEdit(invoice)}
+              className="flex items-center gap-1 px-3 py-1.5 bg-white text-gray-700 text-sm font-medium border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+            >
+              <Edit className="w-4 h-4" />
+              Edit
+            </button>
+          </div>
+
           {/* Summary Grid */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div className="bg-gray-50 rounded-lg p-3">
@@ -639,6 +698,22 @@ function InvoiceDetailModal({ invoice, onClose }) {
               {invoice.status || 'DRAFT'}
             </span>
           </div>
+
+          {activityItems.length > 0 && (
+            <div>
+              <h3 className="text-sm font-medium text-gray-900 mb-2">Activity</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {activityItems.map((item) => (
+                  <div key={item.label} className="bg-gray-50 rounded-lg p-3">
+                    <p className="text-xs text-gray-500">{item.label}</p>
+                    <p className="text-sm font-medium text-gray-900">
+                      {new Date(item.value).toLocaleString()}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Line Items */}
           {invoice.lineItems && invoice.lineItems.length > 0 && (
@@ -1773,6 +1848,33 @@ export default function OpportunityDetail() {
 
   // Invoice detail modal state
   const [showInvoiceDetailModal, setShowInvoiceDetailModal] = useState(false);
+
+  const openInvoiceEditor = useCallback((invoiceId) => {
+    navigate(`/invoices/${invoiceId}`);
+  }, [navigate]);
+
+  const handleInvoiceDownload = useCallback(async (invoice) => {
+    try {
+      const result = await invoicesApi.getInvoicePdf(invoice.id);
+      const downloadUrl = result?.pdfUrl || result?.downloadUrl || result?.data?.pdfUrl || result?.data?.downloadUrl;
+      if (!downloadUrl) {
+        throw new Error('Invoice PDF is unavailable');
+      }
+      window.open(downloadUrl, '_blank', 'noopener,noreferrer');
+    } catch (error) {
+      setActionError(error?.message || 'Failed to download invoice');
+    }
+  }, []);
+
+  const openInvoiceSendModal = useCallback((invoice) => {
+    setInvoiceToSend(invoice);
+    setShowSendInvoiceModal(true);
+  }, []);
+
+  const openInvoicePayModal = useCallback((invoice) => {
+    setSelectedInvoice(invoice);
+    setShowPayInvoiceModal(true);
+  }, []);
 
   // Documents sub-tab state (contracts vs photos)
   const [documentsSubTab, setDocumentsSubTab] = useState('contracts');
@@ -7131,18 +7233,28 @@ export default function OpportunityDetail() {
                               </div>
                               {/* Invoice Action Buttons */}
                               <div className="flex items-center gap-2">
-                                {/* Send Invoice Button - show if not already sent or paid */}
-                                {invoice.status !== 'PAID' && invoice.status !== 'SENT' && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleInvoiceDownload(invoice);
+                                  }}
+                                  className="flex items-center gap-1 px-3 py-1.5 bg-gray-900 text-white text-sm font-medium rounded-lg hover:bg-black transition-colors"
+                                >
+                                  <Download className="w-4 h-4" />
+                                  Download
+                                </button>
+                                {/* Send/Resend Invoice Button */}
+                                {invoice.status !== 'PAID' && invoice.status !== 'VOID' && (
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      setInvoiceToSend(invoice);
-                                      setShowSendInvoiceModal(true);
+                                      openInvoiceSendModal(invoice);
                                     }}
                                     className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition-colors"
                                   >
                                     <Mail className="w-4 h-4" />
-                                    Send
+                                    {invoice.status === 'SENT' ? 'Resend' : 'Send'}
                                   </button>
                                 )}
                                 {/* Pay Invoice Button - only show if not fully paid */}
@@ -7150,8 +7262,7 @@ export default function OpportunityDetail() {
                                   <button
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      setSelectedInvoice(invoice);
-                                      setShowPayInvoiceModal(true);
+                                      openInvoicePayModal(invoice);
                                     }}
                                     className="flex items-center gap-1 px-3 py-1.5 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 transition-colors"
                                   >
@@ -7159,8 +7270,29 @@ export default function OpportunityDetail() {
                                     Pay
                                   </button>
                                 )}
-                                {/* View indicator */}
-                                <ExternalLink className="w-4 h-4 text-gray-400" />
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    openInvoiceEditor(invoice.id);
+                                  }}
+                                  className="flex items-center gap-1 px-3 py-1.5 bg-white text-gray-700 text-sm font-medium border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                                >
+                                  <Edit className="w-4 h-4" />
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedInvoice(invoice);
+                                    setShowInvoiceDetailModal(true);
+                                  }}
+                                  className="flex items-center gap-1 px-3 py-1.5 bg-white text-gray-700 text-sm font-medium border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                                >
+                                  <Activity className="w-4 h-4" />
+                                  Activity
+                                </button>
                               </div>
                             </div>
                           </div>
@@ -11507,6 +11639,10 @@ export default function OpportunityDetail() {
       {showInvoiceDetailModal && selectedInvoice && (
         <InvoiceDetailModal
           invoice={selectedInvoice}
+          onDownload={handleInvoiceDownload}
+          onSend={openInvoiceSendModal}
+          onPay={openInvoicePayModal}
+          onEdit={(invoice) => openInvoiceEditor(invoice.id)}
           onClose={() => {
             setShowInvoiceDetailModal(false);
             setSelectedInvoice(null);
