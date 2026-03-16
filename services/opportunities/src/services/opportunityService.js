@@ -2174,7 +2174,6 @@ Be factual and professional. Highlight anything that needs attention.`;
       select: {
         stage: true,
         status: true,
-        stageName: true,
         isApproved: true,
         claimNumber: true,
         claimFiledDate: true,
@@ -2250,6 +2249,7 @@ Be factual and professional. Highlight anything that needs attention.`;
         accountId: data.accountId,
         contactId: data.contactId,
         ownerId: data.ownerId,
+        projectManagerId: data.projectManagerId,
         // Invoice workflow fields
         invoiceStatus: data.invoiceStatus,
         invoiceReadyDate: data.invoiceReadyDate ? new Date(data.invoiceReadyDate) : undefined,
@@ -2275,7 +2275,6 @@ Be factual and professional. Highlight anything that needs attention.`;
       try {
         // Build changes object to pass to triggers
         const changes = {
-          stageName: data.stageName,
           stage: data.stage,
           status: data.status,
           isApproved: data.isApproved,
@@ -2287,7 +2286,6 @@ Be factual and professional. Highlight anything that needs attention.`;
           acvAmount: data.acvAmount,
           deductible: data.deductible,
           // Include previous values for comparison
-          _previousStageName: previousState.stageName,
           _previousStage: previousState.stage,
           _previousStatus: previousState.status,
           _previousIsApproved: previousState.isApproved,
@@ -2296,7 +2294,6 @@ Be factual and professional. Highlight anything that needs attention.`;
 
         // Only trigger if there was an actual change in relevant fields
         const hasRelevantChange =
-          changes.stageName !== previousState.stageName ||
           changes.stage !== previousState.stage ||
           changes.status !== previousState.status ||
           changes.isApproved !== previousState.isApproved ||
