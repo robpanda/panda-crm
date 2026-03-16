@@ -2666,6 +2666,7 @@ Be factual and professional. Highlight anything that needs attention.`;
   createOpportunityWrapper(opp, includeDetails = false) {
     const sourceLeadUser = opp.sourceLead?.leadSetBy || opp.sourceLead?.owner || null;
     const effectiveOwner = opp.owner || opp.sourceLead?.owner || opp.sourceLead?.leadSetBy || null;
+    const hasAppointmentResultPath = Boolean(opp.currentDispositionCategory);
     const sourceLeadDisplayName = sourceLeadUser
       ? `${sourceLeadUser.firstName || ''} ${sourceLeadUser.lastName || ''}`.trim() || sourceLeadUser.email || null
       : null;
@@ -2687,7 +2688,8 @@ Be factual and professional. Highlight anything that needs attention.`;
       soldDate: opp.soldDate,
       amount: opp.amount ? Number(opp.amount) : null,
       contractTotal: opp.contractTotal ? Number(opp.contractTotal) : null,
-      type: opp.type,
+      type: hasAppointmentResultPath ? opp.type : null,
+      rawType: opp.type,
       workType: opp.workType,
       leadSource: opp.leadSource,
       isSelfGen: opp.isSelfGen,

@@ -700,9 +700,16 @@ export default function OpportunityList() {
                     )}
                     {isColumnVisible('name') && (
                       <td className="px-6 py-4">
-                        <Link to={`/jobs/${opp.id}`} className="font-medium text-gray-900 hover:text-panda-primary">
-                          {getOpportunityDisplayName(opp.name)}
-                        </Link>
+                        <div className="min-w-0">
+                          <Link to={`/jobs/${opp.id}`} className="font-medium text-gray-900 hover:text-panda-primary">
+                            {getOpportunityDisplayName(opp.name)}
+                          </Link>
+                          {(opp.accountName || opp.account?.name) && (
+                            <div className="text-xs text-gray-500 truncate">
+                              {opp.accountName || opp.account?.name}
+                            </div>
+                          )}
+                        </div>
                       </td>
                     )}
                     {isColumnVisible('account') && (
