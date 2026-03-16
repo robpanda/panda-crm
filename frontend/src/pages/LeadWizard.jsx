@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -248,6 +248,7 @@ const INSPECTION_SUGGESTION_WINDOW_DAYS = 14;
 const APPOINTMENT_SLOT_TIMES = ['09:00', '11:00', '13:00', '15:00'];
 
 export default function LeadWizard() {
+  const saveRequestRef = useRef(null);
   const { id } = useParams();
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -1233,61 +1234,69 @@ export default function LeadWizard() {
   };
 
   const handleSave = async (options = {}) => {
-    const { navigateAfterSave = true } = options;
-    setIsSaving(true);
-    try {
-      const saveData = {
-        firstName: formData.firstName,
-        lastName: formData.lastName,
-        email: formData.email,
-        phone: formData.phone,
-        mobilePhone: formData.mobilePhone,
-        company: formData.company,
-        street: formData.street,
-        city: formData.city,
-        state: formData.state,
-        postalCode: formData.postalCode,
-        status: formData.status,
-        source: formData.leadSource,
-        rating: formData.rating,
-        description: formData.description,
-        // New fields
-        stage: formData.stage,
-        ownerId: formData.ownerId,
-        creatorId: formData.creatorId,
-        salesRabbitUser: formData.salesRabbitUser,
-        propertyType: formData.propertyType,
-        workType: formData.workType,
-        leadNotes: formData.leadNotes,
-        jobNotes: formData.jobNotes,
-        // Call Center tracking - who entered/set this lead
-        leadSetById: formData.leadSetById,
-        tentativeAppointmentDate: formData.tentativeAppointmentDate || null,
-        tentativeAppointmentTime: formData.tentativeAppointmentTime || null,
-        disposition: formData.leadDisposition || null,
-      };
+    if (saveRequestRef.current) {
+      return saveRequestRef.current;
+    }
 
-      if (isNewLead) {
-        const newLead = await leadsApi.createLead(saveData);
-        // Set the lead state directly to avoid reload clearing form data
-        setLead(newLead);
-        // Navigate with replace and state to indicate we just saved
-        if (navigateAfterSave) {
-          navigate(`/leads/${newLead.id}/wizard`, { replace: true, state: { justSaved: true } });
+    const { navigateAfterSave = true } = options;
+    const savePromise = (async () => {
+      setIsSaving(true);
+      try {
+        const saveData = {
+          firstName: formData.firstName,
+          lastName: formData.lastName,
+          email: formData.email,
+          phone: formData.phone,
+          mobilePhone: formData.mobilePhone,
+          company: formData.company,
+          street: formData.street,
+          city: formData.city,
+          state: formData.state,
+          postalCode: formData.postalCode,
+          status: formData.status,
+          source: formData.leadSource,
+          rating: formData.rating,
+          description: formData.description,
+          // New fields
+          stage: formData.stage,
+          ownerId: formData.ownerId,
+          creatorId: formData.creatorId,
+          salesRabbitUser: formData.salesRabbitUser,
+          propertyType: formData.propertyType,
+          workType: formData.workType,
+          leadNotes: formData.leadNotes,
+          jobNotes: formData.jobNotes,
+          // Call Center tracking - who entered/set this lead
+          leadSetById: formData.leadSetById,
+          tentativeAppointmentDate: formData.tentativeAppointmentDate || null,
+          tentativeAppointmentTime: formData.tentativeAppointmentTime || null,
+          disposition: formData.leadDisposition || null,
+        };
+
+        if (isNewLead) {
+          const newLead = await leadsApi.createLead(saveData);
+          setLead(newLead);
+          if (navigateAfterSave) {
+            navigate(`/leads/${newLead.id}/wizard`, { replace: true, state: { justSaved: true } });
+          }
+          return newLead.id;
         }
-        return newLead.id;
-      } else {
+
         const updatedLead = await leadsApi.updateLead(id, saveData);
         setLead(updatedLead);
         return updatedLead?.id || id;
+      } catch (error) {
+        console.error('Failed to save lead:', error);
+        setErrorMessage('Failed to save lead. Please try again.');
+        return null;
+      } finally {
+        setIsSaving(false);
+        saveRequestRef.current = null;
       }
-    } catch (error) {
-      console.error('Failed to save lead:', error);
-      setErrorMessage('Failed to save lead. Please try again.');
-      return null;
-    } finally {
-      setIsSaving(false);
-    }
+    })();
+
+    saveRequestRef.current = savePromise;
+    return savePromise;
   };
 
   const convertLeadWithOpportunityType = async (opportunityType, options = {}) => {
