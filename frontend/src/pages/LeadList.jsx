@@ -309,7 +309,7 @@ export default function LeadList() {
                   setSearch(e.target.value);
                   setPage(1);
                 }}
-                placeholder="Search by name, email, phone, or company..."
+                placeholder="Search leads by name, email, phone, address, company, or source..."
                 className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent transition-all"
               />
             </div>
