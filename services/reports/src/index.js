@@ -41,6 +41,37 @@ app.get('/health', (req, res) => {
 // Apply auth middleware to all routes below
 app.use(authMiddleware);
 
+app.get('/api/insight-schedules', (req, res) => {
+  res.json({
+    success: true,
+    data: [],
+  });
+});
+
+app.get('/api/metabase/status', (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      connected: false,
+      configured: false,
+    },
+  });
+});
+
+app.get('/api/metabase/dashboards', (req, res) => {
+  res.json({
+    success: true,
+    data: [],
+  });
+});
+
+app.get('/api/metabase/settings', (req, res) => {
+  res.json({
+    success: true,
+    data: {},
+  });
+});
+
 // Routes - /api/* to match ALB path-based routing
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/reports-dashboards', dashboardRoutes);
