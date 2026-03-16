@@ -603,15 +603,20 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
 
   const photos = useMemo(() => {
     const mergedPhotos = [];
-    const seen = new Set();
+    const seen = new Map();
 
-    [...projectPhotos, ...legacyPhotos].forEach((photo) => {
-      const dedupeKey = photo.isLegacy
-        ? `legacy:${photo.legacyPhotoId || photo.id}`
-        : `project:${photo.id || photo.displayUrl || photo.thumbnailUrl}`;
+    [...legacyPhotos, ...projectPhotos].forEach((photo) => {
+      const externalCompanyCamId = photo.isLegacy
+        ? photo.legacyPhotoId || photo.companyCamId || photo.externalId || null
+        : photo.externalId || photo.companyCamId || null;
+      const dedupeKey = externalCompanyCamId
+        ? `companycam:${externalCompanyCamId}`
+        : photo.isLegacy
+          ? `legacy:${photo.legacyPhotoId || photo.id}`
+          : `project:${photo.id || photo.displayUrl || photo.thumbnailUrl}`;
 
       if (!dedupeKey || seen.has(dedupeKey)) return;
-      seen.add(dedupeKey);
+      seen.set(dedupeKey, mergedPhotos.length);
       mergedPhotos.push(photo);
     });
 

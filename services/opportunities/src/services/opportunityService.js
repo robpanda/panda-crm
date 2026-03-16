@@ -371,6 +371,58 @@ async function getNotificationService() {
 }
 
 class OpportunityService {
+  async getRawOpportunityActivities(opportunityId, { limit = 50, sortDirection = 'DESC' } = {}) {
+    const direction = String(sortDirection || 'DESC').toUpperCase() === 'ASC'
+      ? Prisma.sql`ASC`
+      : Prisma.sql`DESC`;
+
+    return prisma.$queryRaw`
+      SELECT
+        a.id,
+        a.type::text AS "type",
+        a.subject,
+        a.description,
+        a.body,
+        a.status,
+        a.source_type AS "sourceType",
+        a.external_email AS "externalEmail",
+        a.external_name AS "externalName",
+        a.occurred_at AS "occurredAt",
+        a.created_at AS "createdAt",
+        u.first_name AS "userFirstName",
+        u.last_name AS "userLastName",
+        u.email AS "userEmail"
+      FROM activities a
+      LEFT JOIN users u ON u.id = a.user_id
+      WHERE a.opportunity_id = ${opportunityId}
+      ORDER BY a.occurred_at ${direction}
+      LIMIT ${Number(limit) || 50}
+    `;
+  }
+
+  mapRawActivityRecord(activity) {
+    return {
+      id: activity.id,
+      type: activity.type,
+      subject: activity.subject,
+      description: activity.description,
+      body: activity.body,
+      status: activity.status,
+      sourceType: activity.sourceType,
+      externalEmail: activity.externalEmail,
+      externalName: activity.externalName,
+      occurredAt: activity.occurredAt,
+      createdAt: activity.createdAt,
+      user: activity.userFirstName || activity.userLastName || activity.userEmail
+        ? {
+            firstName: activity.userFirstName || null,
+            lastName: activity.userLastName || null,
+            email: activity.userEmail || null,
+          }
+        : null,
+    };
+  }
+
   buildSourceLeadSelect() {
     return {
       id: true,
@@ -1330,7 +1382,7 @@ class OpportunityService {
   async getOpportunityActivity(id, options = {}) {
     const { limit = 50, offset = 0 } = options;
 
-    const [notes, tasks, activityRecords, callLogs, opportunity] = await Promise.all([
+    const [notes, tasks, rawActivityRecords, callLogs, opportunity] = await Promise.all([
       // Get notes
       prisma.note.findMany({
         where: { opportunityId: id },
@@ -1350,14 +1402,7 @@ class OpportunityService {
         },
       }),
       // Get activity records (imported from AccuLynx, emails, Chatter, etc.)
-      prisma.activity.findMany({
-        where: { opportunityId: id },
-        orderBy: { occurredAt: 'desc' },
-        take: limit,
-        include: {
-          user: { select: { firstName: true, lastName: true } },
-        },
-      }),
+      this.getRawOpportunityActivities(id, { limit, sortDirection: 'DESC' }),
       // Get call logs with full details
       prisma.callLog.findMany({
         where: { opportunityId: id },
@@ -1374,6 +1419,8 @@ class OpportunityService {
         select: { stage: true, updatedAt: true, createdAt: true },
       }),
     ]);
+
+    const activityRecords = rawActivityRecords.map((activity) => this.mapRawActivityRecord(activity));
 
     // Combine into unified timeline
     const activities = [
@@ -1568,18 +1615,16 @@ Keep it concise and factual. Do not add interpretation beyond what's stated.`;
   async generateConversationSummary(opportunityId) {
     try {
       // Fetch all activities, notes, and messages for this opportunity
-      const [activities, notes] = await Promise.all([
-        prisma.activity.findMany({
-          where: { opportunityId },
-          orderBy: { occurredAt: 'asc' },
-          take: 50, // Limit to last 50 to avoid token limits
-        }),
+      const [rawActivities, notes] = await Promise.all([
+        this.getRawOpportunityActivities(opportunityId, { limit: 50, sortDirection: 'ASC' }),
         prisma.note.findMany({
           where: { opportunityId },
           orderBy: { createdAt: 'asc' },
           take: 50,
         }),
       ]);
+
+      const activities = rawActivities.map((activity) => this.mapRawActivityRecord(activity));
 
       // Build conversation context
       const conversationParts = [];
@@ -1813,14 +1858,8 @@ Be factual and professional. Highlight anything that needs attention.`;
    * Get threaded conversation for an opportunity
    */
   async getThreadedConversation(opportunityId) {
-    const [activities, notes] = await Promise.all([
-      prisma.activity.findMany({
-        where: { opportunityId },
-        orderBy: { occurredAt: 'desc' },
-        include: {
-          user: { select: { firstName: true, lastName: true, email: true } },
-        },
-      }),
+    const [rawActivities, notes] = await Promise.all([
+      this.getRawOpportunityActivities(opportunityId, { sortDirection: 'DESC' }),
       prisma.note.findMany({
         where: { opportunityId },
         orderBy: { createdAt: 'desc' },
@@ -1829,6 +1868,8 @@ Be factual and professional. Highlight anything that needs attention.`;
         },
       }),
     ]);
+
+    const activities = rawActivities.map((activity) => this.mapRawActivityRecord(activity));
 
     // Build thread structure
     const threads = [];
