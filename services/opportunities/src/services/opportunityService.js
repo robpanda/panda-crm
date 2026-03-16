@@ -371,6 +371,96 @@ async function getNotificationService() {
 }
 
 class OpportunityService {
+  buildSourceLeadSelect() {
+    return {
+      id: true,
+      leadSetById: true,
+      ownerId: true,
+      accountId: true,
+      contactId: true,
+      convertedDate: true,
+      convertedOpportunityId: true,
+      leadSetBy: {
+        select: { id: true, firstName: true, lastName: true, email: true, phone: true },
+      },
+      owner: {
+        select: { id: true, firstName: true, lastName: true, email: true, phone: true },
+      },
+    };
+  }
+
+  async findSourceLeadForOpportunity(opportunity) {
+    const select = this.buildSourceLeadSelect();
+    const convertedDateFilter = opportunity?.createdAt
+      ? { lte: opportunity.createdAt }
+      : { not: null };
+
+    const directMatch = await prisma.lead.findFirst({
+      where: { convertedOpportunityId: opportunity.id },
+      select,
+    });
+
+    if (directMatch) {
+      return directMatch;
+    }
+
+    if (opportunity.contactId) {
+      const convertedContactMatch = await prisma.lead.findFirst({
+        where: {
+          isConverted: true,
+          deleted_at: null,
+          convertedDate: convertedDateFilter,
+          convertedContactId: opportunity.contactId,
+          ...(opportunity.accountId ? { convertedAccountId: opportunity.accountId } : {}),
+        },
+        orderBy: [{ convertedDate: 'desc' }, { updatedAt: 'desc' }],
+        select,
+      });
+
+      if (convertedContactMatch) {
+        return convertedContactMatch;
+      }
+
+      const legacyContactMatch = await prisma.lead.findFirst({
+        where: {
+          isConverted: true,
+          deleted_at: null,
+          convertedDate: convertedDateFilter,
+          contactId: opportunity.contactId,
+          ...(opportunity.accountId ? { accountId: opportunity.accountId } : {}),
+        },
+        orderBy: [{ convertedDate: 'desc' }, { updatedAt: 'desc' }],
+        select,
+      });
+
+      if (legacyContactMatch) {
+        return legacyContactMatch;
+      }
+    }
+
+    if (opportunity.accountId) {
+      const accountMatch = await prisma.lead.findFirst({
+        where: {
+          isConverted: true,
+          deleted_at: null,
+          convertedDate: convertedDateFilter,
+          OR: [
+            { convertedAccountId: opportunity.accountId },
+            { accountId: opportunity.accountId },
+          ],
+        },
+        orderBy: [{ convertedDate: 'desc' }, { updatedAt: 'desc' }],
+        select,
+      });
+
+      if (accountMatch) {
+        return accountMatch;
+      }
+    }
+
+    return null;
+  }
+
   /**
    * Get opportunities with filtering and pagination
    * Replicates: SalesLeaderOpportunityListController.getOpportunities()
@@ -560,20 +650,7 @@ class OpportunityService {
         throw error;
       }
 
-      const sourceLead = await prisma.lead.findFirst({
-        where: { convertedOpportunityId: id },
-        select: {
-          id: true,
-          leadSetById: true,
-          ownerId: true,
-          leadSetBy: {
-            select: { id: true, firstName: true, lastName: true, email: true },
-          },
-          owner: {
-            select: { id: true, firstName: true, lastName: true, email: true },
-          },
-        },
-      });
+      const sourceLead = await this.findSourceLeadForOpportunity(opportunity);
 
       console.log(`[getOpportunityDetails] Found opportunity: ${opportunity.name}`);
       const wrapper = this.createOpportunityWrapper({ ...opportunity, sourceLead }, true);
@@ -2463,9 +2540,13 @@ Be factual and professional. Highlight anything that needs attention.`;
    */
   createOpportunityWrapper(opp, includeDetails = false) {
     const sourceLeadUser = opp.sourceLead?.leadSetBy || opp.sourceLead?.owner || null;
+    const effectiveOwner = opp.owner || opp.sourceLead?.owner || opp.sourceLead?.leadSetBy || null;
     const sourceLeadDisplayName = sourceLeadUser
       ? `${sourceLeadUser.firstName || ''} ${sourceLeadUser.lastName || ''}`.trim() || sourceLeadUser.email || null
       : null;
+    const effectiveOwnerName = effectiveOwner
+      ? `${effectiveOwner.firstName || ''} ${effectiveOwner.lastName || ''}`.trim() || effectiveOwner.email || 'Assigned'
+      : 'Unassigned';
 
     const wrapper = {
       id: opp.id,
@@ -2504,9 +2585,9 @@ Be factual and professional. Highlight anything that needs attention.`;
       contactPhone: opp.contact?.phone,
       contactEmail: opp.contact?.email,
       // Owner
-      ownerId: opp.ownerId,
-      ownerName: opp.owner ? `${opp.owner.firstName} ${opp.owner.lastName}` : 'Unassigned',
-      owner: opp.owner || null,
+      ownerId: opp.ownerId || effectiveOwner?.id || null,
+      ownerName: effectiveOwnerName,
+      owner: effectiveOwner,
       projectManagerId: opp.projectManagerId || null,
       projectManager: opp.projectManager || null,
       onboardedById: opp.onboardedById || null,
