@@ -113,6 +113,46 @@ import {
   UserCircle,
 } from 'lucide-react';
 
+const CONTACT_METHOD_OPTIONS = [
+  { value: 'Phone', label: 'Phone' },
+  { value: 'Email', label: 'Email' },
+  { value: 'SMS', label: 'SMS/Text' },
+  { value: 'Any', label: 'Any' },
+];
+
+const CONTACT_STATE_OPTIONS = [
+  'DE',
+  'FL',
+  'MD',
+  'NC',
+  'NJ',
+  'PA',
+  'VA',
+];
+
+function buildContactModalForm(contact) {
+  return {
+    firstName: contact?.firstName || '',
+    lastName: contact?.lastName || '',
+    email: contact?.email || '',
+    phone: contact?.phone || '',
+    mobilePhone: contact?.mobilePhone || '',
+    smsNumber: contact?.smsNumber || '',
+    title: contact?.title || '',
+    department: contact?.department || '',
+    mailingStreet: contact?.mailingStreet || '',
+    mailingCity: contact?.mailingCity || '',
+    mailingState: contact?.mailingState || '',
+    mailingPostalCode: contact?.mailingPostalCode || '',
+    preferredContactMethod: contact?.preferredContactMethod || '',
+    smsOptOut: Boolean(contact?.smsOptOut),
+    emailOptOut: Boolean(contact?.emailOptOut),
+    doNotCall: Boolean(contact?.doNotCall),
+    isPrimary: Boolean(contact?.isPrimary),
+    accountId: contact?.accountId || '',
+  };
+}
+
 // SMS Modal Component with Canned Responses (same as LeadDetail)
 function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {} }) {
   const [message, setMessage] = useState('');
@@ -1661,6 +1701,10 @@ export default function OpportunityDetail() {
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState(null);
   const [actionSuccess, setActionSuccess] = useState(null);
+  const [showContactModal, setShowContactModal] = useState(false);
+  const [selectedContactId, setSelectedContactId] = useState(null);
+  const [isEditingContactModal, setIsEditingContactModal] = useState(false);
+  const [contactModalForm, setContactModalForm] = useState(buildContactModalForm());
   const [showSpecsPreparation, setShowSpecsPreparation] = useState(false);
   const [showMaterialLaborWizard, setShowMaterialLaborWizard] = useState(false);
 
@@ -1847,6 +1891,12 @@ export default function OpportunityDetail() {
     queryKey: ['opportunityContacts', id],
     queryFn: () => opportunitiesApi.getContacts(id),
     enabled: !!id,
+  });
+
+  const { data: selectedContact, isLoading: selectedContactLoading } = useQuery({
+    queryKey: ['contact', selectedContactId],
+    queryFn: () => contactsApi.getContact(selectedContactId),
+    enabled: showContactModal && !!selectedContactId,
   });
 
   // Hub API Queries
@@ -2655,6 +2705,52 @@ export default function OpportunityDetail() {
     isPrimary: false,
   });
 
+  useEffect(() => {
+    if (!selectedContact) return;
+    setContactModalForm(buildContactModalForm(selectedContact));
+  }, [selectedContact]);
+
+  const openContactModal = (contactId, { startInEdit = false } = {}) => {
+    setSelectedContactId(contactId);
+    setShowContactModal(true);
+    setIsEditingContactModal(startInEdit);
+    setActionError(null);
+  };
+
+  const closeContactModal = () => {
+    setShowContactModal(false);
+    setSelectedContactId(null);
+    setIsEditingContactModal(false);
+    setContactModalForm(buildContactModalForm());
+    setActionError(null);
+  };
+
+  const handleContactModalInputChange = (e) => {
+    const { name, value, type, checked } = e.target;
+    setContactModalForm(prev => ({
+      ...prev,
+      [name]: type === 'checkbox' ? checked : value,
+    }));
+  };
+
+  const handleContactModalSave = () => {
+    if (!selectedContactId) return;
+    const cleanedData = { ...contactModalForm };
+    Object.keys(cleanedData).forEach((key) => {
+      if (typeof cleanedData[key] === 'string' && cleanedData[key] === '') {
+        cleanedData[key] = null;
+      }
+    });
+    cleanedData.fullName = [cleanedData.firstName, cleanedData.lastName].filter(Boolean).join(' ').trim() || null;
+    updateContactMutation.mutate({ contactId: selectedContactId, data: cleanedData });
+  };
+
+  const handleContactModalCancel = () => {
+    setContactModalForm(buildContactModalForm(selectedContact));
+    setIsEditingContactModal(false);
+    setActionError(null);
+  };
+
   // Contact mutation - add contact to account
   const addContactMutation = useMutation({
     mutationFn: (data) => contactsApi.createContact({
@@ -2671,6 +2767,22 @@ export default function OpportunityDetail() {
     },
     onError: (error) => {
       setActionError(error.message || 'Failed to add contact');
+    },
+  });
+
+  const updateContactMutation = useMutation({
+    mutationFn: ({ contactId, data }) => contactsApi.updateContact(contactId, data),
+    onSuccess: (updatedContact) => {
+      queryClient.invalidateQueries(['contact', selectedContactId]);
+      queryClient.invalidateQueries(['contacts']);
+      queryClient.invalidateQueries(['opportunityContacts', id]);
+      setContactModalForm(buildContactModalForm(updatedContact));
+      setIsEditingContactModal(false);
+      setActionSuccess('Contact updated successfully');
+      setTimeout(() => setActionSuccess(null), 3000);
+    },
+    onError: (error) => {
+      setActionError(error.message || 'Failed to update contact');
     },
   });
 
@@ -5044,9 +5156,13 @@ export default function OpportunityDetail() {
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center space-x-2">
-                                <Link to={`/contacts/${contact.id}`} className="font-medium text-gray-900 hover:text-panda-primary">
+                                <button
+                                  type="button"
+                                  onClick={() => openContactModal(contact.id)}
+                                  className="font-medium text-gray-900 hover:text-panda-primary text-left"
+                                >
                                   {contact.firstName} {contact.lastName}
-                                </Link>
+                                </button>
                                 {isPrimary && (
                                   <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-medium rounded-full">Primary</span>
                                 )}
@@ -5083,13 +5199,14 @@ export default function OpportunityDetail() {
                               )}
                             </div>
                             {/* Edit button */}
-                            <Link
-                              to={`/contacts/${contact.id}`}
+                            <button
+                              type="button"
+                              onClick={() => openContactModal(contact.id, { startInEdit: true })}
                               className="p-2 text-gray-400 hover:text-panda-primary hover:bg-gray-100 rounded-lg transition-colors flex-shrink-0"
                               title="Edit Contact"
                             >
                               <Edit className="w-4 h-4" />
-                            </Link>
+                            </button>
                           </div>
                         </div>
                       );
@@ -5596,9 +5713,8 @@ export default function OpportunityDetail() {
                     </div>
 
                     {contacts && contacts.length > 0 ? contacts.map((contact) => (
-                      <Link
+                      <div
                         key={contact.id}
-                        to={`/contacts/${contact.id}`}
                         className="block border border-gray-200 rounded-lg p-4 hover:border-panda-primary transition-colors"
                       >
                         <div className="flex items-center space-x-3">
@@ -5609,7 +5725,13 @@ export default function OpportunityDetail() {
                           </div>
                           <div className="flex-1">
                             <div className="flex items-center space-x-2">
-                              <h4 className="font-medium text-gray-900">{contact.firstName} {contact.lastName}</h4>
+                              <button
+                                type="button"
+                                onClick={() => openContactModal(contact.id)}
+                                className="font-medium text-gray-900 hover:text-panda-primary text-left"
+                              >
+                                {contact.firstName} {contact.lastName}
+                              </button>
                               {contact.isPrimary && (
                                 <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-medium rounded-full">Primary</span>
                               )}
@@ -5629,8 +5751,16 @@ export default function OpportunityDetail() {
                               )}
                             </div>
                           </div>
+                          <button
+                            type="button"
+                            onClick={() => openContactModal(contact.id, { startInEdit: true })}
+                            className="p-2 text-gray-400 hover:text-panda-primary hover:bg-gray-100 rounded-lg transition-colors flex-shrink-0"
+                            title="Edit Contact"
+                          >
+                            <Edit className="w-4 h-4" />
+                          </button>
                         </div>
-                      </Link>
+                      </div>
                     )) : (
                       <div className="text-center py-8 text-gray-500">
                         <Users className="w-12 h-12 mx-auto text-gray-300 mb-2" />
@@ -8062,6 +8192,322 @@ export default function OpportunityDetail() {
       </div>
 
       {/* Quick Action Modal */}
+      {showContactModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between p-6 border-b border-gray-100">
+              <div>
+                <h2 className="text-xl font-semibold text-gray-900">
+                  {isEditingContactModal ? 'Edit Contact' : 'Contact Details'}
+                </h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  View and update the contact linked to this job without leaving the page.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeContactModal}
+                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-6">
+              {actionError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-center space-x-2 text-red-700">
+                  <AlertCircle className="w-5 h-5 flex-shrink-0" />
+                  <span className="text-sm">{actionError}</span>
+                </div>
+              )}
+
+              {selectedContactLoading ? (
+                <div className="py-16 flex items-center justify-center">
+                  <Loader2 className="w-6 h-6 animate-spin text-panda-primary" />
+                </div>
+              ) : !selectedContact ? (
+                <div className="py-12 text-center text-gray-500">
+                  <Users className="w-12 h-12 mx-auto text-gray-300 mb-3" />
+                  <p>Contact not found.</p>
+                </div>
+              ) : (
+                <>
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex items-start space-x-4">
+                      <div className="w-14 h-14 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center flex-shrink-0">
+                        <span className="text-white text-lg font-medium">
+                          {selectedContact.firstName?.charAt(0)}{selectedContact.lastName?.charAt(0)}
+                        </span>
+                      </div>
+                      <div>
+                        <h3 className="text-xl font-semibold text-gray-900">
+                          {selectedContact.firstName} {selectedContact.lastName}
+                        </h3>
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-sm text-gray-500">
+                          {selectedContact.account?.name && (
+                            <span className="flex items-center">
+                              <Building2 className="w-4 h-4 mr-1" />
+                              {selectedContact.account.name}
+                            </span>
+                          )}
+                          {!selectedContact.account?.name && opportunity?.account?.name && (
+                            <span className="flex items-center">
+                              <Building2 className="w-4 h-4 mr-1" />
+                              {opportunity.account.name}
+                            </span>
+                          )}
+                          {selectedContact.isPrimary && (
+                            <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-medium rounded-full">
+                              Primary Contact
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {!isEditingContactModal ? (
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingContactModal(true)}
+                        className="flex items-center space-x-2 px-4 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-dark"
+                      >
+                        <Edit className="w-4 h-4" />
+                        <span>Edit Contact</span>
+                      </button>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={handleContactModalCancel}
+                          className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleContactModalSave}
+                          disabled={updateContactMutation.isPending}
+                          className="flex items-center space-x-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
+                        >
+                          {updateContactMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
+                          <span>{updateContactMutation.isPending ? 'Saving...' : 'Save Changes'}</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">First Name</label>
+                      {isEditingContactModal ? (
+                        <input
+                          type="text"
+                          name="firstName"
+                          value={contactModalForm.firstName}
+                          onChange={handleContactModalInputChange}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                        />
+                      ) : (
+                        <div className="px-3 py-2 bg-gray-50 rounded-lg text-gray-900">{selectedContact.firstName || '-'}</div>
+                      )}
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Last Name</label>
+                      {isEditingContactModal ? (
+                        <input
+                          type="text"
+                          name="lastName"
+                          value={contactModalForm.lastName}
+                          onChange={handleContactModalInputChange}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                        />
+                      ) : (
+                        <div className="px-3 py-2 bg-gray-50 rounded-lg text-gray-900">{selectedContact.lastName || '-'}</div>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                      {isEditingContactModal ? (
+                        <input
+                          type="email"
+                          name="email"
+                          value={contactModalForm.email}
+                          onChange={handleContactModalInputChange}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                        />
+                      ) : (
+                        <div className="px-3 py-2 bg-gray-50 rounded-lg text-gray-900">{selectedContact.email || '-'}</div>
+                      )}
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Title</label>
+                      {isEditingContactModal ? (
+                        <input
+                          type="text"
+                          name="title"
+                          value={contactModalForm.title}
+                          onChange={handleContactModalInputChange}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                        />
+                      ) : (
+                        <div className="px-3 py-2 bg-gray-50 rounded-lg text-gray-900">{selectedContact.title || '-'}</div>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
+                      {isEditingContactModal ? (
+                        <input
+                          type="text"
+                          name="phone"
+                          value={contactModalForm.phone}
+                          onChange={handleContactModalInputChange}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                        />
+                      ) : (
+                        <div className="px-3 py-2 bg-gray-50 rounded-lg text-gray-900">{selectedContact.phone || '-'}</div>
+                      )}
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Mobile</label>
+                      {isEditingContactModal ? (
+                        <input
+                          type="text"
+                          name="mobilePhone"
+                          value={contactModalForm.mobilePhone}
+                          onChange={handleContactModalInputChange}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                        />
+                      ) : (
+                        <div className="px-3 py-2 bg-gray-50 rounded-lg text-gray-900">{selectedContact.mobilePhone || '-'}</div>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Department</label>
+                      {isEditingContactModal ? (
+                        <input
+                          type="text"
+                          name="department"
+                          value={contactModalForm.department}
+                          onChange={handleContactModalInputChange}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                        />
+                      ) : (
+                        <div className="px-3 py-2 bg-gray-50 rounded-lg text-gray-900">{selectedContact.department || '-'}</div>
+                      )}
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Preferred Contact Method</label>
+                      {isEditingContactModal ? (
+                        <select
+                          name="preferredContactMethod"
+                          value={contactModalForm.preferredContactMethod}
+                          onChange={handleContactModalInputChange}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                        >
+                          <option value="">Select...</option>
+                          {CONTACT_METHOD_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <div className="px-3 py-2 bg-gray-50 rounded-lg text-gray-900">{selectedContact.preferredContactMethod || '-'}</div>
+                      )}
+                    </div>
+
+                    <div className="md:col-span-2">
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Street</label>
+                      {isEditingContactModal ? (
+                        <input
+                          type="text"
+                          name="mailingStreet"
+                          value={contactModalForm.mailingStreet}
+                          onChange={handleContactModalInputChange}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                        />
+                      ) : (
+                        <div className="px-3 py-2 bg-gray-50 rounded-lg text-gray-900">{selectedContact.mailingStreet || '-'}</div>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">City</label>
+                      {isEditingContactModal ? (
+                        <input
+                          type="text"
+                          name="mailingCity"
+                          value={contactModalForm.mailingCity}
+                          onChange={handleContactModalInputChange}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                        />
+                      ) : (
+                        <div className="px-3 py-2 bg-gray-50 rounded-lg text-gray-900">{selectedContact.mailingCity || '-'}</div>
+                      )}
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">State</label>
+                      {isEditingContactModal ? (
+                        <select
+                          name="mailingState"
+                          value={contactModalForm.mailingState}
+                          onChange={handleContactModalInputChange}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                        >
+                          <option value="">Select...</option>
+                          {CONTACT_STATE_OPTIONS.map((stateCode) => (
+                            <option key={stateCode} value={stateCode}>{stateCode}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <div className="px-3 py-2 bg-gray-50 rounded-lg text-gray-900">{selectedContact.mailingState || '-'}</div>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Postal Code</label>
+                      {isEditingContactModal ? (
+                        <input
+                          type="text"
+                          name="mailingPostalCode"
+                          value={contactModalForm.mailingPostalCode}
+                          onChange={handleContactModalInputChange}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                        />
+                      ) : (
+                        <div className="px-3 py-2 bg-gray-50 rounded-lg text-gray-900">{selectedContact.mailingPostalCode || '-'}</div>
+                      )}
+                    </div>
+
+                    <div className="md:col-span-2 grid grid-cols-2 md:grid-cols-4 gap-3">
+                      {[
+                        { name: 'isPrimary', label: 'Primary Contact' },
+                        { name: 'doNotCall', label: 'Do Not Call' },
+                        { name: 'smsOptOut', label: 'SMS Opt-Out' },
+                        { name: 'emailOptOut', label: 'Email Opt-Out' },
+                      ].map((option) => (
+                        <label key={option.name} className="flex items-center space-x-2 px-3 py-2 border border-gray-200 rounded-lg">
+                          <input
+                            type="checkbox"
+                            name={option.name}
+                            checked={isEditingContactModal ? contactModalForm[option.name] : Boolean(selectedContact[option.name])}
+                            onChange={handleContactModalInputChange}
+                            disabled={!isEditingContactModal}
+                            className="rounded border-gray-300 text-panda-primary focus:ring-panda-primary"
+                          />
+                          <span className="text-sm text-gray-700">{option.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {showQuickActionModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className={`bg-white rounded-xl shadow-xl w-full mx-4 max-h-[90vh] overflow-y-auto ${
