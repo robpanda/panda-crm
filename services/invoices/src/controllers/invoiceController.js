@@ -661,7 +661,6 @@ ${Buffer.from(pdfResult.pdfBytes).toString('base64')}`;
       include: {
         account: { select: { id: true, name: true, email: true } },
         lineItems: true,
-        opportunity: { select: { id: true, name: true } },
       },
     });
 
