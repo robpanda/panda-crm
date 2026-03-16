@@ -271,9 +271,10 @@ export default function OpportunityList() {
   });
 
   const bulkDeleteMutation = useMutation({
-    mutationFn: ({ opportunityIds }) => opportunitiesApi.bulkDelete(opportunityIds),
+    mutationFn: ({ opportunityIds }) => opportunitiesApi.bulkDeleteOpportunities(opportunityIds),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['opportunities'] });
+      queryClient.invalidateQueries({ queryKey: ['opportunityStageCounts'] });
       setShowDeleteModal(false);
       setSelectedJobs([]);
       setSelectionMode(false);

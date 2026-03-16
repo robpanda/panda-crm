@@ -881,6 +881,10 @@ export const opportunitiesApi = {
     return response.data;
   },
 
+  async bulkReassign(opportunityIds, newOwnerId) {
+    return this.bulkReassignJobs(opportunityIds, newOwnerId);
+  },
+
   async bulkUpdateStage(opportunityIds, stage) {
     const response = await api.post('/api/opportunities/bulk-update-stage', { opportunityIds, stage });
     return response.data;
@@ -889,6 +893,10 @@ export const opportunitiesApi = {
   async bulkDeleteOpportunities(opportunityIds) {
     const response = await api.post('/api/opportunities/bulk-delete', { opportunityIds });
     return response.data;
+  },
+
+  async bulkDelete(opportunityIds) {
+    return this.bulkDeleteOpportunities(opportunityIds);
   },
 
   // ============================================================================

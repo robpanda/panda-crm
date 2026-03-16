@@ -2565,12 +2565,99 @@ Be factual and professional. Highlight anything that needs attention.`;
   }
 
   /**
-   * Delete opportunity
+   * Soft delete opportunity
    */
-  async deleteOpportunity(id) {
-    await prisma.opportunity.delete({ where: { id } });
-    logger.info(`Opportunity deleted: ${id}`);
-    return { deleted: true };
+  async deleteOpportunity(id, auditContext = {}, options = {}) {
+    const action = options.action || 'DELETE';
+    const defaultLostReason = options.lostReason || 'Deleted';
+    const deletedAt = new Date();
+    const oldOpp = await prisma.opportunity.findUnique({
+      where: { id },
+      select: { id: true, name: true, stage: true, lostReason: true, deletedAt: true },
+    });
+
+    if (!oldOpp) {
+      const error = new Error('Opportunity not found');
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    if (oldOpp.deletedAt) {
+      logger.info(`Opportunity already soft deleted: ${id}`);
+      return { deleted: true, alreadyDeleted: true, id };
+    }
+
+    const retiredRelated = await prisma.$transaction(async (tx) => {
+      const [workOrders, appointments, tasks, cases] = await Promise.all([
+        tx.workOrder.updateMany({
+          where: {
+            opportunityId: id,
+            status: { notIn: ['CANCELED', 'CANCELLED', 'COMPLETED'] },
+          },
+          data: { status: 'CANCELED' },
+        }),
+        tx.serviceAppointment.updateMany({
+          where: {
+            workOrder: { opportunityId: id },
+            status: { notIn: ['CANCELED', 'COMPLETED'] },
+          },
+          data: { status: 'CANCELED' },
+        }),
+        tx.task.updateMany({
+          where: {
+            opportunityId: id,
+            status: { notIn: ['COMPLETED', 'DEFERRED'] },
+          },
+          data: { status: 'DEFERRED' },
+        }),
+        tx.case.updateMany({
+          where: {
+            opportunityId: id,
+            status: { not: 'CLOSED' },
+          },
+          data: { status: 'CLOSED' },
+        }),
+      ]);
+
+      await tx.opportunity.update({
+        where: { id },
+        data: {
+          stage: 'CLOSED_LOST',
+          closeDate: deletedAt,
+          lostReason: oldOpp.lostReason || defaultLostReason,
+          deletedAt,
+        },
+      });
+
+      return {
+        workOrders: workOrders.count,
+        appointments: appointments.count,
+        tasks: tasks.count,
+        cases: cases.count,
+      };
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        tableName: 'opportunities',
+        recordId: id,
+        action,
+        oldValues: { stage: oldOpp.stage, deletedAt: oldOpp.deletedAt },
+        newValues: {
+          stage: 'CLOSED_LOST',
+          closeDate: deletedAt,
+          lostReason: oldOpp.lostReason || defaultLostReason,
+          deletedAt,
+        },
+        changedFields: ['stage', 'closeDate', 'lostReason', 'deletedAt'],
+        userId: auditContext.userId,
+        userEmail: auditContext.userEmail,
+        source: 'api',
+      },
+    }).catch((err) => logger.error('Audit log failed:', err));
+
+    logger.info(`Opportunity soft deleted: ${id}`);
+    return { deleted: true, id, deletedAt, retiredRelated };
   }
 
   /**
@@ -3949,44 +4036,11 @@ Be factual and professional. Highlight anything that needs attention.`;
 
     for (const oppId of opportunityIds) {
       try {
-        const oldOpp = await prisma.opportunity.findUnique({
-          where: { id: oppId },
-          select: { id: true, name: true, stage: true },
+        await this.deleteOpportunity(oppId, auditContext, {
+          action: 'BULK_DELETE',
+          lostReason: 'Bulk Deleted',
         });
-
-        if (!oldOpp) {
-          results.failed.push({ id: oppId, error: 'Opportunity not found' });
-          continue;
-        }
-
-        // Soft delete by setting stage to CLOSED_LOST and adding deletion marker
-        await prisma.opportunity.update({
-          where: { id: oppId },
-          data: {
-            stage: 'CLOSED_LOST',
-            closeDate: new Date(),
-            lostReason: 'Bulk Deleted',
-            deletedAt: new Date(),
-          },
-        });
-
-        // Log audit
-        await prisma.auditLog.create({
-          data: {
-            tableName: 'opportunities',
-            recordId: oppId,
-            action: 'BULK_DELETE',
-            oldValues: { stage: oldOpp.stage },
-            newValues: { stage: 'CLOSED_LOST', lostReason: 'Bulk Deleted', deletedAt: new Date() },
-            changedFields: ['stage', 'closeDate', 'lostReason', 'deletedAt'],
-            userId: auditContext.userId,
-            userEmail: auditContext.userEmail,
-            source: 'api',
-          },
-        }).catch((err) => logger.error('Audit log failed:', err));
-
         results.success.push(oppId);
-        logger.info(`Soft deleted opportunity: ${oldOpp.name}`);
       } catch (error) {
         logger.error(`Failed to delete opportunity ${oppId}:`, error);
         results.failed.push({ id: oppId, error: error.message });

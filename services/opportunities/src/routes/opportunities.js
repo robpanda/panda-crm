@@ -664,7 +664,12 @@ router.patch('/:id', async (req, res, next) => {
 // Delete opportunity
 router.delete('/:id', async (req, res, next) => {
   try {
-    const result = await opportunityService.deleteOpportunity(req.params.id);
+    const result = await opportunityService.deleteOpportunity(req.params.id, {
+      userId: req.user?.id,
+      userEmail: req.user?.email,
+      ipAddress: req.ip || req.headers['x-forwarded-for']?.split(',')[0],
+      userAgent: req.headers['user-agent'],
+    });
     res.json({ success: true, data: result });
   } catch (error) {
     next(error);
