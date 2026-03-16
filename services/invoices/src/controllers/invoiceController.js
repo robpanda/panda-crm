@@ -2,7 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import Decimal from 'decimal.js';
 import { addDays, differenceInDays, format, parseISO } from 'date-fns';
-import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import Stripe from 'stripe';
 import sgMail from '@sendgrid/mail';
