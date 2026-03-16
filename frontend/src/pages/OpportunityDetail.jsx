@@ -1727,6 +1727,7 @@ export default function OpportunityDetail() {
 
   // Documents sub-tab state (contracts vs photos)
   const [documentsSubTab, setDocumentsSubTab] = useState('contracts');
+  const documentUploadInputRef = useRef(null);
 
   // Details sub-tab state (status vs measurements)
   const [detailsSubTab, setDetailsSubTab] = useState('status');
@@ -1935,6 +1936,36 @@ export default function OpportunityDetail() {
       || [];
     return Array.isArray(raw) ? raw : [];
   }, [repositoryFiles]);
+  const getRepositoryDocumentUrl = useCallback((file) => (
+    file?.contentUrl || file?.downloadUrl || file?.thumbnailUrl || ''
+  ), []);
+  const getRepositoryDocumentExtension = useCallback((file) => (
+    (file?.fileExtension || file?.fileType || '').toString().toLowerCase()
+  ), []);
+  const isRepositoryImage = useCallback((file) => (
+    ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(getRepositoryDocumentExtension(file))
+  ), [getRepositoryDocumentExtension]);
+  const isRepositoryPdf = useCallback((file) => (
+    getRepositoryDocumentExtension(file) === 'pdf'
+  ), [getRepositoryDocumentExtension]);
+  const currentCrewMembers = useMemo(() => {
+    const appointmentsList = Array.isArray(appointments) ? appointments : [];
+    const seen = new Set();
+
+    return appointmentsList.flatMap((appointment) => {
+      const crewList = Array.isArray(appointment?.crew)
+        ? appointment.crew
+        : appointment?.assignedResource
+          ? [appointment.assignedResource]
+          : [];
+
+      return crewList.filter((member) => {
+        if (!member?.id || seen.has(member.id)) return false;
+        seen.add(member.id);
+        return true;
+      });
+    });
+  }, [appointments]);
 
   // Cases (linked via Account) - service not yet deployed, disable retries
   const { data: cases } = useQuery({
@@ -2247,6 +2278,28 @@ export default function OpportunityDetail() {
     },
     onError: (error) => {
       setActionError(error.message || 'Failed to assign crew');
+    },
+  });
+
+  const uploadRepositoryDocumentMutation = useMutation({
+    mutationFn: async (file) => {
+      if (!file) {
+        throw new Error('No file selected');
+      }
+      return documentsApi.uploadDocument(file, {
+        title: file.name,
+        opportunityId: id,
+        accountId: opportunity?.accountId || opportunity?.account?.id || '',
+        linkedRecordType: 'OPPORTUNITY',
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries(['opportunityRepositoryFiles', id]);
+      setActionSuccess('File uploaded successfully');
+      setTimeout(() => setActionSuccess(null), 3000);
+    },
+    onError: (error) => {
+      setActionError(error.message || 'Failed to upload file');
     },
   });
 
@@ -4894,6 +4947,45 @@ export default function OpportunityDetail() {
                       <h3 className="text-sm font-semibold text-gray-900">Job Team</h3>
                     </div>
 
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                        <label className="block text-xs text-gray-500 uppercase tracking-wide mb-2">Owner / Transfer Job</label>
+                        <select
+                          value={opportunity?.ownerId || ''}
+                          onChange={async (e) => {
+                            await updateMutation.mutateAsync({ ownerId: e.target.value || null });
+                          }}
+                          disabled={updateMutation.isPending}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary disabled:opacity-50"
+                        >
+                          <option value="">-- Select Owner --</option>
+                          {(usersForDropdown?.data || usersForDropdown || []).map((user) => (
+                            <option key={user.id} value={user.id}>
+                              {user.firstName} {user.lastName}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                        <label className="block text-xs text-gray-500 uppercase tracking-wide mb-2">Project Manager</label>
+                        <select
+                          value={opportunity?.projectManagerId || ''}
+                          onChange={async (e) => {
+                            await updateMutation.mutateAsync({ projectManagerId: e.target.value || null });
+                          }}
+                          disabled={updateMutation.isPending}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary disabled:opacity-50"
+                        >
+                          <option value="">-- Select Project Manager --</option>
+                          {(usersForDropdown?.data || usersForDropdown || []).map((user) => (
+                            <option key={user.id} value={user.id}>
+                              {user.firstName} {user.lastName}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
                     {/* Team Members */}
                     <div className="space-y-3">
                       {/* Sales Rep / Owner */}
@@ -5064,8 +5156,45 @@ export default function OpportunityDetail() {
                         </div>
                       )}
 
+                      {currentCrewMembers.length > 0 && (
+                        <div className="border border-gray-200 rounded-lg p-4">
+                          <div className="flex items-center justify-between mb-3">
+                            <div>
+                              <p className="font-medium text-gray-900">Crew</p>
+                              <p className="text-sm text-gray-500">Assigned from scheduled appointments</p>
+                            </div>
+                          </div>
+                          <div className="space-y-3">
+                            {currentCrewMembers.map((crewMember) => (
+                              <div key={crewMember.id} className="flex items-center justify-between">
+                                <div className="flex items-center space-x-3">
+                                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-sky-500 to-cyan-500 flex items-center justify-center">
+                                    <span className="text-white text-sm font-medium">
+                                      {crewMember.name?.charAt(0) || 'C'}
+                                    </span>
+                                  </div>
+                                  <div>
+                                    <p className="font-medium text-gray-900">{crewMember.name}</p>
+                                    <p className="text-sm text-gray-500">{crewMember.type || 'Crew'}</p>
+                                  </div>
+                                </div>
+                                {crewMember.phone && (
+                                  <a
+                                    href={`tel:${crewMember.phone}`}
+                                    className="p-2 text-gray-400 hover:text-green-600 hover:bg-green-50 rounded-lg transition-colors"
+                                    title="Call"
+                                  >
+                                    <Phone className="w-4 h-4" />
+                                  </a>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
                       {/* Empty State */}
-                      {!opportunity?.owner && !opportunity?.projectManager && !opportunity?.onboardedBy && !opportunity?.approvedBy && (
+                      {!opportunity?.owner && !opportunity?.projectManager && !opportunity?.onboardedBy && !opportunity?.approvedBy && currentCrewMembers.length === 0 && (
                         <div className="text-center py-8 text-gray-500">
                           <UserCircle className="w-12 h-12 mx-auto text-gray-300 mb-2" />
                           <p>No team members assigned</p>
@@ -7108,6 +7237,38 @@ export default function OpportunityDetail() {
                     {/* Files Sub-tab Content */}
                     {documentsSubTab === 'files' && (
                       <div className="space-y-4">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <h3 className="text-sm font-semibold text-gray-900">Files</h3>
+                            <p className="text-sm text-gray-500">Upload, preview, and download job files</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <input
+                              ref={documentUploadInputRef}
+                              type="file"
+                              className="hidden"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  uploadRepositoryDocumentMutation.mutate(file);
+                                }
+                                e.target.value = '';
+                              }}
+                            />
+                            <button
+                              onClick={() => documentUploadInputRef.current?.click()}
+                              disabled={uploadRepositoryDocumentMutation.isPending}
+                              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-panda-primary text-white hover:bg-panda-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              {uploadRepositoryDocumentMutation.isPending ? (
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                              ) : (
+                                <Upload className="w-4 h-4" />
+                              )}
+                              <span>{uploadRepositoryDocumentMutation.isPending ? 'Uploading...' : 'Upload File'}</span>
+                            </button>
+                          </div>
+                        </div>
                         {(() => {
                           const files = repositoryDocuments;
                           if (files.length === 0) {
@@ -7124,44 +7285,71 @@ export default function OpportunityDetail() {
                               {files.map((file) => (
                                 <div
                                   key={file.id}
-                                  className="bg-white border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow"
+                                  className="bg-white border border-gray-200 rounded-xl overflow-hidden hover:shadow-md transition-shadow"
                                 >
-                                  <div className="flex items-start space-x-3">
-                                    <div className="flex-shrink-0">
-                                      <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center">
-                                        <FileText className="w-5 h-5 text-gray-500" />
+                                  <div className="aspect-[4/3] bg-gray-50 border-b border-gray-200 overflow-hidden">
+                                    {isRepositoryImage(file) && getRepositoryDocumentUrl(file) ? (
+                                      <img
+                                        src={getRepositoryDocumentUrl(file)}
+                                        alt={file.title || file.fileName || 'Job file'}
+                                        className="w-full h-full object-cover"
+                                        loading="lazy"
+                                      />
+                                    ) : (
+                                      <div className="w-full h-full flex flex-col items-center justify-center gap-2 bg-gradient-to-br from-gray-50 to-gray-100 text-gray-500">
+                                        {isRepositoryPdf(file) ? (
+                                          <FileSignature className="w-10 h-10 text-red-500" />
+                                        ) : (
+                                          <FileText className="w-10 h-10" />
+                                        )}
+                                        <span className="text-xs font-medium uppercase tracking-wide">
+                                          {getRepositoryDocumentExtension(file) || 'file'}
+                                        </span>
                                       </div>
-                                    </div>
-                                    <div className="flex-1 min-w-0">
+                                    )}
+                                  </div>
+                                  <div className="p-4">
+                                    <div className="min-w-0">
                                       <p className="text-sm font-medium text-gray-900 truncate" title={file.title || file.fileName || 'Untitled'}>
                                         {file.title || file.fileName || 'Untitled'}
                                       </p>
                                       <p className="text-xs text-gray-500 mt-1">
-                                        {file.fileType || file.fileExtension || 'File'}
+                                        {(file.fileType || file.fileExtension || 'File').toString().toUpperCase()}
                                         {file.contentSize && ` • ${(file.contentSize / 1024).toFixed(1)} KB`}
                                       </p>
                                       <p className="text-xs text-gray-400 mt-1">
-                                        {file.createdAt && new Date(file.createdAt).toLocaleDateString()}
+                                        {file.createdAt ? new Date(file.createdAt).toLocaleDateString() : 'Unknown date'}
                                       </p>
                                     </div>
-                                  </div>
-                                  <div className="mt-3 flex space-x-2">
-                                    {(file.contentUrl || file.downloadUrl) ? (
-                                      <a
-                                        href={file.contentUrl || file.downloadUrl}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="flex-1 inline-flex items-center justify-center px-3 py-1.5 bg-panda-primary/10 text-panda-primary text-xs font-medium rounded-md hover:bg-panda-primary/20 transition-colors"
-                                      >
-                                        <Download className="w-3 h-3 mr-1" />
-                                        Download
-                                      </a>
-                                    ) : (
-                                      <span className="flex-1 inline-flex items-center justify-center px-3 py-1.5 bg-gray-100 text-gray-400 text-xs font-medium rounded-md">
-                                        <FileText className="w-3 h-3 mr-1" />
-                                        {file.category || 'Salesforce'}
-                                      </span>
-                                    )}
+                                    <div className="mt-4 flex gap-2">
+                                      {getRepositoryDocumentUrl(file) ? (
+                                        <>
+                                          <a
+                                            href={getRepositoryDocumentUrl(file)}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="flex-1 inline-flex items-center justify-center px-3 py-2 bg-gray-100 text-gray-700 text-xs font-medium rounded-md hover:bg-gray-200 transition-colors"
+                                          >
+                                            <Eye className="w-3 h-3 mr-1" />
+                                            Preview
+                                          </a>
+                                          <a
+                                            href={getRepositoryDocumentUrl(file)}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="flex-1 inline-flex items-center justify-center px-3 py-2 bg-panda-primary/10 text-panda-primary text-xs font-medium rounded-md hover:bg-panda-primary/20 transition-colors"
+                                          >
+                                            <Download className="w-3 h-3 mr-1" />
+                                            Download
+                                          </a>
+                                        </>
+                                      ) : (
+                                        <span className="flex-1 inline-flex items-center justify-center px-3 py-2 bg-gray-100 text-gray-400 text-xs font-medium rounded-md">
+                                          <FileText className="w-3 h-3 mr-1" />
+                                          {file.category || 'File'}
+                                        </span>
+                                      )}
+                                    </div>
                                   </div>
                                 </div>
                               ))}

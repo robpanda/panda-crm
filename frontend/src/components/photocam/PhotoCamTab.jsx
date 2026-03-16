@@ -490,7 +490,7 @@ export default function PhotoCamTab({ opportunityId, activeSubTab = 'photos' }) 
     },
   });
 
-  const photos = photosData?.data || photosData || [];
+  const photos = photosData?.photos || photosData?.data?.photos || [];
 
   const galleryItems = Array.isArray(galleriesData?.data)
     ? galleriesData.data

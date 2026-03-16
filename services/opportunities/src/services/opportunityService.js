@@ -495,7 +495,16 @@ class OpportunityService {
           account: true,
           contact: true,
           owner: {
-            select: { id: true, firstName: true, lastName: true, email: true },
+            select: { id: true, firstName: true, lastName: true, email: true, phone: true },
+          },
+          projectManager: {
+            select: { id: true, firstName: true, lastName: true, email: true, phone: true },
+          },
+          onboardedBy: {
+            select: { id: true, firstName: true, lastName: true, email: true, phone: true },
+          },
+          approvedBy: {
+            select: { id: true, firstName: true, lastName: true, email: true, phone: true },
           },
           lineItems: {
             orderBy: { sortOrder: 'asc' },
@@ -2477,6 +2486,13 @@ Be factual and professional. Highlight anything that needs attention.`;
       // Owner
       ownerId: opp.ownerId,
       ownerName: opp.owner ? `${opp.owner.firstName} ${opp.owner.lastName}` : 'Unassigned',
+      owner: opp.owner || null,
+      projectManagerId: opp.projectManagerId || null,
+      projectManager: opp.projectManager || null,
+      onboardedById: opp.onboardedById || null,
+      onboardedBy: opp.onboardedBy || null,
+      approvedById: opp.approvedById || null,
+      approvedBy: opp.approvedBy || null,
       // Timestamps
       createdAt: opp.createdAt,
       updatedAt: opp.updatedAt,

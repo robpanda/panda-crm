@@ -6,6 +6,7 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
 import multer from 'multer';
+import { PrismaClient } from '@prisma/client';
 
 import agreementRoutes from './routes/agreements.js';
 import pdfRoutes from './routes/pdf.js';
@@ -17,6 +18,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.DOCUMENTS_PORT || 3009;
+const prisma = new PrismaClient();
 
 // Configure multer for file uploads
 const upload = multer({
@@ -72,6 +74,16 @@ app.post('/api/documents/upload', upload.single('file'), async (req, res, next) 
     const fileId = uuidv4();
     const ext = req.file.originalname.split('.').pop();
     const key = `uploads/${fileId}.${ext}`;
+    const {
+      title,
+      description,
+      opportunityId,
+      accountId,
+      contactId,
+      workOrderId,
+      linkedRecordType,
+      ownerId,
+    } = req.body || {};
 
     await s3Client.send(new PutObjectCommand({
       Bucket: bucket,
@@ -85,13 +97,56 @@ app.post('/api/documents/upload', upload.single('file'), async (req, res, next) 
     }));
 
     const url = `https://${bucket}.s3.amazonaws.com/${key}`;
+    const fileType = ext ? ext.toUpperCase() : null;
+    const fileExtension = ext ? ext.toLowerCase() : null;
+
+    const document = await prisma.document.create({
+      data: {
+        title: title || req.file.originalname,
+        description: description || null,
+        fileName: req.file.originalname,
+        fileType,
+        fileExtension,
+        contentSize: req.file.size,
+        contentUrl: url,
+        ownerId: ownerId || null,
+        sourceType: 'UPLOAD',
+        metadata: JSON.stringify({
+          key,
+          bucket,
+          uploadedAt: new Date().toISOString(),
+          contentType: req.file.mimetype,
+        }),
+        links: (opportunityId || accountId || contactId || workOrderId) ? {
+          create: {
+            opportunityId: opportunityId || null,
+            accountId: accountId || null,
+            contactId: contactId || null,
+            workOrderId: workOrderId || null,
+            linkedRecordType:
+              linkedRecordType
+              || (opportunityId ? 'OPPORTUNITY' : null)
+              || (accountId ? 'ACCOUNT' : null)
+              || (contactId ? 'CONTACT' : null)
+              || (workOrderId ? 'WORK_ORDER' : null),
+            visibility: 'AllUsers',
+            shareType: 'V',
+          },
+        } : undefined,
+      },
+      include: {
+        links: true,
+      },
+    });
 
     res.json({
       success: true,
       data: {
         fileId,
+        documentId: document.id,
         key,
         url,
+        contentUrl: url,
         originalName: req.file.originalname,
         contentType: req.file.mimetype,
         size: req.file.size,
