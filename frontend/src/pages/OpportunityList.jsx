@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { opportunitiesApi, usersApi } from '../services/api';
@@ -125,23 +125,22 @@ const workTypeOptions = [
 const DEFAULT_COLUMNS = ['jobId', 'priority', 'name', 'account', 'amount', 'stage', 'type', 'closeDate', 'owner'];
 
 export default function OpportunityList() {
-  const [searchParams] = useSearchParams();
-  const initialStage = searchParams.get('stage') || 'all';
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
 
-  const [search, setSearch] = useState('');
-  const [ownerFilter, setOwnerFilter] = useState('all');
-  const [ownerId, setOwnerId] = useState('');
+  const [search, setSearch] = useState(searchParams.get('search') || '');
+  const [ownerFilter, setOwnerFilter] = useState(searchParams.get('ownerFilter') || 'all');
+  const [ownerId, setOwnerId] = useState(searchParams.get('ownerId') || '');
   const [ownerSearch, setOwnerSearch] = useState('');
-  const [stage, setStage] = useState(initialStage === 'all' ? '' : initialStage);
-  const [type, setType] = useState('');
-  const [leadSource, setLeadSource] = useState('');
-  const [workType, setWorkType] = useState('');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-  const [sortBy, setSortBy] = useState('createdAt');
-  const [sortOrder, setSortOrder] = useState('desc');
-  const [page, setPage] = useState(1);
+  const [stage, setStage] = useState(searchParams.get('stage') || '');
+  const [type, setType] = useState(searchParams.get('type') || '');
+  const [leadSource, setLeadSource] = useState(searchParams.get('leadSource') || '');
+  const [workType, setWorkType] = useState(searchParams.get('workType') || '');
+  const [startDate, setStartDate] = useState(searchParams.get('createdFrom') || '');
+  const [endDate, setEndDate] = useState(searchParams.get('createdTo') || '');
+  const [sortBy, setSortBy] = useState(searchParams.get('sortBy') || 'createdAt');
+  const [sortOrder, setSortOrder] = useState(searchParams.get('sortOrder') || 'desc');
+  const [page, setPage] = useState(parseInt(searchParams.get('page') || '1', 10));
   const [showFilters, setShowFilters] = useState(false);
 
   // Bulk selection state
@@ -208,6 +207,45 @@ export default function OpportunityList() {
     enabled: showReassignModal,
   });
   const users = usersData || [];
+
+  useEffect(() => {
+    const nextParams = new URLSearchParams();
+
+    if (search) nextParams.set('search', search);
+    if (ownerFilter !== 'all') nextParams.set('ownerFilter', ownerFilter);
+    if (ownerId) nextParams.set('ownerId', ownerId);
+    if (stage) nextParams.set('stage', stage);
+    if (type) nextParams.set('type', type);
+    if (leadSource) nextParams.set('leadSource', leadSource);
+    if (workType) nextParams.set('workType', workType);
+    if (startDate) nextParams.set('createdFrom', startDate);
+    if (endDate) nextParams.set('createdTo', endDate);
+    if (sortBy !== 'createdAt') nextParams.set('sortBy', sortBy);
+    if (sortOrder !== 'desc') nextParams.set('sortOrder', sortOrder);
+    if (page > 1) nextParams.set('page', String(page));
+
+    const nextQuery = nextParams.toString();
+    const currentQuery = searchParams.toString();
+
+    if (nextQuery !== currentQuery) {
+      setSearchParams(nextParams, { replace: true });
+    }
+  }, [
+    search,
+    ownerFilter,
+    ownerId,
+    stage,
+    type,
+    leadSource,
+    workType,
+    startDate,
+    endDate,
+    sortBy,
+    sortOrder,
+    page,
+    searchParams,
+    setSearchParams,
+  ]);
 
   // Bulk mutations
   const bulkReassignMutation = useMutation({

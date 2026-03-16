@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { leadsApi, usersApi } from '../services/api';
@@ -74,12 +74,12 @@ export default function LeadList() {
   const [source, setSource] = useState(searchParams.get('source') || '');
   const [sortBy, setSortBy] = useState(searchParams.get('sortBy') || 'createdAt');
   const [sortOrder, setSortOrder] = useState(searchParams.get('sortOrder') || 'desc');
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(parseInt(searchParams.get('page') || '1', 10));
   const [showFilters, setShowFilters] = useState(false);
-  const [leadSource, setLeadSource] = useState('');
-  const [workType, setWorkType] = useState('');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
+  const [leadSource, setLeadSource] = useState(searchParams.get('leadSource') || '');
+  const [workType, setWorkType] = useState(searchParams.get('workType') || '');
+  const [startDate, setStartDate] = useState(searchParams.get('startDate') || '');
+  const [endDate, setEndDate] = useState(searchParams.get('endDate') || '');
 
   // Bulk selection state
   const [selectionMode, setSelectionMode] = useState(false);
@@ -134,6 +134,41 @@ export default function LeadList() {
     enabled: showReassignModal,
   });
   const users = usersData || [];
+
+  useEffect(() => {
+    const nextParams = new URLSearchParams();
+
+    if (search) nextParams.set('search', search);
+    if (status && status !== 'all') nextParams.set('status', status);
+    if (source) nextParams.set('source', source);
+    if (leadSource) nextParams.set('leadSource', leadSource);
+    if (workType) nextParams.set('workType', workType);
+    if (startDate) nextParams.set('startDate', startDate);
+    if (endDate) nextParams.set('endDate', endDate);
+    if (sortBy !== 'createdAt') nextParams.set('sortBy', sortBy);
+    if (sortOrder !== 'desc') nextParams.set('sortOrder', sortOrder);
+    if (page > 1) nextParams.set('page', String(page));
+
+    const nextQuery = nextParams.toString();
+    const currentQuery = searchParams.toString();
+
+    if (nextQuery !== currentQuery) {
+      setSearchParams(nextParams, { replace: true });
+    }
+  }, [
+    search,
+    status,
+    source,
+    leadSource,
+    workType,
+    startDate,
+    endDate,
+    sortBy,
+    sortOrder,
+    page,
+    searchParams,
+    setSearchParams,
+  ]);
 
   // Bulk mutations
   const bulkReassignMutation = useMutation({
@@ -199,6 +234,7 @@ export default function LeadList() {
       setSortBy(field);
       setSortOrder('desc');
     }
+    setPage(1);
   };
 
   // Sort indicator component
@@ -222,6 +258,7 @@ export default function LeadList() {
     setEndDate('');
     setSortBy('createdAt');
     setSortOrder('desc');
+    setPage(1);
   };
 
   const hasActiveFilters = search || (status && status !== 'all') || source || leadSource || workType || startDate || endDate;
@@ -268,7 +305,10 @@ export default function LeadList() {
               <input
                 type="text"
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  setPage(1);
+                }}
                 placeholder="Search by name, email, phone, or company..."
                 className="w-full pl-10 pr-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent transition-all"
               />
@@ -277,7 +317,10 @@ export default function LeadList() {
             {/* Source Filter */}
             <select
               value={source}
-              onChange={(e) => setSource(e.target.value)}
+              onChange={(e) => {
+                setSource(e.target.value);
+                setPage(1);
+              }}
               className="px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent bg-white min-w-[160px]"
             >
               {sourceOptions.map((opt) => (
@@ -335,7 +378,10 @@ export default function LeadList() {
                   </label>
                   <select
                     value={leadSource}
-                    onChange={(e) => setLeadSource(e.target.value)}
+                    onChange={(e) => {
+                      setLeadSource(e.target.value);
+                      setPage(1);
+                    }}
                     className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent bg-white"
                   >
                     <option value="">All Sources</option>
@@ -363,7 +409,10 @@ export default function LeadList() {
                   </label>
                   <select
                     value={workType}
-                    onChange={(e) => setWorkType(e.target.value)}
+                    onChange={(e) => {
+                      setWorkType(e.target.value);
+                      setPage(1);
+                    }}
                     className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent bg-white"
                   >
                     <option value="">All Work Types</option>
@@ -388,7 +437,10 @@ export default function LeadList() {
                     <input
                       type="date"
                       value={startDate}
-                      onChange={(e) => setStartDate(e.target.value)}
+                      onChange={(e) => {
+                        setStartDate(e.target.value);
+                        setPage(1);
+                      }}
                       className="w-full pl-10 pr-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
                     />
                   </div>
@@ -404,7 +456,10 @@ export default function LeadList() {
                     <input
                       type="date"
                       value={endDate}
-                      onChange={(e) => setEndDate(e.target.value)}
+                      onChange={(e) => {
+                        setEndDate(e.target.value);
+                        setPage(1);
+                      }}
                       className="w-full pl-10 pr-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
                     />
                   </div>
@@ -485,7 +540,10 @@ export default function LeadList() {
             {tabs.map((tab) => (
               <button
                 key={tab.id}
-                onClick={() => setStatus(tab.id)}
+                onClick={() => {
+                  setStatus(tab.id);
+                  setPage(1);
+                }}
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
                   status === tab.id
                     ? 'bg-panda-primary text-white'
