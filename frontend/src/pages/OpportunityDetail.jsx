@@ -1651,7 +1651,7 @@ export default function OpportunityDetail() {
   const activeTab = legacyTabId;
   const setActiveTab = navigateToTab;
   const activeMessagesSubTab = activeCategory === 'messages'
-    ? ['internalNotes', 'internalComments', 'customerComms'].includes(activeSubTab)
+    ? ['internalNotes', 'internalComments', 'customerComms', 'notifications', 'activity'].includes(activeSubTab)
       ? activeSubTab
       : 'customerComms'
     : activeSubTab;
@@ -3579,6 +3579,8 @@ export default function OpportunityDetail() {
                         { id: 'internalNotes', label: 'Internal Notes' },
                         { id: 'internalComments', label: 'Internal Comments' },
                         { id: 'customerComms', label: 'Customer Comms' },
+                        { id: 'notifications', label: 'Notifications' },
+                        { id: 'activity', label: 'Activity' },
                       ].map((subTab) => {
                         const isActive = activeMessagesSubTab === subTab.id;
                         return (

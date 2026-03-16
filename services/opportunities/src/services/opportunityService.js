@@ -23,6 +23,7 @@ const S3_BUCKET = process.env.S3_BUCKET || 'pandasign-documents';
 // SES client for email notifications
 const sesClient = new SESClient({ region: process.env.AWS_REGION || 'us-east-2' });
 const FROM_EMAIL = process.env.SES_FROM_EMAIL || 'notifications@pandaexteriors.com';
+const INTERNAL_COMMENT_TITLE_PREFIX = 'INTERNAL_COMMENT|';
 
 const DISPOSITION_STAGE_MAP = {
   INSPECTION_NOT_COMPLETED: 'SCHEDULED',
@@ -41,6 +42,32 @@ function parseDate(value) {
 }
 
 const DEFAULT_IN_PERSON_DURATION_MINUTES = 120;
+
+function normalizeDepartmentTag(value) {
+  const normalized = String(value || 'general')
+    .trim()
+    .toLowerCase()
+    .replace(/\|/g, '')
+    .replace(/\s+/g, '_');
+  return normalized || 'general';
+}
+
+function toInternalCommentTitle(departmentTag = 'general', isResolved = false) {
+  return `${INTERNAL_COMMENT_TITLE_PREFIX}${normalizeDepartmentTag(departmentTag)}|${isResolved ? '1' : '0'}`;
+}
+
+function parseInternalCommentTitle(title) {
+  if (typeof title !== 'string' || !title.startsWith(INTERNAL_COMMENT_TITLE_PREFIX)) {
+    return null;
+  }
+
+  const remainder = title.slice(INTERNAL_COMMENT_TITLE_PREFIX.length);
+  const [departmentTagRaw = 'general', resolvedRaw = '0'] = remainder.split('|');
+  return {
+    departmentTag: normalizeDepartmentTag(departmentTagRaw),
+    isResolved: resolvedRaw === '1' || String(resolvedRaw).toLowerCase() === 'true',
+  };
+}
 
 function normalizeOpportunityType(value) {
   if (!value) return null;
@@ -3803,7 +3830,10 @@ Be factual and professional. Highlight anything that needs attention.`;
     logger.info(`Getting notes for opportunity: ${opportunityId}`);
 
     const notes = await prisma.note.findMany({
-      where: { opportunityId },
+      where: {
+        opportunityId,
+        NOT: { title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } },
+      },
       include: {
         createdBy: {
           select: { id: true, firstName: true, lastName: true, email: true },
@@ -4014,6 +4044,200 @@ Be factual and professional. Highlight anything that needs attention.`;
           }
         : null,
     };
+  }
+
+  async getOpportunityInternalComments(opportunityId) {
+    const comments = await prisma.note.findMany({
+      where: {
+        opportunityId,
+        title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return comments.map((comment) => {
+      const meta = parseInternalCommentTitle(comment.title) || {
+        departmentTag: 'general',
+        isResolved: false,
+      };
+      return {
+        id: comment.id,
+        content: comment.body,
+        body: comment.body,
+        departmentTag: meta.departmentTag,
+        isResolved: meta.isResolved,
+        createdAt: comment.createdAt,
+        updatedAt: comment.updatedAt,
+        author: comment.createdBy
+          ? {
+              id: comment.createdBy.id,
+              firstName: comment.createdBy.firstName,
+              lastName: comment.createdBy.lastName,
+              email: comment.createdBy.email,
+            }
+          : null,
+        replies: [],
+        attachmentUrls: [],
+      };
+    });
+  }
+
+  async createOpportunityInternalComment(opportunityId, payload = {}, actor = null) {
+    const content = String(payload.content || payload.body || '').trim();
+    if (!content) {
+      const error = new Error('Comment content is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const opportunity = await prisma.opportunity.findUnique({
+      where: { id: opportunityId },
+      select: { id: true },
+    });
+    if (!opportunity) {
+      const error = new Error(`Opportunity not found: ${opportunityId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const departmentTag = normalizeDepartmentTag(payload.departmentTag || payload.department || 'general');
+    const isResolved = Boolean(payload.isResolved);
+
+    const comment = await prisma.note.create({
+      data: {
+        opportunityId,
+        title: toInternalCommentTitle(departmentTag, isResolved),
+        body: content,
+        createdById: actor?.id || null,
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+    });
+
+    return {
+      id: comment.id,
+      content: comment.body,
+      body: comment.body,
+      departmentTag,
+      isResolved,
+      createdAt: comment.createdAt,
+      updatedAt: comment.updatedAt,
+      author: comment.createdBy
+        ? {
+            id: comment.createdBy.id,
+            firstName: comment.createdBy.firstName,
+            lastName: comment.createdBy.lastName,
+            email: comment.createdBy.email,
+          }
+        : null,
+      replies: [],
+      attachmentUrls: [],
+      mentionsNotified: 0,
+    };
+  }
+
+  async updateOpportunityInternalComment(opportunityId, commentId, payload = {}) {
+    const existing = await prisma.note.findFirst({
+      where: {
+        id: commentId,
+        opportunityId,
+        title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+    });
+
+    if (!existing) {
+      const error = new Error(`Internal comment not found: ${commentId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const has = (key) => Object.prototype.hasOwnProperty.call(payload, key);
+    const meta = parseInternalCommentTitle(existing.title) || {
+      departmentTag: 'general',
+      isResolved: false,
+    };
+    const nextDepartment = has('departmentTag') || has('department')
+      ? normalizeDepartmentTag(payload.departmentTag || payload.department)
+      : meta.departmentTag;
+    const nextResolved = has('isResolved')
+      ? Boolean(payload.isResolved)
+      : meta.isResolved;
+    const nextContent = has('content') || has('body')
+      ? String(payload.content || payload.body || '').trim()
+      : existing.body;
+
+    if (!nextContent) {
+      const error = new Error('Comment content is required');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const updated = await prisma.note.update({
+      where: { id: commentId },
+      data: {
+        title: toInternalCommentTitle(nextDepartment, nextResolved),
+        body: nextContent,
+      },
+      include: {
+        createdBy: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
+    });
+
+    return {
+      id: updated.id,
+      content: updated.body,
+      body: updated.body,
+      departmentTag: nextDepartment,
+      isResolved: nextResolved,
+      createdAt: updated.createdAt,
+      updatedAt: updated.updatedAt,
+      author: updated.createdBy
+        ? {
+            id: updated.createdBy.id,
+            firstName: updated.createdBy.firstName,
+            lastName: updated.createdBy.lastName,
+            email: updated.createdBy.email,
+          }
+        : null,
+      replies: [],
+      attachmentUrls: [],
+      mentionsNotified: 0,
+    };
+  }
+
+  async deleteOpportunityInternalComment(opportunityId, commentId) {
+    const existing = await prisma.note.findFirst({
+      where: {
+        id: commentId,
+        opportunityId,
+        title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+      },
+      select: { id: true },
+    });
+
+    if (!existing) {
+      const error = new Error(`Internal comment not found: ${commentId}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    await prisma.note.delete({ where: { id: commentId } });
+    return { success: true, deletedId: commentId };
   }
 
   // ============================================================================
