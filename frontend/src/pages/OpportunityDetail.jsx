@@ -36,6 +36,7 @@ import WorkflowSidebar from '../components/WorkflowSidebar';
 import NotesSidebar from '../components/NotesSidebar';
 import AddressAutocomplete from '../components/AddressAutocomplete';
 import ExpediterChecklist from '../components/ExpediterChecklist';
+import InternalComments from '../components/InternalComments';
 import {
   Target,
   ArrowLeft,
@@ -1649,6 +1650,11 @@ export default function OpportunityDetail() {
   // For backward compatibility with existing tab content
   const activeTab = legacyTabId;
   const setActiveTab = navigateToTab;
+  const activeMessagesSubTab = activeCategory === 'messages'
+    ? ['internalNotes', 'internalComments', 'customerComms'].includes(activeSubTab)
+      ? activeSubTab
+      : 'customerComms'
+    : activeSubTab;
 
   const [showQuickActionModal, setShowQuickActionModal] = useState(false);
   const [activeQuickAction, setActiveQuickAction] = useState(null);
@@ -3567,12 +3573,40 @@ export default function OpportunityDetail() {
               {/* Sub-Tab Navigation (hidden when Details is active) */}
               {!showDetails && (
                 <div className="px-6 pt-4">
-                  <SubTabNav
-                    category={activeCategory}
-                    activeSubTab={activeSubTab}
-                    onSubTabChange={changeSubTab}
-                    subTabCounts={subTabCounts}
-                  />
+                  {activeCategory === 'messages' ? (
+                    <div className="flex gap-1 border-b border-gray-200 mb-4">
+                      {[
+                        { id: 'internalNotes', label: 'Internal Notes' },
+                        { id: 'internalComments', label: 'Internal Comments' },
+                        { id: 'customerComms', label: 'Customer Comms' },
+                      ].map((subTab) => {
+                        const isActive = activeMessagesSubTab === subTab.id;
+                        return (
+                          <button
+                            key={subTab.id}
+                            onClick={() => changeSubTab(subTab.id)}
+                            className={`
+                              flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 -mb-px
+                              transition-colors duration-150
+                              ${isActive
+                                ? 'border-panda-primary text-panda-primary'
+                                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                              }
+                            `}
+                          >
+                            <span>{subTab.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <SubTabNav
+                      category={activeCategory}
+                      activeSubTab={activeSubTab}
+                      onSubTabChange={changeSubTab}
+                      subTabCounts={subTabCounts}
+                    />
+                  )}
                 </div>
               )}
 
@@ -7156,7 +7190,15 @@ export default function OpportunityDetail() {
                   />
                 )}
 
-                {activeTab === 'communications' && (
+                {activeCategory === 'messages' && activeMessagesSubTab === 'internalNotes' && (
+                  <NotesSidebar opportunityId={id} />
+                )}
+
+                {activeCategory === 'messages' && activeMessagesSubTab === 'internalComments' && (
+                  <InternalComments entityType="opportunity" entityId={id} />
+                )}
+
+                {activeCategory === 'messages' && activeMessagesSubTab === 'customerComms' && (
                   <CommunicationsTab
                     phone={opportunity?.contact?.phone || opportunity?.contact?.mobilePhone}
                     email={opportunity?.contact?.email}
