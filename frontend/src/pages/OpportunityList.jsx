@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useDeferredValue } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { opportunitiesApi, usersApi } from '../services/api';
@@ -142,6 +142,7 @@ export default function OpportunityList() {
   const [sortOrder, setSortOrder] = useState(searchParams.get('sortOrder') || 'desc');
   const [page, setPage] = useState(parseInt(searchParams.get('page') || '1', 10));
   const [showFilters, setShowFilters] = useState(false);
+  const deferredSearch = useDeferredValue(search);
 
   // Bulk selection state
   const [selectionMode, setSelectionMode] = useState(false);
@@ -162,7 +163,7 @@ export default function OpportunityList() {
 
   const queryParams = useMemo(() => {
     const params = { page, limit: 25, sortBy, sortOrder };
-    if (search) params.search = search;
+    if (deferredSearch) params.search = deferredSearch;
     if (ownerFilter === 'mine') params.ownerFilter = 'mine';
     if (ownerId) params.ownerId = ownerId;
     if (stage) params.stage = stage;
@@ -172,7 +173,7 @@ export default function OpportunityList() {
     if (startDate) params.createdFrom = startDate;
     if (endDate) params.createdTo = endDate;
     return params;
-  }, [search, ownerFilter, ownerId, stage, type, leadSource, workType, startDate, endDate, sortBy, sortOrder, page]);
+  }, [deferredSearch, ownerFilter, ownerId, stage, type, leadSource, workType, startDate, endDate, sortBy, sortOrder, page]);
 
   const { data, isLoading } = useQuery({
     queryKey: ['opportunities', queryParams],

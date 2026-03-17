@@ -428,10 +428,10 @@ class OpportunityService {
       id: true,
       leadSetById: true,
       ownerId: true,
-      accountId: true,
-      contactId: true,
       convertedDate: true,
       convertedOpportunityId: true,
+      convertedAccountId: true,
+      convertedContactId: true,
       leadSetBy: {
         select: { id: true, firstName: true, lastName: true, email: true, phone: true },
       },
@@ -585,29 +585,27 @@ class OpportunityService {
       where.invoiceStatus = invoiceStatus;
     }
 
-    const [opportunities, total] = await Promise.all([
-      prisma.opportunity.findMany({
-        where,
-        skip,
-        take: limit,
-        orderBy: { [sortBy]: sortOrder },
-        include: {
-          account: {
-            select: { id: true, name: true, billingCity: true, billingState: true },
-          },
-          contact: {
-            select: { id: true, firstName: true, lastName: true, phone: true, email: true },
-          },
-          owner: {
-            select: { id: true, firstName: true, lastName: true },
-          },
-          _count: {
-            select: { quotes: true, workOrders: true },
-          },
+    const opportunities = await prisma.opportunity.findMany({
+      where,
+      skip,
+      take: limit,
+      orderBy: { [sortBy]: sortOrder },
+      include: {
+        account: {
+          select: { id: true, name: true, billingCity: true, billingState: true },
         },
-      }),
-      prisma.opportunity.count({ where }),
-    ]);
+        contact: {
+          select: { id: true, firstName: true, lastName: true, phone: true, email: true },
+        },
+        owner: {
+          select: { id: true, firstName: true, lastName: true },
+        },
+        _count: {
+          select: { quotes: true, workOrders: true },
+        },
+      },
+    });
+    const total = await prisma.opportunity.count({ where });
 
     // Transform to wrappers
     const wrappers = opportunities.map((opp) => this.createOpportunityWrapper(opp));
