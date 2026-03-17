@@ -6537,6 +6537,18 @@ export const customerPortalApi = {
     return response.data;
   },
 
+  // Get public invoice details for billing-only portal fallback
+  async getPublicInvoice(invoiceId) {
+    const response = await publicApi.get(`/api/payments/invoices/${invoiceId}/public`);
+    return response.data;
+  },
+
+  // Get public payment history for a specific invoice
+  async getPublicInvoicePayments(invoiceId) {
+    const response = await publicApi.get(`/api/payments/invoice/${invoiceId}`);
+    return response.data;
+  },
+
   // Get workflow stages for timeline
   async getStages(token) {
     try {

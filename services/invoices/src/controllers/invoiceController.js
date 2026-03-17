@@ -527,7 +527,7 @@ export async function sendInvoice(req, res, next) {
       : null;
 
     const customerPortalUrl = opportunity?.jobId
-      ? `${process.env.FRONTEND_URL || 'https://crm.pandaadmin.com'}/portal/job/${encodeURIComponent(opportunity.jobId)}?tab=billing`
+      ? `${process.env.FRONTEND_URL || 'https://crm.pandaadmin.com'}/portal/job/${encodeURIComponent(opportunity.jobId)}?tab=billing&invoiceId=${encodeURIComponent(invoice.id)}`
       : null;
 
     const defaultMessage = `Dear ${invoice.account?.name || 'Customer'},

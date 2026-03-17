@@ -56,6 +56,7 @@ const stageConfig = {
 export default function CustomerPortal() {
   const { token, jobId } = useParams();
   const [searchParams] = useSearchParams();
+  const invoiceId = searchParams.get('invoiceId');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [projectData, setProjectData] = useState(null);
@@ -69,6 +70,7 @@ export default function CustomerPortal() {
   const [selectedInvoice, setSelectedInvoice] = useState(null);
   const [paymentSuccess, setPaymentSuccess] = useState(false);
   const [portalToken, setPortalToken] = useState(token); // Store the token for API calls
+  const [billingOnlyPortal, setBillingOnlyPortal] = useState(false);
   const requestedTab = searchParams.get('tab');
   const portalTabs = ['overview', 'progress', 'documents', 'billing', 'messages', 'support'];
   const [activeTab, setActiveTab] = useState(
@@ -94,19 +96,40 @@ export default function CustomerPortal() {
   const [bookingError, setBookingError] = useState(null);
   const showAppointments = false;
   const refreshBilling = async (activeToken) => {
-    if (!activeToken) return;
     try {
-      const billingResponse = await customerPortalApi.getPayments(activeToken);
-      if (billingResponse.success) {
-        const billingData = billingResponse.data || {};
-        const resolvedInvoices = Array.isArray(billingData)
-          ? billingData
-          : (billingData.invoices || []);
-        const resolvedPayments = Array.isArray(billingData)
-          ? []
-          : (billingData.payments || []);
-        setInvoices(resolvedInvoices);
-        setPayments(resolvedPayments);
+      if (activeToken) {
+        const billingResponse = await customerPortalApi.getPayments(activeToken);
+        if (billingResponse.success) {
+          const billingData = billingResponse.data || {};
+          const resolvedInvoices = Array.isArray(billingData)
+            ? billingData
+            : (billingData.invoices || []);
+          const resolvedPayments = Array.isArray(billingData)
+            ? []
+            : (billingData.payments || []);
+          setInvoices(resolvedInvoices);
+          setPayments(resolvedPayments);
+        }
+        return;
+      }
+
+      if (invoiceId) {
+        const [invoiceResponse, paymentsResponse] = await Promise.all([
+          customerPortalApi.getPublicInvoice(invoiceId),
+          customerPortalApi.getPublicInvoicePayments(invoiceId),
+        ]);
+
+        if (invoiceResponse.success) {
+          const invoiceData = invoiceResponse.data || {};
+          setInvoices([{
+            ...invoiceData,
+            issueDate: invoiceData.invoiceDate,
+            accountName: invoiceData.account?.name,
+          }]);
+        }
+        if (paymentsResponse.success) {
+          setPayments(paymentsResponse.data || []);
+        }
       }
     } catch (err) {
       console.error('Error refreshing billing:', err);
@@ -124,17 +147,30 @@ export default function CustomerPortal() {
 
       try {
         setLoading(true);
+        setError(null);
 
         let projectResponse;
         let activeToken = token;
+        let useBillingOnlyFallback = false;
 
         // If accessing via job number, fetch initial data and get the token
         if (jobId && !token) {
           if (typeof customerPortalApi.getProjectByJobId === 'function') {
-            projectResponse = await customerPortalApi.getProjectByJobId(jobId);
-            if (projectResponse.success && projectResponse.data.token) {
-              activeToken = projectResponse.data.token;
-              setPortalToken(activeToken);
+            try {
+              projectResponse = await customerPortalApi.getProjectByJobId(jobId);
+              if (projectResponse.success && projectResponse.data.token) {
+                activeToken = projectResponse.data.token;
+                setPortalToken(activeToken);
+              }
+            } catch (portalLookupError) {
+              if (invoiceId && [401, 403, 404].includes(portalLookupError?.response?.status)) {
+                useBillingOnlyFallback = true;
+                setBillingOnlyPortal(true);
+                setPortalToken(null);
+                setActiveTab('billing');
+              } else {
+                throw portalLookupError;
+              }
             }
           } else {
             throw new Error('Invalid portal link');
@@ -142,6 +178,40 @@ export default function CustomerPortal() {
         } else {
           projectResponse = await customerPortalApi.getProject(token);
         }
+
+        if (useBillingOnlyFallback && invoiceId) {
+          const [invoiceResponse, paymentsResponse] = await Promise.all([
+            customerPortalApi.getPublicInvoice(invoiceId),
+            customerPortalApi.getPublicInvoicePayments(invoiceId),
+          ]);
+
+          if (!invoiceResponse.success) {
+            throw new Error('Unable to load invoice information');
+          }
+
+          const invoiceData = invoiceResponse.data || {};
+          setProjectData({
+            name: invoiceData.account?.name || `Job ${jobId}`,
+            jobId,
+            project: {
+              jobId,
+              accountName: invoiceData.account?.name || 'Customer',
+            },
+            account: invoiceData.account || null,
+          });
+          setStages([]);
+          setGalleries([]);
+          setAppointments([]);
+          setInvoices([{
+            ...invoiceData,
+            issueDate: invoiceData.invoiceDate,
+            accountName: invoiceData.account?.name,
+          }]);
+          setPayments(paymentsResponse.success ? (paymentsResponse.data || []) : []);
+          return;
+        }
+
+        setBillingOnlyPortal(false);
 
         if (projectResponse.success) {
           setProjectData(projectResponse.data);
@@ -474,14 +544,20 @@ export default function CustomerPortal() {
     }
   }, [requestedTab]);
 
-  const tabs = useMemo(() => ([
-    { id: 'overview', label: 'Overview', icon: LayoutGrid },
-    { id: 'progress', label: 'Project Progress', icon: TrendingUp },
-    { id: 'documents', label: 'Documents', icon: Image },
-    { id: 'billing', label: 'Billing', icon: CreditCard },
-    { id: 'messages', label: 'Messages', icon: MessageSquare },
-    { id: 'support', label: 'Support', icon: LifeBuoy },
-  ]), []);
+  const tabs = useMemo(() => {
+    if (billingOnlyPortal) {
+      return [{ id: 'billing', label: 'Billing', icon: CreditCard }];
+    }
+
+    return [
+      { id: 'overview', label: 'Overview', icon: LayoutGrid },
+      { id: 'progress', label: 'Project Progress', icon: TrendingUp },
+      { id: 'documents', label: 'Documents', icon: Image },
+      { id: 'billing', label: 'Billing', icon: CreditCard },
+      { id: 'messages', label: 'Messages', icon: MessageSquare },
+      { id: 'support', label: 'Support', icon: LifeBuoy },
+    ];
+  }, [billingOnlyPortal]);
 
   const portalBrand = useMemo(() => ({
     name: 'Panda Exteriors',
