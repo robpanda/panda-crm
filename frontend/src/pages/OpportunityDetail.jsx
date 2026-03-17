@@ -2278,6 +2278,7 @@ export default function OpportunityDetail() {
   // Document gallery state
   const [showDocumentGallery, setShowDocumentGallery] = useState(false);
   const [selectedDocumentIndex, setSelectedDocumentIndex] = useState(0);
+  const [documentGalleryItems, setDocumentGalleryItems] = useState([]);
 
   // Contract signing modal state
   const [showContractSigningModal, setShowContractSigningModal] = useState(false);
@@ -2603,6 +2604,40 @@ export default function OpportunityDetail() {
   const isRepositoryPdf = useCallback((file) => (
     getRepositoryDocumentExtension(file) === 'pdf'
   ), [getRepositoryDocumentExtension]);
+  const openDocumentGallery = useCallback((items, index = 0) => {
+    if (!Array.isArray(items) || items.length === 0) return;
+    setDocumentGalleryItems(items);
+    setSelectedDocumentIndex(index);
+    setShowDocumentGallery(true);
+  }, []);
+  const contractGalleryItems = useMemo(() => (
+    (documents?.documents || []).map((doc) => ({
+      id: doc.id,
+      title: doc.name || doc.agreementNumber || 'Document',
+      subtitle: doc.signedAt
+        ? `Signed ${new Date(doc.signedAt).toLocaleDateString()}`
+        : doc.createdAt ? new Date(doc.createdAt).toLocaleDateString() : '-',
+      previewUrl: doc.signedDocumentUrl || doc.documentUrl || '',
+      downloadUrl: doc.downloadUrl || doc.signedDocumentUrl || doc.documentUrl || '',
+      fileName: doc.fileName || doc.name || doc.agreementNumber || 'document',
+      isImage: false,
+      isPdf: true,
+      badge: doc.status || 'DRAFT',
+    }))
+  ), [documents]);
+  const repositoryGalleryItems = useMemo(() => (
+    repositoryDocuments.map((file) => ({
+      id: file.id,
+      title: file.title || file.fileName || 'Untitled',
+      subtitle: file.createdAt ? new Date(file.createdAt).toLocaleDateString() : 'Unknown date',
+      previewUrl: getRepositoryDocumentUrl(file),
+      downloadUrl: getRepositoryDocumentUrl(file),
+      fileName: file.fileName || file.title || 'document',
+      isImage: isRepositoryImage(file),
+      isPdf: isRepositoryPdf(file),
+      badge: (file.fileType || file.fileExtension || 'File').toString().toUpperCase(),
+    }))
+  ), [repositoryDocuments, getRepositoryDocumentUrl, isRepositoryImage, isRepositoryPdf]);
   const currentCrewMembers = useMemo(() => {
     const appointmentsList = Array.isArray(appointments) ? appointments : [];
     const seen = new Set();
@@ -8012,8 +8047,7 @@ export default function OpportunityDetail() {
                               key={doc.id}
                               className="group relative border border-gray-200 rounded-lg overflow-hidden hover:border-panda-primary hover:shadow-md transition-all cursor-pointer bg-white"
                               onClick={() => {
-                                setSelectedDocumentIndex(index);
-                                setShowDocumentGallery(true);
+                                openDocumentGallery(contractGalleryItems, index);
                               }}
                             >
                               {/* PDF Thumbnail Preview */}
@@ -8064,7 +8098,7 @@ export default function OpportunityDetail() {
                         </div>
 
                         {/* Document Gallery Modal */}
-                        {showDocumentGallery && documents.documents.length > 0 && (
+                        {showDocumentGallery && documentGalleryItems.length > 0 && (
                           <div className="fixed inset-0 z-50 bg-black/90 flex flex-col">
                             {/* Header */}
                             <div className="flex items-center justify-between p-4 bg-black/50">
@@ -8076,18 +8110,18 @@ export default function OpportunityDetail() {
                                   <X className="w-6 h-6" />
                                 </button>
                                 <div className="text-white">
-                                  <h3 className="font-medium">{documents.documents[selectedDocumentIndex]?.name || 'Document'}</h3>
+                                  <h3 className="font-medium">{documentGalleryItems[selectedDocumentIndex]?.title || 'Document'}</h3>
                                   <p className="text-sm text-gray-300">
-                                    {selectedDocumentIndex + 1} of {documents.documents.length}
+                                    {selectedDocumentIndex + 1} of {documentGalleryItems.length}
                                   </p>
                                 </div>
                               </div>
                               <div className="flex items-center space-x-2">
                                 {/* Download button */}
-                                {documents.documents[selectedDocumentIndex]?.downloadUrl && (
+                                {documentGalleryItems[selectedDocumentIndex]?.downloadUrl && (
                                   <a
-                                    href={documents.documents[selectedDocumentIndex].downloadUrl}
-                                    download={documents.documents[selectedDocumentIndex].fileName}
+                                    href={documentGalleryItems[selectedDocumentIndex].downloadUrl}
+                                    download={documentGalleryItems[selectedDocumentIndex].fileName}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="flex items-center space-x-2 px-4 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90"
@@ -8098,9 +8132,9 @@ export default function OpportunityDetail() {
                                   </a>
                                 )}
                                 {/* Open in new tab */}
-                                {(documents.documents[selectedDocumentIndex]?.signedDocumentUrl || documents.documents[selectedDocumentIndex]?.documentUrl) && (
+                                {documentGalleryItems[selectedDocumentIndex]?.previewUrl && (
                                   <a
-                                    href={documents.documents[selectedDocumentIndex].signedDocumentUrl || documents.documents[selectedDocumentIndex].documentUrl}
+                                    href={documentGalleryItems[selectedDocumentIndex].previewUrl}
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="flex items-center space-x-2 px-4 py-2 bg-white/10 text-white rounded-lg hover:bg-white/20"
@@ -8113,14 +8147,22 @@ export default function OpportunityDetail() {
                               </div>
                             </div>
 
-                            {/* Main content - PDF viewer */}
+                            {/* Main content */}
                             <div className="flex-1 flex items-center justify-center p-4 overflow-hidden">
-                              {(documents.documents[selectedDocumentIndex]?.signedDocumentUrl || documents.documents[selectedDocumentIndex]?.documentUrl) ? (
-                                <iframe
-                                  src={documents.documents[selectedDocumentIndex].signedDocumentUrl || documents.documents[selectedDocumentIndex].documentUrl}
-                                  className="w-full max-w-4xl h-full rounded-lg bg-white"
-                                  title="Document Preview"
-                                />
+                              {documentGalleryItems[selectedDocumentIndex]?.previewUrl ? (
+                                documentGalleryItems[selectedDocumentIndex]?.isImage ? (
+                                  <img
+                                    src={documentGalleryItems[selectedDocumentIndex].previewUrl}
+                                    alt={documentGalleryItems[selectedDocumentIndex].title || 'Document Preview'}
+                                    className="max-w-full max-h-full rounded-lg bg-white object-contain"
+                                  />
+                                ) : (
+                                  <iframe
+                                    src={documentGalleryItems[selectedDocumentIndex].previewUrl}
+                                    className="w-full max-w-5xl h-full rounded-lg bg-white"
+                                    title="Document Preview"
+                                  />
+                                )
                               ) : (
                                 <div className="text-center text-white">
                                   <FileSignature className="w-24 h-24 mx-auto mb-4 text-gray-400" />
@@ -8130,16 +8172,16 @@ export default function OpportunityDetail() {
                             </div>
 
                             {/* Navigation arrows */}
-                            {documents.documents.length > 1 && (
+                            {documentGalleryItems.length > 1 && (
                               <>
                                 <button
-                                  onClick={() => setSelectedDocumentIndex((prev) => (prev === 0 ? documents.documents.length - 1 : prev - 1))}
+                                  onClick={() => setSelectedDocumentIndex((prev) => (prev === 0 ? documentGalleryItems.length - 1 : prev - 1))}
                                   className="absolute left-4 top-1/2 -translate-y-1/2 p-3 bg-black/50 text-white rounded-full hover:bg-black/70"
                                 >
                                   <ChevronLeft className="w-6 h-6" />
                                 </button>
                                 <button
-                                  onClick={() => setSelectedDocumentIndex((prev) => (prev === documents.documents.length - 1 ? 0 : prev + 1))}
+                                  onClick={() => setSelectedDocumentIndex((prev) => (prev === documentGalleryItems.length - 1 ? 0 : prev + 1))}
                                   className="absolute right-4 top-1/2 -translate-y-1/2 p-3 bg-black/50 text-white rounded-full hover:bg-black/70"
                                 >
                                   <ChevronRight className="w-6 h-6" />
@@ -8148,10 +8190,10 @@ export default function OpportunityDetail() {
                             )}
 
                             {/* Thumbnail strip at bottom */}
-                            {documents.documents.length > 1 && (
+                            {documentGalleryItems.length > 1 && (
                               <div className="bg-black/50 p-4 overflow-x-auto">
                                 <div className="flex space-x-2 justify-center">
-                                  {documents.documents.map((doc, index) => (
+                                  {documentGalleryItems.map((doc, index) => (
                                     <button
                                       key={doc.id}
                                       onClick={() => setSelectedDocumentIndex(index)}
@@ -8162,7 +8204,15 @@ export default function OpportunityDetail() {
                                       }`}
                                     >
                                       <div className="w-full h-full bg-gradient-to-br from-gray-700 to-gray-800 flex items-center justify-center">
-                                        <FileSignature className="w-6 h-6 text-gray-400" />
+                                        {doc.isImage && doc.previewUrl ? (
+                                          <img
+                                            src={doc.previewUrl}
+                                            alt={doc.title || 'Document thumbnail'}
+                                            className="w-full h-full object-cover"
+                                          />
+                                        ) : (
+                                          <FileSignature className="w-6 h-6 text-gray-400" />
+                                        )}
                                       </div>
                                     </button>
                                   ))}
@@ -8280,8 +8330,10 @@ export default function OpportunityDetail() {
                                         <>
                                           <a
                                             href={getRepositoryDocumentUrl(file)}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
+                                            onClick={(event) => {
+                                              event.preventDefault();
+                                              openDocumentGallery(repositoryGalleryItems, files.findIndex((entry) => entry.id === file.id));
+                                            }}
                                             className="flex-1 inline-flex items-center justify-center px-3 py-2 bg-gray-100 text-gray-700 text-xs font-medium rounded-md hover:bg-gray-200 transition-colors"
                                           >
                                             <Eye className="w-3 h-3 mr-1" />

@@ -414,31 +414,55 @@ async function getDocumentAccessUrl(doc) {
 
 function getS3Location(doc) {
   if (doc?.storageKey) {
-    return { bucket: defaultBucket, key: String(doc.storageKey) };
+    return normalizeS3Location(defaultBucket, String(doc.storageKey));
   }
 
   const rawUrl = String(doc?.contentUrl || '');
   if (!rawUrl.startsWith('http')) {
-    return { bucket: defaultBucket, key: rawUrl || null };
+    return normalizeS3Location(defaultBucket, rawUrl || null);
   }
 
   try {
     const parsed = new URL(rawUrl);
-    const pathKey = parsed.pathname.replace(/^\/+/, '');
+    const pathKey = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
 
     if (parsed.hostname === `${defaultBucket}.s3.amazonaws.com`) {
-      return { bucket: defaultBucket, key: pathKey };
+      return normalizeS3Location(defaultBucket, pathKey);
     }
 
     const hostParts = parsed.hostname.split('.');
     if (hostParts.length >= 4 && hostParts[1] === 's3') {
-      return { bucket: hostParts[0], key: pathKey };
+      return normalizeS3Location(hostParts[0], pathKey);
     }
   } catch {
     return { bucket: defaultBucket, key: null };
   }
 
   return { bucket: defaultBucket, key: null };
+}
+
+function normalizeS3Location(fallbackBucket, rawKey) {
+  const value = decodeURIComponent(String(rawKey || '').trim()).replace(/^\/+/, '');
+  if (!value) {
+    return { bucket: fallbackBucket, key: null };
+  }
+
+  if (value.startsWith('s3://')) {
+    const [, bucketFromUri, keyFromUri] = value.match(/^s3:\/\/([^/]+)\/?(.*)$/) || [];
+    return {
+      bucket: bucketFromUri || fallbackBucket,
+      key: keyFromUri || null,
+    };
+  }
+
+  if (value.startsWith(`${fallbackBucket}/`)) {
+    return {
+      bucket: fallbackBucket,
+      key: value.slice(fallbackBucket.length + 1) || null,
+    };
+  }
+
+  return { bucket: fallbackBucket, key: value };
 }
 
 /**
