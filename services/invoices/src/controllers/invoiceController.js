@@ -437,12 +437,6 @@ export async function sendInvoice(req, res, next) {
       where: { id },
       include: {
         account: true,
-        opportunity: {
-          select: {
-            id: true,
-            jobId: true,
-          },
-        },
         lineItems: true,
         payments: {
           where: { status: 'SETTLED' },
@@ -525,8 +519,15 @@ export async function sendInvoice(req, res, next) {
     const dueDateFormatted = invoice.dueDate
       ? format(new Date(invoice.dueDate), 'MMMM d, yyyy')
       : 'Upon Receipt';
-    const customerPortalUrl = invoice.opportunity?.jobId
-      ? `${process.env.FRONTEND_URL || 'https://crm.pandaadmin.com'}/portal/job/${encodeURIComponent(invoice.opportunity.jobId)}?tab=billing`
+    const opportunity = invoice.opportunityId
+      ? await prisma.opportunity.findUnique({
+          where: { id: invoice.opportunityId },
+          select: { id: true, job_id: true },
+        })
+      : null;
+
+    const customerPortalUrl = opportunity?.job_id
+      ? `${process.env.FRONTEND_URL || 'https://crm.pandaadmin.com'}/portal/job/${encodeURIComponent(opportunity.job_id)}?tab=billing`
       : null;
 
     const defaultMessage = `Dear ${invoice.account?.name || 'Customer'},
