@@ -684,6 +684,12 @@ function InvoiceDetailModal({
   onSend,
   onPay,
   onSave,
+  opportunityId,
+  contactPhone = '',
+  contactEmail = '',
+  contactName = '',
+  archivedActivities = [],
+  onActivityClick,
   initialMode = 'view',
   isSaving = false,
   isLoading = false,
@@ -692,6 +698,7 @@ function InvoiceDetailModal({
   const [loading, setLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(initialMode === 'edit');
   const [saveError, setSaveError] = useState('');
+  const [activeTab, setActiveTab] = useState('details');
   const [formState, setFormState] = useState(() => buildInvoiceEditorState(invoice));
 
   useEffect(() => {
@@ -701,6 +708,7 @@ function InvoiceDetailModal({
   useEffect(() => {
     setIsEditing(initialMode === 'edit');
     setSaveError('');
+    setActiveTab('details');
     setFormState(buildInvoiceEditorState(invoice));
   }, [invoice, initialMode]);
 
@@ -1125,9 +1133,36 @@ function InvoiceDetailModal({
                 </span>
               </div>
 
+              <div className="inline-flex rounded-lg border border-gray-200 overflow-hidden self-start">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('details')}
+                  className={`px-3 py-2 text-sm font-medium transition-colors ${
+                    activeTab === 'details'
+                      ? 'bg-panda-primary text-white'
+                      : 'bg-white text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  Details
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('activity')}
+                  className={`px-3 py-2 text-sm font-medium border-l border-gray-200 transition-colors ${
+                    activeTab === 'activity'
+                      ? 'bg-panda-primary text-white'
+                      : 'bg-white text-gray-700 hover:bg-gray-50'
+                  }`}
+                >
+                  Activity
+                </button>
+              </div>
+
+              {activeTab === 'details' ? (
+                <>
               {activityItems.length > 0 && (
                 <div>
-                  <h3 className="text-sm font-medium text-gray-900 mb-2">Activity</h3>
+                  <h3 className="text-sm font-medium text-gray-900 mb-2">Timeline</h3>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {activityItems.map((item) => (
                       <div key={item.label} className="bg-gray-50 rounded-lg p-3">
@@ -1198,6 +1233,19 @@ function InvoiceDetailModal({
                   <p className="text-sm text-gray-500 py-2">No payments recorded for this invoice.</p>
                 )}
               </div>
+                </>
+              ) : (
+                <div className="rounded-xl border border-gray-200 overflow-hidden">
+                  <CommunicationsTab
+                    phone={contactPhone}
+                    email={contactEmail}
+                    contactName={contactName}
+                    archivedActivities={archivedActivities}
+                    onActivityClick={onActivityClick}
+                    opportunityId={opportunityId}
+                  />
+                </div>
+              )}
             </>
           )}
         </div>
@@ -12182,6 +12230,29 @@ export default function OpportunityDetail() {
           onSend={openInvoiceSendModal}
           onPay={openInvoicePayModal}
           onSave={(payload) => updateInvoiceMutation.mutateAsync(payload)}
+          opportunityId={id}
+          contactPhone={
+            contacts?.[0]?.mobilePhone ||
+            contacts?.[0]?.phone ||
+            opportunity?.contact?.mobilePhone ||
+            opportunity?.contact?.phone ||
+            ''
+          }
+          contactEmail={
+            contacts?.[0]?.email ||
+            opportunity?.contact?.email ||
+            ''
+          }
+          contactName={
+            contacts?.[0]
+              ? `${contacts[0].firstName || ''} ${contacts[0].lastName || ''}`.trim()
+              : `${opportunity?.contact?.firstName || ''} ${opportunity?.contact?.lastName || ''}`.trim() || opportunity?.name || 'Customer'
+          }
+          archivedActivities={Array.isArray(activityData?.activities) ? activityData.activities : []}
+          onActivityClick={(item) => {
+            setSelectedActivity(item);
+            setShowActivityModal(true);
+          }}
           initialMode={invoiceModalMode}
           isSaving={updateInvoiceMutation.isPending}
           isLoading={invoiceDetailLoading}
