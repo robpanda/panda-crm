@@ -428,8 +428,9 @@ export async function sendInvoice(req, res, next) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
 
-    if (invoice.status !== 'DRAFT' && invoice.status !== 'PENDING') {
-      return res.status(400).json({ error: 'Invoice already sent or processed' });
+    const resendableStatuses = new Set(['DRAFT', 'PENDING', 'SENT', 'PARTIAL', 'OVERDUE']);
+    if (!resendableStatuses.has(invoice.status)) {
+      return res.status(400).json({ error: 'Invoice cannot be sent in its current status' });
     }
 
     // Determine recipient email
@@ -647,10 +648,14 @@ ${Buffer.from(pdfResult.pdfBytes).toString('base64')}`;
     }
 
     // Step 4: Update invoice status
+    const nextInvoiceStatus = invoice.status === 'DRAFT' || invoice.status === 'PENDING'
+      ? 'SENT'
+      : invoice.status;
+
     const updatedInvoice = await prisma.invoice.update({
       where: { id },
       data: {
-        status: 'SENT',
+        status: nextInvoiceStatus,
         // Store payment link for reference
         ...(paymentLink && { stripePaymentLinkUrl: paymentLink }),
         ...(pdfResult && {
@@ -709,7 +714,9 @@ ${Buffer.from(pdfResult.pdfBytes).toString('base64')}`;
 
     res.json({
       invoice: updatedInvoice,
-      message: emailSent ? 'Invoice sent successfully' : 'Invoice marked as sent (email delivery failed)',
+      message: emailSent
+        ? (invoice.status === 'DRAFT' || invoice.status === 'PENDING' ? 'Invoice sent successfully' : 'Invoice resent successfully')
+        : 'Invoice email delivery failed',
       emailSent,
       emailError,
       paymentLinkUrl: paymentLink,
