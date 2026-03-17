@@ -426,6 +426,12 @@ export async function sendInvoice(req, res, next) {
       where: { id },
       include: {
         account: true,
+        opportunity: {
+          select: {
+            id: true,
+            jobId: true,
+          },
+        },
         lineItems: true,
         payments: {
           where: { status: 'SETTLED' },
@@ -508,6 +514,9 @@ export async function sendInvoice(req, res, next) {
     const dueDateFormatted = invoice.dueDate
       ? format(new Date(invoice.dueDate), 'MMMM d, yyyy')
       : 'Upon Receipt';
+    const customerPortalUrl = invoice.opportunity?.jobId
+      ? `${process.env.FRONTEND_URL || 'https://crm.pandaadmin.com'}/portal/job/${encodeURIComponent(invoice.opportunity.jobId)}?tab=billing`
+      : null;
 
     const defaultMessage = `Dear ${invoice.account?.name || 'Customer'},
 
@@ -518,6 +527,7 @@ Invoice Details:
 - Amount Due: ${balanceDueFormatted}
 - Due Date: ${dueDateFormatted}
 
+${customerPortalUrl ? `View Invoice: ${customerPortalUrl}` : ''}
 ${paymentLink ? `Pay Online: ${paymentLink}` : ''}
 
 Thank you for your business!
@@ -539,7 +549,10 @@ info@pandaexteriors.com`;
     .content { padding: 20px; }
     .invoice-box { background: #f5f5f5; border-radius: 8px; padding: 15px; margin: 15px 0; }
     .amount { font-size: 24px; color: #667eea; font-weight: bold; }
-    .pay-button { display: inline-block; background: #667eea; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin: 15px 0; }
+    .button-row { margin: 15px 0; }
+    .action-button { display: inline-block; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin: 0 12px 12px 0; }
+    .view-button { background: #1f2937; }
+    .pay-button { background: #667eea; }
     .footer { border-top: 1px solid #eee; padding-top: 15px; margin-top: 20px; font-size: 12px; color: #666; }
   </style>
 </head>
@@ -557,9 +570,12 @@ info@pandaexteriors.com`;
       <p><strong>Amount Due:</strong></p>
       <p class="amount">${balanceDueFormatted}</p>
     </div>
-    ${paymentLink ? `
-    <p>Click the button below to pay securely online:</p>
-    <a href="${paymentLink}" class="pay-button">Pay Now</a>
+    ${(customerPortalUrl || paymentLink) ? `
+    <p>Use the options below to review or pay your invoice:</p>
+    <div class="button-row">
+      ${customerPortalUrl ? `<a href="${customerPortalUrl}" class="action-button view-button">View Invoice</a>` : ''}
+      ${paymentLink ? `<a href="${paymentLink}" class="action-button pay-button">Pay Now</a>` : ''}
+    </div>
     ` : ''}
     ${pdfResult ? `<p><em>Invoice PDF is attached to this email.</em></p>` : ''}
     <p>Thank you for your business!</p>

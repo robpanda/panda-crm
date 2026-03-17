@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import {
   CheckCircle,
   Clock,
@@ -55,6 +55,7 @@ const stageConfig = {
 
 export default function CustomerPortal() {
   const { token, jobId } = useParams();
+  const [searchParams] = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [projectData, setProjectData] = useState(null);
@@ -68,7 +69,11 @@ export default function CustomerPortal() {
   const [selectedInvoice, setSelectedInvoice] = useState(null);
   const [paymentSuccess, setPaymentSuccess] = useState(false);
   const [portalToken, setPortalToken] = useState(token); // Store the token for API calls
-  const [activeTab, setActiveTab] = useState('overview');
+  const requestedTab = searchParams.get('tab');
+  const portalTabs = ['overview', 'progress', 'documents', 'billing', 'messages', 'support'];
+  const [activeTab, setActiveTab] = useState(
+    portalTabs.includes(requestedTab) ? requestedTab : 'overview'
+  );
   const [trackerLoaded, setTrackerLoaded] = useState(false);
   const [trackerError, setTrackerError] = useState(false);
 
@@ -462,6 +467,12 @@ export default function CustomerPortal() {
     setTrackerLoaded(false);
     setTrackerError(false);
   }, [activeTab, trackerUrl]);
+
+  useEffect(() => {
+    if (portalTabs.includes(requestedTab)) {
+      setActiveTab(requestedTab);
+    }
+  }, [requestedTab]);
 
   const tabs = useMemo(() => ([
     { id: 'overview', label: 'Overview', icon: LayoutGrid },

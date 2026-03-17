@@ -139,6 +139,7 @@ export default function App() {
       <Route path="/champion/join/:token" element={<ChampionJoin />} />
 
       {/* Public Customer Portal Routes */}
+      <Route path="/portal/job/:jobId" element={<CustomerPortal />} />
       <Route path="/portal/:token" element={<CustomerPortal />} />
 
       {/* Public Contractor Portal Routes */}
