@@ -246,9 +246,9 @@ export async function createInvoice(req, res, next) {
         amountPaid: 0,
         balanceDue: total,
         // Insurance-specific fields
-        isInsuranceInvoice: data.isInsuranceInvoice || false,
-        insuranceCarrier: data.insuranceCarrier || null,
-        claimNumber: data.claimNumber || null,
+        is_insurance_invoice: data.isInsuranceInvoice || false,
+        insurance_carrier: data.insuranceCarrier || null,
+        claim_number: data.claimNumber || null,
         notes: data.notes || null,
         lineItems: {
           create: lineItems.map((item) => ({
@@ -292,7 +292,17 @@ export async function updateInvoice(req, res, next) {
       return res.status(400).json({ error: `Cannot update ${existing.status.toLowerCase()} invoice` });
     }
 
-    const updateData = { ...data };
+    const updateData = {
+      terms: data.terms,
+      tax: data.tax,
+      notes: data.notes,
+      insurance_carrier: data.insuranceCarrier,
+      claim_number: data.claimNumber,
+    };
+
+    if (data.isInsuranceInvoice !== undefined) {
+      updateData.is_insurance_invoice = data.isInsuranceInvoice;
+    }
 
     // Recalculate due date if terms or invoice date changed
     if (data.invoiceDate || data.terms) {
