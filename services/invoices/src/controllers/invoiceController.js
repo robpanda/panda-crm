@@ -997,12 +997,28 @@ export async function getInvoicePdf(req, res, next) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
 
-    // Return existing PDF URL if available and not regenerating
-    if ((invoice.pdf_url || invoice.pdfUrl) && regenerate !== 'true') {
+    const pdfKey = invoice.pdf_key || invoice.pdfKey;
+
+    // Return a fresh signed URL for existing PDFs if we already have the object key.
+    if (pdfKey && regenerate !== 'true') {
+      const S3_BUCKET = process.env.DOCUMENTS_BUCKET || 'panda-crm-documents';
+      const freshPdfUrl = await getSignedUrl(
+        s3Client,
+        new GetObjectCommand({ Bucket: S3_BUCKET, Key: pdfKey }),
+        { expiresIn: 3600 * 24 * 7 }
+      );
+
+      await prisma.invoice.update({
+        where: { id },
+        data: {
+          pdf_url: freshPdfUrl,
+        },
+      });
+
       return res.json({
         invoiceNumber: invoice.invoiceNumber,
-        pdfUrl: invoice.pdf_url || invoice.pdfUrl,
-        pdfKey: invoice.pdf_key || invoice.pdfKey,
+        pdfUrl: freshPdfUrl,
+        pdfKey,
         cached: true,
       });
     }
