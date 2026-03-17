@@ -103,6 +103,16 @@ function calculateTotals(lineItems, taxAmount = 0) {
   };
 }
 
+function getInvoiceCompanyInfo() {
+  return {
+    name: process.env.INVOICE_COMPANY_NAME || 'Panda Exteriors',
+    address: process.env.INVOICE_COMPANY_ADDRESS || '14409 Greenview Dr Suite 202',
+    cityStateZip: process.env.INVOICE_COMPANY_CITY_STATE_ZIP || 'Laurel, MD 20708',
+    phone: process.env.INVOICE_COMPANY_PHONE || '(301) 276-4323',
+    email: process.env.INVOICE_COMPANY_EMAIL || 'info@pandaexteriors.com',
+  };
+}
+
 // List invoices
 export async function listInvoices(req, res, next) {
   try {
@@ -421,6 +431,7 @@ export async function sendInvoice(req, res, next) {
       message,           // Custom message body
       includePaymentLink = true,
     } = req.body || {};
+    const companyInfo = getInvoiceCompanyInfo();
 
     const invoice = await prisma.invoice.findUnique({
       where: { id },
@@ -505,7 +516,7 @@ export async function sendInvoice(req, res, next) {
     }
 
     // Step 3: Send Email
-    const emailSubject = subject || `Invoice ${invoice.invoiceNumber} from Panda Exteriors`;
+    const emailSubject = subject || `Invoice ${invoice.invoiceNumber} from ${companyInfo.name}`;
     const balanceDueFormatted = new Intl.NumberFormat('en-US', {
       style: 'currency',
       currency: 'USD',
@@ -532,9 +543,11 @@ ${paymentLink ? `Pay Online: ${paymentLink}` : ''}
 
 Thank you for your business!
 
-Panda Exteriors
-(240) 801-6665
-info@pandaexteriors.com`;
+${companyInfo.name}
+${companyInfo.address}
+${companyInfo.cityStateZip}
+${companyInfo.phone}
+${companyInfo.email}`;
 
     const emailBody = message || defaultMessage;
 
@@ -558,7 +571,7 @@ info@pandaexteriors.com`;
 </head>
 <body>
   <div class="header">
-    <h1 style="margin:0;">Panda Exteriors</h1>
+    <h1 style="margin:0;">${companyInfo.name}</h1>
     <p style="margin:5px 0 0 0;">Invoice ${invoice.invoiceNumber}</p>
   </div>
   <div class="content">
@@ -580,9 +593,9 @@ info@pandaexteriors.com`;
     ${pdfResult ? `<p><em>Invoice PDF is attached to this email.</em></p>` : ''}
     <p>Thank you for your business!</p>
     <div class="footer">
-      <p><strong>Panda Exteriors</strong><br>
-      8825 Stanford Blvd Suite 201, Columbia, MD 21045<br>
-      (240) 801-6665 | info@pandaexteriors.com</p>
+      <p><strong>${companyInfo.name}</strong><br>
+      ${companyInfo.address}, ${companyInfo.cityStateZip}<br>
+      ${companyInfo.phone} | ${companyInfo.email}</p>
     </div>
   </div>
 </body>
@@ -598,7 +611,7 @@ info@pandaexteriors.com`;
           cc: ccEmails.filter(Boolean),
           from: {
             email: process.env.EMAIL_FROM_ADDRESS || 'invoices@pandaexteriors.com',
-            name: 'Panda Exteriors',
+            name: companyInfo.name,
           },
           subject: emailSubject,
           text: emailBody,
@@ -627,7 +640,7 @@ info@pandaexteriors.com`;
 
         // For SES with attachment, we need to use raw email
         const boundary = `----=_Part_${Date.now()}`;
-        let rawEmail = `From: "Panda Exteriors" <${process.env.EMAIL_FROM_ADDRESS || 'invoices@pandaexteriors.com'}>
+        let rawEmail = `From: "${companyInfo.name}" <${process.env.EMAIL_FROM_ADDRESS || 'invoices@pandaexteriors.com'}>
 To: ${toEmail}
 ${ccEmails.length > 0 ? `Cc: ${ccEmails.join(', ')}\n` : ''}Subject: ${emailSubject}
 MIME-Version: 1.0
@@ -762,13 +775,7 @@ async function generateInvoicePdfInternal(invoice) {
   const { v4: uuidv4 } = await import('uuid');
   const { PutObjectCommand } = await import('@aws-sdk/client-s3');
 
-  const COMPANY_INFO = {
-    name: 'Panda Exteriors',
-    address: '8825 Stanford Blvd Suite 201',
-    cityStateZip: 'Columbia, MD 21045',
-    phone: '(240) 801-6665',
-    email: 'info@pandaexteriors.com',
-  };
+  const COMPANY_INFO = getInvoiceCompanyInfo();
 
   const COLORS = {
     primary: rgb(0.4, 0.49, 0.92),
