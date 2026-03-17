@@ -522,12 +522,12 @@ export async function sendInvoice(req, res, next) {
     const opportunity = invoice.opportunityId
       ? await prisma.opportunity.findUnique({
           where: { id: invoice.opportunityId },
-          select: { id: true, job_id: true },
+          select: { id: true, jobId: true },
         })
       : null;
 
-    const customerPortalUrl = opportunity?.job_id
-      ? `${process.env.FRONTEND_URL || 'https://crm.pandaadmin.com'}/portal/job/${encodeURIComponent(opportunity.job_id)}?tab=billing`
+    const customerPortalUrl = opportunity?.jobId
+      ? `${process.env.FRONTEND_URL || 'https://crm.pandaadmin.com'}/portal/job/${encodeURIComponent(opportunity.jobId)}?tab=billing`
       : null;
 
     const defaultMessage = `Dear ${invoice.account?.name || 'Customer'},
