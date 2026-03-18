@@ -6549,6 +6549,18 @@ export const customerPortalApi = {
     return response.data;
   },
 
+  // Get public Stripe config for customer billing flows
+  async getPublicStripeConfig() {
+    const response = await publicApi.get('/api/payments/config');
+    return response.data.data;
+  },
+
+  // Create a public payment intent for a specific invoice
+  async createPublicInvoicePaymentIntent(invoiceId, amount) {
+    const response = await publicApi.post(`/api/payments/invoices/${invoiceId}/create-intent`, { amount });
+    return response.data.data;
+  },
+
   // Get workflow stages for timeline
   async getStages(token) {
     try {

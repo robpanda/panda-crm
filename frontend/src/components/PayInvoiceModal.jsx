@@ -7,7 +7,7 @@ import {
   useStripe,
   useElements,
 } from '@stripe/react-stripe-js';
-import { paymentsApi } from '../services/api';
+import { customerPortalApi, paymentsApi } from '../services/api';
 import {
   X,
   CreditCard,
@@ -19,8 +19,18 @@ import {
   Building2,
 } from 'lucide-react';
 
+const getApiErrorMessage = (error, fallback) =>
+  error?.response?.data?.error?.message || error?.message || fallback;
+
 // Payment Form Component (uses Stripe hooks)
-function PaymentForm({ invoice, paymentAmount, onSuccess, onCancel, clientSecret }) {
+function PaymentForm({
+  invoice,
+  paymentAmount,
+  onSuccess,
+  onCancel,
+  clientSecret,
+  publicPortal = false,
+}) {
   const stripe = useStripe();
   const elements = useElements();
   const queryClient = useQueryClient();
@@ -70,20 +80,23 @@ function PaymentForm({ invoice, paymentAmount, onSuccess, onCancel, clientSecret
         return;
       }
 
-      // Payment succeeded - record it in our system
+      // Public portal payments are recorded asynchronously via Stripe webhooks.
+      // Internal CRM payments continue to record immediately after confirmation.
       if (paymentIntent && paymentIntent.status === 'succeeded') {
-        await recordPaymentMutation.mutateAsync({
-          invoiceId: invoice.id,
-          amount: paymentAmount,
-          paymentMethod: 'CREDIT_CARD',
-          stripePaymentIntentId: paymentIntent.id,
-          notes: `Payment collected via CRM - ${new Date().toLocaleString()}`,
-        });
+        if (!publicPortal) {
+          await recordPaymentMutation.mutateAsync({
+            invoiceId: invoice.id,
+            amount: paymentAmount,
+            paymentMethod: 'CREDIT_CARD',
+            stripePaymentIntentId: paymentIntent.id,
+            notes: `Payment collected via CRM - ${new Date().toLocaleString()}`,
+          });
+        }
 
-        onSuccess(paymentIntent);
+        await Promise.resolve(onSuccess?.(paymentIntent));
       }
     } catch (err) {
-      setPaymentError(err.message || 'An unexpected error occurred');
+      setPaymentError(getApiErrorMessage(err, 'An unexpected error occurred'));
     } finally {
       setIsProcessing(false);
     }
@@ -136,7 +149,13 @@ function PaymentForm({ invoice, paymentAmount, onSuccess, onCancel, clientSecret
 }
 
 // Main Modal Component
-export default function PayInvoiceModal({ isOpen, onClose, invoice, opportunity }) {
+export default function PayInvoiceModal({
+  isOpen,
+  onClose,
+  invoice,
+  opportunity,
+  publicPortal = false,
+}) {
   const [step, setStep] = useState(1); // 1: Amount, 2: Payment, 3: Success
   const [amountType, setAmountType] = useState('full'); // full, downpayment, partial
   const [customAmount, setCustomAmount] = useState('');
@@ -150,8 +169,11 @@ export default function PayInvoiceModal({ isOpen, onClose, invoice, opportunity 
 
   // Fetch Stripe config
   const { data: stripeConfig } = useQuery({
-    queryKey: ['stripeConfig'],
-    queryFn: () => paymentsApi.getStripeConfig(),
+    queryKey: ['stripeConfig', publicPortal ? 'public' : 'internal'],
+    queryFn: () =>
+      publicPortal
+        ? customerPortalApi.getPublicStripeConfig()
+        : paymentsApi.getStripeConfig(),
     staleTime: Infinity,
     enabled: isOpen,
   });
@@ -165,13 +187,16 @@ export default function PayInvoiceModal({ isOpen, onClose, invoice, opportunity 
 
   // Create payment intent mutation
   const createIntentMutation = useMutation({
-    mutationFn: ({ invoiceId, amount }) => paymentsApi.createPaymentIntentForInvoice(invoiceId, amount),
+    mutationFn: ({ invoiceId, amount }) =>
+      publicPortal
+        ? customerPortalApi.createPublicInvoicePaymentIntent(invoiceId, amount)
+        : paymentsApi.createPaymentIntentForInvoice(invoiceId, amount),
     onSuccess: (data) => {
       setClientSecret(data.clientSecret);
       setStep(2);
     },
     onError: (err) => {
-      setError(err.message || 'Failed to create payment intent');
+      setError(getApiErrorMessage(err, 'Failed to create payment intent'));
     },
   });
 
@@ -264,7 +289,9 @@ export default function PayInvoiceModal({ isOpen, onClose, invoice, opportunity 
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-gray-500">Invoice Total</span>
-                    <span className="font-medium">${parseFloat(invoice.totalAmount || 0).toLocaleString()}</span>
+                    <span className="font-medium">
+                      ${parseFloat(invoice.totalAmount || invoice.total || 0).toLocaleString()}
+                    </span>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-gray-500">Amount Paid</span>
@@ -354,6 +381,7 @@ export default function PayInvoiceModal({ isOpen, onClose, invoice, opportunity 
                     onSuccess={handlePaymentSuccess}
                     onCancel={() => setStep(1)}
                     clientSecret={clientSecret}
+                    publicPortal={publicPortal}
                   />
 
                   <p className="text-xs text-gray-500 text-center">

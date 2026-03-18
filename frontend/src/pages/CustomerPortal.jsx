@@ -95,6 +95,8 @@ export default function CustomerPortal() {
   const [bookingSuccess, setBookingSuccess] = useState(null);
   const [bookingError, setBookingError] = useState(null);
   const showAppointments = false;
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
   const refreshBilling = async (activeToken) => {
     try {
       if (activeToken) {
@@ -109,8 +111,9 @@ export default function CustomerPortal() {
             : (billingData.payments || []);
           setInvoices(resolvedInvoices);
           setPayments(resolvedPayments);
+          return { invoices: resolvedInvoices, payments: resolvedPayments };
         }
-        return;
+        return { invoices: [], payments: [] };
       }
 
       if (invoiceId) {
@@ -121,19 +124,22 @@ export default function CustomerPortal() {
 
         if (invoiceResponse.success) {
           const invoiceData = invoiceResponse.data || {};
-          setInvoices([{
+          const resolvedInvoices = [{
             ...invoiceData,
             issueDate: invoiceData.invoiceDate,
             accountName: invoiceData.account?.name,
-          }]);
-        }
-        if (paymentsResponse.success) {
-          setPayments(paymentsResponse.data || []);
+          }];
+          setInvoices(resolvedInvoices);
+          const resolvedPayments = paymentsResponse.success ? (paymentsResponse.data || []) : [];
+          setPayments(resolvedPayments);
+          return { invoices: resolvedInvoices, payments: resolvedPayments };
         }
       }
     } catch (err) {
       console.error('Error refreshing billing:', err);
     }
+
+    return { invoices: [], payments: [] };
   };
 
   useEffect(() => {
@@ -153,8 +159,17 @@ export default function CustomerPortal() {
         let activeToken = token;
         let useBillingOnlyFallback = false;
 
+        // If an invoiceId is present on a job-number link, go straight to the
+        // public billing view and avoid the auth-gated project lookup.
+        if (jobId && !token && invoiceId) {
+          useBillingOnlyFallback = true;
+          setBillingOnlyPortal(true);
+          setPortalToken(null);
+          setActiveTab('billing');
+        }
+
         // If accessing via job number, fetch initial data and get the token
-        if (jobId && !token) {
+        if (jobId && !token && !useBillingOnlyFallback) {
           if (typeof customerPortalApi.getProjectByJobId === 'function') {
             try {
               projectResponse = await customerPortalApi.getProjectByJobId(jobId);
@@ -175,7 +190,7 @@ export default function CustomerPortal() {
           } else {
             throw new Error('Invalid portal link');
           }
-        } else {
+        } else if (token) {
           projectResponse = await customerPortalApi.getProject(token);
         }
 
@@ -258,7 +273,7 @@ export default function CustomerPortal() {
     }
 
     loadPortalData();
-  }, [token, jobId]);
+  }, [token, jobId, invoiceId]);
 
   const handleSendMessage = async (e) => {
     e.preventDefault();
@@ -1299,9 +1314,28 @@ export default function CustomerPortal() {
         invoice={selectedInvoice}
         opportunity={project}
         fullAmountOnly
-        onSuccess={() => {
+        publicPortal
+        onSuccess={async (paymentIntent) => {
           const activeToken = portalToken || token;
-          refreshBilling(activeToken);
+          const previousBalance = parseFloat(selectedInvoice?.balanceDue || selectedInvoice?.total || 0);
+
+          for (let attempt = 0; attempt < 5; attempt += 1) {
+            const { invoices: latestInvoices, payments: latestPayments } = await refreshBilling(activeToken);
+            const refreshedInvoice = latestInvoices.find((invoice) => invoice.id === selectedInvoice?.id);
+            const paymentRecorded = latestPayments.some(
+              (payment) => payment.stripePaymentIntentId === paymentIntent?.id
+            );
+            const balanceChanged = refreshedInvoice
+              ? parseFloat(refreshedInvoice.balanceDue || refreshedInvoice.total || 0) < previousBalance
+              : false;
+
+            if (paymentRecorded || balanceChanged) {
+              break;
+            }
+
+            await wait(1200 * (attempt + 1));
+          }
+
           setPaymentSuccess(true);
           setTimeout(() => setPaymentSuccess(false), 5000);
         }}
