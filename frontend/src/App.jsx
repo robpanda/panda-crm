@@ -1,3 +1,4 @@
+import { lazy } from 'react';
 import { Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { useAuth } from './context/AuthContext';
 import Layout from './components/Layout';
@@ -67,26 +68,7 @@ import { PermissionRoute } from './components/PermissionRoute';
 // Admin Pages
 import Workflows from './pages/admin/Workflows';
 import RolesPermissions from './pages/admin/RolesPermissions';
-import Commissions from './pages/admin/Commissions';
-import CommissionEngine from './pages/admin/CommissionEngine';
-import PaymentEngine from './pages/admin/PaymentEngine';
 // Templates page is now part of Bamboogli - redirect in routes
-import Integrations from './pages/admin/Integrations';
-import Users from './pages/admin/Users';
-import AuditLogs from './pages/admin/AuditLogs';
-import Bamboogli from './pages/admin/Bamboogli';
-import ServiceAdmin from './pages/admin/ServiceAdmin';
-import TrainingBotAnalytics from './pages/admin/TrainingBotAnalytics';
-import RingCentral from './pages/admin/RingCentral';
-import CallCenterSettings from './pages/admin/CallCenterSettings';
-import AdminHelp from './pages/admin/AdminHelp';
-import AdminSupport from './pages/admin/Support';
-import AdminSupportTickets from './pages/admin/AdminSupportTickets';
-import Setup from './pages/admin/Setup';
-import GoogleCalendar from './pages/admin/GoogleCalendar';
-import DeletedRecords from './pages/admin/DeletedRecords';
-import OrphanedRecords from './pages/admin/OrphanedRecords';
-import Referral from './pages/admin/Referral';
 import PandaSignV2 from './pages/admin/PandaSignV2';
 
 // Help
@@ -102,6 +84,35 @@ import Search from './pages/Search';
 // Champion Public Pages
 import ChampionRegister from './pages/ChampionRegister';
 import ChampionJoin from './pages/ChampionJoin';
+import LazyBoundary from './components/LazyBoundary';
+
+const Commissions = lazy(() => import('./pages/admin/Commissions'));
+const CommissionEngine = lazy(() => import('./pages/admin/CommissionEngine'));
+const PaymentEngine = lazy(() => import('./pages/admin/PaymentEngine'));
+const Integrations = lazy(() => import('./pages/admin/Integrations'));
+const Users = lazy(() => import('./pages/admin/Users'));
+const AuditLogs = lazy(() => import('./pages/admin/AuditLogs'));
+const Bamboogli = lazy(() => import('./pages/admin/Bamboogli'));
+const ServiceAdmin = lazy(() => import('./pages/admin/ServiceAdmin'));
+const TrainingBotAnalytics = lazy(() => import('./pages/admin/TrainingBotAnalytics'));
+const RingCentral = lazy(() => import('./pages/admin/RingCentral'));
+const CallCenterSettings = lazy(() => import('./pages/admin/CallCenterSettings'));
+const AdminHelp = lazy(() => import('./pages/admin/AdminHelp'));
+const AdminSupport = lazy(() => import('./pages/admin/Support'));
+const AdminSupportTickets = lazy(() => import('./pages/admin/AdminSupportTickets'));
+const Setup = lazy(() => import('./pages/admin/Setup'));
+const GoogleCalendar = lazy(() => import('./pages/admin/GoogleCalendar'));
+const DeletedRecords = lazy(() => import('./pages/admin/DeletedRecords'));
+const OrphanedRecords = lazy(() => import('./pages/admin/OrphanedRecords'));
+const Referral = lazy(() => import('./pages/admin/Referral'));
+
+function renderLazyRoute(Component, label) {
+  return (
+    <LazyBoundary label={label}>
+      <Component />
+    </LazyBoundary>
+  );
+}
 
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuth();
@@ -250,28 +261,28 @@ export default function App() {
         {/* Admin Routes */}
         <Route path="admin/workflows" element={<Workflows />} />
         <Route path="admin/roles" element={<RolesPermissions />} />
-        <Route path="admin/commissions" element={<Commissions />} />
-        <Route path="admin/commission-engine" element={<CommissionEngine />} />
-        <Route path="admin/payment-engine" element={<PaymentEngine />} />
+        <Route path="admin/commissions" element={renderLazyRoute(Commissions, 'Loading commissions...')} />
+        <Route path="admin/commission-engine" element={renderLazyRoute(CommissionEngine, 'Loading commission engine...')} />
+        <Route path="admin/payment-engine" element={renderLazyRoute(PaymentEngine, 'Loading payment engine...')} />
         <Route path="admin/pandasign-v2" element={<PandaSignV2 />} />
         <Route path="admin/templates" element={<Navigate to="/admin/bamboogli?tab=templates" replace />} />
-        <Route path="admin/integrations" element={<Integrations />} />
-        <Route path="admin/users" element={<Users />} />
-        <Route path="admin/audit" element={<AuditLogs />} />
-        <Route path="admin/bamboogli" element={<Bamboogli />} />
-        <Route path="admin/service-admin" element={<ServiceAdmin />} />
-        <Route path="admin/training-bot" element={<TrainingBotAnalytics />} />
-        <Route path="admin/support" element={<AdminSupport />} />
-        <Route path="admin/support/tickets" element={<AdminSupportTickets />} />
+        <Route path="admin/integrations" element={renderLazyRoute(Integrations, 'Loading integrations...')} />
+        <Route path="admin/users" element={renderLazyRoute(Users, 'Loading users...')} />
+        <Route path="admin/audit" element={renderLazyRoute(AuditLogs, 'Loading audit logs...')} />
+        <Route path="admin/bamboogli" element={renderLazyRoute(Bamboogli, 'Loading templates...')} />
+        <Route path="admin/service-admin" element={renderLazyRoute(ServiceAdmin, 'Loading service admin...')} />
+        <Route path="admin/training-bot" element={renderLazyRoute(TrainingBotAnalytics, 'Loading training bot analytics...')} />
+        <Route path="admin/support" element={renderLazyRoute(AdminSupport, 'Loading support admin...')} />
+        <Route path="admin/support/tickets" element={renderLazyRoute(AdminSupportTickets, 'Loading support tickets...')} />
         <Route path="admin/support/ticket/:id" element={<SupportTicketDetail />} />
-        <Route path="admin/ringcentral" element={<RingCentral />} />
-        <Route path="admin/call-center" element={<CallCenterSettings />} />
-        <Route path="admin/help" element={<AdminHelp />} />
-        <Route path="admin/setup" element={<Setup />} />
-        <Route path="admin/google-calendar" element={<GoogleCalendar />} />
-        <Route path="admin/deleted-records" element={<DeletedRecords />} />
-        <Route path="admin/orphaned-records" element={<OrphanedRecords />} />
-        <Route path="admin/referral" element={<Referral />} />
+        <Route path="admin/ringcentral" element={renderLazyRoute(RingCentral, 'Loading RingCentral...')} />
+        <Route path="admin/call-center" element={renderLazyRoute(CallCenterSettings, 'Loading call center settings...')} />
+        <Route path="admin/help" element={renderLazyRoute(AdminHelp, 'Loading admin help...')} />
+        <Route path="admin/setup" element={renderLazyRoute(Setup, 'Loading setup...')} />
+        <Route path="admin/google-calendar" element={renderLazyRoute(GoogleCalendar, 'Loading Google Calendar...')} />
+        <Route path="admin/deleted-records" element={renderLazyRoute(DeletedRecords, 'Loading deleted records...')} />
+        <Route path="admin/orphaned-records" element={renderLazyRoute(OrphanedRecords, 'Loading orphaned records...')} />
+        <Route path="admin/referral" element={renderLazyRoute(Referral, 'Loading referral settings...')} />
 
         {/* Management Routes - Protected by page access permissions */}
         <Route path="management/cases" element={<PermissionRoute page="cases"><Cases /></PermissionRoute>} />
