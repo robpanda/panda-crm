@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { lazy, useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useParams, Link, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { opportunitiesApi, companyCamApi, scheduleApi, casesApi, emailsApi, notificationsApi, bamboogliApi, approvalsApi, measurementsApi, contactsApi, ringCentralApi, usersApi, quotesApi, invoicesApi, paymentsApi, tasksApi, documentsApi } from '../services/api';
@@ -12,30 +12,17 @@ import {
   interpolateMessageTemplate,
   templateLooksLikeHtml,
 } from '../utils/messageTemplateUtils';
-import PhotoGallery from '../components/PhotoGallery';
 import CrewAccessManager from '../components/CrewAccessManager';
 import InspectionChecklist from '../components/InspectionChecklist';
-import ApprovalQueue, { CreateApprovalForm } from '../components/ApprovalQueue';
 import DraggableMap from '../components/DraggableMap';
 import MilestoneTracker from '../components/MilestoneTracker';
 import JobPriority from '../components/JobPriority';
-import SpecsPreparation from '../components/SpecsPreparation';
-import MaterialLaborOrderWizard from '../components/MaterialLaborOrderWizard';
-import CommissionsTab from '../components/CommissionsTab';
-import TasksTab from '../components/TasksTab';
-import ContractSigningModal from '../components/ContractSigningModal';
-import ChangeOrderModal from '../components/ChangeOrderModal';
-import PayInvoiceModal from '../components/PayInvoiceModal';
-import SendInvoiceModal from '../components/SendInvoiceModal';
-import ResultAppointmentWizard from '../components/result-appointment-wizard/ResultAppointmentWizard';
+import LazyBoundary from '../components/LazyBoundary';
 import SuperTabNav, { SubTabNav, CATEGORIES } from '../components/SuperTabNav';
-import PhotoCamTab from '../components/photocam/PhotoCamTab';
-import CommunicationsTab from '../components/CommunicationsTab';
 import useJobCategories from '../hooks/useJobCategories';
 import WorkflowSidebar from '../components/WorkflowSidebar';
 import NotesSidebar from '../components/NotesSidebar';
 import AddressAutocomplete from '../components/AddressAutocomplete';
-import ExpediterChecklist from '../components/ExpediterChecklist';
 import InternalComments from '../components/InternalComments';
 import {
   Target,
@@ -113,6 +100,20 @@ import {
   UserCircle,
 } from 'lucide-react';
 
+const ApprovalQueue = lazy(() => import('../components/ApprovalQueue'));
+const SpecsPreparation = lazy(() => import('../components/SpecsPreparation'));
+const MaterialLaborOrderWizard = lazy(() => import('../components/MaterialLaborOrderWizard'));
+const CommissionsTab = lazy(() => import('../components/CommissionsTab'));
+const TasksTab = lazy(() => import('../components/TasksTab'));
+const ContractSigningModal = lazy(() => import('../components/ContractSigningModal'));
+const ChangeOrderModal = lazy(() => import('../components/ChangeOrderModal'));
+const PayInvoiceModal = lazy(() => import('../components/PayInvoiceModal'));
+const SendInvoiceModal = lazy(() => import('../components/SendInvoiceModal'));
+const ResultAppointmentWizard = lazy(() => import('../components/result-appointment-wizard/ResultAppointmentWizard'));
+const PhotoCamTab = lazy(() => import('../components/photocam/PhotoCamTab'));
+const CommunicationsTab = lazy(() => import('../components/CommunicationsTab'));
+const ExpediterChecklist = lazy(() => import('../components/ExpediterChecklist'));
+
 const CONTACT_METHOD_OPTIONS = [
   { value: 'Phone', label: 'Phone' },
   { value: 'Email', label: 'Email' },
@@ -129,6 +130,10 @@ const CONTACT_STATE_OPTIONS = [
   'PA',
   'VA',
 ];
+
+function LazyPanel({ label, children }) {
+  return <LazyBoundary label={label}>{children}</LazyBoundary>;
+}
 
 function buildContactModalForm(contact) {
   return {
@@ -7303,7 +7308,9 @@ export default function OpportunityDetail() {
                     </div>
 
                     {/* Approval Queue */}
-                    <ApprovalQueue opportunityId={id} mode="all" />
+                    <LazyPanel label="Loading approval queue...">
+                      <ApprovalQueue opportunityId={id} mode="all" />
+                    </LazyPanel>
                   </div>
                 )}
 
@@ -7986,20 +7993,24 @@ export default function OpportunityDetail() {
                 )}
 
                 {activeTab === 'commissions' && (
-                  <CommissionsTab
-                    commissions={commissions}
-                    commissionSummary={commissionsData?.summary}
-                    summary={summary}
-                    opportunity={opportunity}
-                    isLoading={!commissionsData}
-                  />
+                  <LazyPanel label="Loading commissions...">
+                    <CommissionsTab
+                      commissions={commissions}
+                      commissionSummary={commissionsData?.summary}
+                      summary={summary}
+                      opportunity={opportunity}
+                      isLoading={!commissionsData}
+                    />
+                  </LazyPanel>
                 )}
 
                 {activeTab === 'tasks' && (
-                  <TasksTab
-                    opportunityId={id}
-                    users={users}
-                  />
+                  <LazyPanel label="Loading tasks...">
+                    <TasksTab
+                      opportunityId={id}
+                      users={users}
+                    />
+                  </LazyPanel>
                 )}
 
                 {activeTab === 'documents' && (
@@ -8418,10 +8429,12 @@ export default function OpportunityDetail() {
 
                 {/* Photos Category - Gallery, Checklists, Before/After */}
                 {(activeTab === 'photos' || activeTab === 'checklists' || activeTab === 'comparisons') && (
-                  <PhotoCamTab
-                    opportunityId={id}
-                    activeSubTab={activeTab}
-                  />
+                  <LazyPanel label="Loading photos...">
+                    <PhotoCamTab
+                      opportunityId={id}
+                      activeSubTab={activeTab}
+                    />
+                  </LazyPanel>
                 )}
 
                 {activeTab === 'activity' && (
@@ -8443,17 +8456,19 @@ export default function OpportunityDetail() {
                 )}
 
                 {activeCategory === 'messages' && activeMessagesSubTab === 'customerComms' && (
-                  <CommunicationsTab
-                    phone={opportunity?.contact?.phone || opportunity?.contact?.mobilePhone}
-                    email={opportunity?.contact?.email}
-                    contactName={opportunity?.contact?.name || `${opportunity?.contact?.firstName || ''} ${opportunity?.contact?.lastName || ''}`}
-                    archivedActivities={activityData?.activities?.filter(a => a.sourceType === 'ACCULYNX_IMPORT') || []}
-                    onActivityClick={(item) => {
-                      setSelectedActivity(item);
-                      setShowActivityModal(true);
-                    }}
-                    opportunityId={id}
-                  />
+                  <LazyPanel label="Loading customer communications...">
+                    <CommunicationsTab
+                      phone={opportunity?.contact?.phone || opportunity?.contact?.mobilePhone}
+                      email={opportunity?.contact?.email}
+                      contactName={opportunity?.contact?.name || `${opportunity?.contact?.firstName || ''} ${opportunity?.contact?.lastName || ''}`}
+                      archivedActivities={activityData?.activities?.filter(a => a.sourceType === 'ACCULYNX_IMPORT') || []}
+                      onActivityClick={(item) => {
+                        setSelectedActivity(item);
+                        setShowActivityModal(true);
+                      }}
+                      opportunityId={id}
+                    />
+                  </LazyPanel>
                 )}
 
                 {activeTab === 'checklist' && (
@@ -8589,11 +8604,13 @@ export default function OpportunityDetail() {
                     </div>
 
                     {/* Project Expediting Checklist - Mobile-first with HOA case creation */}
-                    <ExpediterChecklist
-                      opportunity={opportunity}
-                      onUpdate={(data) => updateMutation.mutateAsync(data)}
-                      users={usersForDropdown?.data || usersForDropdown || []}
-                    />
+                    <LazyPanel label="Loading expediter checklist...">
+                      <ExpediterChecklist
+                        opportunity={opportunity}
+                        onUpdate={(data) => updateMutation.mutateAsync(data)}
+                        users={usersForDropdown?.data || usersForDropdown || []}
+                      />
+                    </LazyPanel>
 
                     {/* HOA & Permits */}
                     <div>
@@ -12044,32 +12061,38 @@ export default function OpportunityDetail() {
 
       {/* Specs Preparation Modal - Insurance workflow */}
       {showSpecsPreparation && (
-        <SpecsPreparation
-          opportunityId={id}
-          opportunity={opportunity}
-          onComplete={() => {
-            setShowSpecsPreparation(false);
-            setActionSuccess('Specs preparation completed successfully. Opportunity status updated to "Specs Prepped".');
-            queryClient.invalidateQueries(['opportunity', id]);
-            setTimeout(() => setActionSuccess(null), 5000);
-          }}
-          onCancel={() => setShowSpecsPreparation(false)}
-        />
+        <LazyPanel label="Loading specs preparation...">
+          <SpecsPreparation
+            opportunityId={id}
+            opportunity={opportunity}
+            onComplete={() => {
+              setShowSpecsPreparation(false);
+              setActionSuccess('Specs preparation completed successfully. Opportunity status updated to "Specs Prepped".');
+              queryClient.invalidateQueries(['opportunity', id]);
+              setTimeout(() => setActionSuccess(null), 5000);
+            }}
+            onCancel={() => setShowSpecsPreparation(false)}
+          />
+        </LazyPanel>
       )}
 
       {/* Material & Labor Order Wizard */}
-      <MaterialLaborOrderWizard
-        isOpen={showMaterialLaborWizard}
-        onClose={() => setShowMaterialLaborWizard(false)}
-        opportunity={opportunity}
-        workOrder={workOrders?.[0]}
-        onComplete={(orderData) => {
-          setShowMaterialLaborWizard(false);
-          setActionSuccess('Orders created successfully. Navigate to Production tab to manage and submit.');
-          queryClient.invalidateQueries(['opportunityWorkOrders', id]);
-          setTimeout(() => setActionSuccess(null), 5000);
-        }}
-      />
+      {showMaterialLaborWizard && (
+        <LazyPanel label="Loading material and labor wizard...">
+          <MaterialLaborOrderWizard
+            isOpen={showMaterialLaborWizard}
+            onClose={() => setShowMaterialLaborWizard(false)}
+            opportunity={opportunity}
+            workOrder={workOrders?.[0]}
+            onComplete={(orderData) => {
+              setShowMaterialLaborWizard(false);
+              setActionSuccess('Orders created successfully. Navigate to Production tab to manage and submit.');
+              queryClient.invalidateQueries(['opportunityWorkOrders', id]);
+              setTimeout(() => setActionSuccess(null), 5000);
+            }}
+          />
+        </LazyPanel>
+      )}
 
       {/* Activity Detail Modal */}
       {showActivityModal && selectedActivity && (
@@ -12179,48 +12202,60 @@ export default function OpportunityDetail() {
       )}
 
       {/* Contract Signing Modal */}
-      <ContractSigningModal
-        isOpen={showContractSigningModal}
-        onClose={() => setShowContractSigningModal(false)}
-        opportunity={opportunity}
-        contact={contacts?.[0] || opportunity?.contact}
-        account={opportunity?.account}
-        onSuccess={(agreement) => {
-          setShowContractSigningModal(false);
-          setActionSuccess(`Contract sent successfully to ${agreement?.recipientEmail || 'recipient'}`);
-          queryClient.invalidateQueries(['opportunityDocuments', id]);
-          setTimeout(() => setActionSuccess(null), 5000);
-        }}
-      />
+      {showContractSigningModal && (
+        <LazyPanel label="Loading contract signing...">
+          <ContractSigningModal
+            isOpen={showContractSigningModal}
+            onClose={() => setShowContractSigningModal(false)}
+            opportunity={opportunity}
+            contact={contacts?.[0] || opportunity?.contact}
+            account={opportunity?.account}
+            onSuccess={(agreement) => {
+              setShowContractSigningModal(false);
+              setActionSuccess(`Contract sent successfully to ${agreement?.recipientEmail || 'recipient'}`);
+              queryClient.invalidateQueries(['opportunityDocuments', id]);
+              setTimeout(() => setActionSuccess(null), 5000);
+            }}
+          />
+        </LazyPanel>
+      )}
 
       {/* Change Order Modal - Mobile-first with touch-friendly signing */}
-      <ChangeOrderModal
-        isOpen={showChangeOrderModal}
-        onClose={() => setShowChangeOrderModal(false)}
-        opportunity={opportunity}
-        contact={contacts?.[0] || opportunity?.contact}
-        account={opportunity?.account}
-        currentUser={currentUser}
-        onSuccess={(changeOrder) => {
-          setShowChangeOrderModal(false);
-          setActionSuccess(`Change order signed and sent to ${changeOrder?.data?.agreement?.recipientEmail || 'customer'}`);
-          queryClient.invalidateQueries(['opportunityDocuments', id]);
-          queryClient.invalidateQueries(['opportunity', id]);
-          queryClient.invalidateQueries(['cases']);
-          setTimeout(() => setActionSuccess(null), 5000);
-        }}
-      />
+      {showChangeOrderModal && (
+        <LazyPanel label="Loading change order...">
+          <ChangeOrderModal
+            isOpen={showChangeOrderModal}
+            onClose={() => setShowChangeOrderModal(false)}
+            opportunity={opportunity}
+            contact={contacts?.[0] || opportunity?.contact}
+            account={opportunity?.account}
+            currentUser={currentUser}
+            onSuccess={(changeOrder) => {
+              setShowChangeOrderModal(false);
+              setActionSuccess(`Change order signed and sent to ${changeOrder?.data?.agreement?.recipientEmail || 'customer'}`);
+              queryClient.invalidateQueries(['opportunityDocuments', id]);
+              queryClient.invalidateQueries(['opportunity', id]);
+              queryClient.invalidateQueries(['cases']);
+              setTimeout(() => setActionSuccess(null), 5000);
+            }}
+          />
+        </LazyPanel>
+      )}
 
       {/* Pay Invoice Modal */}
-      <PayInvoiceModal
-        isOpen={showPayInvoiceModal}
-        onClose={() => {
-          setShowPayInvoiceModal(false);
-          setSelectedInvoice(null);
-        }}
-        invoice={selectedInvoice}
-        opportunity={opportunity}
-      />
+      {showPayInvoiceModal && selectedInvoice && (
+        <LazyPanel label="Loading payment form...">
+          <PayInvoiceModal
+            isOpen={showPayInvoiceModal}
+            onClose={() => {
+              setShowPayInvoiceModal(false);
+              setSelectedInvoice(null);
+            }}
+            invoice={selectedInvoice}
+            opportunity={opportunity}
+          />
+        </LazyPanel>
+      )}
 
       {/* Invoice Detail Modal */}
       {showInvoiceDetailModal && selectedInvoice && (
@@ -12266,43 +12301,51 @@ export default function OpportunityDetail() {
       )}
 
       {/* Send Invoice Modal */}
-      <SendInvoiceModal
-        isOpen={showSendInvoiceModal}
-        onClose={() => {
-          setShowSendInvoiceModal(false);
-          setInvoiceToSend(null);
-        }}
-        invoice={invoiceToSend}
-        opportunity={opportunity}
-        contact={opportunity?.contact}
-      />
+      {showSendInvoiceModal && invoiceToSend && (
+        <LazyPanel label="Loading invoice sender...">
+          <SendInvoiceModal
+            isOpen={showSendInvoiceModal}
+            onClose={() => {
+              setShowSendInvoiceModal(false);
+              setInvoiceToSend(null);
+            }}
+            invoice={invoiceToSend}
+            opportunity={opportunity}
+            contact={opportunity?.contact}
+          />
+        </LazyPanel>
+      )}
 
       {/* Result Appointment Wizard */}
-      <ResultAppointmentWizard
-        isOpen={showResultAppointmentWizard}
-        onClose={() => setShowResultAppointmentWizard(false)}
-        opportunityId={id}
-        appointmentId={appointments?.[0]?.id || null}
-        opportunity={opportunity}
-        onCompleted={() => {
-          void (async () => {
-            let successMessage = 'Appointment result saved';
-            if (!opportunity?.jobId) {
-              try {
-                const jobId = await assignMissingJobId();
-                if (jobId) {
-                  successMessage = `Appointment result saved. Assigned Job #${jobId}`;
+      {showResultAppointmentWizard && (
+        <LazyPanel label="Loading result appointment...">
+          <ResultAppointmentWizard
+            isOpen={showResultAppointmentWizard}
+            onClose={() => setShowResultAppointmentWizard(false)}
+            opportunityId={id}
+            appointmentId={appointments?.[0]?.id || null}
+            opportunity={opportunity}
+            onCompleted={() => {
+              void (async () => {
+                let successMessage = 'Appointment result saved';
+                if (!opportunity?.jobId) {
+                  try {
+                    const jobId = await assignMissingJobId();
+                    if (jobId) {
+                      successMessage = `Appointment result saved. Assigned Job #${jobId}`;
+                    }
+                  } catch (error) {
+                    console.error('Failed to assign Job # after appointment result:', error);
+                    setActionError('Appointment result saved, but failed to assign Job #');
+                  }
                 }
-              } catch (error) {
-                console.error('Failed to assign Job # after appointment result:', error);
-                setActionError('Appointment result saved, but failed to assign Job #');
-              }
-            }
-            setActionSuccess(successMessage);
-            setTimeout(() => setActionSuccess(null), 4000);
-          })();
-        }}
-      />
+                setActionSuccess(successMessage);
+                setTimeout(() => setActionSuccess(null), 4000);
+              })();
+            }}
+          />
+        </LazyPanel>
+      )}
 
       {/* Create Insurance Invoice Modal */}
       {showCreateInsuranceInvoiceModal && (
