@@ -1,19 +1,21 @@
+import { lazy } from 'react';
 import { Navigate, Route } from 'react-router-dom';
-import Reports from '../../pages/Reports';
-import ReportBuilder from '../../pages/ReportBuilder';
-import ReportDetail from '../../pages/ReportDetail';
-import DashboardBuilder from '../../pages/DashboardBuilder';
-import Dashboards from '../../pages/Dashboards';
-import DashboardView from '../../pages/DashboardView';
-import ExecutiveDashboards from '../../pages/ExecutiveDashboards';
-import ClaimsOnboarding from '../../pages/ClaimsOnboarding';
-import AdvancedReportEditor from '../../pages/AdvancedReportEditor';
-import AnalyticsShell from '../../pages/analytics/AnalyticsShell';
-import AnalyticsOverview from '../../pages/analytics/AnalyticsOverview';
-import AnalyticsSchedules from '../../pages/analytics/AnalyticsSchedules';
-import AnalyticsSettings from '../../pages/analytics/AnalyticsSettings';
-import AnalyticsRedirect from '../../pages/analytics/AnalyticsRedirect';
-import { RedirectWithId } from '../../routes/shared';
+import { RedirectWithId, renderLazyRoute } from '../../routes/shared';
+
+const Reports = lazy(() => import('../../pages/Reports'));
+const ReportBuilder = lazy(() => import('../../pages/ReportBuilder'));
+const ReportDetail = lazy(() => import('../../pages/ReportDetail'));
+const DashboardBuilder = lazy(() => import('../../pages/DashboardBuilder'));
+const Dashboards = lazy(() => import('../../pages/Dashboards'));
+const DashboardView = lazy(() => import('../../pages/DashboardView'));
+const ExecutiveDashboards = lazy(() => import('../../pages/ExecutiveDashboards'));
+const ClaimsOnboarding = lazy(() => import('../../pages/ClaimsOnboarding'));
+const AdvancedReportEditor = lazy(() => import('../../pages/AdvancedReportEditor'));
+const AnalyticsShell = lazy(() => import('../../pages/analytics/AnalyticsShell'));
+const AnalyticsOverview = lazy(() => import('../../pages/analytics/AnalyticsOverview'));
+const AnalyticsSchedules = lazy(() => import('../../pages/analytics/AnalyticsSchedules'));
+const AnalyticsSettings = lazy(() => import('../../pages/analytics/AnalyticsSettings'));
+const AnalyticsRedirect = lazy(() => import('../../pages/analytics/AnalyticsRedirect'));
 
 export function renderAnalyticsRoutes() {
   return (
@@ -32,24 +34,24 @@ export function renderAnalyticsRoutes() {
       <Route path="dashboards/builder/:id" element={<RedirectWithId basePath="/analytics/dashboards" suffix="/edit" />} />
       <Route path="dashboards/:id" element={<RedirectWithId basePath="/analytics/dashboards" />} />
 
-      <Route path="analytics" element={<AnalyticsShell />}>
-        <Route index element={<AnalyticsRedirect />} />
-        <Route path="overview" element={<AnalyticsOverview />} />
-        <Route path="reports" element={<Reports />} />
-        <Route path="reports/new" element={<ReportBuilder />} />
-        <Route path="reports/advanced/new" element={<AdvancedReportEditor />} />
-        <Route path="reports/advanced/:id" element={<AdvancedReportEditor />} />
-        <Route path="reports/:id" element={<ReportDetail />} />
-        <Route path="reports/:id/edit" element={<ReportBuilder />} />
-        <Route path="dashboards" element={<Dashboards />} />
-        <Route path="dashboards/new" element={<DashboardBuilder />} />
-        <Route path="dashboards/executive" element={<ExecutiveDashboards />} />
-        <Route path="dashboards/claims-onboarding" element={<ClaimsOnboarding />} />
-        <Route path="dashboards/:id" element={<DashboardView />} />
-        <Route path="dashboards/:id/edit" element={<DashboardBuilder />} />
-        <Route path="schedules" element={<AnalyticsSchedules />} />
+      <Route path="analytics" element={renderLazyRoute(AnalyticsShell, 'Loading analytics...')}>
+        <Route index element={renderLazyRoute(AnalyticsRedirect, 'Loading analytics...')} />
+        <Route path="overview" element={renderLazyRoute(AnalyticsOverview, 'Loading analytics overview...')} />
+        <Route path="reports" element={renderLazyRoute(Reports, 'Loading reports...')} />
+        <Route path="reports/new" element={renderLazyRoute(ReportBuilder, 'Loading report builder...')} />
+        <Route path="reports/advanced/new" element={renderLazyRoute(AdvancedReportEditor, 'Loading advanced report editor...')} />
+        <Route path="reports/advanced/:id" element={renderLazyRoute(AdvancedReportEditor, 'Loading advanced report editor...')} />
+        <Route path="reports/:id" element={renderLazyRoute(ReportDetail, 'Loading report details...')} />
+        <Route path="reports/:id/edit" element={renderLazyRoute(ReportBuilder, 'Loading report builder...')} />
+        <Route path="dashboards" element={renderLazyRoute(Dashboards, 'Loading dashboards...')} />
+        <Route path="dashboards/new" element={renderLazyRoute(DashboardBuilder, 'Loading dashboard builder...')} />
+        <Route path="dashboards/executive" element={renderLazyRoute(ExecutiveDashboards, 'Loading executive dashboards...')} />
+        <Route path="dashboards/claims-onboarding" element={renderLazyRoute(ClaimsOnboarding, 'Loading claims onboarding...')} />
+        <Route path="dashboards/:id" element={renderLazyRoute(DashboardView, 'Loading dashboard...')} />
+        <Route path="dashboards/:id/edit" element={renderLazyRoute(DashboardBuilder, 'Loading dashboard builder...')} />
+        <Route path="schedules" element={renderLazyRoute(AnalyticsSchedules, 'Loading analytics schedules...')} />
         <Route path="settings" element={<Navigate to="/analytics/settings/health" replace />} />
-        <Route path="settings/:section" element={<AnalyticsSettings />} />
+        <Route path="settings/:section" element={renderLazyRoute(AnalyticsSettings, 'Loading analytics settings...')} />
         <Route path="ai" element={<Navigate to="/analytics/settings/ai" replace />} />
         <Route path="health" element={<Navigate to="/analytics/settings/health" replace />} />
         <Route path="metabase" element={<Navigate to="/analytics/settings/metabase" replace />} />
