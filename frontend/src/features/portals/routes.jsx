@@ -1,18 +1,21 @@
+import { lazy } from 'react';
 import { Route } from 'react-router-dom';
-import CustomerPortal from '../../pages/CustomerPortal';
-import PMPortal from '../../pages/PMPortal';
-import SubcontractorPortal from '../../pages/SubcontractorPortal';
+import { renderLazyRoute } from '../../routes/shared';
+
+const CustomerPortal = lazy(() => import('../../pages/CustomerPortal'));
+const PMPortal = lazy(() => import('../../pages/PMPortal'));
+const SubcontractorPortal = lazy(() => import('../../pages/SubcontractorPortal'));
 
 export function renderPublicPortalRoutes() {
   return (
     <>
-      <Route path="/portal/job/:jobId" element={<CustomerPortal />} />
-      <Route path="/portal/:token" element={<CustomerPortal />} />
-      <Route path="/contractor-portal/:token" element={<SubcontractorPortal />} />
+      <Route path="/portal/job/:jobId" element={renderLazyRoute(CustomerPortal, 'Loading customer portal...')} />
+      <Route path="/portal/:token" element={renderLazyRoute(CustomerPortal, 'Loading customer portal...')} />
+      <Route path="/contractor-portal/:token" element={renderLazyRoute(SubcontractorPortal, 'Loading contractor portal...')} />
     </>
   );
 }
 
 export function renderProtectedPortalRoutes() {
-  return <Route path="pm-portal" element={<PMPortal />} />;
+  return <Route path="pm-portal" element={renderLazyRoute(PMPortal, 'Loading PM portal...')} />;
 }
