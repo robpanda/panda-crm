@@ -17,22 +17,34 @@ const ANALYTICS_VENDOR_PACKAGES = [
   '/react-resizable/',
 ];
 
-const OPERATIONAL_ROUTE_MODULES = [
+const OPERATIONAL_CATALOG_MODULES = [
   '/src/pages/PriceBooks.jsx',
   '/src/pages/PriceBookDetail.jsx',
   '/src/pages/Products.jsx',
+];
+
+const OPERATIONAL_FINANCE_MODULES = [
   '/src/pages/QuoteBuilder.jsx',
   '/src/pages/Invoices.jsx',
+  '/src/pages/Documents.jsx',
+];
+
+const OPERATIONAL_WORKFLOW_MODULES = [
   '/src/pages/WorkOrders.jsx',
   '/src/pages/WorkOrderWizard.jsx',
   '/src/pages/Cases.jsx',
   '/src/pages/Emails.jsx',
   '/src/pages/Schedule.jsx',
-  '/src/pages/Documents.jsx',
   '/src/pages/Campaigns.jsx',
+];
+
+const OPERATIONAL_MISC_MODULES = [
   '/src/pages/Settings.jsx',
   '/src/pages/More.jsx',
   '/src/pages/Help.jsx',
+];
+
+const OPERATIONAL_MANAGEMENT_MODULES = [
   '/src/pages/management/TasksPage.jsx',
   '/src/pages/management/ContractsPage.jsx',
   '/src/pages/management/QuotesPage.jsx',
@@ -59,8 +71,24 @@ export default defineConfig({
             }
           }
 
-          if (includesAny(id, OPERATIONAL_ROUTE_MODULES)) {
-            return 'routes-operational';
+          if (includesAny(id, OPERATIONAL_CATALOG_MODULES)) {
+            return 'routes-operational-catalog';
+          }
+
+          if (includesAny(id, OPERATIONAL_FINANCE_MODULES)) {
+            return 'routes-operational-finance';
+          }
+
+          if (includesAny(id, OPERATIONAL_WORKFLOW_MODULES)) {
+            return 'routes-operational-workflow';
+          }
+
+          if (includesAny(id, OPERATIONAL_MISC_MODULES)) {
+            return 'routes-operational-misc';
+          }
+
+          if (includesAny(id, OPERATIONAL_MANAGEMENT_MODULES)) {
+            return 'routes-operational-management';
           }
 
           return undefined;

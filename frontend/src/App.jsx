@@ -1,35 +1,15 @@
+import { lazy } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Opportunities from './pages/Opportunities';
 import AttentionQueue from './pages/AttentionQueue';
-import More from './pages/More';
-import PriceBooks from './pages/PriceBooks';
-import PriceBookDetail from './pages/PriceBookDetail';
-import Products from './pages/Products';
-import Schedule from './pages/Schedule';
-import Documents from './pages/Documents';
-import Campaigns from './pages/Campaigns';
-import Settings from './pages/Settings';
-import QuoteBuilder from './pages/QuoteBuilder';
-import Invoices from './pages/Invoices';
-import WorkOrders from './pages/WorkOrders';
-import WorkOrderWizard from './pages/WorkOrderWizard';
-import Cases from './pages/Cases';
-import Emails from './pages/Emails';
 import MyCommissions from './pages/MyCommissions';
 import SalesRepDashboard from './pages/SalesRepDashboard';
 
 // Management Pages
-import TasksPage from './pages/management/TasksPage';
-import ContractsPage from './pages/management/ContractsPage';
-import QuotesPage from './pages/management/QuotesPage';
-import AppointmentsPage from './pages/management/AppointmentsPage';
 import { PermissionRoute } from './components/PermissionRoute';
-
-// Help
-import Help from './pages/Help';
 
 // Champion Public Pages
 import ChampionRegister from './pages/ChampionRegister';
@@ -44,6 +24,26 @@ import { renderPublicPortalRoutes, renderProtectedPortalRoutes } from './feature
 import { renderSearchRoutes } from './features/search/routes';
 import { renderSupportRoutes } from './features/support/routes';
 import { ProtectedRoute, renderLazyRoute } from './routes/shared';
+
+const More = lazy(() => import('./pages/More'));
+const PriceBooks = lazy(() => import('./pages/PriceBooks'));
+const PriceBookDetail = lazy(() => import('./pages/PriceBookDetail'));
+const Products = lazy(() => import('./pages/Products'));
+const Schedule = lazy(() => import('./pages/Schedule'));
+const Documents = lazy(() => import('./pages/Documents'));
+const Campaigns = lazy(() => import('./pages/Campaigns'));
+const Settings = lazy(() => import('./pages/Settings'));
+const QuoteBuilder = lazy(() => import('./pages/QuoteBuilder'));
+const Invoices = lazy(() => import('./pages/Invoices'));
+const WorkOrders = lazy(() => import('./pages/WorkOrders'));
+const WorkOrderWizard = lazy(() => import('./pages/WorkOrderWizard'));
+const Cases = lazy(() => import('./pages/Cases'));
+const Emails = lazy(() => import('./pages/Emails'));
+const Help = lazy(() => import('./pages/Help'));
+const TasksPage = lazy(() => import('./pages/management/TasksPage'));
+const ContractsPage = lazy(() => import('./pages/management/ContractsPage'));
+const QuotesPage = lazy(() => import('./pages/management/QuotesPage'));
+const AppointmentsPage = lazy(() => import('./pages/management/AppointmentsPage'));
 
 export default function App() {
   return (
@@ -72,38 +72,38 @@ export default function App() {
         {renderJobsRoutes()}
         <Route path="attention" element={<AttentionQueue />} />
         {renderAnalyticsRoutes()}
-        <Route path="pricebooks" element={<PriceBooks />} />
-        <Route path="pricebooks/:id" element={<PriceBookDetail />} />
-        <Route path="products" element={<Products />} />
-        <Route path="quotes" element={<QuoteBuilder />} />
-        <Route path="quotes/new" element={<QuoteBuilder />} />
-        <Route path="quotes/:id" element={<QuoteBuilder />} />
-        <Route path="invoices" element={<Invoices />} />
-        <Route path="invoices/:id" element={<Invoices />} />
-        <Route path="workorders" element={<WorkOrders />} />
-        <Route path="workorders/new" element={<WorkOrderWizard />} />
-        <Route path="workorders/:id" element={<WorkOrders />} />
-        <Route path="workorders/:id/wizard" element={<WorkOrderWizard />} />
-        <Route path="cases" element={<Cases />} />
-        <Route path="cases/:id" element={<Cases />} />
-        <Route path="emails" element={<Emails />} />
-        <Route path="emails/:id" element={<Emails />} />
+        <Route path="pricebooks" element={renderLazyRoute(PriceBooks, 'Loading price books...')} />
+        <Route path="pricebooks/:id" element={renderLazyRoute(PriceBookDetail, 'Loading price book...')} />
+        <Route path="products" element={renderLazyRoute(Products, 'Loading products...')} />
+        <Route path="quotes" element={renderLazyRoute(QuoteBuilder, 'Loading quote builder...')} />
+        <Route path="quotes/new" element={renderLazyRoute(QuoteBuilder, 'Loading quote builder...')} />
+        <Route path="quotes/:id" element={renderLazyRoute(QuoteBuilder, 'Loading quote builder...')} />
+        <Route path="invoices" element={renderLazyRoute(Invoices, 'Loading invoices...')} />
+        <Route path="invoices/:id" element={renderLazyRoute(Invoices, 'Loading invoices...')} />
+        <Route path="workorders" element={renderLazyRoute(WorkOrders, 'Loading work orders...')} />
+        <Route path="workorders/new" element={renderLazyRoute(WorkOrderWizard, 'Loading work order wizard...')} />
+        <Route path="workorders/:id" element={renderLazyRoute(WorkOrders, 'Loading work orders...')} />
+        <Route path="workorders/:id/wizard" element={renderLazyRoute(WorkOrderWizard, 'Loading work order wizard...')} />
+        <Route path="cases" element={renderLazyRoute(Cases, 'Loading cases...')} />
+        <Route path="cases/:id" element={renderLazyRoute(Cases, 'Loading cases...')} />
+        <Route path="emails" element={renderLazyRoute(Emails, 'Loading emails...')} />
+        <Route path="emails/:id" element={renderLazyRoute(Emails, 'Loading emails...')} />
         <Route path="my-commissions" element={<MyCommissions />} />
         <Route path="my-dashboard" element={<SalesRepDashboard />} />
-        <Route path="schedule" element={<Schedule />} />
-        <Route path="documents" element={<Documents />} />
-        <Route path="campaigns" element={<Campaigns />} />
-        <Route path="settings" element={<Settings />} />
-        <Route path="more" element={<More />} />
+        <Route path="schedule" element={renderLazyRoute(Schedule, 'Loading schedule...')} />
+        <Route path="documents" element={renderLazyRoute(Documents, 'Loading documents...')} />
+        <Route path="campaigns" element={renderLazyRoute(Campaigns, 'Loading campaigns...')} />
+        <Route path="settings" element={renderLazyRoute(Settings, 'Loading settings...')} />
+        <Route path="more" element={renderLazyRoute(More, 'Loading more...')} />
         {renderSearchRoutes()}
-        <Route path="help" element={<Help />} />
+        <Route path="help" element={renderLazyRoute(Help, 'Loading help...')} />
         {renderSupportRoutes()}
 
         {renderAdminRoutes()}
 
         {/* Management Routes - Protected by page access permissions */}
-        <Route path="management/cases" element={<PermissionRoute page="cases"><Cases /></PermissionRoute>} />
-        <Route path="management/tasks" element={<PermissionRoute page="tasks"><TasksPage /></PermissionRoute>} />
+        <Route path="management/cases" element={<PermissionRoute page="cases">{renderLazyRoute(Cases, 'Loading cases...')}</PermissionRoute>} />
+        <Route path="management/tasks" element={<PermissionRoute page="tasks">{renderLazyRoute(TasksPage, 'Loading tasks...')}</PermissionRoute>} />
         <Route
           path="management/commissions"
           element={
@@ -112,11 +112,11 @@ export default function App() {
             </PermissionRoute>
           }
         />
-        <Route path="management/invoices" element={<PermissionRoute page="invoices"><Invoices /></PermissionRoute>} />
-        <Route path="management/contracts" element={<PermissionRoute page="contracts"><ContractsPage /></PermissionRoute>} />
-        <Route path="management/quotes" element={<PermissionRoute page="quotes"><QuotesPage /></PermissionRoute>} />
-        <Route path="management/appointments" element={<PermissionRoute page="appointments"><AppointmentsPage /></PermissionRoute>} />
-        <Route path="management/work-orders" element={<PermissionRoute page="workOrders"><WorkOrders /></PermissionRoute>} />
+        <Route path="management/invoices" element={<PermissionRoute page="invoices">{renderLazyRoute(Invoices, 'Loading invoices...')}</PermissionRoute>} />
+        <Route path="management/contracts" element={<PermissionRoute page="contracts">{renderLazyRoute(ContractsPage, 'Loading contracts...')}</PermissionRoute>} />
+        <Route path="management/quotes" element={<PermissionRoute page="quotes">{renderLazyRoute(QuotesPage, 'Loading quotes...')}</PermissionRoute>} />
+        <Route path="management/appointments" element={<PermissionRoute page="appointments">{renderLazyRoute(AppointmentsPage, 'Loading appointments...')}</PermissionRoute>} />
+        <Route path="management/work-orders" element={<PermissionRoute page="workOrders">{renderLazyRoute(WorkOrders, 'Loading work orders...')}</PermissionRoute>} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />
