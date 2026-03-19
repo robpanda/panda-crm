@@ -2,16 +2,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
-import AccountsDashboard from './pages/AccountsDashboard';
-import Accounts from './pages/Accounts';
-import AccountList from './pages/AccountList';
-import AccountDetail from './pages/AccountDetail';
-import ContactsDashboard from './pages/ContactsDashboard';
-import Contacts from './pages/Contacts';
-import ContactList from './pages/ContactList';
-import ContactDetail from './pages/ContactDetail';
 import Opportunities from './pages/Opportunities';
-import AccountWizard from './pages/AccountWizard';
 import AttentionQueue from './pages/AttentionQueue';
 import More from './pages/More';
 import PriceBooks from './pages/PriceBooks';
@@ -43,8 +34,10 @@ import Help from './pages/Help';
 // Champion Public Pages
 import ChampionRegister from './pages/ChampionRegister';
 import ChampionJoin from './pages/ChampionJoin';
+import { renderAccountRoutes } from './features/accounts/routes';
 import { AdminCommissionsPage, renderAdminRoutes } from './features/admin/routes';
 import { renderAnalyticsRoutes } from './features/analytics/routes';
+import { renderContactRoutes } from './features/contacts/routes';
 import { renderJobsRoutes } from './features/jobs/routes';
 import { renderLeadRoutes } from './features/leads/routes';
 import { renderPublicPortalRoutes, renderProtectedPortalRoutes } from './features/portals/routes';
@@ -73,15 +66,8 @@ export default function App() {
       >
         <Route index element={<Dashboard />} />
         {renderProtectedPortalRoutes()}
-        <Route path="accounts" element={<AccountsDashboard />} />
-        <Route path="accounts/list" element={<AccountList />} />
-        <Route path="accounts/new" element={<AccountWizard />} />
-        <Route path="accounts/:id" element={<AccountDetail />} />
-        <Route path="accounts/:id/wizard" element={<AccountWizard />} />
-        <Route path="contacts" element={<ContactsDashboard />} />
-        <Route path="contacts/list" element={<ContactList />} />
-        <Route path="contacts/new" element={<ContactDetail />} />
-        <Route path="contacts/:id" element={<ContactDetail />} />
+        {renderAccountRoutes()}
+        {renderContactRoutes()}
         {renderLeadRoutes()}
         {renderJobsRoutes()}
         <Route path="attention" element={<AttentionQueue />} />
