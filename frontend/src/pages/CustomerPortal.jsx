@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { lazy, useState, useEffect, useMemo } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import {
   CheckCircle,
@@ -27,9 +27,11 @@ import {
   Users,
 } from 'lucide-react';
 import { customerPortalApi } from '../services/api';
+import LazyBoundary from '../components/LazyBoundary';
 import PortalLayout from '../components/customer-portal/PortalLayout';
 import PortalTabNav from '../components/customer-portal/PortalTabNav';
-import PayInvoiceModal from '../components/PayInvoiceModal';
+
+const PayInvoiceModal = lazy(() => import('../components/PayInvoiceModal'));
 
 // Timeline stage icons and colors
 const stageConfig = {
@@ -1306,40 +1308,42 @@ export default function CustomerPortal() {
       </div>
 
       {/* Stripe Payment Modal (Full Amount Only) */}
-      <PayInvoiceModal
-        isOpen={!!selectedInvoice}
-        onClose={() => {
-          setSelectedInvoice(null);
-        }}
-        invoice={selectedInvoice}
-        opportunity={project}
-        fullAmountOnly
-        publicPortal
-        onSuccess={async (paymentIntent) => {
-          const activeToken = portalToken || token;
-          const previousBalance = parseFloat(selectedInvoice?.balanceDue || selectedInvoice?.total || 0);
+      <LazyBoundary label="Loading payment form...">
+        <PayInvoiceModal
+          isOpen={!!selectedInvoice}
+          onClose={() => {
+            setSelectedInvoice(null);
+          }}
+          invoice={selectedInvoice}
+          opportunity={project}
+          fullAmountOnly
+          publicPortal
+          onSuccess={async (paymentIntent) => {
+            const activeToken = portalToken || token;
+            const previousBalance = parseFloat(selectedInvoice?.balanceDue || selectedInvoice?.total || 0);
 
-          for (let attempt = 0; attempt < 5; attempt += 1) {
-            const { invoices: latestInvoices, payments: latestPayments } = await refreshBilling(activeToken);
-            const refreshedInvoice = latestInvoices.find((invoice) => invoice.id === selectedInvoice?.id);
-            const paymentRecorded = latestPayments.some(
-              (payment) => payment.stripePaymentIntentId === paymentIntent?.id
-            );
-            const balanceChanged = refreshedInvoice
-              ? parseFloat(refreshedInvoice.balanceDue || refreshedInvoice.total || 0) < previousBalance
-              : false;
+            for (let attempt = 0; attempt < 5; attempt += 1) {
+              const { invoices: latestInvoices, payments: latestPayments } = await refreshBilling(activeToken);
+              const refreshedInvoice = latestInvoices.find((invoice) => invoice.id === selectedInvoice?.id);
+              const paymentRecorded = latestPayments.some(
+                (payment) => payment.stripePaymentIntentId === paymentIntent?.id
+              );
+              const balanceChanged = refreshedInvoice
+                ? parseFloat(refreshedInvoice.balanceDue || refreshedInvoice.total || 0) < previousBalance
+                : false;
 
-            if (paymentRecorded || balanceChanged) {
-              break;
+              if (paymentRecorded || balanceChanged) {
+                break;
+              }
+
+              await wait(1200 * (attempt + 1));
             }
 
-            await wait(1200 * (attempt + 1));
-          }
-
-          setPaymentSuccess(true);
-          setTimeout(() => setPaymentSuccess(false), 5000);
-        }}
-      />
+            setPaymentSuccess(true);
+            setTimeout(() => setPaymentSuccess(false), 5000);
+          }}
+        />
+      </LazyBoundary>
 
       {/* Booking Modal */}
       {showAppointments && showBookingModal && (
