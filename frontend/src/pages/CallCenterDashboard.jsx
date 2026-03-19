@@ -500,6 +500,7 @@ function CallListsPanel({ clickToCall, openSmsModal, isManager = false }) {
   const [showDispositionModal, setShowDispositionModal] = useState(false);
   const [dispositionNotes, setDispositionNotes] = useState('');
   const [selectedDisposition, setSelectedDisposition] = useState('');
+  const [callbackAt, setCallbackAt] = useState('');
 
   // State for Create List modal
   const [showCreateListModal, setShowCreateListModal] = useState(false);
@@ -552,6 +553,7 @@ function CallListsPanel({ clickToCall, openSmsModal, isManager = false }) {
   const lists = listsData?.data || [];
   const items = itemsData?.data || [];
   const dispositions = dispositionsData?.data || [];
+  const selectedDispositionConfig = dispositions.find((disp) => disp.code === selectedDisposition) || null;
 
   // Fetch RingCX dial groups and campaigns for Push to RingCX feature
   // Note: RingCX is optional - errors are silently handled if not configured
@@ -684,12 +686,16 @@ function CallListsPanel({ clickToCall, openSmsModal, isManager = false }) {
 
   // Apply disposition
   const applyDispositionMutation = useMutation({
-    mutationFn: ({ listId, itemId, code, notes }) =>
-      callListsApi.applyDisposition(listId, itemId, code, notes),
+    mutationFn: ({ listId, itemId, code, notes, callbackAt: scheduledCallbackAt }) =>
+      callListsApi.applyDisposition(listId, itemId, code, {
+        notes,
+        callbackAt: scheduledCallbackAt,
+      }),
     onSuccess: () => {
       setShowDispositionModal(false);
       setSelectedDisposition('');
       setDispositionNotes('');
+      setCallbackAt('');
       getNextItem(); // Get next item after disposition
       refetchItems();
     },
@@ -710,11 +716,13 @@ function CallListsPanel({ clickToCall, openSmsModal, isManager = false }) {
   // Handle disposition submission
   const handleSubmitDisposition = () => {
     if (!selectedDisposition || !currentItem) return;
+    if (selectedDispositionConfig?.scheduleCallback && !callbackAt) return;
     applyDispositionMutation.mutate({
       listId: selectedList.id,
       itemId: currentItem.id,
       code: selectedDisposition,
       notes: dispositionNotes,
+      callbackAt,
     });
   };
 
@@ -996,7 +1004,7 @@ function CallListsPanel({ clickToCall, openSmsModal, isManager = false }) {
                   <h4 className="text-sm font-medium text-gray-700 mb-3">Quick Dispositions</h4>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                     {dispositions
-                      .filter(d => ['APPOINTMENT_SET', 'INTERESTED', 'NOT_INTERESTED', 'CALLBACK_REQUESTED'].includes(d.code))
+                      .filter(d => ['SCHEDULED', 'CALL_BACK', 'NOT_INTERESTED', 'WRONG_NUMBER'].includes(d.code))
                       .map((disp) => (
                         <button
                           key={disp.code}
@@ -1073,6 +1081,7 @@ function CallListsPanel({ clickToCall, openSmsModal, isManager = false }) {
                   setShowDispositionModal(false);
                   setSelectedDisposition('');
                   setDispositionNotes('');
+                  setCallbackAt('');
                 }}
                 className="p-1 hover:bg-gray-100 rounded-lg"
               >
@@ -1110,6 +1119,24 @@ function CallListsPanel({ clickToCall, openSmsModal, isManager = false }) {
               </div>
 
               {/* Notes */}
+              {selectedDispositionConfig?.scheduleCallback && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Callback Date & Time
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={callbackAt}
+                    onChange={(e) => setCallbackAt(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    Required for callback dispositions. This will schedule the lead for follow-up.
+                  </p>
+                </div>
+              )}
+
+              {/* Notes */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Notes (optional)
@@ -1130,6 +1157,7 @@ function CallListsPanel({ clickToCall, openSmsModal, isManager = false }) {
                   setShowDispositionModal(false);
                   setSelectedDisposition('');
                   setDispositionNotes('');
+                  setCallbackAt('');
                 }}
                 className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg"
               >
@@ -1137,7 +1165,7 @@ function CallListsPanel({ clickToCall, openSmsModal, isManager = false }) {
               </button>
               <button
                 onClick={handleSubmitDisposition}
-                disabled={!selectedDisposition || applyDispositionMutation.isPending}
+                disabled={!selectedDisposition || (selectedDispositionConfig?.scheduleCallback && !callbackAt) || applyDispositionMutation.isPending}
                 className="flex items-center gap-2 px-4 py-2 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90 disabled:opacity-50"
               >
                 {applyDispositionMutation.isPending ? (

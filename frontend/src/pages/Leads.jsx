@@ -10,12 +10,20 @@ import { LeadRankBadge, LeadScoreTooltip } from '../components/LeadRankBadge';
 // Lead disposition options (alphabetized after "All")
 const DISPOSITION_OPTIONS = [
   { value: '', label: 'All Dispositions' },
-  { value: 'APPOINTMENT_SET', label: 'Appointment Set' },
-  { value: 'CALLBACK', label: 'Callback' },
+  { value: 'CALL_BACK', label: 'Call Back' },
+  { value: 'CANCELED', label: 'Canceled' },
+  { value: 'CANT_AFFORD', label: "Can't Afford" },
+  { value: 'CONFIRMED', label: 'Confirmed' },
   { value: 'DO_NOT_CALL', label: 'Do Not Call' },
+  { value: 'MISSING_PARTY', label: 'Missing Party' },
+  { value: 'NEED_RESET', label: 'Need Reset' },
   { value: 'NO_ANSWER', label: 'No Answer' },
+  { value: 'NO_VALUE', label: 'No Value' },
   { value: 'NOT_INTERESTED', label: 'Not Interested' },
+  { value: 'SCHEDULED', label: 'Scheduled' },
+  { value: 'THINKING_ABOUT_IT', label: 'Thinking About It' },
   { value: 'VOICEMAIL', label: 'Voicemail' },
+  { value: 'WEATHER_RELATED', label: 'Weather Related' },
   { value: 'WRONG_NUMBER', label: 'Wrong Number' },
 ];
 

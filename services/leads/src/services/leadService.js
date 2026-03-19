@@ -4,6 +4,10 @@ import { PrismaClient, Prisma } from '@prisma/client';
 import { logger } from '../middleware/logger.js';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import crypto from 'crypto';
+import {
+  getCallCenterDispositionCompatibleCodes,
+  normalizeCallCenterDispositionCode,
+} from '../../../../shared/src/services/callCenterTaxonomy.js';
 
 const prisma = new PrismaClient();
 const lambdaClient = new LambdaClient({ region: 'us-east-2' });
@@ -438,7 +442,10 @@ class LeadService {
 
     // Disposition filter
     if (disposition && disposition !== 'all') {
-      where.disposition = disposition;
+      const compatibleDispositionCodes = getCallCenterDispositionCompatibleCodes(disposition);
+      where.disposition = compatibleDispositionCodes.length > 0
+        ? { in: compatibleDispositionCodes }
+        : disposition;
     }
 
     // Work type filter - case insensitive
@@ -3029,7 +3036,7 @@ class LeadService {
     NA: { status: 'NEW', disposition: null },           // No Answer
     NI: { status: 'UNQUALIFIED', disposition: 'NOT_INTERESTED' }, // Not Interested
     NP: { status: 'CONTACTED', disposition: 'NO_PITCH' },    // No Pitch
-    GBL: { status: 'NURTURING', disposition: 'CALLBACK' },   // Go Back Later
+    GBL: { status: 'NURTURING', disposition: 'CALL_BACK' },   // Go Back Later
     INFO: { status: 'CONTACTED', disposition: null },        // Info Gather
     SET: { status: 'QUALIFIED', disposition: null },         // Lead Set
     JOB: { status: 'CONVERTED', disposition: null },         // Panda Job (has Opportunity)
@@ -3165,7 +3172,7 @@ class LeadService {
     });
 
     const gbl = await prisma.lead.count({
-      where: { ...baseWhere, disposition: 'CALLBACK' },
+      where: { ...baseWhere, disposition: { in: ['CALL_BACK', 'CALLBACK'] } },
     });
 
     const np = await prisma.lead.count({
@@ -3424,9 +3431,10 @@ class LeadService {
     if (lead.opportunityId) return 'JOB';
 
     // Check disposition first
-    if (lead.disposition === 'NOT_INTERESTED') return 'NI';
+    const canonicalDisposition = normalizeCallCenterDispositionCode(lead.disposition);
+    if (canonicalDisposition === 'NOT_INTERESTED') return 'NI';
     if (lead.disposition === 'NO_PITCH') return 'NP';
-    if (lead.disposition === 'CALLBACK') return 'GBL';
+    if (canonicalDisposition === 'CALL_BACK') return 'GBL';
 
     // Check status
     if (lead.status === 'NEW') return 'NA';

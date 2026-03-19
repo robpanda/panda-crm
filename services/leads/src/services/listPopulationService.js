@@ -1,6 +1,13 @@
 // List Population Service - Auto-routes leads to appropriate call lists
 // Based on Panda Call Center Process flow diagram
 import { PrismaClient } from '@prisma/client';
+import {
+  CALLBACK_DISPOSITION_CODES,
+  COOLDOWN_DISPOSITION_CODES,
+  normalizeCallCenterDispositionCode,
+  requiresCallbackAt,
+  toSystemLeadStatusFromDisposition,
+} from '../../../../shared/src/services/callCenterTaxonomy.js';
 
 const prisma = new PrismaClient();
 
@@ -26,9 +33,9 @@ const prisma = new PrismaClient();
  *   Inspected but not sold → Rehash list
  *
  * Dispositions:
- *   CALLBACK_REQUESTED → Scheduled Callbacks list
+ *   CALL_BACK → Scheduled Callbacks list
  *   NOT_INTERESTED → Cool Down list (90 day cooldown)
- *   DNC → Remove from all lists
+ *   DO_NOT_CALL → Remove from all lists
  */
 class ListPopulationService {
 
@@ -316,7 +323,7 @@ class ListPopulationService {
         callbackScheduledAt: { not: null },
         isConverted: false,
         deletedAt: null,
-        disposition: { in: ['CALLBACK_REQUESTED', 'FOLLOW_UP_SPECIFIC_DATE', 'CALL_BACK_LATER'] },
+        disposition: { in: CALLBACK_DISPOSITION_CODES },
       },
       take: limit,
       select: { id: true, firstName: true, lastName: true, phone: true, mobilePhone: true, state: true, status: true, callbackScheduledAt: true },
@@ -375,7 +382,7 @@ class ListPopulationService {
 
     const leads = await prisma.lead.findMany({
       where: {
-        disposition: { in: ['NOT_INTERESTED', 'CALL_BACK_LATER'] },
+        disposition: { in: COOLDOWN_DISPOSITION_CODES },
         status: 'NURTURING',
         isConverted: false,
         deletedAt: null,
@@ -433,29 +440,38 @@ class ListPopulationService {
    * Called after an agent applies a disposition to a call
    *
    * @param {string} leadId - Lead ID
-   * @param {string} dispositionCode - Disposition code (e.g., 'NOT_INTERESTED', 'CALLBACK_REQUESTED')
+   * @param {string} dispositionCode - Disposition code (e.g., 'NOT_INTERESTED', 'CALL_BACK')
    * @param {Object} options - { callbackAt, notes }
    */
   async handleDisposition(leadId, dispositionCode, options = {}) {
     const { callbackAt, notes } = options;
+    const canonicalDispositionCode = normalizeCallCenterDispositionCode(dispositionCode) || dispositionCode;
 
     // Get disposition settings
     const disposition = await prisma.callListDisposition.findFirst({
-      where: { code: dispositionCode, callListId: null, isActive: true },
+      where: {
+        callListId: null,
+        isActive: true,
+        code: { in: [...new Set([canonicalDispositionCode, dispositionCode].filter(Boolean))] },
+      },
     });
 
     if (!disposition) {
       throw new Error(`Disposition ${dispositionCode} not found`);
     }
+    if (requiresCallbackAt(canonicalDispositionCode) && !callbackAt) {
+      throw new Error('callbackAt is required for Call Back dispositions');
+    }
 
     const listsByName = await this.getCallListsByName();
     const lead = await prisma.lead.findUnique({ where: { id: leadId } });
     if (!lead) throw new Error('Lead not found');
+    const recordedDispositionCode = normalizeCallCenterDispositionCode(disposition.code) || canonicalDispositionCode || disposition.code;
 
     const updates = {
-      disposition: dispositionCode,
+      disposition: recordedDispositionCode,
       lastCallAt: new Date(),
-      lastCallResult: dispositionCode,
+      lastCallResult: recordedDispositionCode,
       callAttempts: lead.callAttempts + 1,
     };
 
@@ -481,7 +497,7 @@ class ListPopulationService {
     }
 
     if (disposition.updateLeadStatus) {
-      updates.status = disposition.updateLeadStatus;
+      updates.status = toSystemLeadStatusFromDisposition(recordedDispositionCode, disposition.updateLeadStatus);
     }
 
     if (disposition.addToDNC) {
