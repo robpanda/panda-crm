@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useContext } from 'react';
+import { lazy, useState, useEffect, useRef, useContext } from 'react';
 import { useParams, Link, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { leadsApi, bamboogliApi, usersApi } from '../services/api';
@@ -19,12 +19,14 @@ import {
   PhoneIncoming, PhoneOutgoing, PhoneMissed, MailOpen, MessageCircle, Sparkles, Trophy
 } from 'lucide-react';
 import { LeadRankBadge, LeadScoreCard } from '../components/LeadRankBadge';
+import LazyBoundary from '../components/LazyBoundary';
 import LoadingSpinner from '../components/LoadingSpinner';
 import MentionTextarea from '../components/MentionTextarea';
 import InternalNotesTabs from '../components/InternalNotesTabs';
 import InternalComments from '../components/InternalComments';
-import CommunicationsTab from '../components/CommunicationsTab';
 import UserSearchDropdown from '../components/UserSearchDropdown';
+
+const CommunicationsTab = lazy(() => import('../components/CommunicationsTab'));
 
 // SMS Modal Component with Canned Responses
 function SmsModal({ isOpen, onClose, phone, recipientName, onSent, mergeData = {} }) {
@@ -422,11 +424,13 @@ function EmailModal({ isOpen, onClose, email, recipientName, onSent, mergeData =
 function ActivityTab({ phone, email, leadName }) {
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-100">
-      <CommunicationsTab
-        phone={phone}
-        email={email}
-        contactName={leadName}
-      />
+      <LazyBoundary label="Loading communications...">
+        <CommunicationsTab
+          phone={phone}
+          email={email}
+          contactName={leadName}
+        />
+      </LazyBoundary>
     </div>
   );
 }
