@@ -1,6 +1,9 @@
+import { lazy } from 'react';
 import { Route } from 'react-router-dom';
-import Search from '../../pages/Search';
+import { renderLazyRoute } from '../../routes/shared';
+
+const Search = lazy(() => import('../../pages/Search'));
 
 export function renderSearchRoutes() {
-  return <Route path="search" element={<Search />} />;
+  return <Route path="search" element={renderLazyRoute(Search, 'Loading search...')} />;
 }
