@@ -3,7 +3,6 @@ import { Navigate, Route } from 'react-router-dom';
 import Workflows from '../../pages/admin/Workflows';
 import RolesPermissions from '../../pages/admin/RolesPermissions';
 import PandaSignV2 from '../../pages/admin/PandaSignV2';
-import SupportTicketDetail from '../../pages/SupportTicketDetail';
 import { renderLazyRoute } from '../../routes/shared';
 
 export const AdminCommissionsPage = lazy(() => import('../../pages/admin/Commissions'));
@@ -20,6 +19,7 @@ const CallCenterSettings = lazy(() => import('../../pages/admin/CallCenterSettin
 const AdminHelp = lazy(() => import('../../pages/admin/AdminHelp'));
 const AdminSupport = lazy(() => import('../../pages/admin/Support'));
 const AdminSupportTickets = lazy(() => import('../../pages/admin/AdminSupportTickets'));
+const SupportTicketDetail = lazy(() => import('../../pages/SupportTicketDetail'));
 const Setup = lazy(() => import('../../pages/admin/Setup'));
 const GoogleCalendar = lazy(() => import('../../pages/admin/GoogleCalendar'));
 const DeletedRecords = lazy(() => import('../../pages/admin/DeletedRecords'));
@@ -44,7 +44,7 @@ export function renderAdminRoutes() {
       <Route path="admin/training-bot" element={renderLazyRoute(TrainingBotAnalytics, 'Loading training bot analytics...')} />
       <Route path="admin/support" element={renderLazyRoute(AdminSupport, 'Loading support admin...')} />
       <Route path="admin/support/tickets" element={renderLazyRoute(AdminSupportTickets, 'Loading support tickets...')} />
-      <Route path="admin/support/ticket/:id" element={<SupportTicketDetail />} />
+      <Route path="admin/support/ticket/:id" element={renderLazyRoute(SupportTicketDetail, 'Loading support ticket...')} />
       <Route path="admin/ringcentral" element={renderLazyRoute(RingCentral, 'Loading RingCentral...')} />
       <Route path="admin/call-center" element={renderLazyRoute(CallCenterSettings, 'Loading call center settings...')} />
       <Route path="admin/help" element={renderLazyRoute(AdminHelp, 'Loading admin help...')} />
