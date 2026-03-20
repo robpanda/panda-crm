@@ -1,19 +1,11 @@
 import { lazy } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
-import Login from './pages/Login';
-import Dashboard from './pages/Dashboard';
-import Opportunities from './pages/Opportunities';
-import AttentionQueue from './pages/AttentionQueue';
-import MyCommissions from './pages/MyCommissions';
-import SalesRepDashboard from './pages/SalesRepDashboard';
 
 // Management Pages
 import { PermissionRoute } from './components/PermissionRoute';
 
 // Champion Public Pages
-import ChampionRegister from './pages/ChampionRegister';
-import ChampionJoin from './pages/ChampionJoin';
 import { renderAccountRoutes } from './features/accounts/routes';
 import { AdminCommissionsPage, renderAdminRoutes } from './features/admin/routes';
 import { renderAnalyticsRoutes } from './features/analytics/routes';
@@ -25,6 +17,13 @@ import { renderSearchRoutes } from './features/search/routes';
 import { renderSupportRoutes } from './features/support/routes';
 import { ProtectedRoute, renderLazyRoute } from './routes/shared';
 
+const Login = lazy(() => import('./pages/Login'));
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const AttentionQueue = lazy(() => import('./pages/AttentionQueue'));
+const MyCommissions = lazy(() => import('./pages/MyCommissions'));
+const SalesRepDashboard = lazy(() => import('./pages/SalesRepDashboard'));
+const ChampionRegister = lazy(() => import('./pages/ChampionRegister'));
+const ChampionJoin = lazy(() => import('./pages/ChampionJoin'));
 const More = lazy(() => import('./pages/More'));
 const PriceBooks = lazy(() => import('./pages/PriceBooks'));
 const PriceBookDetail = lazy(() => import('./pages/PriceBookDetail'));
@@ -48,11 +47,11 @@ const AppointmentsPage = lazy(() => import('./pages/management/AppointmentsPage'
 export default function App() {
   return (
     <Routes>
-      <Route path="/login" element={<Login />} />
+      <Route path="/login" element={renderLazyRoute(Login, 'Loading login...')} />
 
       {/* Public Champion Routes */}
-      <Route path="/champion/register" element={<ChampionRegister />} />
-      <Route path="/champion/join/:token" element={<ChampionJoin />} />
+      <Route path="/champion/register" element={renderLazyRoute(ChampionRegister, 'Loading champion registration...')} />
+      <Route path="/champion/join/:token" element={renderLazyRoute(ChampionJoin, 'Loading champion join...')} />
 
       {renderPublicPortalRoutes()}
 
@@ -64,13 +63,13 @@ export default function App() {
           </ProtectedRoute>
         }
       >
-        <Route index element={<Dashboard />} />
+        <Route index element={renderLazyRoute(Dashboard, 'Loading dashboard...')} />
         {renderProtectedPortalRoutes()}
         {renderAccountRoutes()}
         {renderContactRoutes()}
         {renderLeadRoutes()}
         {renderJobsRoutes()}
-        <Route path="attention" element={<AttentionQueue />} />
+        <Route path="attention" element={renderLazyRoute(AttentionQueue, 'Loading attention queue...')} />
         {renderAnalyticsRoutes()}
         <Route path="pricebooks" element={renderLazyRoute(PriceBooks, 'Loading price books...')} />
         <Route path="pricebooks/:id" element={renderLazyRoute(PriceBookDetail, 'Loading price book...')} />
@@ -88,8 +87,8 @@ export default function App() {
         <Route path="cases/:id" element={renderLazyRoute(Cases, 'Loading cases...')} />
         <Route path="emails" element={renderLazyRoute(Emails, 'Loading emails...')} />
         <Route path="emails/:id" element={renderLazyRoute(Emails, 'Loading emails...')} />
-        <Route path="my-commissions" element={<MyCommissions />} />
-        <Route path="my-dashboard" element={<SalesRepDashboard />} />
+        <Route path="my-commissions" element={renderLazyRoute(MyCommissions, 'Loading commissions...')} />
+        <Route path="my-dashboard" element={renderLazyRoute(SalesRepDashboard, 'Loading dashboard...')} />
         <Route path="schedule" element={renderLazyRoute(Schedule, 'Loading schedule...')} />
         <Route path="documents" element={renderLazyRoute(Documents, 'Loading documents...')} />
         <Route path="campaigns" element={renderLazyRoute(Campaigns, 'Loading campaigns...')} />
