@@ -14,7 +14,6 @@ import {
 } from '../utils/messageTemplateUtils';
 import CrewAccessManager from '../components/CrewAccessManager';
 import InspectionChecklist from '../components/InspectionChecklist';
-import DraggableMap from '../components/DraggableMap';
 import MilestoneTracker from '../components/MilestoneTracker';
 import JobPriority from '../components/JobPriority';
 import LazyBoundary from '../components/LazyBoundary';
@@ -113,6 +112,7 @@ const ResultAppointmentWizard = lazy(() => import('../components/result-appointm
 const PhotoCamTab = lazy(() => import('../components/photocam/PhotoCamTab'));
 const CommunicationsTab = lazy(() => import('../components/CommunicationsTab'));
 const ExpediterChecklist = lazy(() => import('../components/ExpediterChecklist'));
+const DraggableMap = lazy(() => import('../components/DraggableMap'));
 
 const CONTACT_METHOD_OPTIONS = [
   { value: 'Phone', label: 'Phone' },
@@ -9494,19 +9494,21 @@ export default function OpportunityDetail() {
                     <p className="text-xs text-gray-500 mb-3">
                       Drag the pin or click on the map to set the exact property location. This ensures accurate measurements.
                     </p>
-                    <DraggableMap
-                      latitude={gafMeasureForm.latitude}
-                      longitude={gafMeasureForm.longitude}
-                      address={`${gafMeasureForm.street}, ${gafMeasureForm.city}, ${gafMeasureForm.state} ${gafMeasureForm.zip}`}
-                      onLocationChange={(lat, lng) => {
-                        setGafMeasureForm(prev => ({
-                          ...prev,
-                          latitude: lat.toFixed(6),
-                          longitude: lng.toFixed(6),
-                        }));
-                      }}
-                      height={350}
-                    />
+                    <LazyPanel label="Loading map...">
+                      <DraggableMap
+                        latitude={gafMeasureForm.latitude}
+                        longitude={gafMeasureForm.longitude}
+                        address={`${gafMeasureForm.street}, ${gafMeasureForm.city}, ${gafMeasureForm.state} ${gafMeasureForm.zip}`}
+                        onLocationChange={(lat, lng) => {
+                          setGafMeasureForm(prev => ({
+                            ...prev,
+                            latitude: lat.toFixed(6),
+                            longitude: lng.toFixed(6),
+                          }));
+                        }}
+                        height={350}
+                      />
+                    </LazyPanel>
                   </div>
 
                   {/* Coordinates Section */}
@@ -9731,19 +9733,21 @@ export default function OpportunityDetail() {
                     <p className="text-xs text-red-500 mb-3">
                       Use the coordinates below to verify the pin placement. Drag the pin or click on the map to adjust.
                     </p>
-                    <DraggableMap
-                      latitude={eagleviewForm.latitude}
-                      longitude={eagleviewForm.longitude}
-                      address={`${eagleviewForm.street}, ${eagleviewForm.city}, ${eagleviewForm.state} ${eagleviewForm.zip}`}
-                      onLocationChange={(lat, lng) => {
-                        setEagleviewForm(prev => ({
-                          ...prev,
-                          latitude: lat.toFixed(6),
-                          longitude: lng.toFixed(6),
-                        }));
-                      }}
-                      height={350}
-                    />
+                    <LazyPanel label="Loading map...">
+                      <DraggableMap
+                        latitude={eagleviewForm.latitude}
+                        longitude={eagleviewForm.longitude}
+                        address={`${eagleviewForm.street}, ${eagleviewForm.city}, ${eagleviewForm.state} ${eagleviewForm.zip}`}
+                        onLocationChange={(lat, lng) => {
+                          setEagleviewForm(prev => ({
+                            ...prev,
+                            latitude: lat.toFixed(6),
+                            longitude: lng.toFixed(6),
+                          }));
+                        }}
+                        height={350}
+                      />
+                    </LazyPanel>
                   </div>
 
                   {/* Coordinates Section */}
