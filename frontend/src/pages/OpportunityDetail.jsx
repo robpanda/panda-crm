@@ -14,13 +14,10 @@ import {
 } from '../utils/messageTemplateUtils';
 import CrewAccessManager from '../components/CrewAccessManager';
 import InspectionChecklist from '../components/InspectionChecklist';
-import MilestoneTracker from '../components/MilestoneTracker';
 import JobPriority from '../components/JobPriority';
 import LazyBoundary from '../components/LazyBoundary';
 import SuperTabNav, { SubTabNav, CATEGORIES } from '../components/SuperTabNav';
 import useJobCategories from '../hooks/useJobCategories';
-import WorkflowSidebar from '../components/WorkflowSidebar';
-import NotesSidebar from '../components/NotesSidebar';
 import AddressAutocomplete from '../components/AddressAutocomplete';
 import InternalComments from '../components/InternalComments';
 import {
@@ -113,6 +110,9 @@ const PhotoCamTab = lazy(() => import('../components/photocam/PhotoCamTab'));
 const CommunicationsTab = lazy(() => import('../components/CommunicationsTab'));
 const ExpediterChecklist = lazy(() => import('../components/ExpediterChecklist'));
 const DraggableMap = lazy(() => import('../components/DraggableMap'));
+const MilestoneTracker = lazy(() => import('../components/MilestoneTracker'));
+const WorkflowSidebar = lazy(() => import('../components/WorkflowSidebar'));
+const NotesSidebar = lazy(() => import('../components/NotesSidebar'));
 
 const CONTACT_METHOD_OPTIONS = [
   { value: 'Phone', label: 'Phone' },
@@ -4347,7 +4347,9 @@ export default function OpportunityDetail() {
 
       {/* Milestone Tracker */}
       <div className="px-4 sm:px-6 pb-4">
-        <MilestoneTracker opportunity={opportunity} />
+        <LazyPanel label="Loading milestone tracker...">
+          <MilestoneTracker opportunity={opportunity} />
+        </LazyPanel>
       </div>
 
       {/* Main Content - Two Column Layout */}
@@ -4552,20 +4554,24 @@ export default function OpportunityDetail() {
               </div>
 
               {/* Notes Sidebar - Pinned note at top, others chronological */}
-              <NotesSidebar opportunityId={id} />
+              <LazyPanel label="Loading notes...">
+                <NotesSidebar opportunityId={id} />
+              </LazyPanel>
 
               {/* Stage-Aware Workflow Sidebar */}
-              <WorkflowSidebar
-                opportunity={opportunity}
-                onActionClick={(action) => {
-                  console.log('Sidebar action clicked:', action);
-                }}
-                onEditClick={() => navigate(`/jobs/${id}/wizard`)}
-                onScheduleClick={() => {
-                  setActiveQuickAction('schedule');
-                  setShowQuickActionModal(true);
-                }}
-              />
+              <LazyPanel label="Loading workflow sidebar...">
+                <WorkflowSidebar
+                  opportunity={opportunity}
+                  onActionClick={(action) => {
+                    console.log('Sidebar action clicked:', action);
+                  }}
+                  onEditClick={() => navigate(`/jobs/${id}/wizard`)}
+                  onScheduleClick={() => {
+                    setActiveQuickAction('schedule');
+                    setShowQuickActionModal(true);
+                  }}
+                />
+              </LazyPanel>
             </div>
           </div>
 
@@ -8448,7 +8454,9 @@ export default function OpportunityDetail() {
                 )}
 
                 {activeCategory === 'messages' && activeMessagesSubTab === 'internalNotes' && (
-                  <NotesSidebar opportunityId={id} />
+                  <LazyPanel label="Loading notes...">
+                    <NotesSidebar opportunityId={id} />
+                  </LazyPanel>
                 )}
 
                 {activeCategory === 'messages' && activeMessagesSubTab === 'internalComments' && (
