@@ -1,10 +1,12 @@
-import { useState, useEffect } from 'react';
+import { lazy, useState, useEffect } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import Navbar from './Navbar';
 import MobileNav from './MobileNav';
 import MobileSidebar from './MobileSidebar';
-import TrainingBot from './TrainingBot';
-import OnboardingTour from './OnboardingTour';
+import LazyBoundary from './LazyBoundary';
+
+const TrainingBot = lazy(() => import('./TrainingBot'));
+const OnboardingTour = lazy(() => import('./OnboardingTour'));
 
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -49,10 +51,14 @@ export default function Layout() {
       {isMobile && <MobileNav onMoreClick={() => setSidebarOpen(true)} />}
 
       {/* Training Bot Widget */}
-      <TrainingBot />
+      <LazyBoundary label="Loading training assistant...">
+        <TrainingBot />
+      </LazyBoundary>
 
       {/* First-time User Onboarding Tour */}
-      <OnboardingTour />
+      <LazyBoundary label="Loading onboarding tour...">
+        <OnboardingTour />
+      </LazyBoundary>
     </div>
   );
 }
