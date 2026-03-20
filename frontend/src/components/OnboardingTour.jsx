@@ -432,10 +432,3 @@ export default function OnboardingTour() {
     </>
   );
 }
-
-// Export a function to manually trigger the tour (e.g., from settings)
-export const triggerOnboardingTour = () => {
-  localStorage.removeItem(TOUR_STORAGE_KEY);
-  localStorage.removeItem(TOUR_VIEW_COUNT_KEY);
-  window.location.reload();
-};

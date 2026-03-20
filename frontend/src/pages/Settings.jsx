@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { triggerOnboardingTour } from '../components/OnboardingTour';
+import { triggerOnboardingTour } from '../components/onboardingTourTrigger';
 import {
   User,
   Bell,
