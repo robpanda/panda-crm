@@ -25,6 +25,77 @@ const MODULE_TO_PRISMA = {
   workOrders: 'workOrder',
 };
 
+function getFieldDefinition(moduleName, fieldId) {
+  const module = getModule(moduleName);
+  if (!module) return null;
+
+  if (module.fields?.[fieldId]) {
+    return { id: fieldId, ...module.fields[fieldId] };
+  }
+
+  return getModuleFields(moduleName).find((field) => field.id === fieldId) || null;
+}
+
+function resolveFieldPath(moduleName, fieldId) {
+  const fieldDef = getFieldDefinition(moduleName, fieldId);
+
+  if (fieldDef?.virtual && fieldDef.relation && fieldDef.sourceField) {
+    return {
+      alias: fieldId,
+      relationName: fieldDef.relation,
+      nestedField: fieldDef.sourceField,
+      fieldDef,
+    };
+  }
+
+  if (fieldId.includes('.')) {
+    const [relationName, ...nestedParts] = fieldId.split('.');
+    return {
+      alias: fieldId,
+      relationName,
+      nestedField: nestedParts.join('.'),
+      fieldDef,
+    };
+  }
+
+  return {
+    alias: fieldId,
+    directField: fieldId,
+    fieldDef,
+  };
+}
+
+function getNestedValue(value, path) {
+  if (!path) {
+    return value;
+  }
+
+  return path.split('.').reduce((currentValue, segment) => currentValue?.[segment], value);
+}
+
+function flattenSelectedFields(moduleName, rows = [], fields = []) {
+  if (!Array.isArray(rows) || rows.length === 0 || !Array.isArray(fields) || fields.length === 0) {
+    return rows;
+  }
+
+  const resolvedFields = fields.map((field) => resolveFieldPath(moduleName, field));
+
+  return rows.map((row) => {
+    const flattenedRow = { ...row };
+
+    for (const resolvedField of resolvedFields) {
+      if (resolvedField?.relationName && resolvedField?.nestedField) {
+        flattenedRow[resolvedField.alias] = getNestedValue(
+          flattenedRow[resolvedField.relationName],
+          resolvedField.nestedField
+        ) ?? null;
+      }
+    }
+
+    return flattenedRow;
+  });
+}
+
 // Operator mappings for filter conditions
 export const OPERATORS = {
   equals: (value) => value,
@@ -75,7 +146,16 @@ export function buildWhereClause(moduleName, filters = []) {
       }
     } else {
       // Direct field filter
-      const fieldDef = module.fields[field];
+      const fieldDef = getFieldDefinition(moduleName, field);
+      if (fieldDef?.virtual && fieldDef.relation && fieldDef.sourceField) {
+        conditions.push({
+          [fieldDef.relation]: {
+            [fieldDef.sourceField]: OPERATORS[operator]?.(value) ?? value,
+          },
+        });
+        continue;
+      }
+
       if (fieldDef) {
         let prismaValue = OPERATORS[operator]?.(value) ?? value;
 
@@ -115,40 +195,30 @@ export function buildWhereClause(moduleName, filters = []) {
  * @returns {Object} Prisma select clause
  */
 export function buildSelectClause(moduleName, fields = []) {
-  const module = getModule(moduleName);
-  if (!module) throw new Error(`Unknown module: ${moduleName}`);
-
   // If no fields specified, return all fields
   if (!fields || fields.length === 0) {
     return undefined; // Prisma will return all fields
   }
 
   const select = {};
-  const include = {};
 
   for (const field of fields) {
-    // Handle nested fields (e.g., "owner.firstName", "account.name")
-    if (field.includes('.')) {
-      const parts = field.split('.');
-      const relationName = parts[0];
-      const nestedField = parts.slice(1).join('.');
+    const resolvedField = resolveFieldPath(moduleName, field);
 
-      if (!include[relationName]) {
-        include[relationName] = { select: {} };
+    if (resolvedField.relationName && resolvedField.nestedField) {
+      if (!select[resolvedField.relationName] || select[resolvedField.relationName] === true) {
+        select[resolvedField.relationName] = { select: {} };
       }
-      include[relationName].select[nestedField.split('.')[0]] = true;
-    } else {
-      select[field] = true;
+
+      select[resolvedField.relationName].select[resolvedField.nestedField.split('.')[0]] = true;
+      continue;
     }
+
+    select[field] = true;
   }
 
   // Always include id
   select.id = true;
-
-  // Merge include into select if there are relations
-  if (Object.keys(include).length > 0) {
-    return { select: { ...select }, include };
-  }
 
   return { select };
 }
@@ -166,6 +236,12 @@ export function buildOrderByClause(moduleName, sortBy = []) {
   }
 
   return sortBy.map(({ field, direction = 'asc' }) => {
+    const fieldDef = getFieldDefinition(moduleName, field);
+
+    if (fieldDef?.virtual && fieldDef.relation && fieldDef.sourceField) {
+      return { [fieldDef.relation]: { [fieldDef.sourceField]: direction } };
+    }
+
     // Handle nested fields
     if (field.includes('.')) {
       const [relationName, nestedField] = field.split('.');
@@ -269,11 +345,11 @@ export async function executeReport(reportConfig) {
     const orderBy = buildOrderByClause(moduleName, sortBy);
 
     // Build include for relations
-    const include = {};
+    const relationSelect = {};
     for (const rel of includeRelations) {
       const relationship = module.relationships?.[rel];
       if (relationship) {
-        include[rel] = true;
+        relationSelect[rel] = true;
       }
     }
 
@@ -287,16 +363,26 @@ export async function executeReport(reportConfig) {
 
     // Execute query
     const selectClause = buildSelectClause(moduleName, fields);
+    const select = selectClause?.select ? { ...selectClause.select } : undefined;
+
+    if (select) {
+      for (const [relationName, relationConfig] of Object.entries(relationSelect)) {
+        if (!(relationName in select)) {
+          select[relationName] = relationConfig;
+        }
+      }
+    }
     const queryOptions = {
       where,
       orderBy,
       skip,
       take,
-      ...(Object.keys(include).length > 0 && { include }),
-      ...(selectClause?.select && { select: selectClause.select }),
+      ...(select && { select }),
+      ...(!select && Object.keys(relationSelect).length > 0 && { include: relationSelect }),
     };
 
-    const data = await prisma[prismaModel].findMany(queryOptions);
+    const rawData = await prisma[prismaModel].findMany(queryOptions);
+    const data = flattenSelectedFields(moduleName, rawData, fields);
 
     return {
       success: true,

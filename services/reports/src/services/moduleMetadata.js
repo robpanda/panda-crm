@@ -24,11 +24,19 @@ export const MODULES = {
       postalCode: { type: 'string', label: 'Postal Code', filterable: true },
       status: { type: 'enum', label: 'Status', filterable: true, sortable: true, groupable: true, enumValues: ['NEW', 'CONTACTED', 'QUALIFIED', 'UNQUALIFIED', 'NURTURING'] },
       source: { type: 'string', label: 'Lead Source', filterable: true, sortable: true, groupable: true },
+      disposition: { type: 'string', label: 'Disposition', filterable: true, sortable: true, groupable: true },
       rating: { type: 'enum', label: 'Rating', filterable: true, sortable: true, groupable: true, enumValues: ['HOT', 'WARM', 'COLD'] },
       score: { type: 'number', label: 'Lead Score', filterable: true, sortable: true, aggregatable: true },
       isConverted: { type: 'boolean', label: 'Converted', filterable: true, groupable: true },
       convertedDate: { type: 'date', label: 'Converted Date', filterable: true, sortable: true },
       ownerId: { type: 'relation', label: 'Owner', relation: 'users', filterable: true, groupable: true },
+      leadSetById: { type: 'relation', label: 'Lead Setter', relation: 'users', filterable: true, groupable: true },
+      call_attempts: { type: 'number', label: 'Call Attempts', filterable: true, sortable: true, aggregatable: true },
+      callback_scheduled_at: { type: 'datetime', label: 'Callback Scheduled At', filterable: true, sortable: true },
+      current_list_id: { type: 'string', label: 'Current List ID', filterable: true, sortable: true, groupable: true },
+      last_call_at: { type: 'datetime', label: 'Last Call At', filterable: true, sortable: true },
+      last_call_result: { type: 'string', label: 'Last Call Result', filterable: true, sortable: true, groupable: true },
+      next_call_at: { type: 'datetime', label: 'Next Call At', filterable: true, sortable: true },
       createdAt: { type: 'datetime', label: 'Created Date', filterable: true, sortable: true, defaultDateField: true },
       updatedAt: { type: 'datetime', label: 'Last Modified', filterable: true, sortable: true },
       workType: { type: 'string', label: 'Work Type', filterable: true, sortable: true, groupable: true },
@@ -36,6 +44,7 @@ export const MODULES = {
     },
     relationships: {
       owner: { module: 'users', type: 'belongsTo', foreignKey: 'ownerId', label: 'Lead Owner' },
+      leadSetBy: { module: 'users', type: 'belongsTo', foreignKey: 'leadSetById', label: 'Lead Setter' },
       convertedOpportunity: { module: 'jobs', type: 'hasOne', foreignKey: 'convertedOpportunityId', label: 'Converted Job' },
       convertedAccount: { module: 'accounts', type: 'hasOne', foreignKey: 'convertedAccountId', label: 'Converted Account' },
       convertedContact: { module: 'contacts', type: 'hasOne', foreignKey: 'convertedContactId', label: 'Converted Contact' },
@@ -154,6 +163,8 @@ export const MODULES = {
       soldDate: { type: 'date', label: 'Sold Date', filterable: true, sortable: true },
       isSelfGen: { type: 'boolean', label: 'Self-Gen', filterable: true, groupable: true },
       isPandaClaims: { type: 'boolean', label: 'Panda Claims', filterable: true, groupable: true },
+      currentDispositionCategory: { type: 'string', label: 'Current Disposition Category', filterable: true, sortable: true, groupable: true },
+      currentDispositionReason: { type: 'string', label: 'Current Disposition Reason', filterable: true, sortable: true, groupable: true },
       accountId: { type: 'relation', label: 'Account', relation: 'accounts', filterable: true },
       ownerId: { type: 'relation', label: 'Owner', relation: 'users', filterable: true, groupable: true },
       createdAt: { type: 'datetime', label: 'Created Date', filterable: true, sortable: true, defaultDateField: true },
@@ -318,6 +329,21 @@ function getVirtualFieldsForModule(module) {
       groupable: false,
       virtual: true,
       relation: 'owner',
+      sourceField: 'fullName',
+    });
+  }
+
+  if (module?.relationships?.leadSetBy) {
+    virtualFields.push({
+      id: 'leadSetByName',
+      type: 'string',
+      label: 'Lead Setter Name',
+      sortable: true,
+      searchable: true,
+      filterable: false,
+      groupable: false,
+      virtual: true,
+      relation: 'leadSetBy',
       sourceField: 'fullName',
     });
   }
