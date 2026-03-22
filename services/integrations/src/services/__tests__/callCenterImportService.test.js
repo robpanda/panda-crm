@@ -299,6 +299,28 @@ test('deriveUserMappings classifies known system labels without resolving them t
   assert.equal(mappings.leadSetBy?.userId, 'user-company');
 });
 
+test('deriveUserMappings preserves assignedTo system labels for owner even when later rep fields map to a user', () => {
+  const lookup = buildUserLookup([
+    { id: 'user-company', firstName: 'Company', lastName: 'Lead', fullName: 'Company Lead', email: 'company.lead@example.com' },
+    { id: 'user-tony', firstName: 'Tony', lastName: 'Valenti', fullName: 'Tony Valenti', email: 'tony@example.com' },
+  ]);
+
+  const mappings = deriveUserMappings({
+    assignedTo: 'Business Development',
+    callCenterRep: 'tony',
+    leadCreator: 'tony',
+  }, lookup, {
+    tony: 'Tony Valenti',
+  });
+
+  assert.equal(mappings.owner?.matchType, 'system_label');
+  assert.equal(mappings.owner?.userId, 'user-company');
+  assert.equal(mappings.owner?.displayName, 'Company Lead');
+  assert.equal(mappings.leadSetBy?.matchType, 'alias');
+  assert.equal(mappings.leadSetBy?.userId, 'user-tony');
+  assert.equal(mappings.leadSetBy?.displayName, 'Tony Valenti');
+});
+
 test('previewImport returns reviewed-plan lock metadata and suppresses obvious duplicate rows', async () => {
   const mockPrisma = createMockPrisma({
     users: [

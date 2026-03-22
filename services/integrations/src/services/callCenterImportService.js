@@ -1251,12 +1251,20 @@ function deriveUserMappings(row, userLookup, aliasMap = {}) {
   const normalizedAliasMap = normalizeAliasMap(aliasMap);
   const ownerInputs = [row.assignedTo, row.representative, row.callCenterRep, row.repName];
   const ownerReportingCredits = resolveOwnerReportingCredits(ownerInputs, userLookup, normalizedAliasMap);
-  const owner = resolveUserCandidates(
-    ownerInputs,
+  const assignedOwner = resolveUserCandidates(
+    [row.assignedTo],
     userLookup,
     normalizedAliasMap,
     'owner'
   );
+  const owner = assignedOwner?.matchType === 'system_label'
+    ? assignedOwner
+    : resolveUserCandidates(
+        ownerInputs,
+        userLookup,
+        normalizedAliasMap,
+        'owner'
+      );
   const leadSetBy = resolveUserCandidates(
     [row.leadCreator, row.callCenterRep, row.repName],
     userLookup,
