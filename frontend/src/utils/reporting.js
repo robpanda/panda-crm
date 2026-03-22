@@ -365,21 +365,22 @@ export function buildPersistedAggregationConfig(report = {}) {
 }
 
 export function normalizeReportConfig(report = {}) {
-  const baseModule = getReportBaseModule(report) || 'jobs';
-  const aggregationConfig = normalizeReportAggregations(report.aggregations, report);
+  const sourceReport = report && typeof report === 'object' ? report : {};
+  const baseModule = getReportBaseModule(sourceReport) || 'jobs';
+  const aggregationConfig = normalizeReportAggregations(sourceReport.aggregations, sourceReport);
   const sort = aggregationConfig.sort;
 
   return {
-    ...report,
+    ...sourceReport,
     baseModule,
-    baseObject: report.baseObject || getLegacyBaseObject(baseModule),
-    selectedFields: normalizeStringArray(report.selectedFields),
-    groupByFields: normalizeStringArray(report.groupByFields),
-    filters: normalizeReportFilters(report.filters),
+    baseObject: sourceReport.baseObject || getLegacyBaseObject(baseModule),
+    selectedFields: normalizeStringArray(sourceReport.selectedFields),
+    groupByFields: normalizeStringArray(sourceReport.groupByFields),
+    filters: normalizeReportFilters(sourceReport.filters),
     includeRelations: aggregationConfig.includeRelations,
     sort,
-    sortBy: report.sortBy || sort[0]?.field || null,
-    sortDirection: report.sortDirection || sort[0]?.direction || null,
+    sortBy: sourceReport.sortBy || sort[0]?.field || null,
+    sortDirection: sourceReport.sortDirection || sort[0]?.direction || null,
     aggregations: aggregationConfig.items,
     aggregationItems: aggregationConfig.items,
     presentation: aggregationConfig.presentation,
@@ -849,6 +850,10 @@ export function formatReportFieldLabel(key) {
     return 'Owner Name';
   }
 
+  if (normalizedKey === 'leadSetByName' || normalizedKey === 'leadSetBy.fullName') {
+    return 'Lead Setter Name';
+  }
+
   if (normalizedKey.includes('.')) {
     return normalizedKey
       .split('.')
@@ -924,6 +929,85 @@ function normalizeChartRows(result) {
   return [];
 }
 
+export function getRenderableReportValue(value) {
+  if (value == null) {
+    return value;
+  }
+
+  if (value instanceof Date) {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    const normalizedItems = value
+      .map((item) => getRenderableReportValue(item))
+      .filter((item) => item != null && item !== '');
+
+    return normalizedItems.length > 0 ? normalizedItems.join(', ') : null;
+  }
+
+  if (typeof value !== 'object') {
+    return value;
+  }
+
+  if (typeof value.fullName === 'string' && value.fullName.trim()) {
+    return value.fullName.trim();
+  }
+
+  const firstName = typeof value.firstName === 'string' ? value.firstName.trim() : '';
+  const lastName = typeof value.lastName === 'string' ? value.lastName.trim() : '';
+  const combinedName = [firstName, lastName].filter(Boolean).join(' ').trim();
+
+  if (combinedName) {
+    return combinedName;
+  }
+
+  for (const key of ['name', 'label', 'title', 'email']) {
+    if (typeof value[key] === 'string' && value[key].trim()) {
+      return value[key].trim();
+    }
+  }
+
+  const primitiveValue = Object.values(value).find((entry) =>
+    entry != null && ['string', 'number', 'boolean'].includes(typeof entry)
+  );
+
+  return primitiveValue ?? null;
+}
+
+function sanitizeReportRowsForRender(rows, selectedFields = []) {
+  if (!Array.isArray(rows)) {
+    return [];
+  }
+
+  const selectedFieldSet = new Set(
+    Array.isArray(selectedFields)
+      ? selectedFields.filter((field) => typeof field === 'string' && field.trim())
+      : []
+  );
+
+  return rows.map((row) => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      return row;
+    }
+
+    return Object.entries(row).reduce((sanitizedRow, [key, value]) => {
+      const isPlainObject =
+        value &&
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        !(value instanceof Date);
+
+      if (isPlainObject && !selectedFieldSet.has(key)) {
+        return sanitizedRow;
+      }
+
+      sanitizedRow[key] = getRenderableReportValue(value);
+      return sanitizedRow;
+    }, {});
+  });
+}
+
 export function normalizeReportRunResult(report, payload) {
   const normalizedReport = normalizeReportConfig(report);
   const result = payload?.results || payload?.data?.results || payload || {};
@@ -935,17 +1019,18 @@ export function normalizeReportRunResult(report, payload) {
   }));
 
   const chartData = normalizeChartRows(result);
-  const rows = Array.isArray(result?.data)
+  const rawRows = Array.isArray(result?.data)
     ? result.data
     : Array.isArray(result?.rows)
     ? result.rows
     : chartData;
+  const rows = sanitizeReportRowsForRender(rawRows, normalizedReport.selectedFields);
 
   const rowCount =
     result?.metadata?.totalCount ||
     result?.totalCount ||
     result?.rowCount ||
-    rows.length ||
+    rawRows.length ||
     chartData.length ||
     0;
 
@@ -955,6 +1040,7 @@ export function normalizeReportRunResult(report, payload) {
     metrics,
     chartData,
     rows,
+    rawRows,
     rowCount,
     dateRangeLabel: result?.period || null,
     comparison: result?.comparison || null,
@@ -1023,6 +1109,10 @@ export function buildSqlPreview(report) {
   const formatSqlFieldReference = (field) => {
     if (field === 'ownerName') {
       return 'owner.fullName AS ownerName';
+    }
+
+    if (field === 'leadSetByName') {
+      return 'leadSetBy.fullName AS leadSetByName';
     }
 
     return field;

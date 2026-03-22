@@ -163,11 +163,21 @@ export default function ReportDetail() {
 
   const tableColumns = useMemo(() => {
     const sample = normalizedResult.rows?.[0] || {};
-    return Object.keys(sample).map((key) => ({
+    const rowKeys = Object.keys(sample);
+    const configuredFields = Array.isArray(normalizedResult.report?.selectedFields)
+      ? normalizedResult.report.selectedFields
+      : [];
+    const useConfiguredColumns =
+      configuredFields.length > 0 &&
+      (rowKeys.length === 0 || configuredFields.some((field) => rowKeys.includes(field)));
+
+    const columnKeys = useConfiguredColumns ? configuredFields : rowKeys;
+
+    return columnKeys.map((key) => ({
       key,
       label: formatReportFieldLabel(key),
     }));
-  }, [normalizedResult.rows]);
+  }, [normalizedResult.report, normalizedResult.rows]);
 
   if (loading) {
     return (

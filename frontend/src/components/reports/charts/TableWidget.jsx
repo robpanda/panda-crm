@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react';
 import { ChevronUp, ChevronDown, ArrowUpDown, ExternalLink } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import EmptyStateDiagnosticsLink from '../../analytics/EmptyStateDiagnosticsLink';
+import { getRenderableReportValue } from '../../../utils/reporting';
 
 const ISO_DATE_PREFIX_PATTERN = /^(\d{4})-(\d{2})-(\d{2})(?:[T\s].*)?$/;
 
@@ -118,31 +119,41 @@ export default function TableWidget({
       return column.render(value);
     }
 
+    const safeValue = getRenderableReportValue(value);
+
+    if (safeValue == null) {
+      return '-';
+    }
+
     if (column.format === 'currency') {
-      return new Intl.NumberFormat('en-US', {
+      return typeof safeValue === 'number'
+        ? new Intl.NumberFormat('en-US', {
         style: 'currency',
         currency: 'USD',
         maximumFractionDigits: 0,
-      }).format(value);
+      }).format(safeValue)
+        : safeValue;
     }
 
     if (column.format === 'percent') {
-      return `${value.toFixed(1)}%`;
+      return typeof safeValue === 'number' ? `${safeValue.toFixed(1)}%` : safeValue;
     }
 
     if (column.format === 'number') {
-      return new Intl.NumberFormat('en-US').format(value);
+      return typeof safeValue === 'number'
+        ? new Intl.NumberFormat('en-US').format(safeValue)
+        : safeValue;
     }
 
     if (column.format === 'date') {
-      return formatDateValue(value);
+      return formatDateValue(safeValue);
     }
 
-    if (isDateLikeValue(value)) {
-      return formatDateValue(value);
+    if (isDateLikeValue(safeValue)) {
+      return formatDateValue(safeValue);
     }
 
-    return value;
+    return safeValue;
   };
 
   if (loading) {
