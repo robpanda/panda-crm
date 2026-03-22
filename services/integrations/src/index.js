@@ -14,6 +14,7 @@ import abcSupplyRoutes from './routes/abcSupply.js';
 import schedulingRoutes from './routes/scheduling.js';
 import mobileRoutes from './routes/mobile.js';
 import fieldServiceRoutes from './routes/fieldService.js';
+import callCenterImportRoutes from './routes/callCenterImports.js';
 import { logger } from './middleware/logger.js';
 import { measurementService } from './services/measurementService.js';
 import companyCamService from './services/companyCamService.js';
@@ -238,6 +239,7 @@ app.use('/api/integrations/measurements', measurementRoutes);
 app.use('/api/integrations/abc-supply', abcSupplyRoutes);
 app.use('/api/integrations/scheduling', schedulingRoutes);
 app.use('/api/integrations/mobile', mobileRoutes);
+app.use('/api/integrations/call-center-import', callCenterImportRoutes);
 
 // Field Service Routes (stub endpoints)
 app.use('/api/field-service', fieldServiceRoutes);

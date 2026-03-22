@@ -334,7 +334,7 @@ router.post('/:listId/items/:itemId/move', async (req, res, next) => {
  */
 router.post('/:listId/items/:itemId/disposition', async (req, res, next) => {
   try {
-    const { dispositionCode, notes } = req.body;
+    const { dispositionCode, notes, callbackAt } = req.body;
     const agentId = req.user?.id;
 
     if (!dispositionCode) {
@@ -348,7 +348,8 @@ router.post('/:listId/items/:itemId/disposition', async (req, res, next) => {
       req.params.itemId,
       dispositionCode,
       notes,
-      agentId
+      agentId,
+      callbackAt
     );
 
     res.json({

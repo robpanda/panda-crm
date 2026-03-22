@@ -1,7 +1,74 @@
 // Call List Service - Manages call lists, items, dispositions, and sessions
 import { PrismaClient } from '@prisma/client';
+import {
+  CALLBACK_DISPOSITION_CODES,
+  CALL_CENTER_DISPOSITION_DEFINITIONS,
+  COOLDOWN_DISPOSITION_CODES,
+  normalizeCallCenterDispositionCode,
+  requiresCallbackAt,
+  toSystemLeadStatusFromDisposition,
+} from '../../../../shared/src/services/callCenterTaxonomy.js';
 
 const prisma = new PrismaClient();
+
+const LEGACY_GLOBAL_DISPOSITION_REPLACEMENTS = {
+  APPOINTMENT_SET: 'SCHEDULED',
+  CALLBACK: 'CALL_BACK',
+  CALLBACK_REQUESTED: 'CALL_BACK',
+  FOLLOW_UP_SPECIFIC_DATE: 'CALL_BACK',
+  CALL_BACK_LATER: 'CALL_BACK',
+  LEFT_VOICEMAIL: 'VOICEMAIL',
+  DNC: 'DO_NOT_CALL',
+  APPOINTMENT_CANCELLED: 'CANCELED',
+  APPOINTMENT_CANCELED: 'CANCELED',
+  APPOINTMENT_RESCHEDULED: 'NEED_RESET',
+  NO_PROSPECT: 'NO_VALUE',
+  BAD_NUMBER: 'WRONG_NUMBER',
+  NOT_HOME_OWNER: 'MISSING_PARTY',
+  NOT_HOMEOWNER: 'MISSING_PARTY',
+};
+
+const LEGACY_GLOBAL_DISPOSITION_CODES_BY_CANONICAL = Object.entries(LEGACY_GLOBAL_DISPOSITION_REPLACEMENTS)
+  .reduce((accumulator, [legacyCode, canonicalCode]) => {
+    if (!accumulator.has(canonicalCode)) {
+      accumulator.set(canonicalCode, []);
+    }
+    accumulator.get(canonicalCode).push(legacyCode);
+    return accumulator;
+  }, new Map());
+
+function getDispositionCarryForwardValue(dispositions, fieldName) {
+  const match = dispositions.find((disposition) => {
+    const value = disposition?.[fieldName];
+    return value !== undefined && value !== null && value !== false;
+  });
+  return match ? match[fieldName] : null;
+}
+
+function buildPredefinedDispositionSeedData(disposition, fallbackDispositions = [], isActive = true) {
+  const carryForwardDispositions = Array.isArray(fallbackDispositions)
+    ? fallbackDispositions.filter(Boolean)
+    : [fallbackDispositions].filter(Boolean);
+
+  return {
+    code: disposition.code,
+    name: disposition.name,
+    description: disposition.description ?? null,
+    category: disposition.category,
+    removeFromList: Boolean(disposition.removeFromList),
+    moveToListId: disposition.moveToListId ?? getDispositionCarryForwardValue(carryForwardDispositions, 'moveToListId'),
+    updateLeadStatus: disposition.updateLeadStatus ?? null,
+    updateOppStage: disposition.updateOppStage ?? null,
+    scheduleCallback: Boolean(disposition.scheduleCallback),
+    addToDNC: Boolean(disposition.addToDNC),
+    cooldownDays: disposition.cooldownDays ?? null,
+    color: disposition.color ?? null,
+    icon: disposition.icon ?? getDispositionCarryForwardValue(carryForwardDispositions, 'icon'),
+    sortOrder: disposition.sortOrder ?? 0,
+    isActive,
+    requireNote: disposition.requireNote ?? Boolean(getDispositionCarryForwardValue(carryForwardDispositions, 'requireNote')),
+  };
+}
 
 /**
  * Resolve date placeholders in filter criteria
@@ -495,7 +562,7 @@ class CallListService {
    * Apply a disposition to a call list item
    * This triggers disposition actions (move to list, update status, etc.)
    */
-  async applyDisposition(itemId, dispositionCode, notes, agentId) {
+  async applyDisposition(itemId, dispositionCode, notes, agentId, callbackAt = null) {
     const item = await prisma.callListItem.findUnique({
       where: { id: itemId },
       include: { callList: true },
@@ -504,23 +571,33 @@ class CallListService {
     if (!item) throw new Error('Item not found');
 
     // Find the disposition
+    const canonicalDispositionCode = normalizeCallCenterDispositionCode(dispositionCode) || dispositionCode;
+    const lookupCodes = [...new Set([canonicalDispositionCode, dispositionCode].filter(Boolean))];
+
     const disposition = await prisma.callListDisposition.findFirst({
       where: {
-        OR: [
-          { callListId: item.callListId, code: dispositionCode },
-          { callListId: null, code: dispositionCode },
-        ],
+        OR: lookupCodes.flatMap((code) => ([
+          { callListId: item.callListId, code },
+          { callListId: null, code },
+        ])),
         isActive: true,
       },
     });
 
     if (!disposition) throw new Error('Disposition not found');
+    if (requiresCallbackAt(canonicalDispositionCode) && !callbackAt) {
+      throw new Error('callbackAt is required for Call Back dispositions');
+    }
 
     const now = new Date();
+    const recordedDispositionCode = normalizeCallCenterDispositionCode(disposition.code) || canonicalDispositionCode || disposition.code;
+    const callbackDate = callbackAt ? new Date(callbackAt) : null;
 
     // Calculate next attempt time based on cadence
     let nextAttemptAt = null;
-    if (!disposition.removeFromList && item.callList.cadenceHours) {
+    if (disposition.scheduleCallback && callbackDate) {
+      nextAttemptAt = callbackDate;
+    } else if (!disposition.removeFromList && item.callList.cadenceHours) {
       nextAttemptAt = new Date(now.getTime() + (item.callList.cadenceHours * 60 * 60 * 1000));
     }
 
@@ -528,13 +605,14 @@ class CallListService {
     const updateData = {
       attemptCount: item.attemptCount + 1,
       lastAttemptAt: now,
-      lastAttemptResult: dispositionCode,
-      disposition: dispositionCode,
+      lastAttemptResult: recordedDispositionCode,
+      disposition: recordedDispositionCode,
       dispositionAt: now,
       status: disposition.removeFromList ? 'COMPLETED' :
               disposition.scheduleCallback ? 'RESCHEDULED' : 'PENDING',
       completedAt: disposition.removeFromList ? now : null,
       nextAttemptAt,
+      scheduledFor: disposition.scheduleCallback ? callbackDate : null,
     };
 
     await prisma.callListItem.update({
@@ -549,7 +627,7 @@ class CallListService {
         opportunityId: item.opportunityId,
         contactId: item.contactId,
         direction: 'OUTBOUND',
-        outcome: dispositionCode,
+        outcome: recordedDispositionCode,
         notes,
         startTime: now,
         endTime: now,
@@ -571,7 +649,11 @@ class CallListService {
     if (disposition.updateLeadStatus && item.leadId) {
       await prisma.lead.update({
         where: { id: item.leadId },
-        data: { status: disposition.updateLeadStatus },
+        data: {
+          status: toSystemLeadStatusFromDisposition(recordedDispositionCode, disposition.updateLeadStatus),
+          disposition: recordedDispositionCode,
+          callbackScheduledAt: disposition.scheduleCallback ? callbackDate : null,
+        },
       });
       actions.push('lead_status_updated');
     }
@@ -971,7 +1053,7 @@ class CallListService {
         cadenceType: 'MANUAL',
         filterCriteria: {
           status: 'NURTURING',
-          disposition: { in: ['NOT_INTERESTED', 'CALL_BACK_LATER'] },
+          disposition: { in: COOLDOWN_DISPOSITION_CODES },
         },
         cadenceHours: 168, // 7 days
         maxAttempts: 3,
@@ -1051,7 +1133,7 @@ class CallListService {
         cadenceType: 'MANUAL',
         filterCriteria: {
           status: 'UNQUALIFIED',
-          disposition: { in: ['NOT_INTERESTED', 'NO_PROSPECT', 'NOT_SOLD'] },
+          disposition: { in: ['NOT_INTERESTED', 'NO_VALUE', 'CANT_AFFORD', 'WRONG_NUMBER'] },
         },
         cadenceHours: 8760, // 1 year in hours
         maxAttempts: 1,
@@ -1098,44 +1180,13 @@ class CallListService {
    */
   async ensurePredefinedDispositions() {
     const predefinedDispositions = [
-      // ============================================
-      // POSITIVE OUTCOMES - Appointment Flow
-      // ============================================
-      {
-        code: 'APPOINTMENT_SET',
-        name: 'Appointment Set',
-        category: 'POSITIVE',
-        color: '#22c55e',
-        sortOrder: 1,
-        removeFromList: true,
-        updateLeadStatus: 'QUALIFIED',
-        description: 'Lead wants to schedule appointment. Creates opportunity and schedules inspection.',
-      },
-      {
-        code: 'CONFIRMED',
-        name: 'Appointment Confirmed',
-        category: 'POSITIVE',
-        color: '#10b981',
-        sortOrder: 2,
-        removeFromList: true,
-        updateOppStage: 'SCHEDULED',
-        description: 'Appointment confirmed by homeowner. Ready for demo/inspection.',
-      },
-      {
-        code: 'APPOINTMENT_RESCHEDULED',
-        name: 'Appointment Rescheduled',
-        category: 'POSITIVE',
-        color: '#84cc16',
-        sortOrder: 3,
-        scheduleCallback: true,
-        description: 'Appointment rescheduled to new date/time. Stays in confirmation queue.',
-      },
+      ...CALL_CENTER_DISPOSITION_DEFINITIONS.map(({ aliases, ...definition }) => definition),
       {
         code: 'SIGNED_CONTRACT',
         name: 'Signed Contract',
         category: 'POSITIVE',
         color: '#059669',
-        sortOrder: 4,
+        sortOrder: 40,
         removeFromList: true,
         updateOppStage: 'CONTRACT_SIGNED',
         description: 'H/O signs contract. Sold - move forward with project.',
@@ -1145,7 +1196,7 @@ class CallListService {
         name: 'Retail Demo Sold / Claim Filed',
         category: 'POSITIVE',
         color: '#047857',
-        sortOrder: 5,
+        sortOrder: 41,
         removeFromList: true,
         updateOppStage: 'CLAIM_FILED',
         description: 'Retail demo sold or insurance claim filed. Moving to production queue.',
@@ -1159,7 +1210,7 @@ class CallListService {
         name: 'No Answer from Lead',
         category: 'NO_CONTACT',
         color: '#94a3b8',
-        sortOrder: 10,
+        sortOrder: 50,
         description: 'No answer from lead. Will retry based on cadence.',
       },
       {
@@ -1167,7 +1218,7 @@ class CallListService {
         name: 'Left Voicemail',
         category: 'NO_CONTACT',
         color: '#64748b',
-        sortOrder: 11,
+        sortOrder: 51,
         description: 'Left voicemail message. Waiting for callback.',
       },
       {
@@ -1175,98 +1226,29 @@ class CallListService {
         name: 'Busy Signal',
         category: 'NO_CONTACT',
         color: '#475569',
-        sortOrder: 12,
+        sortOrder: 52,
         description: 'Line was busy. Will retry shortly.',
       },
       {
         code: 'DISCONNECTED',
-        name: 'Number Disconnected',
+        name: 'Disconnected Number',
         category: 'NO_CONTACT',
         color: '#334155',
-        sortOrder: 13,
+        sortOrder: 53,
         removeFromList: true,
+        updateLeadStatus: 'UNQUALIFIED',
         description: 'Phone number is disconnected or invalid.',
-      },
-
-      // ============================================
-      // CALLBACK - Scheduled follow-ups
-      // ============================================
-      {
-        code: 'CALLBACK_REQUESTED',
-        name: 'Callback Requested',
-        category: 'CALLBACK',
-        color: '#3b82f6',
-        sortOrder: 20,
-        scheduleCallback: true,
-        description: 'Lead requested callback at specific time. Push callback to rep on specified date/time.',
-      },
-      {
-        code: 'FOLLOW_UP_SPECIFIC_DATE',
-        name: 'Follow Up Specific Date',
-        category: 'CALLBACK',
-        color: '#2563eb',
-        sortOrder: 21,
-        scheduleCallback: true,
-        description: 'Follow up on specific date requested by homeowner.',
-      },
-      {
-        code: 'CALL_BACK_LATER',
-        name: 'Call Back Later',
-        category: 'CALLBACK',
-        color: '#1d4ed8',
-        sortOrder: 22,
-        scheduleCallback: true,
-        description: 'General callback later - no specific time given.',
       },
 
       // ============================================
       // NEGATIVE OUTCOMES - Not moving forward
       // ============================================
       {
-        code: 'NOT_INTERESTED',
-        name: 'Not Interested',
-        category: 'NEGATIVE',
-        color: '#f97316',
-        sortOrder: 30,
-        cooldownDays: 90,
-        moveToListName: 'Cool Down',
-        description: 'Not interested dispos, add to not interested or cool down list.',
-      },
-      {
-        code: 'DNC',
-        name: 'Do Not Call (DNC)',
-        category: 'NEGATIVE',
-        color: '#ef4444',
-        sortOrder: 31,
-        removeFromList: true,
-        addToDNC: true,
-        description: 'Add to Do Not Call list. Never contact again.',
-      },
-      {
-        code: 'APPOINTMENT_CANCELLED',
-        name: 'Appointment Cancelled',
-        category: 'NEGATIVE',
-        color: '#dc2626',
-        sortOrder: 32,
-        moveToListName: 'Reset',
-        description: 'Appointment cancelled. Move to cancelled in Salesforce, add to Reset list.',
-      },
-      {
-        code: 'NO_PROSPECT',
-        name: 'No Prospect',
-        category: 'NEGATIVE',
-        color: '#b91c1c',
-        sortOrder: 33,
-        removeFromList: true,
-        updateLeadStatus: 'UNQUALIFIED',
-        description: 'Not a valid prospect. Remove from all lists.',
-      },
-      {
         code: 'LEAD_RAN_NO_CLAIM',
         name: 'Lead Ran No Claim',
         category: 'NEGATIVE',
         color: '#991b1b',
-        sortOrder: 34,
+        sortOrder: 60,
         removeFromList: true,
         description: 'Insurance lead - inspection ran but no claim filed.',
       },
@@ -1435,15 +1417,50 @@ class CallListService {
 
     let createdCount = 0;
     for (const disp of predefinedDispositions) {
-      const existing = await prisma.callListDisposition.findFirst({
-        where: { code: disp.code, callListId: null },
-      });
+      const legacyCodes = LEGACY_GLOBAL_DISPOSITION_CODES_BY_CANONICAL.get(disp.code) || [];
+      const [existingCanonical, legacyRows] = await Promise.all([
+        prisma.callListDisposition.findFirst({
+          where: { code: disp.code, callListId: null },
+        }),
+        legacyCodes.length > 0
+          ? prisma.callListDisposition.findMany({
+              where: {
+                callListId: null,
+                code: { in: legacyCodes },
+              },
+            })
+          : Promise.resolve([]),
+      ]);
 
-      if (!existing) {
-        await prisma.callListDisposition.create({
-          data: { ...disp, callListId: null },
+      const carryForwardDispositions = [existingCanonical, ...legacyRows].filter(Boolean);
+      const legacyHasActiveRow = legacyRows.some((row) => row.isActive);
+      const shouldBeActive = existingCanonical
+        ? Boolean(existingCanonical.isActive || legacyHasActiveRow)
+        : (legacyRows.length > 0 ? legacyHasActiveRow : true);
+      const seedData = buildPredefinedDispositionSeedData(disp, carryForwardDispositions, shouldBeActive);
+
+      if (existingCanonical) {
+        await prisma.callListDisposition.update({
+          where: { id: existingCanonical.id },
+          data: seedData,
         });
-        createdCount++;
+      } else {
+        await prisma.callListDisposition.create({
+          data: {
+            ...seedData,
+            callListId: null,
+          },
+        });
+        createdCount += 1;
+      }
+
+      if (legacyRows.length > 0) {
+        await prisma.callListDisposition.updateMany({
+          where: {
+            id: { in: legacyRows.map((row) => row.id) },
+          },
+          data: { isActive: false },
+        });
       }
     }
 

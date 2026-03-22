@@ -97,13 +97,24 @@ export default defineConfig({
     },
   },
   server: {
-    port: 3000,
+    host: '127.0.0.1',
+    port: 5173,
+    strictPort: true,
+    hmr: {
+      host: '127.0.0.1',
+      clientPort: 5173,
+      protocol: 'ws',
+    },
     proxy: {
       '/api/auth': 'http://localhost:3000',
+      '/api/permissions': 'http://localhost:3000',
       '/api/accounts': 'http://localhost:3001',
+      '/api/users': 'http://localhost:3001',
       '/api/contacts': 'http://localhost:3002',
       '/api/leads': 'http://localhost:3003',
       '/api/opportunities': 'http://localhost:3004',
+      '/api/integrations': 'http://localhost:3010',
+      '/api/bamboogli': 'http://localhost:3012',
     },
   },
 });

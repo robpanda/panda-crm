@@ -66,3 +66,14 @@ test('createLeadWrapper derives rank when only score exists', () => {
   assert.equal(wrapper.leadScore, 61);
   assert.equal(wrapper.leadRank, 'B');
 });
+
+test('leadToPinStatus treats canonical and legacy callback dispositions as go-back-later', () => {
+  assert.equal(
+    leadService.leadToPinStatus({ opportunityId: null, disposition: 'CALL_BACK', status: 'NURTURING' }),
+    'GBL'
+  );
+  assert.equal(
+    leadService.leadToPinStatus({ opportunityId: null, disposition: 'CALLBACK', status: 'NURTURING' }),
+    'GBL'
+  );
+});

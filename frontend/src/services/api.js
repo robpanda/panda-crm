@@ -5358,10 +5358,11 @@ export const callListsApi = {
   },
 
   // Apply a disposition to an item
-  async applyDisposition(listId, itemId, dispositionCode, notes) {
+  async applyDisposition(listId, itemId, dispositionCode, options = {}) {
     const response = await api.post(`/api/leads/call-lists/${listId}/items/${itemId}/disposition`, {
       dispositionCode,
-      notes,
+      notes: options.notes,
+      callbackAt: options.callbackAt,
     });
     return response.data;
   },
@@ -5458,6 +5459,82 @@ export const callListsApi = {
     const response = await api.post(`/api/leads/call-lists/disposition/${leadId}`, {
       dispositionCode,
       ...options,
+    });
+    return response.data;
+  },
+};
+
+function buildCallCenterImportFormData({
+  file = null,
+  rows = null,
+  fileName = null,
+  userAliasMap = null,
+  previewToken = null,
+  allowRiskOverride = false,
+  confirm = false,
+} = {}) {
+  const formData = new FormData();
+
+  if (file) {
+    formData.append('file', file);
+  }
+
+  if (Array.isArray(rows)) {
+    formData.append('rows', JSON.stringify(rows));
+  }
+
+  if (fileName) {
+    formData.append('fileName', fileName);
+  }
+
+  if (userAliasMap && typeof userAliasMap === 'object') {
+    formData.append('userAliasMap', JSON.stringify(userAliasMap));
+  }
+
+  if (previewToken) {
+    formData.append('previewToken', previewToken);
+  }
+
+  if (allowRiskOverride) {
+    formData.append('allowRiskOverride', 'true');
+  }
+
+  if (confirm) {
+    formData.append('confirm', 'true');
+  }
+
+  return formData;
+}
+
+export const callCenterImportsApi = {
+  async preview({ file = null, rows = null, fileName = null, userAliasMap = null } = {}) {
+    const formData = buildCallCenterImportFormData({ file, rows, fileName, userAliasMap });
+    const response = await api.post('/api/integrations/call-center-import/preview', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  },
+
+  async execute({
+    file = null,
+    rows = null,
+    fileName = null,
+    userAliasMap = null,
+    previewToken,
+    allowRiskOverride = false,
+    confirm = true,
+  } = {}) {
+    const formData = buildCallCenterImportFormData({
+      file,
+      rows,
+      fileName,
+      userAliasMap,
+      previewToken,
+      allowRiskOverride,
+      confirm,
+    });
+    const response = await api.post('/api/integrations/call-center-import/execute', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
     });
     return response.data;
   },

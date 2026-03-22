@@ -174,6 +174,7 @@ model Lead {
   tentativeAppointmentDate DateTime?           @map("tentative_appointment_date")
   tentativeAppointmentTime String?             @map("tentative_appointment_time")
   leadSetById              String?             @map("lead_set_by_id")
+  reportingCredits         Json?               @map("reporting_credits")
   lead_rank                String?
   score_factors            Json?
   scored_at                DateTime?

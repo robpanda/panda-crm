@@ -1,4 +1,4 @@
-import { lazy, useState, useEffect, useRef, useContext } from 'react';
+import { lazy, useState, useEffect, useRef, useContext, useMemo } from 'react';
 import { useParams, Link, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { leadsApi, bamboogliApi, usersApi } from '../services/api';
@@ -446,14 +446,83 @@ const LEAD_STATUSES = [
 
 const LEAD_DISPOSITIONS = [
   { value: 'SCHEDULED', label: 'Scheduled' },
-  { value: 'CALLBACK', label: 'Callback' },
+  { value: 'CONFIRMED', label: 'Confirmed' },
+  { value: 'CALL_BACK', label: 'Call Back' },
+  { value: 'CANCELED', label: 'Canceled' },
+  { value: 'NEED_RESET', label: 'Need Reset' },
   { value: 'NOT_INTERESTED', label: 'Not Interested' },
-  { value: 'BAD_NUMBER', label: 'Bad Number' },
+  { value: 'MISSING_PARTY', label: 'Missing Party' },
+  { value: 'CANT_AFFORD', label: "Can't Afford" },
+  { value: 'NO_VALUE', label: 'No Value' },
+  { value: 'WEATHER_RELATED', label: 'Weather Related' },
+  { value: 'THINKING_ABOUT_IT', label: 'Thinking About It' },
   { value: 'NO_ANSWER', label: 'No Answer' },
-  { value: 'LEFT_VOICEMAIL', label: 'Left Voicemail' },
+  { value: 'VOICEMAIL', label: 'Left Voicemail' },
   { value: 'WRONG_NUMBER', label: 'Wrong Number' },
   { value: 'DO_NOT_CALL', label: 'Do Not Call' },
 ];
+
+const LEAD_DISPOSITION_LABELS = new Map(
+  LEAD_DISPOSITIONS.map((disposition) => [disposition.value, disposition.label])
+);
+
+const LEGACY_LEAD_DISPOSITION_LABELS = {
+  APPOINTMENT_SET: 'Scheduled',
+  CALLBACK: 'Call Back',
+  CALLBACK_REQUESTED: 'Call Back',
+  FOLLOW_UP_SPECIFIC_DATE: 'Call Back',
+  CALL_BACK_LATER: 'Call Back',
+  APPOINTMENT_CANCELLED: 'Canceled',
+  APPOINTMENT_CANCELED: 'Canceled',
+  APPOINTMENT_RESCHEDULED: 'Need Reset',
+  NO_DEMO: 'Need Reset',
+  '2ND_VISIT_NEEDED': 'Need Reset',
+  NO_PROSPECT: 'No Value',
+  BAD_NUMBER: 'Wrong Number',
+  NOT_HOME_OWNER: 'Missing Party',
+  NOT_HOMEOWNER: 'Missing Party',
+  DNC: 'Do Not Call',
+  LEFT_VOICEMAIL: 'Left Voicemail',
+};
+
+function normalizeLeadDispositionKey(value) {
+  return String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function formatLeadDispositionLabel(value) {
+  const normalizedValue = normalizeLeadDispositionKey(value);
+  if (!normalizedValue) return '';
+  if (LEAD_DISPOSITION_LABELS.has(normalizedValue)) {
+    return LEAD_DISPOSITION_LABELS.get(normalizedValue);
+  }
+  if (LEGACY_LEAD_DISPOSITION_LABELS[normalizedValue]) {
+    return LEGACY_LEAD_DISPOSITION_LABELS[normalizedValue];
+  }
+  return normalizedValue
+    .replace(/_/g, ' ')
+    .toLowerCase()
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function buildLeadDispositionOptions(currentValue) {
+  const rawValue = String(currentValue || '').trim();
+  const normalizedValue = normalizeLeadDispositionKey(rawValue);
+  if (!normalizedValue || LEAD_DISPOSITION_LABELS.has(normalizedValue)) {
+    return LEAD_DISPOSITIONS;
+  }
+
+  return [
+    ...LEAD_DISPOSITIONS,
+    {
+      value: rawValue,
+      label: `${formatLeadDispositionLabel(rawValue)} (Legacy)`,
+    },
+  ];
+}
 
 const LEAD_SOURCES = [
   { value: 'Website', label: 'Website' },
@@ -814,6 +883,11 @@ export default function LeadDetail() {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
   };
+
+  const leadDispositionOptions = useMemo(
+    () => buildLeadDispositionOptions(formData.disposition || lead?.disposition || ''),
+    [formData.disposition, lead?.disposition]
+  );
 
   const handleSave = () => {
     // Clean up empty strings to null for optional fields
@@ -1467,7 +1541,7 @@ export default function LeadDetail() {
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
                   >
                     <option value="">Select Disposition</option>
-                    {LEAD_DISPOSITIONS.map(d => (
+                    {leadDispositionOptions.map(d => (
                       <option key={d.value} value={d.value}>{d.label}</option>
                     ))}
                   </select>
@@ -1563,7 +1637,7 @@ export default function LeadDetail() {
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">Disposition</span>
-                <span className="text-gray-900">{lead.disposition || '-'}</span>
+                <span className="text-gray-900">{formatLeadDispositionLabel(lead.disposition) || '-'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">Lead Source</span>

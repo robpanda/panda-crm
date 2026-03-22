@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import AdminLayout from '../../components/AdminLayout';
 import {
@@ -30,13 +30,15 @@ import {
   PhoneOff,
   Calendar,
   RotateCcw,
+  Upload,
 } from 'lucide-react';
-import api, { callListsApi } from '../../services/api';
+import { callCenterImportsApi, callListsApi, usersApi } from '../../services/api';
 
 // Tab configuration
 const TABS = [
   { id: 'lists', label: 'Call Lists', icon: List },
   { id: 'dispositions', label: 'Dispositions', icon: MessageSquare },
+  { id: 'imports', label: 'Imports', icon: Upload },
   { id: 'settings', label: 'General Settings', icon: Settings },
 ];
 
@@ -72,6 +74,8 @@ const STATE_OPTIONS = [
   'MD', 'DE', 'VA', 'NC', 'NJ', 'PA', 'TPA', 'CAT'
 ];
 
+const NON_USER_OVERRIDE_VALUE = '__NON_USER__';
+
 export default function CallCenterSettings() {
   const [activeTab, setActiveTab] = useState('lists');
   const [searchTerm, setSearchTerm] = useState('');
@@ -80,6 +84,15 @@ export default function CallCenterSettings() {
   const [selectedList, setSelectedList] = useState(null);
   const [selectedDisposition, setSelectedDisposition] = useState(null);
   const [expandedList, setExpandedList] = useState(null);
+  const [importFile, setImportFile] = useState(null);
+  const [importError, setImportError] = useState('');
+  const [importMessage, setImportMessage] = useState('');
+  const [previewResult, setPreviewResult] = useState(null);
+  const [executeResult, setExecuteResult] = useState(null);
+  const [aliasOverrides, setAliasOverrides] = useState({});
+  const [mappingSearch, setMappingSearch] = useState('');
+  const [allowRiskOverride, setAllowRiskOverride] = useState(false);
+  const [lastPreviewAliasSignature, setLastPreviewAliasSignature] = useState('{}');
 
   const queryClient = useQueryClient();
 
@@ -93,6 +106,13 @@ export default function CallCenterSettings() {
   const { data: dispositionsData, isLoading: dispositionsLoading } = useQuery({
     queryKey: ['dispositions'],
     queryFn: () => callListsApi.getGlobalDispositions(),
+  });
+
+  const { data: importUsersData, isLoading: importUsersLoading } = useQuery({
+    queryKey: ['callCenterImportUsers'],
+    queryFn: () => usersApi.getUsers({ limit: 2000, sortBy: 'firstName', sortOrder: 'asc' }),
+    enabled: activeTab === 'imports',
+    staleTime: 5 * 60 * 1000,
   });
 
   // Initialize predefined lists and dispositions
@@ -171,8 +191,47 @@ export default function CallCenterSettings() {
     },
   });
 
+  const previewImportMutation = useMutation({
+    mutationFn: ({ file, userAliasMap }) => callCenterImportsApi.preview({ file, userAliasMap }),
+    onMutate: () => {
+      setImportError('');
+      setImportMessage('');
+    },
+    onSuccess: (data, variables) => {
+      setPreviewResult(data?.data || data || null);
+      setExecuteResult(null);
+      setLastPreviewAliasSignature(buildAliasSignature(variables?.userAliasMap || {}));
+      setImportMessage('Preview refreshed. Review unresolved names before execute.');
+    },
+    onError: (error) => {
+      setImportError(getErrorMessage(error, 'Preview failed'));
+    },
+  });
+
+  const executeImportMutation = useMutation({
+    mutationFn: ({ file, previewToken, userAliasMap, allowOverride }) => callCenterImportsApi.execute({
+      file,
+      previewToken,
+      userAliasMap,
+      allowRiskOverride: allowOverride,
+      confirm: true,
+    }),
+    onMutate: () => {
+      setImportError('');
+      setImportMessage('');
+    },
+    onSuccess: (data) => {
+      setExecuteResult(data?.data || data || null);
+      setImportMessage('Import executed. Verify created and matched records before any rerun.');
+    },
+    onError: (error) => {
+      setImportError(getErrorMessage(error, 'Execute failed'));
+    },
+  });
+
   const callLists = callListsData?.data || [];
   const dispositions = dispositionsData?.data || [];
+  const importUsers = importUsersData?.data || [];
 
   // Filter lists by search term
   const filteredLists = callLists.filter(list =>
@@ -191,6 +250,73 @@ export default function CallCenterSettings() {
     acc[cat.value] = filteredDispositions.filter(d => d.category === cat.value);
     return acc;
   }, {});
+
+  const mappingReviewItems = useMemo(
+    () => buildMappingReviewItems(previewResult?.rows || []),
+    [previewResult]
+  );
+
+  const filteredMappingReviewItems = useMemo(() => {
+    if (!mappingSearch.trim()) return mappingReviewItems;
+    const query = mappingSearch.trim().toLowerCase();
+    return mappingReviewItems.filter((item) =>
+      item.input.toLowerCase().includes(query) ||
+      item.roles.some((role) => role.toLowerCase().includes(query)) ||
+      item.classification.toLowerCase().includes(query)
+    );
+  }, [mappingReviewItems, mappingSearch]);
+
+  const aliasMapPayload = useMemo(() => {
+    const next = {};
+    Object.entries(aliasOverrides).forEach(([key, value]) => {
+      if (typeof value === 'string' && value.trim()) {
+        next[key] = value.trim();
+      }
+    });
+    return next;
+  }, [aliasOverrides]);
+
+  const hasStalePreviewMappings = Boolean(previewResult?.previewToken)
+    && lastPreviewAliasSignature !== buildAliasSignature(aliasMapPayload);
+
+  const handlePreviewImport = () => {
+    if (!importFile) {
+      setImportError('Select a workbook before running preview.');
+      return;
+    }
+    previewImportMutation.mutate({ file: importFile, userAliasMap: aliasMapPayload });
+  };
+
+  const handleExecuteImport = () => {
+    if (!importFile) {
+      setImportError('Select the reviewed workbook before execute.');
+      return;
+    }
+    if (!previewResult?.previewToken) {
+      setImportError('Run preview first so execute can use a reviewed previewToken.');
+      return;
+    }
+    const confirmed = window.confirm('Execute the reviewed call-center import with the current preview token?');
+    if (!confirmed) return;
+    executeImportMutation.mutate({
+      file: importFile,
+      previewToken: previewResult.previewToken,
+      userAliasMap: aliasMapPayload,
+      allowOverride: allowRiskOverride,
+    });
+  };
+
+  const setAliasOverride = (input, displayName) => {
+    setAliasOverrides((current) => {
+      const next = { ...current };
+      if (displayName?.trim()) {
+        next[input] = displayName.trim();
+      } else {
+        delete next[input];
+      }
+      return next;
+    });
+  };
 
   return (
     <AdminLayout>
@@ -233,23 +359,23 @@ export default function CallCenterSettings() {
               Populate Lists
             </button>
           )}
-          <button
-            onClick={() => {
-              if (activeTab === 'lists') {
-                setSelectedList(null);
-                setShowListModal(true);
-              } else if (activeTab === 'dispositions') {
-                setSelectedDisposition(null);
-                setShowDispositionModal(true);
-              }
-            }}
-            className="inline-flex items-center px-4 py-2 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg hover:opacity-90 transition-opacity"
-          >
-            <Plus className="w-5 h-5 mr-2" />
-            <span>
-              {activeTab === 'lists' ? 'New List' : activeTab === 'dispositions' ? 'New Disposition' : 'Add'}
-            </span>
-          </button>
+          {(activeTab === 'lists' || activeTab === 'dispositions') && (
+            <button
+              onClick={() => {
+                if (activeTab === 'lists') {
+                  setSelectedList(null);
+                  setShowListModal(true);
+                } else if (activeTab === 'dispositions') {
+                  setSelectedDisposition(null);
+                  setShowDispositionModal(true);
+                }
+              }}
+              className="inline-flex items-center px-4 py-2 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg hover:opacity-90 transition-opacity"
+            >
+              <Plus className="w-5 h-5 mr-2" />
+              <span>{activeTab === 'lists' ? 'New List' : 'New Disposition'}</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -323,6 +449,39 @@ export default function CallCenterSettings() {
                 setSelectedDisposition(disp);
                 setShowDispositionModal(true);
               }}
+            />
+          )}
+
+          {activeTab === 'imports' && (
+            <ImportsTab
+              importFile={importFile}
+              onSelectFile={(file) => {
+                setImportFile(file);
+                setPreviewResult(null);
+                setExecuteResult(null);
+                setLastPreviewAliasSignature('{}');
+                setImportError('');
+                setImportMessage('');
+              }}
+              onRunPreview={handlePreviewImport}
+              onRunExecute={handleExecuteImport}
+              previewResult={previewResult}
+              executeResult={executeResult}
+              importError={importError}
+              importMessage={importMessage}
+              previewing={previewImportMutation.isPending}
+              executing={executeImportMutation.isPending}
+              aliasOverrides={aliasOverrides}
+              onAliasOverrideChange={setAliasOverride}
+              reviewItems={filteredMappingReviewItems}
+              rawReviewItemCount={mappingReviewItems.length}
+              mappingSearch={mappingSearch}
+              onMappingSearchChange={setMappingSearch}
+              users={importUsers}
+              usersLoading={importUsersLoading}
+              allowRiskOverride={allowRiskOverride}
+              onAllowRiskOverrideChange={setAllowRiskOverride}
+              hasStalePreviewMappings={hasStalePreviewMappings}
             />
           )}
 
@@ -708,12 +867,732 @@ function GeneralSettingsTab() {
   );
 }
 
+function ImportsTab({
+  importFile,
+  onSelectFile,
+  onRunPreview,
+  onRunExecute,
+  previewResult,
+  executeResult,
+  importError,
+  importMessage,
+  previewing,
+  executing,
+  aliasOverrides,
+  onAliasOverrideChange,
+  reviewItems,
+  rawReviewItemCount,
+  mappingSearch,
+  onMappingSearchChange,
+  users,
+  usersLoading,
+  allowRiskOverride,
+  onAllowRiskOverrideChange,
+  hasStalePreviewMappings,
+}) {
+  const usersDatalistId = 'call-center-import-user-options';
+  const summary = previewResult?.summary || null;
+  const duplicateSummary = previewResult?.diagnostics?.duplicates?.summary || null;
+  const executionGuards = previewResult?.diagnostics?.executionGuards || null;
+  const userMappingSummary = previewResult?.diagnostics?.userMappings?.summary || summary?.userMappings || null;
+  const previewLocked = Boolean(previewResult?.previewToken);
+  const requiresManualOverride = Boolean(executionGuards?.requiresManualOverride);
+  const canExecute = previewLocked && !hasStalePreviewMappings && (!requiresManualOverride || allowRiskOverride) && !previewing && !executing;
+  const aliasOverrideCount = Object.keys(aliasOverrides || {}).filter((key) => aliasOverrides[key]?.trim()).length;
+  const splitResolvedCount = userMappingSummary?.splitResolved ?? 0;
+  const splitIssuesCount = userMappingSummary?.splitIssues ?? 0;
+
+  return (
+    <div className="space-y-6">
+      <div className="rounded-xl border border-gray-200 bg-gradient-to-br from-white to-gray-50 p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div className="space-y-2">
+            <div className="inline-flex items-center gap-2 rounded-full bg-panda-primary/10 px-3 py-1 text-xs font-medium text-panda-primary">
+              <Upload className="h-3.5 w-3.5" />
+              Preview-First Import Review
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900">Workbook import review</h3>
+              <p className="text-sm text-gray-500">
+                Upload the call-center workbook, review unresolved owner and lead-setter names, rerun preview with overrides, then execute with the reviewed preview token.
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <button
+              onClick={onRunPreview}
+              disabled={!importFile || previewing || executing}
+              className="inline-flex items-center justify-center rounded-lg bg-panda-primary px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {previewing ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <PlayCircle className="mr-2 h-4 w-4" />}
+              {previewResult ? 'Rerun Preview' : 'Run Preview'}
+            </button>
+            <button
+              onClick={onRunExecute}
+              disabled={!canExecute}
+              className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {executing ? <RefreshCw className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
+              Execute Reviewed Import
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="rounded-lg border border-gray-200 bg-white p-4">
+            <label className="mb-2 block text-sm font-medium text-gray-700">Workbook</label>
+            <input
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              onChange={(event) => onSelectFile(event.target.files?.[0] || null)}
+              className="block w-full text-sm text-gray-600 file:mr-4 file:rounded-lg file:border-0 file:bg-panda-primary/10 file:px-4 file:py-2 file:text-sm file:font-medium file:text-panda-primary hover:file:bg-panda-primary/20"
+            />
+            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-gray-500">
+              <span>{importFile ? `Selected: ${importFile.name}` : 'No workbook selected'}</span>
+              {previewResult?.previewToken && (
+                <span className="rounded-full bg-green-50 px-2 py-1 font-medium text-green-700">
+                  Preview token locked
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-gray-200 bg-white p-4">
+            <label className="flex items-start gap-3 text-sm text-gray-700">
+              <input
+                type="checkbox"
+                checked={allowRiskOverride}
+                onChange={(event) => onAllowRiskOverrideChange(event.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-gray-300 text-panda-primary focus:ring-panda-primary"
+              />
+              <span>
+                <span className="block font-medium text-gray-900">Allow manual override on execute</span>
+                <span className="block text-xs text-gray-500">
+                  Leave this off for normal use. Only enable it for supervised QA when guardrails still report reviewed risks.
+                </span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        {importError && (
+          <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {importError}
+          </div>
+        )}
+        {importMessage && !importError && (
+          <div className="mt-4 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
+            {importMessage}
+          </div>
+        )}
+        {hasStalePreviewMappings && (
+          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700">
+            Mapping overrides changed after the last preview. Rerun preview before execute so the reviewed preview token stays valid.
+          </div>
+        )}
+      </div>
+
+      {previewResult && (
+        <>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+            <SummaryCard
+              title="Rows"
+              value={summary?.totalRows ?? 0}
+              detail={`${summary?.actionableRows ?? 0} actionable`}
+            />
+            <SummaryCard
+              title="Duplicate Suppression"
+              value={duplicateSummary?.suppressedRows ?? summary?.suppressedDuplicateRows ?? 0}
+              detail={`${duplicateSummary?.duplicateGroups ?? summary?.duplicateGroups ?? 0} duplicate groups`}
+            />
+            <SummaryCard
+              title="User Mappings"
+              value={userMappingSummary?.unresolved ?? 0}
+              detail={`${userMappingSummary?.lowConfidence ?? 0} low-confidence, ${userMappingSummary?.systemLabel ?? 0} system labels, ${userMappingSummary?.inactiveMatched ?? 0} inactive matched`}
+              tone={(userMappingSummary?.unresolved || userMappingSummary?.lowConfidence) ? 'warning' : 'success'}
+            />
+            <SummaryCard
+              title="Split Owner Labels"
+              value={splitIssuesCount}
+              detail={`${splitResolvedCount} resolved for weighted credit`}
+              tone={splitIssuesCount ? 'warning' : (splitResolvedCount ? 'success' : 'default')}
+            />
+            <SummaryCard
+              title="Execution Guard"
+              value={executionGuards?.blockers?.length ?? 0}
+              detail={executionGuards?.requiresManualOverride ? 'Manual override required' : 'No active blockers'}
+              tone={executionGuards?.requiresManualOverride ? 'danger' : 'success'}
+            />
+          </div>
+
+          <div className="grid gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,0.9fr)]">
+            <div className="space-y-4 rounded-xl border border-gray-200 bg-white p-5">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900">Mapping review queue</h3>
+                  <p className="text-sm text-gray-500">
+                    Review unresolved and low-confidence workbook names, including multi-user owner labels that should become weighted split credit. System labels stay visible here for transparency and can route to the configured Company Lead assignee.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="relative">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                    <input
+                      type="text"
+                      value={mappingSearch}
+                      onChange={(event) => onMappingSearchChange(event.target.value)}
+                      placeholder="Filter review names..."
+                      className="rounded-lg border border-gray-300 py-2 pl-9 pr-3 text-sm focus:border-transparent focus:ring-2 focus:ring-panda-primary"
+                    />
+                  </div>
+                  <span className="rounded-full bg-gray-100 px-3 py-2 text-xs font-medium text-gray-600">
+                    {reviewItems.length}/{rawReviewItemCount} shown
+                  </span>
+                </div>
+              </div>
+
+              {(splitResolvedCount > 0 || splitIssuesCount > 0) && (
+                <div className="rounded-lg border border-purple-200 bg-purple-50 p-3">
+                  <p className="text-sm font-medium text-purple-900">Split owner credit status</p>
+                  <p className="mt-1 text-sm text-purple-700">
+                    {splitResolvedCount} multi-user owner labels currently resolve to weighted reporting credit.
+                    {splitIssuesCount > 0 ? ` ${splitIssuesCount} still need review before execute.` : ' No unresolved split-owner labels remain in this preview.'}
+                  </p>
+                </div>
+              )}
+
+              {aliasOverrideCount > 0 && (
+                <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
+                  <p className="text-sm font-medium text-blue-900">Current overrides</p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {Object.entries(aliasOverrides)
+                      .filter(([, value]) => value?.trim())
+                      .map(([input, value]) => (
+                        <span key={input} className="rounded-full bg-white px-3 py-1 text-xs font-medium text-blue-700 shadow-sm">
+                          {input} <ArrowRight className="mx-1 inline h-3 w-3" /> {isNonUserOverrideValue(value) ? 'Marked non-user' : value}
+                        </span>
+                      ))}
+                  </div>
+                </div>
+              )}
+
+              {rawReviewItemCount === 0 ? (
+                <div className="rounded-lg border border-dashed border-green-200 bg-green-50 p-6 text-center">
+                  <CheckCircle className="mx-auto h-8 w-8 text-green-600" />
+                  <h4 className="mt-3 text-sm font-semibold text-green-900">No unresolved names in the current preview</h4>
+                  <p className="mt-1 text-sm text-green-700">
+                    If the guardrails are otherwise clean, this preview is ready for supervised execute.
+                  </p>
+                </div>
+              ) : reviewItems.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 p-6 text-center">
+                  <Search className="mx-auto h-8 w-8 text-gray-400" />
+                  <h4 className="mt-3 text-sm font-semibold text-gray-900">No review items match the current filter</h4>
+                  <p className="mt-1 text-sm text-gray-500">
+                    Clear or change the filter to continue mapping unresolved workbook names.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {reviewItems.map((item) => (
+                    <MappingReviewCard
+                      key={item.input}
+                      item={item}
+                      usersDatalistId={usersDatalistId}
+                      usersLoading={usersLoading}
+                      selectedOverrides={aliasOverrides}
+                      onChange={onAliasOverrideChange}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-4">
+              <div className="rounded-xl border border-gray-200 bg-white p-5">
+                <h3 className="text-lg font-semibold text-gray-900">Reviewed preview lock</h3>
+                <div className="mt-4 space-y-3 text-sm text-gray-600">
+                  <LockDetail label="Preview token" value={previewResult.previewToken || 'Not generated'} mono />
+                  <LockDetail label="Workbook hash" value={previewResult.source?.workbookHash || '-'} mono />
+                  <LockDetail label="Normalized rows hash" value={previewResult.source?.normalizedRowsHash || '-'} mono />
+                  <LockDetail label="Created" value={formatReviewDate(previewResult.previewTokenCreatedAt)} />
+                  <LockDetail label="Expires" value={formatReviewDate(previewResult.previewTokenExpiresAt)} />
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-gray-200 bg-white p-5">
+                <h3 className="text-lg font-semibold text-gray-900">Guardrails</h3>
+                {executionGuards?.blockers?.length ? (
+                  <div className="mt-4 space-y-3">
+                    {executionGuards.blockers.map((blocker) => (
+                      <div key={blocker.code} className="rounded-lg border border-red-200 bg-red-50 p-3">
+                        <div className="flex items-start gap-3">
+                          <AlertCircle className="mt-0.5 h-4 w-4 text-red-600" />
+                          <div>
+                            <p className="text-sm font-medium text-red-900">{blocker.code}</p>
+                            <p className="mt-1 text-sm text-red-700">{blocker.message}</p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-4 rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-700">
+                    Guardrails are clear for the current preview.
+                  </div>
+                )}
+                <div className="mt-4 grid grid-cols-2 gap-3 text-sm text-gray-600">
+                  <MetricChip label="Unresolved mappings" value={executionGuards?.counts?.unresolvedUserMappings ?? 0} />
+                  <MetricChip label="Low-confidence mappings" value={executionGuards?.counts?.lowConfidenceUserMappings ?? 0} />
+                  <MetricChip label="System labels" value={executionGuards?.counts?.systemLabelMappings ?? 0} />
+                  <MetricChip label="Inactive matched users" value={executionGuards?.counts?.inactiveMatchedUsers ?? 0} />
+                  <MetricChip label="Split-owner issues" value={executionGuards?.counts?.splitOwnerMappingIssues ?? 0} />
+                  <MetricChip label="Blocking conflicts" value={executionGuards?.counts?.blockingConflicts ?? 0} />
+                </div>
+              </div>
+
+              {executeResult && (
+                <div className="rounded-xl border border-gray-200 bg-white p-5">
+                  <h3 className="text-lg font-semibold text-gray-900">Last execute result</h3>
+                  <div className="mt-4 grid grid-cols-2 gap-3">
+                    <MetricChip label="Created" value={executeResult.summary?.created ?? 0} />
+                    <MetricChip label="Updated" value={executeResult.summary?.updated ?? 0} />
+                    <MetricChip label="Skipped" value={executeResult.summary?.skipped ?? 0} />
+                    <MetricChip label="Failed" value={executeResult.summary?.failed ?? 0} />
+                  </div>
+                  <p className="mt-4 text-xs text-gray-500">
+                    This is not a replacement for DB/UI QA. Verify matched leads, appointment chains, conservative opportunity updates, and AuditLog rows after execute.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <datalist id={usersDatalistId}>
+            {users.map((user) => (
+              <option key={user.id} value={user.fullName || `${user.firstName || ''} ${user.lastName || ''}`.trim()}>
+                {`${user.email || 'No email'}${user.isActive === false ? ' • inactive' : ''}`}
+              </option>
+            ))}
+          </datalist>
+        </>
+      )}
+    </div>
+  );
+}
+
+function SummaryCard({ title, value, detail, tone = 'default' }) {
+  const toneClasses = {
+    default: 'border-gray-200 bg-white text-gray-900',
+    success: 'border-green-200 bg-green-50 text-green-900',
+    warning: 'border-amber-200 bg-amber-50 text-amber-900',
+    danger: 'border-red-200 bg-red-50 text-red-900',
+  };
+
+  return (
+    <div className={`rounded-xl border p-4 ${toneClasses[tone] || toneClasses.default}`}>
+      <p className="text-xs font-medium uppercase tracking-wide text-current/70">{title}</p>
+      <p className="mt-2 text-2xl font-semibold">{value}</p>
+      <p className="mt-1 text-sm text-current/80">{detail}</p>
+    </div>
+  );
+}
+
+function MetricChip({ label, value }) {
+  return (
+    <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+      <p className="text-xs font-medium uppercase tracking-wide text-gray-500">{label}</p>
+      <p className="mt-1 text-lg font-semibold text-gray-900">{value}</p>
+    </div>
+  );
+}
+
+function LockDetail({ label, value, mono = false }) {
+  return (
+    <div>
+      <p className="text-xs font-medium uppercase tracking-wide text-gray-400">{label}</p>
+      <p className={`mt-1 break-all text-sm text-gray-700 ${mono ? 'font-mono' : ''}`}>{value}</p>
+    </div>
+  );
+}
+
+function MappingReviewCard({ item, usersDatalistId, usersLoading, selectedOverrides, onChange }) {
+  const isMultiUser = item.classification === 'multi-user label' && item.splitTokens.length > 0;
+  const selectedOverride = selectedOverrides[item.input] || '';
+  const selectedValue = isNonUserOverrideValue(selectedOverride) ? '' : selectedOverride;
+
+  return (
+    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <h4 className="text-base font-semibold text-gray-900">{item.input}</h4>
+            <span className={`rounded-full px-2.5 py-1 text-xs font-medium ${getClassificationClasses(item.classification)}`}>
+              {item.classification}
+            </span>
+            {item.matchTypes.map((matchType) => (
+              <span key={matchType} className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-gray-600">
+                {matchType.replace('_', ' ')}
+              </span>
+            ))}
+          </div>
+          <p className="text-sm text-gray-500">
+            Seen in {item.rowCount} rows as {item.roles.join(', ')}.
+          </p>
+          {item.classification === 'multi-user label' && (
+            <p className="text-sm text-purple-700">
+              This label can create weighted split reporting credit when each person resolves cleanly.
+            </p>
+          )}
+          {item.splitPreview.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {item.splitPreview.map((entry) => (
+                <span
+                  key={`${item.input}-${entry.userId || entry.label}`}
+                  className="rounded-full bg-purple-100 px-3 py-1 text-xs font-medium text-purple-800"
+                >
+                  {entry.label}
+                </span>
+              ))}
+            </div>
+          )}
+          {!isMultiUser && item.suggestedMatches.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {item.suggestedMatches.map((suggestion) => (
+                <button
+                  key={suggestion}
+                  type="button"
+                  onClick={() => onChange(item.input, suggestion)}
+                  className="rounded-full border border-blue-200 bg-white px-3 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50"
+                >
+                  Use {suggestion}
+                </button>
+              ))}
+            </div>
+          )}
+          {item.classification === 'system label' && (
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => onChange(item.input, NON_USER_OVERRIDE_VALUE)}
+                className="rounded-full border border-amber-200 bg-white px-3 py-1 text-xs font-medium text-amber-700 hover:bg-amber-50"
+              >
+                Confirm system label / Company Lead
+              </button>
+              {isNonUserOverrideValue(selectedOverride) && (
+                <button
+                  type="button"
+                  onClick={() => onChange(item.input, '')}
+                  className="rounded-full border border-gray-200 bg-white px-3 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50"
+                >
+                  Clear override
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="min-w-0 lg:w-[340px]">
+          {isMultiUser ? (
+            <div className="space-y-3">
+              <label className="block text-xs font-medium uppercase tracking-wide text-gray-500">
+                Map each person to a CRM user
+              </label>
+              {item.splitTokens.map((token) => (
+                <div key={`${item.input}-${token.aliasKey}`} className="rounded-lg border border-white bg-white p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-gray-900">{token.label}</p>
+                      <p className="text-xs text-gray-500">
+                        {token.matchType === 'low_confidence'
+                          ? 'Low-confidence match'
+                          : token.matchType === 'unresolved'
+                            ? 'Unresolved token'
+                            : 'Candidate token'}
+                      </p>
+                    </div>
+                    {token.resolvedLabel && (
+                      <span className="rounded-full bg-purple-100 px-2.5 py-1 text-xs font-medium text-purple-800">
+                        {token.resolvedLabel}
+                      </span>
+                    )}
+                  </div>
+                  {token.suggestedMatches.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {token.suggestedMatches.map((suggestion) => (
+                        <button
+                          key={`${token.aliasKey}-${suggestion}`}
+                          type="button"
+                          onClick={() => onChange(token.aliasKey, suggestion)}
+                          className="rounded-full border border-blue-200 bg-white px-3 py-1 text-xs font-medium text-blue-700 hover:bg-blue-50"
+                        >
+                          Use {suggestion}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <input
+                    list={usersDatalistId}
+                    value={selectedOverrides[token.aliasKey] || ''}
+                    onChange={(event) => onChange(token.aliasKey, event.target.value)}
+                    placeholder={usersLoading ? 'Loading users...' : `Map ${token.label}`}
+                    className="mt-3 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-transparent focus:ring-2 focus:ring-panda-primary"
+                  />
+                </div>
+              ))}
+              <p className="text-xs text-gray-500">
+                Save each person separately, rerun preview, and confirm the split owner label resolves to weighted credit before execute.
+              </p>
+            </div>
+          ) : (
+            <>
+              <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-gray-500">
+                Map to CRM user
+              </label>
+              {isNonUserOverrideValue(selectedOverride) && (
+                <div className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800">
+                  Marked as an intentional system label. Rerun preview to refresh the reviewed preview token and Company Lead assignment.
+                </div>
+              )}
+              <input
+                list={usersDatalistId}
+                value={selectedValue}
+                onChange={(event) => onChange(item.input, event.target.value)}
+                placeholder={usersLoading ? 'Loading users...' : 'Type a user name'}
+                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-transparent focus:ring-2 focus:ring-panda-primary"
+              />
+              <p className="mt-2 text-xs text-gray-500">
+                Save the exact CRM display name here, rerun preview, and confirm the name resolves cleanly before execute.
+              </p>
+            </>
+          )}
+        </div>
+      </div>
+
+      {item.exampleRows.length > 0 && (
+        <div className="mt-4 rounded-lg border border-white bg-white/70 p-3">
+          <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Example workbook rows</p>
+          <div className="mt-2 space-y-2">
+            {item.exampleRows.map((row) => (
+              <div key={`${item.input}-${row.rowId}`} className="text-sm text-gray-600">
+                <span className="font-medium text-gray-800">{row.sourceSheet}</span>
+                {` row ${row.sourceRowNumber}`}
+                {row.name ? ` • ${row.name}` : ''}
+                {row.eventType ? ` • ${row.eventType}` : ''}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function buildMappingReviewItems(rows) {
+  const reviewMap = new Map();
+
+  for (const row of rows) {
+    const mappings = [
+      { role: 'Owner', value: row.userMappings?.owner },
+      { role: 'Lead Setter', value: row.userMappings?.leadSetBy },
+      { role: 'Split Owner Credit', value: row.userMappings?.ownerReportingCredits },
+    ];
+
+    for (const entry of mappings) {
+      const mapping = entry.value;
+      const isSplitMapping = entry.role === 'Split Owner Credit';
+      const mappingStatus = isSplitMapping ? mapping?.status : mapping?.matchType;
+      if (!mapping?.input || !['unresolved', 'low_confidence', 'system_label'].includes(mappingStatus)) {
+        continue;
+      }
+
+      const key = normalizeMappingInput(mapping.input);
+      if (!reviewMap.has(key)) {
+        reviewMap.set(key, {
+          input: mapping.input.trim(),
+          classification: classifyMappingInput(mapping.input),
+          roles: new Set(),
+          matchTypes: new Set(),
+          suggestedMatches: new Set(),
+          splitPreview: [],
+          splitTokens: [],
+          rowCount: 0,
+          exampleRows: [],
+        });
+      }
+
+      const item = reviewMap.get(key);
+      item.roles.add(entry.role);
+      item.matchTypes.add(mappingStatus);
+      item.rowCount += 1;
+
+      if (isSplitMapping) {
+        const tokenMappings = Array.isArray(mapping.tokenMappings) ? mapping.tokenMappings : [];
+        tokenMappings.forEach((tokenMapping) => {
+          if (tokenMapping?.displayName) {
+            item.suggestedMatches.add(tokenMapping.displayName);
+          }
+          const candidates = Array.isArray(tokenMapping?.candidates) ? tokenMapping.candidates : [];
+          candidates.forEach((candidate) => {
+            if (candidate?.name) {
+              item.suggestedMatches.add(candidate.name);
+            }
+          });
+        });
+        if (item.splitPreview.length === 0) {
+          item.splitPreview = tokenMappings.map((tokenMapping) => ({
+            userId: tokenMapping?.userId || null,
+            label: tokenMapping?.displayName
+              ? `${tokenMapping.displayName}${tokenMapping.matchType === 'low_confidence' ? ' (low confidence)' : ''}`
+              : `${tokenMapping?.input || tokenMapping?.normalized || 'Unresolved'}${tokenMapping?.matchType === 'unresolved' ? ' (unresolved)' : ''}`,
+          }));
+        }
+        if (item.splitTokens.length === 0) {
+          const inputTokens = splitReviewInput(mapping.input);
+          item.splitTokens = inputTokens.map((token, index) => {
+            const tokenMapping = tokenMappings[index] || null;
+            const suggestions = new Set();
+
+            if (tokenMapping?.displayName) {
+              suggestions.add(tokenMapping.displayName);
+            }
+
+            const candidates = Array.isArray(tokenMapping?.candidates) ? tokenMapping.candidates : [];
+            candidates.forEach((candidate) => {
+              if (candidate?.name) {
+                suggestions.add(candidate.name);
+              }
+            });
+
+            return {
+              label: token,
+              aliasKey: token,
+              matchType: tokenMapping?.matchType || 'unresolved',
+              resolvedLabel: tokenMapping?.displayName || null,
+              suggestedMatches: Array.from(suggestions),
+            };
+          });
+        }
+      } else if (mapping.displayName) {
+        item.suggestedMatches.add(mapping.displayName);
+      }
+
+      if (item.exampleRows.length < 3) {
+        item.exampleRows.push({
+          rowId: row.rowId,
+          sourceSheet: row.sourceSheet,
+          sourceRowNumber: row.sourceRowNumber,
+          name: row.name,
+          eventType: row.eventType,
+        });
+      }
+    }
+  }
+
+  return Array.from(reviewMap.values())
+    .map((item) => ({
+      ...item,
+      roles: Array.from(item.roles),
+      matchTypes: Array.from(item.matchTypes),
+      suggestedMatches: Array.from(item.suggestedMatches),
+      splitPreview: item.splitPreview,
+      splitTokens: item.splitTokens,
+    }))
+    .sort((left, right) => {
+      const leftPriority = left.matchTypes.includes('unresolved') ? 0 : 1;
+      const rightPriority = right.matchTypes.includes('unresolved') ? 0 : 1;
+      if (leftPriority !== rightPriority) return leftPriority - rightPriority;
+      if (right.rowCount !== left.rowCount) return right.rowCount - left.rowCount;
+      return left.input.localeCompare(right.input);
+    });
+}
+
+function normalizeMappingInput(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[._-]+/g, ' ')
+    .replace(/\s+/g, ' ');
+}
+
+function splitReviewInput(value) {
+  return String(value || '')
+    .split(/[\/,&]| and /i)
+    .map((token) => token.replace(/\(.*?\)/g, ' ').replace(/[._-]+/g, ' ').replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+}
+
+function isNonUserOverrideValue(value) {
+  return String(value || '').trim().toUpperCase() === NON_USER_OVERRIDE_VALUE;
+}
+
+function classifyMappingInput(value) {
+  const normalized = normalizeMappingInput(value);
+  const normalizedSystemKey = normalized.replace(/[^a-z0-9]+/g, '');
+  const systemLabels = new Set([
+    'ai',
+    'admin',
+    'businessdevelopment',
+    'callcenter',
+    'house',
+    'na',
+    'noccrep',
+    'office',
+    'queue',
+    'reset',
+    'telemarketing',
+    'teamlead',
+    'unassigned',
+  ]);
+  if (systemLabels.has(normalizedSystemKey)) {
+    return 'system label';
+  }
+  if (normalized.includes('/')) {
+    return 'multi-user label';
+  }
+  return 'person mapping';
+}
+
+function getClassificationClasses(classification) {
+  if (classification === 'system label') {
+    return 'bg-amber-100 text-amber-800';
+  }
+  if (classification === 'multi-user label') {
+    return 'bg-purple-100 text-purple-800';
+  }
+  return 'bg-blue-100 text-blue-800';
+}
+
+function formatReviewDate(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+}
+
+function getErrorMessage(error, fallback) {
+  return error?.response?.data?.error?.message
+    || error?.response?.data?.message
+    || error?.response?.data?.error
+    || error?.message
+    || fallback;
+}
+
+function buildAliasSignature(aliasMap) {
+  const entries = Object.entries(aliasMap || {})
+    .filter(([, value]) => typeof value === 'string' && value.trim())
+    .map(([key, value]) => [key, value.trim()])
+    .sort(([left], [right]) => left.localeCompare(right));
+
+  return JSON.stringify(entries);
+}
+
 // Filter field options based on target object
 const LEAD_FILTER_FIELDS = [
   { field: 'status', label: 'Lead Status', type: 'select', options: ['NEW', 'CONTACTED', 'QUALIFIED', 'UNQUALIFIED', 'NURTURING'] },
   { field: 'source', label: 'Lead Source', type: 'select', options: ['Web', 'Phone', 'Referral', 'Marketing Campaign', 'Self-Gen', 'Door Knock'] },
   { field: 'workType', label: 'Work Type', type: 'select', options: ['Insurance', 'Retail', 'Commercial'] },
-  { field: 'disposition', label: 'Disposition', type: 'select', options: ['NOT_CONTACTED', 'NO_ANSWER', 'LEFT_VOICEMAIL', 'CALLBACK_REQUESTED', 'NOT_INTERESTED', 'APPOINTMENT_SET'] },
+  { field: 'disposition', label: 'Disposition', type: 'select', options: ['SCHEDULED', 'CONFIRMED', 'CALL_BACK', 'CANCELED', 'NEED_RESET', 'NOT_INTERESTED', 'MISSING_PARTY', 'CANT_AFFORD', 'NO_VALUE', 'WEATHER_RELATED', 'THINKING_ABOUT_IT', 'NO_ANSWER', 'VOICEMAIL', 'WRONG_NUMBER', 'DO_NOT_CALL'] },
   { field: 'leadScore', label: 'Lead Score', type: 'range', min: 0, max: 100 },
   { field: 'leadRank', label: 'Lead Rank', type: 'select', options: ['A', 'B', 'C', 'D', 'F'] },
   { field: 'leadAge', label: 'Lead Age (Days)', type: 'range', min: 0, max: 365 },
