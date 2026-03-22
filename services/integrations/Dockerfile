@@ -14,6 +14,9 @@ WORKDIR /app
 
 # Copy shared modules
 COPY shared/prisma ./shared/prisma
+# Some service imports resolve shared runtime helpers to /shared/... once inside the
+# container, so keep that absolute path available too.
+COPY shared/src /shared/src
 
 # Copy service files
 COPY services/integrations/package*.json ./
