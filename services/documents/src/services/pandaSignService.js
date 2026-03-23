@@ -122,6 +122,79 @@ function renderHtmlToDocumentText(content) {
     .trim();
 }
 
+function connectById(id) {
+  return id ? { connect: { id } } : undefined;
+}
+
+function normalizeSignatureRecord(signature) {
+  if (!signature || typeof signature !== 'object') return signature;
+  return {
+    ...signature,
+    signerType: signature.signerType ?? signature.signer_type ?? null,
+    signatureType: signature.signatureType ?? signature.signature_type ?? null,
+    signatureUrl: signature.signatureUrl ?? signature.signature_url ?? null,
+  };
+}
+
+function normalizeAgreementRecord(agreement) {
+  if (!agreement || typeof agreement !== 'object') return agreement;
+
+  return {
+    ...agreement,
+    recipientEmail: agreement.recipientEmail ?? agreement.recipient_email ?? null,
+    recipientName: agreement.recipientName ?? agreement.recipient_name ?? null,
+    hostSignerEmail: agreement.hostSignerEmail ?? agreement.host_signer_email ?? null,
+    hostSignerName: agreement.hostSignerName ?? agreement.host_signer_name ?? null,
+    hostSigningToken: agreement.hostSigningToken ?? agreement.host_signing_token ?? null,
+    hostSigningInitiatedAt: agreement.hostSigningInitiatedAt ?? agreement.host_signing_initiated_at ?? null,
+    hostSignedAt: agreement.hostSignedAt ?? agreement.host_signed_at ?? null,
+    completedAt: agreement.completedAt ?? agreement.completed_at ?? null,
+    createdById: agreement.createdById ?? agreement.created_by_id ?? null,
+    sentById: agreement.sentById ?? agreement.sent_by_id ?? null,
+    voidReason: agreement.voidReason ?? agreement.void_reason ?? null,
+    voidedAt: agreement.voidedAt ?? agreement.voided_at ?? null,
+    voidedById: agreement.voidedById ?? agreement.voided_by_id ?? null,
+    signatures: Array.isArray(agreement.signatures)
+      ? agreement.signatures.map(normalizeSignatureRecord)
+      : agreement.signatures,
+  };
+}
+
+function buildAgreementCreateData({
+  agreementNumber,
+  name,
+  status = 'DRAFT',
+  templateId,
+  opportunityId,
+  accountId,
+  contactId,
+  recipientEmail,
+  recipientName,
+  signingToken,
+  expiresAt,
+  mergeData,
+  documentUrl,
+  userId,
+}) {
+  return {
+    agreementNumber,
+    name,
+    status,
+    signingToken,
+    signingUrl: `${SIGNING_BASE_URL}/sign/${signingToken}`,
+    expiresAt,
+    mergeData,
+    ...(documentUrl ? { documentUrl } : {}),
+    ...(recipientEmail !== undefined ? { recipient_email: recipientEmail } : {}),
+    ...(recipientName !== undefined ? { recipient_name: recipientName } : {}),
+    ...(templateId ? { template: connectById(templateId) } : {}),
+    ...(opportunityId ? { opportunities: connectById(opportunityId) } : {}),
+    ...(accountId ? { accounts: connectById(accountId) } : {}),
+    ...(contactId ? { contacts: connectById(contactId) } : {}),
+    ...(userId ? { users_agreements_created_by_idTousers: connectById(userId) } : {}),
+  };
+}
+
 function extractTemplateMetadata(signatureFields) {
   if (Array.isArray(signatureFields)) {
     return {
@@ -715,10 +788,9 @@ export const pandaSignService = {
 
     // Create agreement record
     const agreement = await prisma.agreement.create({
-      data: {
+      data: buildAgreementCreateData({
         agreementNumber,
         name: this.interpolateText(template.name, resolvedMergeData),
-        status: 'DRAFT',
         templateId,
         opportunityId,
         accountId,
@@ -726,15 +798,15 @@ export const pandaSignService = {
         recipientEmail,
         recipientName,
         signingToken,
-        signingUrl: `${SIGNING_BASE_URL}/sign/${signingToken}`,
-        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
+        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
         mergeData: resolvedMergeData,
-        createdById: userId,
-      },
+        userId,
+      }),
     });
+    const normalizedAgreement = normalizeAgreementRecord(agreement);
 
     // Generate PDF document
-    const pdfUrl = await this.generateDocument(agreement, template, resolvedMergeData);
+    const pdfUrl = await this.generateDocument(normalizedAgreement, template, resolvedMergeData);
 
     // Update agreement with document URL
     await prisma.agreement.update({
@@ -750,10 +822,10 @@ export const pandaSignService = {
 
     logger.info(`Agreement created: ${agreement.id}`);
 
-    return {
+    return normalizeAgreementRecord({
       ...agreement,
       documentUrl: pdfUrl,
-    };
+    });
   },
 
   /**
@@ -835,7 +907,7 @@ export const pandaSignService = {
         font,
       });
 
-      page.drawText(`Name: ${agreement.recipientName || ''}`, {
+      page.drawText(`Name: ${normalizeAgreementRecord(agreement)?.recipientName || ''}`, {
         x: 50,
         y: 130,
         size: 10,
@@ -877,7 +949,7 @@ export const pandaSignService = {
    * Send agreement for signature
    */
   async sendForSignature(agreementId, userId) {
-    const agreement = await prisma.agreement.findUnique({
+    const agreementRecord = await prisma.agreement.findUnique({
       where: { id: agreementId },
       include: {
         template: true,
@@ -885,6 +957,7 @@ export const pandaSignService = {
         account: true,
       },
     });
+    const agreement = normalizeAgreementRecord(agreementRecord);
 
     if (!agreement) {
       throw new Error('Agreement not found');
@@ -903,7 +976,7 @@ export const pandaSignService = {
       data: {
         status: 'SENT',
         sentAt: new Date(),
-        sentById: userId,
+        ...(userId ? { users_agreements_sent_by_idTousers: connectById(userId) } : {}),
       },
     });
 
@@ -917,13 +990,14 @@ export const pandaSignService = {
 
     logger.info(`Agreement sent: ${agreementId} to ${agreement.recipientEmail}`);
 
-    return updated;
+    return normalizeAgreementRecord(updated);
   },
 
   /**
    * Send signing email via SES
    */
   async sendSigningEmail(agreement) {
+    agreement = normalizeAgreementRecord(agreement);
     const signingUrl = agreement.signingUrl;
 
     const emailParams = {
@@ -1014,13 +1088,14 @@ Panda Exteriors
    * Get agreement by signing token (public access for signing page)
    */
   async getAgreementByToken(token) {
-    const agreement = await prisma.agreement.findFirst({
+    const agreementRecord = await prisma.agreement.findFirst({
       where: { signingToken: token },
       include: {
         template: true,
         signatures: true,
       },
     });
+    const agreement = normalizeAgreementRecord(agreementRecord);
 
     if (!agreement) {
       throw new Error('Agreement not found or invalid token');
@@ -1051,7 +1126,7 @@ Panda Exteriors
       }, null);
     }
 
-    return agreement;
+    return normalizeAgreementRecord(agreement);
   },
 
   /**
@@ -1066,7 +1141,7 @@ Panda Exteriors
     signerName,
     signerEmail,
   }) {
-    const agreement = await this.getAgreementByToken(token);
+    const agreement = normalizeAgreementRecord(await this.getAgreementByToken(token));
 
     if (!signatureData) {
       throw new Error('Signature data is required');
@@ -1113,9 +1188,10 @@ Panda Exteriors
         status: finalStatus,
         signedAt: new Date(),
         signedDocumentUrl,
-        ...(hasAgentSignature && { completedAt: new Date() }),
+        ...(hasAgentSignature && { completed_at: new Date() }),
       },
     });
+    const normalizedUpdated = normalizeAgreementRecord(updated);
 
     // Create audit log
     await this.createAuditLog(agreement.id, finalStatus === 'COMPLETED' ? 'COMPLETED' : 'SIGNED', {
@@ -1127,7 +1203,7 @@ Panda Exteriors
     }, null);
 
     // Send confirmation emails
-    await this.sendCompletionEmails(updated, signature);
+    await this.sendCompletionEmails(normalizedUpdated, signature);
 
     // If this is a change order that is now fully signed, trigger completion workflow
     if (finalStatus === 'COMPLETED' && agreement.mergeData?.changeDescription) {
@@ -1166,7 +1242,7 @@ Panda Exteriors
     logger.info(`Agreement signed: ${agreement.id}`);
 
     return {
-      agreement: updated,
+      agreement: normalizedUpdated,
       signature,
     };
   },
@@ -1304,6 +1380,7 @@ Panda Exteriors
    * Send completion emails to all parties
    */
   async sendCompletionEmails(agreement, signature) {
+    agreement = normalizeAgreementRecord(agreement);
     // Send to signer
     await sesClient.send(new SendEmailCommand({
       Source: process.env.FROM_EMAIL || 'documents@pandaexteriors.com',
@@ -2107,16 +2184,14 @@ ${agreement.signedDocumentUrl}
 
     // Create agreement record linked to the invoice PDF
     const agreement = await prisma.agreement.create({
-      data: {
+      data: buildAgreementCreateData({
         agreementNumber,
         name: `Invoice Acknowledgment - ${invoice.invoiceNumber}`,
-        status: 'DRAFT',
         templateId: template.id,
         accountId: invoice.accountId,
         recipientEmail: options.recipientEmail || invoice.account?.email || invoice.account?.primaryContact?.email,
         recipientName: options.recipientName || invoice.account?.primaryContact?.name || invoice.account?.name,
         signingToken,
-        signingUrl: `${SIGNING_BASE_URL}/sign/${signingToken}`,
         expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
         documentUrl: pdfResult.downloadUrl,
         mergeData: {
@@ -2126,9 +2201,10 @@ ${agreement.signedDocumentUrl}
           invoiceDate: invoice.invoiceDate,
           dueDate: invoice.dueDate,
         },
-        createdById: options.userId,
-      },
+        userId: options.userId,
+      }),
     });
+    const normalizedAgreement = normalizeAgreementRecord(agreement);
 
     // Create audit log
     await this.createAuditLog(agreement.id, 'CREATED', null, {
@@ -2139,9 +2215,9 @@ ${agreement.signedDocumentUrl}
     logger.info(`Signable invoice created: ${agreement.id}`);
 
     return {
-      agreement,
+      agreement: normalizedAgreement,
       pdfUrl: pdfResult.downloadUrl,
-      signingUrl: agreement.signingUrl,
+      signingUrl: normalizedAgreement.signingUrl,
     };
   },
 
@@ -2194,10 +2270,9 @@ ${agreement.signedDocumentUrl}
     const account = quote.opportunity?.account;
 
     const agreement = await prisma.agreement.create({
-      data: {
+      data: buildAgreementCreateData({
         agreementNumber,
         name: `Quote Acceptance - ${quote.quoteNumber}`,
-        status: 'DRAFT',
         templateId: template.id,
         opportunityId: quote.opportunityId,
         accountId: account?.id,
@@ -2205,7 +2280,6 @@ ${agreement.signedDocumentUrl}
         recipientEmail: options.recipientEmail || contact?.email || account?.email,
         recipientName: options.recipientName || `${contact?.firstName || ''} ${contact?.lastName || ''}`.trim() || account?.name,
         signingToken,
-        signingUrl: `${SIGNING_BASE_URL}/sign/${signingToken}`,
         expiresAt: quote.expirationDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
         documentUrl: pdfResult.downloadUrl,
         mergeData: {
@@ -2214,9 +2288,10 @@ ${agreement.signedDocumentUrl}
           quoteTotal: quote.grandTotal || quote.total,
           projectName: quote.opportunity?.name,
         },
-        createdById: options.userId,
-      },
+        userId: options.userId,
+      }),
     });
+    const normalizedAgreement = normalizeAgreementRecord(agreement);
 
     await this.createAuditLog(agreement.id, 'CREATED', null, {
       quoteId,
@@ -2226,9 +2301,9 @@ ${agreement.signedDocumentUrl}
     logger.info(`Signable quote created: ${agreement.id}`);
 
     return {
-      agreement,
+      agreement: normalizedAgreement,
       pdfUrl: pdfResult.downloadUrl,
-      signingUrl: agreement.signingUrl,
+      signingUrl: normalizedAgreement.signingUrl,
     };
   },
 
@@ -2281,10 +2356,9 @@ ${agreement.signedDocumentUrl}
     const account = workOrder.opportunity?.account;
 
     const agreement = await prisma.agreement.create({
-      data: {
+      data: buildAgreementCreateData({
         agreementNumber,
         name: `Work Order Authorization - ${workOrder.workOrderNumber}`,
-        status: 'DRAFT',
         templateId: template.id,
         opportunityId: workOrder.opportunityId,
         accountId: account?.id,
@@ -2292,7 +2366,6 @@ ${agreement.signedDocumentUrl}
         recipientEmail: options.recipientEmail || contact?.email || account?.email,
         recipientName: options.recipientName || `${contact?.firstName || ''} ${contact?.lastName || ''}`.trim() || account?.name,
         signingToken,
-        signingUrl: `${SIGNING_BASE_URL}/sign/${signingToken}`,
         expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
         documentUrl: pdfResult.downloadUrl,
         mergeData: {
@@ -2301,9 +2374,10 @@ ${agreement.signedDocumentUrl}
           workType: workOrder.workType,
           status: workOrder.status,
         },
-        createdById: options.userId,
-      },
+        userId: options.userId,
+      }),
     });
+    const normalizedAgreement = normalizeAgreementRecord(agreement);
 
     await this.createAuditLog(agreement.id, 'CREATED', null, {
       workOrderId,
@@ -2313,9 +2387,9 @@ ${agreement.signedDocumentUrl}
     logger.info(`Signable work order created: ${agreement.id}`);
 
     return {
-      agreement,
+      agreement: normalizedAgreement,
       pdfUrl: pdfResult.downloadUrl,
-      signingUrl: agreement.signingUrl,
+      signingUrl: normalizedAgreement.signingUrl,
     };
   },
 
@@ -2361,10 +2435,9 @@ ${agreement.signedDocumentUrl}
     const agreementNumber = `DOC-${Date.now()}-${uuidv4().slice(0, 4).toUpperCase()}`;
 
     const agreement = await prisma.agreement.create({
-      data: {
+      data: buildAgreementCreateData({
         agreementNumber,
         name,
-        status: 'DRAFT',
         templateId: template.id,
         accountId,
         contactId,
@@ -2372,13 +2445,13 @@ ${agreement.signedDocumentUrl}
         recipientEmail,
         recipientName,
         signingToken,
-        signingUrl: `${SIGNING_BASE_URL}/sign/${signingToken}`,
         expiresAt: new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000),
         documentUrl: pdfUrl,
         mergeData,
-        createdById: userId,
-      },
+        userId,
+      }),
     });
+    const normalizedAgreement = normalizeAgreementRecord(agreement);
 
     await this.createAuditLog(agreement.id, 'CREATED', null, {
       type: 'signable_from_pdf',
@@ -2388,8 +2461,8 @@ ${agreement.signedDocumentUrl}
     logger.info(`Signable document created from PDF: ${agreement.id}`);
 
     return {
-      agreement,
-      signingUrl: agreement.signingUrl,
+      agreement: normalizedAgreement,
+      signingUrl: normalizedAgreement.signingUrl,
     };
   },
 
@@ -2436,13 +2509,14 @@ ${agreement.signedDocumentUrl}
   async initiateHostSigning(agreementId, hostInfo, userId) {
     logger.info(`Initiating host signing for agreement: ${agreementId}`);
 
-    const agreement = await prisma.agreement.findUnique({
+    const agreementRecord = await prisma.agreement.findUnique({
       where: { id: agreementId },
       include: {
         template: true,
         signatures: true,
       },
     });
+    const agreement = normalizeAgreementRecord(agreementRecord);
 
     if (!agreement) {
       throw new Error('Agreement not found');
@@ -2470,11 +2544,11 @@ ${agreement.signedDocumentUrl}
     await prisma.agreement.update({
       where: { id: agreementId },
       data: {
-        hostSigningToken,
-        hostSignerName: hostInfo.name,
-        hostSignerEmail: hostInfo.email,
-        hostSigningInitiatedAt: new Date(),
-        hostSigningInitiatedById: userId,
+        host_signing_token: hostSigningToken,
+        host_signer_name: hostInfo.name,
+        host_signer_email: hostInfo.email,
+        host_signing_initiated_at: new Date(),
+        host_signing_initiated_by_id: userId,
         // If customer already signed, mark as partially signed
         status: agreement.status === 'SIGNED' ? 'PARTIALLY_SIGNED' : agreement.status,
       },
@@ -2504,13 +2578,14 @@ ${agreement.signedDocumentUrl}
    * Get agreement by host signing token (for embedded in-person signing)
    */
   async getAgreementByHostToken(token) {
-    const agreement = await prisma.agreement.findFirst({
-      where: { hostSigningToken: token },
+    const agreementRecord = await prisma.agreement.findFirst({
+      where: { host_signing_token: token },
       include: {
         template: true,
         signatures: true,
       },
     });
+    const agreement = normalizeAgreementRecord(agreementRecord);
 
     if (!agreement) {
       throw new Error('Agreement not found or invalid host signing token');
@@ -2539,7 +2614,7 @@ ${agreement.signedDocumentUrl}
     ipAddress,
     userAgent,
   }) {
-    const agreement = await this.getAgreementByHostToken(hostToken);
+    const agreement = normalizeAgreementRecord(await this.getAgreementByHostToken(hostToken));
 
     if (!signatureData) {
       throw new Error('Signature data is required');
@@ -2581,13 +2656,14 @@ ${agreement.signedDocumentUrl}
       where: { id: agreement.id },
       data: {
         status: 'COMPLETED',
-        completedAt: new Date(),
+        completed_at: new Date(),
         signedDocumentUrl,
-        hostSignedAt: new Date(),
+        host_signed_at: new Date(),
         // Clear the host signing token after use
-        hostSigningToken: null,
+        host_signing_token: null,
       },
     });
+    const normalizedUpdated = normalizeAgreementRecord(updated);
 
     // Create audit log
     await this.createAuditLog(agreement.id, 'HOST_SIGNED', {
@@ -2599,12 +2675,12 @@ ${agreement.signedDocumentUrl}
     }, null);
 
     // Send completion emails to all parties
-    await this.sendHostSigningCompletionEmails(updated, signature);
+    await this.sendHostSigningCompletionEmails(normalizedUpdated, signature);
 
     logger.info(`Agreement completed with host signature: ${agreement.id}`);
 
     return {
-      agreement: updated,
+      agreement: normalizedUpdated,
       signature,
     };
   },
@@ -2720,6 +2796,7 @@ ${agreement.signedDocumentUrl}
    * Send completion emails after host signing
    */
   async sendHostSigningCompletionEmails(agreement, hostSignature) {
+    agreement = normalizeAgreementRecord(agreement);
     // Send to original customer
     await sesClient.send(new SendEmailCommand({
       Source: process.env.FROM_EMAIL || 'documents@pandaexteriors.com',
