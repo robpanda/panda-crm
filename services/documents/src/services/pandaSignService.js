@@ -126,6 +126,39 @@ function connectById(id) {
   return id ? { connect: { id } } : undefined;
 }
 
+const VALID_AUDIT_ACTIONS = new Set([
+  'CREATE',
+  'UPDATE',
+  'DELETE',
+  'LOGIN',
+  'LOGOUT',
+  'EXPORT',
+  'VIEW',
+]);
+
+export function normalizeAuditAction(action) {
+  const normalized = String(action || '').trim().toUpperCase();
+
+  if (VALID_AUDIT_ACTIONS.has(normalized)) {
+    return normalized;
+  }
+
+  switch (normalized) {
+    case 'CREATED':
+      return 'CREATE';
+    case 'VIEWED':
+      return 'VIEW';
+    case 'SENT':
+    case 'SIGNED':
+    case 'COMPLETED':
+    case 'HOST_SIGNING_INITIATED':
+    case 'HOST_SIGNED':
+      return 'UPDATE';
+    default:
+      return 'UPDATE';
+  }
+}
+
 async function resolveAgreementUserRelationInput(userId, relationField) {
   if (!userId) return {};
 
@@ -2080,11 +2113,17 @@ ${agreement.signedDocumentUrl}
    * Create audit log entry
    */
   async createAuditLog(agreementId, action, oldValues, newValues, userId) {
+    const normalizedAction = normalizeAuditAction(action);
+
+    if (normalizedAction !== action) {
+      logger.info(`Normalized PandaSign audit action ${action} -> ${normalizedAction}`);
+    }
+
     await prisma.auditLog.create({
       data: {
         tableName: 'agreements',
         recordId: agreementId,
-        action,
+        action: normalizedAction,
         oldValues,
         newValues,
         userId,
