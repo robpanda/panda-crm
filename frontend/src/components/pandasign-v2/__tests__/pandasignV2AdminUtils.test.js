@@ -80,4 +80,28 @@ describe('pandasignV2AdminUtils', () => {
     expect(html).toContain('(215) 555-1212');
     expect(html).toContain('PA rescission language');
   });
+
+  it('renders order contract tokens in the admin preview', () => {
+    const html = renderTemplatePreview({
+      name: 'Contract',
+      territory: 'PA',
+      content: [
+        '<p>{{projectName}}</p>',
+        '<p>{{orderContract.overview.customerName}}</p>',
+        '<p>{{orderContract.pricing.contractAmount}}</p>',
+        '<div>{{orderContract.pricing.lineItemsHtml}}</div>',
+        '<p>{{orderContract.signers.agent.email}}</p>',
+      ].join(''),
+    }, {
+      brandingItems: [],
+      dynamicContentItems: [],
+      territoryProfiles: [],
+    });
+
+    expect(html).toContain('Kitchen Renovation Agreement');
+    expect(html).toContain('Jamie Customer');
+    expect(html).toContain('$15,250.00');
+    expect(html).toContain('Premium Roofing Package');
+    expect(html).toContain('alex@pandaexteriors.com');
+  });
 });
