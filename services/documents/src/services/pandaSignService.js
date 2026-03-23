@@ -211,6 +211,30 @@ function normalizeAgreementRecord(agreement) {
   };
 }
 
+export function buildSignatureCreateData({
+  agreementId,
+  signerName,
+  signerEmail,
+  signerType,
+  signatureType = 'ELECTRONIC',
+  signatureUrl,
+  signedAt = new Date(),
+  ipAddress,
+  userAgent,
+}) {
+  return {
+    agreementId,
+    signerName,
+    ...(signerEmail !== undefined ? { signerEmail } : {}),
+    ...(signerType ? { signer_type: signerType } : {}),
+    signature_type: signatureType,
+    signature_url: signatureUrl,
+    signedAt,
+    ...(ipAddress !== undefined ? { ipAddress } : {}),
+    ...(userAgent !== undefined ? { userAgent } : {}),
+  };
+}
+
 function buildAgreementCreateData({
   agreementNumber,
   name,
@@ -1223,7 +1247,7 @@ Panda Exteriors
 
     // Create signature record
     const signature = await prisma.signature.create({
-      data: {
+      data: buildSignatureCreateData({
         agreementId: agreement.id,
         signerName: signerName || agreement.recipientName,
         signerEmail: signerEmail || agreement.recipientEmail,
@@ -1232,7 +1256,7 @@ Panda Exteriors
         signedAt: new Date(),
         ipAddress,
         userAgent,
-      },
+      }),
     });
 
     // Generate signed document with signature embedded
@@ -2730,7 +2754,7 @@ ${agreement.signedDocumentUrl}
 
     // Create host signature record
     const signature = await prisma.signature.create({
-      data: {
+      data: buildSignatureCreateData({
         agreementId: agreement.id,
         signerName: signerName || agreement.hostSignerName,
         signerEmail: signerEmail || agreement.hostSignerEmail,
@@ -2740,7 +2764,7 @@ ${agreement.signedDocumentUrl}
         signedAt: new Date(),
         ipAddress,
         userAgent,
-      },
+      }),
     });
 
     // Generate fully signed document with both signatures
