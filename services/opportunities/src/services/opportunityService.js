@@ -1995,20 +1995,11 @@ Be factual and professional. Highlight anything that needs attention.`;
         const rawSignedDocumentUrl = normalizeStoredS3Url(a.signedDocumentUrl);
         const rawDocumentUrl = normalizeStoredS3Url(a.documentUrl);
 
-        // Check if the URL is an S3 URL that needs pre-signing
-        const needsPresigning = (url) => (
-          url
-          && !String(url).startsWith('http')
-          && (url.startsWith('s3://') || url.includes('pandasign-documents') || url.includes('panda-crm-documents') || url.includes('.s3.'))
-        );
-
-        const signedDocumentUrl = needsPresigning(rawSignedDocumentUrl)
-          ? await getPresignedUrl(rawSignedDocumentUrl)
-          : rawSignedDocumentUrl;
-
-        const documentUrl = needsPresigning(rawDocumentUrl)
-          ? await getPresignedUrl(rawDocumentUrl)
-          : rawDocumentUrl;
+        // Agreement records already store usable job-scoped file URLs. Return
+        // them directly here so the job contracts list can always surface the
+        // draft/signed files without depending on this service's S3 creds.
+        const signedDocumentUrl = rawSignedDocumentUrl || null;
+        const documentUrl = rawDocumentUrl || null;
 
         // Generate thumbnail URL (same as document but smaller - we'll handle this in frontend)
         const thumbnailUrl = signedDocumentUrl || documentUrl;
