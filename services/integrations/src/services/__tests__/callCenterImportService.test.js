@@ -156,6 +156,36 @@ function createMockPrisma({
           reviewItems: createdReviewItems,
         };
       },
+      update: async ({ where, data, select }) => {
+        const run = importRuns.find((entry) => entry.id === where.id);
+        if (!run) throw new Error(`CallCenterImportRun ${where.id} not found`);
+
+        Object.assign(run, {
+          executedAt: data.executedAt ?? run.executedAt,
+          summaryJson: data.summaryJson ?? run.summaryJson,
+          aliasMapJson: data.aliasMapJson ?? run.aliasMapJson,
+        });
+
+        const createdReviewItems = (data.reviewItems?.create || []).map((item, index) => ({
+          id: `review-item-${reviewItems.length + index + 1}`,
+          runId: run.id,
+          status: item.status || 'OPEN',
+          ...item,
+        }));
+        reviewItems.push(...createdReviewItems);
+
+        if (select?._count?.select?.reviewItems) {
+          return {
+            id: run.id,
+            _count: { reviewItems: createdReviewItems.length },
+          };
+        }
+
+        return {
+          ...run,
+          reviewItems: createdReviewItems,
+        };
+      },
     },
     $transaction: async (callback) => callback(tx),
     __createdLeads: createdLeads,
@@ -774,6 +804,9 @@ test('executeImport consumes preview tokens after a successful reviewed executio
   assert.equal(mockPrisma.__createdLeads.length, 1);
   assert.equal(mockPrisma.__auditEntries.length, 1);
   assert.ok(execution.preview.consumedAt);
+  assert.equal(execution.review?.runId, 'import-run-1');
+  assert.equal(mockPrisma.__createdLeads[0].callCenterImportRun?.connect?.id, execution.review?.runId);
+  assert.equal(mockPrisma.__auditEntries[0].workflowId, execution.review?.runId);
 
   await assert.rejects(
     service.executeImport({

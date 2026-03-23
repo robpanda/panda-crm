@@ -56,7 +56,9 @@ model Account {
   latitude            Float?              @map("latitude")
   longitude           Float?              @map("longitude")
   deletedAt           DateTime?           @map("deleted_at")
+  callCenterImportRunId String?           @map("call_center_import_run_id")
   owner               User?               @relation("AccountOwner", fields: [ownerId], references: [id])
+  callCenterImportRun CallCenterImportRun? @relation("CallCenterImportRunAccounts", fields: [callCenterImportRunId], references: [id])
   activities          Activity[]          @relation("AccountActivities")
   agreements          Agreement[]
   attentionItems      AttentionItem[]     @relation("AccountAttentionItems")
@@ -81,6 +83,7 @@ model Account {
   @@index([ownerId])
   @@index([billingState])
   @@index([deletedAt])
+  @@index([callCenterImportRunId])
   @@map("accounts")
 }
 
@@ -109,11 +112,13 @@ model Contact {
   createdAt              DateTime        @default(now()) @map("created_at")
   updatedAt              DateTime        @updatedAt @map("updated_at")
   deletedAt              DateTime?       @map("deleted_at")
+  callCenterImportRunId  String?         @map("call_center_import_run_id")
   activities             Activity[]      @relation("ContactActivities")
   agreements             Agreement[]
   attentionItems         AttentionItem[] @relation("ContactAttentionItems")
   callLogs               CallLog[]
   account                Account?        @relation(fields: [accountId], references: [id])
+  callCenterImportRun    CallCenterImportRun? @relation("CallCenterImportRunContacts", fields: [callCenterImportRunId], references: [id])
   emailMessages          EmailMessage[]  @relation("ContactEmails")
   emails                 Email[]         @relation("ContactEmails")
   events                 Event[]         @relation("ContactEvents")
@@ -127,6 +132,7 @@ model Contact {
   @@index([email])
   @@index([smsNumber])
   @@index([deletedAt])
+  @@index([callCenterImportRunId])
   @@map("contacts")
 }
 
@@ -196,6 +202,7 @@ model Lead {
   champion_referral_id     String?
   is_champion_referral     Boolean             @default(false)
   referred_by_champion_id  String?
+  callCenterImportRunId    String?             @map("call_center_import_run_id")
   activities               Activity[]          @relation("LeadActivities")
   attentionItems           AttentionItem[]     @relation("LeadAttentionItems")
   callLogs                 CallLog[]
@@ -205,6 +212,7 @@ model Lead {
   events                   Event[]             @relation("LeadEvents")
   assignmentLogs           LeadAssignmentLog[]
   leadSetBy                User?               @relation("LeadSetByUser", fields: [leadSetById], references: [id])
+  callCenterImportRun      CallCenterImportRun? @relation("CallCenterImportRunLeads", fields: [callCenterImportRunId], references: [id])
   owner                    User?               @relation("LeadOwner", fields: [ownerId], references: [id])
   notes                    Note[]              @relation("LeadNotes")
   notifications            Notification[]      @relation("LeadNotifications")
@@ -223,6 +231,7 @@ model Lead {
   @@index([is_champion_referral])
   @@index([next_call_at])
   @@index([referred_by_champion_id])
+  @@index([callCenterImportRunId])
   @@map("leads")
 }
 
@@ -344,6 +353,7 @@ model Opportunity {
   invoiceReadyDate         DateTime?               @map("invoice_ready_date")
   invoiceStatus            InvoiceWorkflowStatus   @default(NOT_READY) @map("invoice_status")
   invoicedDate             DateTime?               @map("invoiced_date")
+  callCenterImportRunId    String?                 @map("call_center_import_run_id")
 
   // Onboarding fields (Claims workflow)
   onboardingStartDate    DateTime?               @map("onboarding_start_date")
@@ -421,6 +431,7 @@ model Opportunity {
   notes                    Note[]                  @relation("OpportunityNotes")
   notifications            Notification[]          @relation("OpportunityNotifications")
   account                  Account                 @relation(fields: [accountId], references: [id])
+  callCenterImportRun      CallCenterImportRun?    @relation("CallCenterImportRunOpportunities", fields: [callCenterImportRunId], references: [id])
   contact                  Contact?                @relation("OpportunityContact", fields: [contactId], references: [id])
   owner                    User?                   @relation("OpportunityOwner", fields: [ownerId], references: [id])
   projectManager           User?                   @relation("OpportunityProjectManager", fields: [projectManagerId], references: [id])
@@ -445,6 +456,7 @@ model Opportunity {
   @@index([projectManagerId])
   @@index([projectExpeditorId])
   @@index([deletedAt])
+  @@index([callCenterImportRunId])
   @@map("opportunities")
 }
 
@@ -509,6 +521,7 @@ model WorkOrder {
   endDate               DateTime?                   @map("end_date")
   createdAt             DateTime                    @default(now()) @map("created_at")
   updatedAt             DateTime                    @updatedAt @map("updated_at")
+  callCenterImportRunId String?                     @map("call_center_import_run_id")
   attentionItems        AttentionItem[]             @relation("WorkOrderAttentionItems")
   materialOrders        MaterialOrder[]
   laborOrders           LaborOrder[]
@@ -517,6 +530,7 @@ model WorkOrder {
   skillRequirements     WorkOrderSkillRequirement[]
   work_order_line_items work_order_line_items[]
   account               Account                     @relation(fields: [accountId], references: [id])
+  callCenterImportRun   CallCenterImportRun?        @relation("CallCenterImportRunWorkOrders", fields: [callCenterImportRunId], references: [id])
   opportunity           Opportunity?                @relation(fields: [opportunityId], references: [id])
   territory             ServiceTerritory?           @relation(fields: [territoryId], references: [id])
   workType              WorkType?                   @relation(fields: [workTypeId], references: [id])
@@ -525,6 +539,7 @@ model WorkOrder {
   @@index([accountId])
   @@index([opportunityId])
   @@index([status])
+  @@index([callCenterImportRunId])
   @@map("work_orders")
 }
 
@@ -550,6 +565,7 @@ model ServiceAppointment {
   workOrderId           String             @map("work_order_id")
   createdAt             DateTime           @default(now()) @map("created_at")
   updatedAt             DateTime           @updatedAt @map("updated_at")
+  callCenterImportRunId String?            @map("call_center_import_run_id")
   geocodedAt            DateTime?          @map("geocoded_at")
   latitude              Float?             @map("latitude")
   longitude             Float?             @map("longitude")
@@ -557,6 +573,7 @@ model ServiceAppointment {
   travelTimeMinutes     Int?               @map("travel_time_minutes")
   work_type_id          String?
   assignedResources     AssignedResource[]
+  callCenterImportRun   CallCenterImportRun? @relation("CallCenterImportRunServiceAppointments", fields: [callCenterImportRunId], references: [id])
   workOrder             WorkOrder          @relation(fields: [workOrderId], references: [id])
   work_types            WorkType?          @relation(fields: [work_type_id], references: [id])
 
@@ -564,6 +581,7 @@ model ServiceAppointment {
   @@index([status])
   @@index([scheduledStart])
   @@index([work_type_id])
+  @@index([callCenterImportRunId])
   @@map("service_appointments")
 }
 
@@ -2430,6 +2448,12 @@ model CallCenterImportRun {
   aliasMapJson     Json?                       @map("alias_map_json")
   createdAt        DateTime                    @default(now()) @map("created_at")
   updatedAt        DateTime                    @updatedAt @map("updated_at")
+  accounts         Account[]                   @relation("CallCenterImportRunAccounts")
+  contacts         Contact[]                   @relation("CallCenterImportRunContacts")
+  leads            Lead[]                      @relation("CallCenterImportRunLeads")
+  opportunities    Opportunity[]               @relation("CallCenterImportRunOpportunities")
+  workOrders       WorkOrder[]                 @relation("CallCenterImportRunWorkOrders")
+  serviceAppointments ServiceAppointment[]     @relation("CallCenterImportRunServiceAppointments")
   executedBy       User?                       @relation("CallCenterImportRunExecutedBy", fields: [executedByUserId], references: [id])
   reviewItems      CallCenterImportReviewItem[]
 
