@@ -455,6 +455,52 @@ function getTemplateSignatureFields(templateOrSignatureFields) {
   return extractTemplateMetadata(signatureFields).fields;
 }
 
+export function getAgreementRenderedSignatureFields(agreement) {
+  const renderedFields = agreement?.mergeData?._renderedSignatureFields;
+  if (!Array.isArray(renderedFields) || renderedFields.length === 0) {
+    return [];
+  }
+
+  return normalizeSignatureFieldLayout(
+    renderedFields,
+    agreement?.template?.signatureFields?.signerRoles || agreement?.template?.signerRoles || DEFAULT_SIGNER_ROLES
+  );
+}
+
+export function getAgreementSignatureFields(agreement) {
+  const renderedFields = getAgreementRenderedSignatureFields(agreement);
+  if (renderedFields.length > 0) {
+    return renderedFields;
+  }
+
+  const templateFields = getTemplateSignatureFields(agreement?.template);
+  if (Array.isArray(templateFields) && templateFields.length > 0) {
+    return templateFields;
+  }
+
+  return buildDefaultSignatureFieldLayout(DEFAULT_SIGNER_ROLES);
+}
+
+export function getAgreementSignatureField(agreement, { role, type = 'SIGNATURE', name } = {}) {
+  const fields = getAgreementSignatureFields(agreement);
+  const normalizedRole = String(role || '').trim().toUpperCase();
+  const normalizedType = String(type || '').trim().toUpperCase();
+
+  return fields.find((field) =>
+    (!name || field.name === name)
+    && (!normalizedRole || field.role === normalizedRole)
+    && (!normalizedType || field.type === normalizedType)
+  )
+    || fields.find((field) =>
+      (!name || field.name === name)
+      && (!normalizedRole || field.role === normalizedRole)
+    )
+    || (name ? fields.find((field) => field.name === name) : null)
+    || (normalizedType ? fields.find((field) => field.type === normalizedType) : null)
+    || fields[0]
+    || null;
+}
+
 function extractMergeFieldsFromContent(content) {
   const matches = String(content || '').match(/\{\{[^}]+\}\}/g) || [];
   return [...new Set(matches.map((match) => match.slice(2, -2).trim()).filter(Boolean))];
@@ -931,12 +977,18 @@ export const pandaSignService = {
     const normalizedAgreement = normalizeAgreementRecord(agreement);
 
     // Generate PDF document
-    const pdfUrl = await this.generateDocument(normalizedAgreement, template, resolvedMergeData);
+    const { pdfUrl, renderedSignatureFields } = await this.generateDocument(normalizedAgreement, template, resolvedMergeData);
 
     // Update agreement with document URL
     await prisma.agreement.update({
       where: { id: agreement.id },
-      data: { documentUrl: pdfUrl },
+      data: {
+        documentUrl: pdfUrl,
+        mergeData: {
+          ...deepCloneJson(resolvedMergeData, {}),
+          _renderedSignatureFields: renderedSignatureFields,
+        },
+      },
     });
 
     // Create audit log
@@ -950,6 +1002,10 @@ export const pandaSignService = {
     return normalizeAgreementRecord({
       ...agreement,
       documentUrl: pdfUrl,
+      mergeData: {
+        ...deepCloneJson(resolvedMergeData, {}),
+        _renderedSignatureFields: renderedSignatureFields,
+      },
     });
   },
 
@@ -959,12 +1015,15 @@ export const pandaSignService = {
   async generateDocument(agreement, template, mergeData) {
     let pdfDoc;
     const templateDocumentUrl = template.documentUrl;
+    const metadata = extractTemplateMetadata(template.signatureFields);
+    let renderedSignatureFields = [];
 
     if (templateDocumentUrl) {
       // Load existing PDF template
       const response = await fetch(templateDocumentUrl);
       const pdfBytes = await response.arrayBuffer();
       pdfDoc = await PDFDocument.load(pdfBytes);
+      renderedSignatureFields = getTemplateSignatureFields(template) || [];
     } else {
       // Create new PDF from scratch
       pdfDoc = await PDFDocument.create();
@@ -976,7 +1035,8 @@ export const pandaSignService = {
     // If no template, create basic document
     if (!templateDocumentUrl) {
       let page = pdfDoc.addPage([612, 792]); // Letter size
-      const { width, height } = page.getSize();
+      const { height } = page.getSize();
+      let currentPageNumber = 1;
 
       // Header
       page.drawText('PANDA EXTERIORS', {
@@ -1005,6 +1065,7 @@ export const pandaSignService = {
           // Add new page if needed
           page = pdfDoc.addPage([612, 792]);
           y = page.getSize().height - 50;
+          currentPageNumber += 1;
         }
         if (line) {
           page.drawText(line, {
@@ -1017,33 +1078,121 @@ export const pandaSignService = {
         y -= 14;
       }
 
-      // Add signature placeholder
-      page.drawText('Signature: ________________________', {
-        x: 50,
-        y: 150,
-        size: 12,
-        font,
-      });
+      const signerRoles = Array.isArray(metadata.signerRoles) && metadata.signerRoles.length > 0
+        ? metadata.signerRoles
+        : normalizeSignerRoles(DEFAULT_SIGNER_ROLES);
+      const configuredFields = metadata.fields?.length > 0
+        ? metadata.fields
+        : buildDefaultSignatureFieldLayout(signerRoles);
 
-      page.drawText(`Date: ${new Date().toLocaleDateString()}`, {
-        x: 400,
-        y: 150,
-        size: 12,
-        font,
-      });
+      if (y < 230) {
+        page = pdfDoc.addPage([612, 792]);
+        y = page.getSize().height - 60;
+        currentPageNumber += 1;
+      } else {
+        y -= 28;
+      }
 
-      page.drawText(`Name: ${normalizeAgreementRecord(agreement)?.recipientName || ''}`, {
-        x: 50,
-        y: 130,
-        size: 10,
-        font,
-      });
+      const drawLine = (fromX, toX, lineY) => {
+        page.drawLine({
+          start: { x: fromX, y: lineY },
+          end: { x: toX, y: lineY },
+          thickness: 1,
+          color: rgb(0.35, 0.35, 0.35),
+        });
+      };
+
+      renderedSignatureFields = [];
+
+      for (const signer of signerRoles) {
+        if (y < 170) {
+          page = pdfDoc.addPage([612, 792]);
+          y = page.getSize().height - 60;
+          currentPageNumber += 1;
+        }
+
+        const role = String(signer.role || '').trim().toUpperCase();
+        const roleLabel = String(signer.label || role || 'Signer').trim();
+        const signatureField = configuredFields.find((field) => field.role === role && field.type === 'SIGNATURE');
+        const initialField = configuredFields.find((field) => field.role === role && field.type === 'INITIAL');
+        const displayName = role === 'AGENT'
+          ? (mergeData?.salesRepName || agreement?.hostSignerName || '')
+          : (mergeData?.customerName || agreement?.recipientName || '');
+
+        page.drawText(`${roleLabel} Signature`, {
+          x: 50,
+          y,
+          size: 11,
+          font: boldFont,
+          color: rgb(0.15, 0.15, 0.15),
+        });
+        y -= 22;
+
+        const signatureLineY = y;
+        page.drawText('Signature:', {
+          x: 50,
+          y: signatureLineY,
+          size: 11,
+          font,
+        });
+        drawLine(112, 292, signatureLineY + 2);
+        page.drawText(`Date: ${new Date().toLocaleDateString()}`, {
+          x: 370,
+          y: signatureLineY,
+          size: 11,
+          font,
+        });
+
+        renderedSignatureFields.push({
+          name: signatureField?.name || (role === 'AGENT' ? 'host_signature' : `${role.toLowerCase()}_signature`),
+          role,
+          type: 'SIGNATURE',
+          page: currentPageNumber,
+          x: 118,
+          y: signatureLineY - 10,
+          width: 165,
+          height: 32,
+        });
+
+        y -= 20;
+
+        if (initialField) {
+          const initialLineY = y;
+          page.drawText('Initials:', {
+            x: 50,
+            y: initialLineY,
+            size: 10,
+            font,
+          });
+          drawLine(100, 165, initialLineY + 2);
+
+          renderedSignatureFields.push({
+            name: initialField.name,
+            role,
+            type: 'INITIAL',
+            page: currentPageNumber,
+            x: 104,
+            y: initialLineY - 7,
+            width: 56,
+            height: 20,
+          });
+
+          y -= 18;
+        }
+
+        if (displayName) {
+          page.drawText(`Name: ${displayName}`, {
+            x: 50,
+            y,
+            size: 10,
+            font,
+          });
+          y -= 14;
+        }
+
+        y -= 18;
+      }
     }
-
-    // Add signature fields metadata
-    const signatureFields = getTemplateSignatureFields(template) || [
-      { name: 'primary_signature', page: 1, x: 100, y: 150, width: 200, height: 50 },
-    ];
 
     // Save document to S3
     const pdfBytes = await pdfDoc.save();
@@ -1067,7 +1216,14 @@ export const pandaSignService = {
       { expiresIn: 3600 * 24 * 7 } // 7 days
     );
 
-    return url;
+    return {
+      pdfUrl: url,
+      renderedSignatureFields: renderedSignatureFields.length > 0
+        ? renderedSignatureFields
+        : (getTemplateSignatureFields(template) || [
+          { name: 'primary_signature', page: 1, x: 100, y: 150, width: 200, height: 50 },
+        ]),
+    };
   },
 
   /**
@@ -1398,16 +1554,20 @@ Panda Exteriors
     const signatureBuffer = Buffer.from(signatureData.replace(/^data:image\/\w+;base64,/, ''), 'base64');
     const signatureImage = await pdfDoc.embedPng(signatureBuffer);
 
-    // Get first page (or page specified in template)
     const pages = pdfDoc.getPages();
-    const page = pages[0];
+    const field = getAgreementSignatureField(agreement, { role: 'CUSTOMER', type: 'SIGNATURE' }) || {
+      page: 1,
+      x: 100,
+      y: 150,
+      width: 200,
+      height: 50,
+    };
+    const pageIndex = Math.min(
+      Math.max(Number(field.page || 1) - 1, 0),
+      Math.max(pages.length - 1, 0)
+    );
+    const page = pages[pageIndex] || pages[0];
 
-    // Add signature at the signature field location
-    const signatureFields = getTemplateSignatureFields(agreement.template) || [
-      { x: 100, y: 150, width: 200, height: 50 },
-    ];
-
-    const field = signatureFields[0];
     page.drawImage(signatureImage, {
       x: field.x,
       y: field.y,
@@ -2100,7 +2260,7 @@ ${agreement.signedDocumentUrl}
       recipientEmail: customerEmail || emails.customer || resolvedMergeData.customerEmail || '',
     };
 
-    const previewUrl = await this.generateDocument(previewAgreement, template, resolvedMergeData);
+    const { pdfUrl: previewUrl } = await this.generateDocument(previewAgreement, template, resolvedMergeData);
     const diagnostics = await this.verifyRequiredFields({
       templateId,
       customerEmail,
@@ -2880,19 +3040,24 @@ ${agreement.signedDocumentUrl}
     const signatureBuffer = Buffer.from(signatureData.replace(/^data:image\/\w+;base64,/, ''), 'base64');
     const signatureImage = await pdfDoc.embedPng(signatureBuffer);
 
-    // Get the page for host signature (typically same page or designated page)
     const pages = pdfDoc.getPages();
-    const page = pages[0];
-
-    // Add host signature at second signature field location
-    // (positioned to the right or below customer signature)
-    const signatureFields = getTemplateSignatureFields(agreement.template) || [];
-    const hostField = signatureFields.find(f => f.name === 'host_signature') || {
-      x: 350, // Right side of page
+    const renderedFields = getAgreementRenderedSignatureFields(agreement);
+    const hostField = getAgreementSignatureField(agreement, {
+      role: 'AGENT',
+      type: 'SIGNATURE',
+      name: 'host_signature',
+    }) || {
+      page: 1,
+      x: 350,
       y: 150,
       width: 200,
       height: 50,
     };
+    const pageIndex = Math.min(
+      Math.max(Number(hostField.page || 1) - 1, 0),
+      Math.max(pages.length - 1, 0)
+    );
+    const page = pages[pageIndex] || pages[0];
 
     page.drawImage(signatureImage, {
       x: hostField.x,
@@ -2901,15 +3066,16 @@ ${agreement.signedDocumentUrl}
       height: hostField.height,
     });
 
-    // Add "Host/Agent Signature" label
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-    page.drawText('Agent/Representative:', {
-      x: hostField.x,
-      y: hostField.y + hostField.height + 5,
-      size: 9,
-      font,
-      color: rgb(0.3, 0.3, 0.3),
-    });
+    if (renderedFields.length === 0) {
+      page.drawText('Agent/Representative:', {
+        x: hostField.x,
+        y: hostField.y + hostField.height + 5,
+        size: 9,
+        font,
+        color: rgb(0.3, 0.3, 0.3),
+      });
+    }
 
     // Update Certificate of Completion with host signature info
     const certPageIndex = pdfDoc.getPageCount() - 1;
