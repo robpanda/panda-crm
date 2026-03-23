@@ -48,7 +48,10 @@ import {
   SkipForward,
 } from 'lucide-react';
 
-const FEATURE_PANDASIGN_V2 = String(import.meta.env.VITE_FEATURE_PANDASIGN_V2 || '').toLowerCase() === 'true';
+// PandaSign V2 is now the supported job-side contract path.
+// Keep the V2 wizard enabled so the live job flow does not fall back to the
+// older 5-step send endpoint contract path.
+const FEATURE_PANDASIGN_V2 = true;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PANDASIGN_TEMPLATE_TERRITORIES = new Set(['DE', 'MD', 'NJ', 'PA', 'NC', 'VA', 'FL']);
 
