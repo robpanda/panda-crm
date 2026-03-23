@@ -1396,6 +1396,7 @@ function createAuditEntry(tx, {
   newValues = null,
   userId = null,
   userEmail = null,
+  workflowId = null,
 }) {
   const changedFields = new Set([
     ...Object.keys(oldValues || {}),
@@ -1413,6 +1414,7 @@ function createAuditEntry(tx, {
       userId,
       userEmail,
       source: IMPORT_SOURCE,
+      workflowId: workflowId || undefined,
     },
   });
 }
@@ -2642,7 +2644,7 @@ class CallCenterImportService {
     return patch;
   }
 
-  async ensureLead(tx, analysisItem, auditUser) {
+  async ensureLead(tx, analysisItem, auditUser, importRunId) {
     if (analysisItem.leadMatch.record) {
       const patch = this.buildLeadPatch(analysisItem.leadMatch.record, analysisItem.row, analysisItem.userMappings);
       if (Object.keys(patch).length === 0) {
@@ -2662,13 +2664,17 @@ class CallCenterImportService {
         newValues: patch,
         userId: auditUser.userId,
         userEmail: auditUser.userEmail,
+        workflowId: importRunId,
       });
 
       return { record: updated, action: 'updated' };
     }
 
     const created = await tx.lead.create({
-      data: this.buildLeadWriteData(this.buildLeadCreateData(analysisItem.row, analysisItem.userMappings)),
+      data: {
+        ...this.buildLeadWriteData(this.buildLeadCreateData(analysisItem.row, analysisItem.userMappings)),
+        callCenterImportRun: connectById(importRunId),
+      },
     });
 
     await createAuditEntry(tx, {
@@ -2685,12 +2691,13 @@ class CallCenterImportService {
       },
       userId: auditUser.userId,
       userEmail: auditUser.userEmail,
+      workflowId: importRunId,
     });
 
     return { record: created, action: 'created' };
   }
 
-  async ensureAccountAndContact(tx, row, leadRecord, ownerUserId) {
+  async ensureAccountAndContact(tx, row, leadRecord, ownerUserId, auditUser, importRunId) {
     let account = await findAccountMatch(tx, row);
     if (!account) {
       account = await tx.account.create({
@@ -2700,10 +2707,32 @@ class CallCenterImportService {
           phone: row.phone,
           email: row.email,
           owner: connectById(ownerUserId || leadRecord.ownerId || null),
+          callCenterImportRun: connectById(importRunId),
           type: 'RESIDENTIAL',
           status: 'NEW',
         },
-        select: { id: true, name: true },
+        select: {
+          id: true,
+          name: true,
+          ownerId: true,
+          phone: true,
+          email: true,
+        },
+      });
+
+      await createAuditEntry(tx, {
+        tableName: 'accounts',
+        recordId: account.id,
+        action: 'CREATE',
+        newValues: {
+          name: account.name,
+          ownerId: account.ownerId || null,
+          phone: account.phone || null,
+          email: account.email || null,
+        },
+        userId: auditUser.userId,
+        userEmail: auditUser.userEmail,
+        workflowId: importRunId,
       });
     }
 
@@ -2719,9 +2748,32 @@ class CallCenterImportService {
           phone: row.phone || leadRecord.phone,
           mobilePhone: row.phone || leadRecord.mobilePhone,
           account: { connect: { id: account.id } },
+          callCenterImportRun: connectById(importRunId),
           isPrimary: true,
         },
-        select: { id: true, accountId: true },
+        select: {
+          id: true,
+          accountId: true,
+          fullName: true,
+          email: true,
+          phone: true,
+          mobilePhone: true,
+        },
+      });
+
+      await createAuditEntry(tx, {
+        tableName: 'contacts',
+        recordId: contact.id,
+        action: 'CREATE',
+        newValues: {
+          accountId: contact.accountId,
+          fullName: contact.fullName || null,
+          email: contact.email || null,
+          phone: contact.phone || contact.mobilePhone || null,
+        },
+        userId: auditUser.userId,
+        userEmail: auditUser.userEmail,
+        workflowId: importRunId,
       });
     }
 
@@ -2763,7 +2815,7 @@ class CallCenterImportService {
     return data;
   }
 
-  async ensureOpportunity(tx, analysisItem, leadRecord, auditUser) {
+  async ensureOpportunity(tx, analysisItem, leadRecord, auditUser, importRunId) {
     const ownerUserId = analysisItem.userMappings.owner?.userId || leadRecord.ownerId || null;
     if (analysisItem.opportunityMatch.record) {
       const patch = this.buildOpportunityPatch(analysisItem.opportunityMatch.record, analysisItem.row, ownerUserId);
@@ -2784,12 +2836,13 @@ class CallCenterImportService {
         newValues: patch,
         userId: auditUser.userId,
         userEmail: auditUser.userEmail,
+        workflowId: importRunId,
       });
 
       return { record: updated, action: 'updated' };
     }
 
-    const { account, contact } = await this.ensureAccountAndContact(tx, analysisItem.row, leadRecord, ownerUserId);
+    const { account, contact } = await this.ensureAccountAndContact(tx, analysisItem.row, leadRecord, ownerUserId, auditUser, importRunId);
     const jobId = await this.generateJobId(tx);
     const created = await tx.opportunity.create({
       data: {
@@ -2798,6 +2851,7 @@ class CallCenterImportService {
         account: { connect: { id: account.id } },
         contact: { connect: { id: contact.id } },
         owner: connectById(ownerUserId),
+        callCenterImportRun: connectById(importRunId),
         stage: toOpportunityStage(analysisItem.row.eventType),
         leadSource: leadRecord.source || 'Call Center Import',
         workType: analysisItem.row.workType || leadRecord.workType || undefined,
@@ -2809,7 +2863,7 @@ class CallCenterImportService {
     });
 
     if (!leadRecord.isConverted) {
-      await tx.lead.update({
+      const convertedLead = await tx.lead.update({
         where: { id: leadRecord.id },
         data: {
           isConverted: true,
@@ -2818,6 +2872,29 @@ class CallCenterImportService {
           convertedContactId: contact.id,
           convertedOpportunityId: created.id,
         },
+      });
+
+      await createAuditEntry(tx, {
+        tableName: 'leads',
+        recordId: convertedLead.id,
+        action: 'UPDATE',
+        oldValues: {
+          isConverted: leadRecord.isConverted,
+          convertedDate: leadRecord.convertedDate,
+          convertedAccountId: leadRecord.convertedAccountId,
+          convertedContactId: leadRecord.convertedContactId,
+          convertedOpportunityId: leadRecord.convertedOpportunityId,
+        },
+        newValues: {
+          isConverted: convertedLead.isConverted,
+          convertedDate: convertedLead.convertedDate,
+          convertedAccountId: convertedLead.convertedAccountId,
+          convertedContactId: convertedLead.convertedContactId,
+          convertedOpportunityId: convertedLead.convertedOpportunityId,
+        },
+        userId: auditUser.userId,
+        userEmail: auditUser.userEmail,
+        workflowId: importRunId,
       });
     }
 
@@ -2834,12 +2911,13 @@ class CallCenterImportService {
       },
       userId: auditUser.userId,
       userEmail: auditUser.userEmail,
+      workflowId: importRunId,
     });
 
     return { record: created, action: 'created' };
   }
 
-  async ensureWorkOrder(tx, opportunityId, accountId, row) {
+  async ensureWorkOrder(tx, opportunityId, accountId, row, auditUser, importRunId) {
     const existing = await tx.workOrder.findFirst({
       where: { opportunityId },
       select: { id: true, workOrderNumber: true, status: true },
@@ -2855,18 +2933,41 @@ class CallCenterImportService {
         description: sanitizeImportNotes(row),
         account: { connect: { id: accountId } },
         opportunity: connectById(opportunityId),
+        callCenterImportRun: connectById(importRunId),
         status: 'SCHEDULED',
         startDate: row.eventAt ? new Date(row.eventAt) : null,
         endDate: row.eventAt ? new Date(new Date(row.eventAt).getTime() + APPOINTMENT_DURATION_MINUTES * 60000) : null,
       },
-      select: { id: true, workOrderNumber: true, status: true },
+      select: {
+        id: true,
+        workOrderNumber: true,
+        status: true,
+        accountId: true,
+        opportunityId: true,
+      },
     });
+
+    await createAuditEntry(tx, {
+      tableName: 'work_orders',
+      recordId: created.id,
+      action: 'CREATE',
+      newValues: {
+        workOrderNumber: created.workOrderNumber,
+        status: created.status,
+        accountId: created.accountId,
+        opportunityId: created.opportunityId || null,
+      },
+      userId: auditUser.userId,
+      userEmail: auditUser.userEmail,
+      workflowId: importRunId,
+    });
+
     return { record: created, action: 'created' };
   }
 
-  async ensureAppointment(tx, analysisItem, opportunityRecord, auditUser) {
+  async ensureAppointment(tx, analysisItem, opportunityRecord, auditUser, importRunId) {
     const accountId = opportunityRecord.accountId;
-    const workOrderResult = await this.ensureWorkOrder(tx, opportunityRecord.id, accountId, analysisItem.row);
+    const workOrderResult = await this.ensureWorkOrder(tx, opportunityRecord.id, accountId, analysisItem.row, auditUser, importRunId);
     const desiredStatus = determineAppointmentStatus(analysisItem.row);
 
     if (analysisItem.appointmentMatch) {
@@ -2897,6 +2998,7 @@ class CallCenterImportService {
         newValues: patch,
         userId: auditUser.userId,
         userEmail: auditUser.userEmail,
+        workflowId: importRunId,
       });
 
       return { record: updated, action: 'updated', workOrder: workOrderResult.record };
@@ -2911,6 +3013,7 @@ class CallCenterImportService {
         subject: `${analysisItem.row.workType || 'Inspection'} - ${analysisItem.row.name}`,
         description: sanitizeImportNotes(analysisItem.row),
         workOrder: { connect: { id: workOrderResult.record.id } },
+        callCenterImportRun: connectById(importRunId),
         status: desiredStatus,
         earliestStart: scheduledStart,
         dueDate: scheduledEnd,
@@ -2934,12 +3037,13 @@ class CallCenterImportService {
       },
       userId: auditUser.userId,
       userEmail: auditUser.userEmail,
+      workflowId: importRunId,
     });
 
     return { record: created, action: 'created', workOrder: workOrderResult.record };
   }
 
-  async applyRow(analysisItem, auditUser) {
+  async applyRow(analysisItem, auditUser, importRunId) {
     if (!analysisItem.actionable) {
       return {
         rowId: analysisItem.row.rowId,
@@ -2951,16 +3055,16 @@ class CallCenterImportService {
 
     const prismaClient = await resolvePrismaClient(this.prisma);
     return prismaClient.$transaction(async (tx) => {
-      const leadResult = await this.ensureLead(tx, analysisItem, auditUser);
+      const leadResult = await this.ensureLead(tx, analysisItem, auditUser, importRunId);
       let opportunityResult = null;
       let appointmentResult = null;
 
       if (shouldCreateOpportunity(analysisItem.row)) {
-        opportunityResult = await this.ensureOpportunity(tx, analysisItem, leadResult.record, auditUser);
+        opportunityResult = await this.ensureOpportunity(tx, analysisItem, leadResult.record, auditUser, importRunId);
       }
 
       if (shouldCreateAppointment(analysisItem.row) && opportunityResult?.record) {
-        appointmentResult = await this.ensureAppointment(tx, analysisItem, opportunityResult.record, auditUser);
+        appointmentResult = await this.ensureAppointment(tx, analysisItem, opportunityResult.record, auditUser, importRunId);
       }
 
       return {
@@ -3017,7 +3121,40 @@ class CallCenterImportService {
     });
   }
 
+  async createImportRunRecord({
+    prepared,
+    currentPreview,
+    previewToken,
+    allowRiskOverride,
+    auditUser,
+  }, prismaClient) {
+    return prismaClient.callCenterImportRun.create({
+      data: {
+        previewToken,
+        workbookFileName: currentPreview.source?.fileName || prepared.fileName,
+        workbookSha256: currentPreview.source?.workbookHash || prepared.workbookHash,
+        executedAt: new Date(),
+        executedByUserId: auditUser.userId || null,
+        summaryJson: toJsonValue({
+          status: 'EXECUTING',
+          preview: currentPreview.summary,
+          diagnostics: {
+            duplicates: currentPreview.diagnostics?.duplicates?.summary || null,
+            userMappings: currentPreview.diagnostics?.userMappings?.summary || null,
+            executionGuards: currentPreview.diagnostics?.executionGuards || null,
+          },
+          source: currentPreview.source,
+          reviewItemCount: 0,
+          overrideApplied: allowRiskOverride,
+        }),
+        aliasMapJson: toJsonValue(prepared.analysisResult.aliasMapUsed),
+      },
+      select: { id: true },
+    });
+  }
+
   async persistImportReviewRun({
+    runId,
     prepared,
     currentPreview,
     results,
@@ -3030,13 +3167,10 @@ class CallCenterImportService {
     const reviewItems = this.buildImportReviewItems(prepared.analysisResult.analysis, results);
 
     try {
-      const run = await prismaClient.callCenterImportRun.create({
+      const run = await prismaClient.callCenterImportRun.update({
+        where: { id: runId },
         data: {
-          previewToken,
-          workbookFileName: currentPreview.source?.fileName || prepared.fileName,
-          workbookSha256: currentPreview.source?.workbookHash || prepared.workbookHash,
           executedAt: consumedPreview?.consumedAt ? new Date(consumedPreview.consumedAt) : new Date(),
-          executedByUserId: auditUser.userId || null,
           summaryJson: toJsonValue({
             execute: executionSummary,
             preview: currentPreview.summary,
@@ -3068,10 +3202,14 @@ class CallCenterImportService {
       };
     } catch (error) {
       logger.error('Failed to persist call-center import review artifacts', {
+        runId,
         previewToken,
         error: error.message,
       });
-      return null;
+      return {
+        runId,
+        reviewItemCount: 0,
+      };
     }
   }
 
@@ -3131,6 +3269,13 @@ class CallCenterImportService {
       userId: userContext.id || null,
       userEmail: userContext.email || null,
     };
+    const importRun = await this.createImportRunRecord({
+      prepared,
+      currentPreview,
+      previewToken,
+      allowRiskOverride,
+      auditUser,
+    }, prismaClient);
 
     const results = [];
     for (const item of prepared.analysisResult.analysis) {
@@ -3154,7 +3299,7 @@ class CallCenterImportService {
       }
 
       try {
-        const result = await this.applyRow(item, auditUser);
+        const result = await this.applyRow(item, auditUser, importRun.id);
         results.push(result);
       } catch (error) {
         logger.error('Call center import row failed', {
@@ -3175,6 +3320,7 @@ class CallCenterImportService {
     const consumedPreview = await markPreviewTokenConsumed(previewToken, prismaClient) || validatedPreview;
     const executionSummary = this.summarizeExecution(results);
     const reviewTracking = await this.persistImportReviewRun({
+      runId: importRun.id,
       prepared,
       currentPreview,
       results,
