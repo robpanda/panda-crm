@@ -179,22 +179,27 @@ async function getPresignedUrl(s3Url, expiresIn = 3600) {
   if (!s3Url) return null;
 
   try {
-    if (isPresignedS3Url(s3Url)) {
-      return s3Url;
+    const normalized = normalizeStoredS3Url(s3Url);
+
+    // Agreements and some documents are already stored as usable HTTP URLs.
+    // For the job documents list, we should surface those URLs as-is instead of
+    // trying to sign them again in this service.
+    if (normalized.startsWith('http')) {
+      return normalized;
     }
 
     // Extract the key from the S3 URL
     // URL format: https://bucket.s3.region.amazonaws.com/key or s3://bucket/key
     let key;
-    if (s3Url.startsWith('s3://')) {
-      key = s3Url.replace(`s3://${S3_BUCKET}/`, '');
-    } else if (s3Url.includes('.s3.')) {
+    if (normalized.startsWith('s3://')) {
+      key = normalized.replace(`s3://${S3_BUCKET}/`, '');
+    } else if (normalized.includes('.s3.')) {
       // https://bucket.s3.region.amazonaws.com/encoded-key
-      const url = new URL(s3Url);
+      const url = new URL(normalized);
       key = decodeURIComponent(url.pathname.slice(1));
     } else {
       // Already just a key
-      key = s3Url;
+      key = normalized;
     }
 
     const command = new GetObjectCommand({
@@ -205,11 +210,20 @@ async function getPresignedUrl(s3Url, expiresIn = 3600) {
     return await getSignedUrl(s3Client, command, { expiresIn });
   } catch (error) {
     logger.error(`Error generating pre-signed URL for ${s3Url}:`, error);
-    if (isPresignedS3Url(s3Url)) {
-      return s3Url;
+    const normalized = normalizeStoredS3Url(s3Url);
+    if (normalized.startsWith('http')) {
+      return normalized;
     }
     return null;
   }
+}
+
+function normalizeStoredS3Url(url) {
+  if (!url) {
+    return '';
+  }
+
+  return String(url).trim().replace(/^['"]|['"]$/g, '');
 }
 
 function isPresignedS3Url(url) {
@@ -217,7 +231,7 @@ function isPresignedS3Url(url) {
     return false;
   }
 
-  const normalized = String(url).trim().replace(/^['"]|['"]$/g, '');
+  const normalized = normalizeStoredS3Url(url);
   if (!normalized.startsWith('http')) {
     return false;
   }
@@ -1978,20 +1992,23 @@ Be factual and professional. Highlight anything that needs attention.`;
     // Generate pre-signed URLs for S3 documents
     const documentsWithPresignedUrls = await Promise.all(
       agreements.map(async (a) => {
+        const rawSignedDocumentUrl = normalizeStoredS3Url(a.signedDocumentUrl);
+        const rawDocumentUrl = normalizeStoredS3Url(a.documentUrl);
+
         // Check if the URL is an S3 URL that needs pre-signing
         const needsPresigning = (url) => (
           url
-          && !isPresignedS3Url(url)
+          && !String(url).startsWith('http')
           && (url.startsWith('s3://') || url.includes('pandasign-documents') || url.includes('panda-crm-documents') || url.includes('.s3.'))
         );
 
-        const signedDocumentUrl = needsPresigning(a.signedDocumentUrl)
-          ? await getPresignedUrl(a.signedDocumentUrl)
-          : a.signedDocumentUrl;
+        const signedDocumentUrl = needsPresigning(rawSignedDocumentUrl)
+          ? await getPresignedUrl(rawSignedDocumentUrl)
+          : rawSignedDocumentUrl;
 
-        const documentUrl = needsPresigning(a.documentUrl)
-          ? await getPresignedUrl(a.documentUrl)
-          : a.documentUrl;
+        const documentUrl = needsPresigning(rawDocumentUrl)
+          ? await getPresignedUrl(rawDocumentUrl)
+          : rawDocumentUrl;
 
         // Generate thumbnail URL (same as document but smaller - we'll handle this in frontend)
         const thumbnailUrl = signedDocumentUrl || documentUrl;
