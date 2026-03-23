@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import apiClient, { documentsApiV2, agreementsApi } from '../services/api';
+import apiClient, { documentsApiV2, agreementsApi, opportunitiesApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import {
   extractHostSigningToken,
@@ -52,6 +52,16 @@ const FEATURE_PANDASIGN_V2 = String(import.meta.env.VITE_FEATURE_PANDASIGN_V2 ||
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PANDASIGN_TEMPLATE_TERRITORIES = new Set(['DE', 'MD', 'NJ', 'PA', 'NC', 'VA', 'FL']);
 
+function pickFirstNonEmpty(...values) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return '';
+}
+
 /**
  * ContractSigningModal - PandaSign V2 contract signing modal
  *
@@ -87,6 +97,8 @@ export default function ContractSigningModal({
   const [v2Mode, setV2Mode] = useState('SIGN_NOW');
   const [v2CustomerEmail, setV2CustomerEmail] = useState('');
   const [v2AgentEmail, setV2AgentEmail] = useState('');
+  const [hasTouchedV2CustomerEmail, setHasTouchedV2CustomerEmail] = useState(false);
+  const [hasTouchedV2AgentEmail, setHasTouchedV2AgentEmail] = useState(false);
   const [v2Verification, setV2Verification] = useState(null);
   const [v2VerificationError, setV2VerificationError] = useState(null);
   const [v2Step, setV2Step] = useState(1);
@@ -114,6 +126,13 @@ export default function ContractSigningModal({
     queryKey: ['wysiwyg-templates'],
     queryFn: () => documentsApiV2.getTemplates({ status: 'PUBLISHED' }),
     enabled: isOpen,
+  });
+
+  const orderContractQuery = useQuery({
+    queryKey: ['opportunityOrderContract', opportunity?.id],
+    enabled: FEATURE_PANDASIGN_V2 && isOpen && Boolean(opportunity?.id),
+    queryFn: () => opportunitiesApi.getOrderContract(opportunity.id),
+    refetchOnWindowFocus: false,
   });
 
   const templates =
@@ -171,6 +190,38 @@ export default function ContractSigningModal({
       || null,
     [territoryScopedTemplates, templates, v2TemplateId]
   );
+
+  const resolvedV2Participants = useMemo(() => {
+    const orderContract = orderContractQuery.data?.orderContract || {};
+    const customerSigner = orderContract?.signers?.customer || {};
+    const agentSigner = orderContract?.signers?.agent || {};
+    const overview = orderContract?.overview || {};
+
+    return {
+      customerName: pickFirstNonEmpty(
+        customerSigner.name,
+        overview.customerName,
+        getCustomerDisplayName(contact),
+        account?.name
+      ),
+      customerEmail: pickFirstNonEmpty(
+        customerSigner.email,
+        overview.customerEmail,
+        contact?.email,
+        account?.email
+      ),
+      agentName: pickFirstNonEmpty(
+        agentSigner.name,
+        overview.salesRepName,
+        getAgentDisplayName(currentUser, currentUser?.email)
+      ),
+      agentEmail: pickFirstNonEmpty(
+        agentSigner.email,
+        overview.salesRepEmail,
+        currentUser?.email
+      ),
+    };
+  }, [orderContractQuery.data, contact, account?.name, account?.email, currentUser]);
 
   // Extract signer roles from selected template
   const signerRoles = useMemo(() => {
@@ -256,6 +307,8 @@ export default function ContractSigningModal({
       setV2Mode('SIGN_NOW');
       setV2CustomerEmail('');
       setV2AgentEmail('');
+      setHasTouchedV2CustomerEmail(false);
+      setHasTouchedV2AgentEmail(false);
       setV2Verification(null);
       setV2VerificationError(null);
       setV2Step(1);
@@ -269,9 +322,19 @@ export default function ContractSigningModal({
 
   useEffect(() => {
     if (!FEATURE_PANDASIGN_V2 || !isOpen) return;
-    setV2CustomerEmail(contact?.email || '');
-    setV2AgentEmail(currentUser?.email || '');
-  }, [isOpen, contact?.email, currentUser?.email]);
+    if (!hasTouchedV2CustomerEmail) {
+      setV2CustomerEmail(resolvedV2Participants.customerEmail);
+    }
+    if (!hasTouchedV2AgentEmail) {
+      setV2AgentEmail(resolvedV2Participants.agentEmail);
+    }
+  }, [
+    isOpen,
+    hasTouchedV2CustomerEmail,
+    hasTouchedV2AgentEmail,
+    resolvedV2Participants.customerEmail,
+    resolvedV2Participants.agentEmail,
+  ]);
 
   // Preview generation mutation
   const previewMutation = useMutation({
@@ -385,13 +448,13 @@ export default function ContractSigningModal({
 
   const startV2SignNowMutation = useMutation({
     mutationFn: async () => {
-      const customerName = getCustomerDisplayName(contact);
+      const customerName = resolvedV2Participants.customerName || getCustomerDisplayName(contact);
       const created = unwrapApiEnvelope(await agreementsApi.createAgreement({
         templateId: v2TemplateId,
         opportunityId: opportunity?.id,
         accountId: account?.id || opportunity?.accountId,
         contactId: contact?.id || opportunity?.contactId,
-        recipientEmail: v2CustomerEmail,
+        recipientEmail: v2CustomerEmail || resolvedV2Participants.customerEmail,
         recipientName: customerName,
       }));
 
@@ -426,13 +489,13 @@ export default function ContractSigningModal({
 
   const startV2SendToSignMutation = useMutation({
     mutationFn: async () => {
-      const customerName = getCustomerDisplayName(contact);
+      const customerName = resolvedV2Participants.customerName || getCustomerDisplayName(contact);
       const created = unwrapApiEnvelope(await agreementsApi.createAgreement({
         templateId: v2TemplateId,
         opportunityId: opportunity?.id,
         accountId: account?.id || opportunity?.accountId,
         contactId: contact?.id || opportunity?.contactId,
-        recipientEmail: v2CustomerEmail,
+        recipientEmail: v2CustomerEmail || resolvedV2Participants.customerEmail,
         recipientName: customerName,
       }));
 
@@ -471,8 +534,8 @@ export default function ContractSigningModal({
 
       await apiClient.post(`/api/documents/agreements/sign/${v2CustomerSigningToken}`, {
         signatureData,
-        signerName: getCustomerDisplayName(contact),
-        signerEmail: v2CustomerEmail,
+        signerName: resolvedV2Participants.customerName || getCustomerDisplayName(contact),
+        signerEmail: v2CustomerEmail || resolvedV2Participants.customerEmail,
       });
 
       const agreementId = v2AgreementData?.id || v2AgreementData?.agreementId;
@@ -480,10 +543,10 @@ export default function ContractSigningModal({
         throw new Error('Agreement id is missing for agent signing session.');
       }
 
-      const hostName = getAgentDisplayName(currentUser, v2AgentEmail);
+      const hostName = resolvedV2Participants.agentName || getAgentDisplayName(currentUser, v2AgentEmail);
       const hostInit = unwrapApiEnvelope(await agreementsApi.initiateHostSigning(agreementId, {
         name: hostName,
-        email: v2AgentEmail || currentUser?.email,
+        email: v2AgentEmail || resolvedV2Participants.agentEmail || currentUser?.email,
       }));
       const hostToken = extractHostSigningToken(hostInit);
 
@@ -516,13 +579,13 @@ export default function ContractSigningModal({
         throw new Error('Agent signing token is missing.');
       }
 
-      const hostName = getAgentDisplayName(currentUser, v2AgentEmail);
+      const hostName = resolvedV2Participants.agentName || getAgentDisplayName(currentUser, v2AgentEmail);
       const completion = unwrapApiEnvelope(await agreementsApi.applyHostSignature(
         v2HostSigningToken,
         signatureData,
         {
           name: hostName,
-          email: v2AgentEmail || currentUser?.email,
+          email: v2AgentEmail || resolvedV2Participants.agentEmail || currentUser?.email,
         }
       ));
 
@@ -549,10 +612,10 @@ export default function ContractSigningModal({
         throw new Error('Agreement id is unavailable for the agent signing step.');
       }
 
-      const hostName = getAgentDisplayName(currentUser, v2AgentEmail);
+      const hostName = resolvedV2Participants.agentName || getAgentDisplayName(currentUser, v2AgentEmail);
       const hostInit = unwrapApiEnvelope(await agreementsApi.initiateHostSigning(agreementId, {
         name: hostName,
-        email: v2AgentEmail || currentUser?.email,
+        email: v2AgentEmail || resolvedV2Participants.agentEmail || currentUser?.email,
       }));
       const hostToken = extractHostSigningToken(hostInit);
 
@@ -1036,10 +1099,16 @@ export default function ContractSigningModal({
                           type="email"
                           autoComplete="email"
                           value={v2CustomerEmail}
-                          onChange={(e) => setV2CustomerEmail(e.target.value)}
+                          onChange={(e) => {
+                            setHasTouchedV2CustomerEmail(true);
+                            setV2CustomerEmail(e.target.value);
+                          }}
                           className="w-full px-3 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary"
                           placeholder="customer@example.com"
                         />
+                        <p className="mt-1 text-xs text-gray-500">
+                          Signer name: <span className="font-medium text-gray-700">{resolvedV2Participants.customerName || 'Not set'}</span>
+                        </p>
                       </div>
                       <div>
                         <label htmlFor="pandasign-agent-email" className="block text-xs font-medium text-gray-600 mb-1">
@@ -1050,10 +1119,16 @@ export default function ContractSigningModal({
                           type="email"
                           autoComplete="email"
                           value={v2AgentEmail}
-                          onChange={(e) => setV2AgentEmail(e.target.value)}
+                          onChange={(e) => {
+                            setHasTouchedV2AgentEmail(true);
+                            setV2AgentEmail(e.target.value);
+                          }}
                           className="w-full px-3 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary"
                           placeholder="agent@example.com"
                         />
+                        <p className="mt-1 text-xs text-gray-500">
+                          Signer name: <span className="font-medium text-gray-700">{resolvedV2Participants.agentName || 'Not set'}</span>
+                        </p>
                       </div>
                     </section>
 
