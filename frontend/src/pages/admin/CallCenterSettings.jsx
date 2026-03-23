@@ -111,7 +111,7 @@ export default function CallCenterSettings() {
 
   const { data: importUsersData, isLoading: importUsersLoading } = useQuery({
     queryKey: ['callCenterImportUsers'],
-    queryFn: () => usersApi.getUsers({ limit: 2000, sortBy: 'firstName', sortOrder: 'asc' }),
+    queryFn: () => usersApi.getUsersForDropdown({ isActive: true }),
     enabled: activeTab === 'imports',
     staleTime: 5 * 60 * 1000,
   });
@@ -232,7 +232,7 @@ export default function CallCenterSettings() {
 
   const callLists = callListsData?.data || [];
   const dispositions = dispositionsData?.data || [];
-  const importUsers = importUsersData?.data || [];
+  const importUsers = Array.isArray(importUsersData) ? importUsersData : (importUsersData?.data || []);
 
   // Filter lists by search term
   const filteredLists = callLists.filter(list =>
