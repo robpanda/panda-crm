@@ -20,6 +20,8 @@ function createMockPrisma({
 } = {}) {
   const createdLeads = [];
   const auditEntries = [];
+  const importRuns = [];
+  const reviewItems = [];
   const settingsStore = systemSettings || new Map();
   const queryCounts = {
     userFindMany: 0,
@@ -120,9 +122,46 @@ function createMockPrisma({
         return { count };
       },
     },
+    callCenterImportRun: {
+      create: async ({ data, select }) => {
+        const run = {
+          id: `import-run-${importRuns.length + 1}`,
+          previewToken: data.previewToken,
+          workbookFileName: data.workbookFileName,
+          workbookSha256: data.workbookSha256,
+          executedAt: data.executedAt,
+          executedByUserId: data.executedByUserId ?? null,
+          summaryJson: data.summaryJson,
+          aliasMapJson: data.aliasMapJson ?? null,
+        };
+        importRuns.push(run);
+
+        const createdReviewItems = (data.reviewItems?.create || []).map((item, index) => ({
+          id: `review-item-${reviewItems.length + index + 1}`,
+          runId: run.id,
+          status: item.status || 'OPEN',
+          ...item,
+        }));
+        reviewItems.push(...createdReviewItems);
+
+        if (select?._count?.select?.reviewItems) {
+          return {
+            id: run.id,
+            _count: { reviewItems: createdReviewItems.length },
+          };
+        }
+
+        return {
+          ...run,
+          reviewItems: createdReviewItems,
+        };
+      },
+    },
     $transaction: async (callback) => callback(tx),
     __createdLeads: createdLeads,
     __auditEntries: auditEntries,
+    __callCenterImportRuns: importRuns,
+    __callCenterImportReviewItems: reviewItems,
     __queryCounts: queryCounts,
     __systemSettings: settingsStore,
   };
@@ -786,6 +825,40 @@ test('executeImport can validate a reviewed preview from durable storage after i
   assert.equal(execution.summary.appliedRows, 1);
   assert.equal(executePrisma.__createdLeads.length, 1);
   assert.ok(executePrisma.__queryCounts.systemSettingFindUnique >= 1);
+});
+
+test('executeImport persists post-import review items only for applied rows with reviewable warnings', async () => {
+  const mockPrisma = createMockPrisma();
+  const service = new CallCenterImportService(mockPrisma);
+  const rows = [
+    {
+      sourceSheet: 'Manual Import',
+      sourceRowNumber: 2,
+      homeownername: 'Jane Example',
+      date: '2026-03-17',
+      assignedto: 'Unknown Owner',
+      eventType: 'LEAD_CREATED',
+    },
+  ];
+
+  const preview = await service.previewImport({ rows });
+  const execution = await service.executeImport({
+    confirm: true,
+    previewToken: preview.previewToken,
+    rows,
+    allowRiskOverride: true,
+  });
+
+  assert.equal(execution.summary.createdLeads, 1);
+  assert.equal(execution.review?.reviewItemCount, 1);
+  assert.equal(mockPrisma.__callCenterImportRuns.length, 1);
+  assert.equal(mockPrisma.__callCenterImportReviewItems.length, 1);
+  assert.deepEqual(
+    [...mockPrisma.__callCenterImportReviewItems[0].warningCodes].sort(),
+    ['LEAD_SETTER_UNRESOLVED', 'OWNER_UNRESOLVED'],
+  );
+  assert.equal(mockPrisma.__callCenterImportReviewItems[0].createdLeadId, mockPrisma.__createdLeads[0].id);
+  assert.equal(mockPrisma.__callCenterImportReviewItems[0].matchedLeadId, null);
 });
 
 test('durably persisted preview tokens remain single-use after in-memory cache reset', async () => {

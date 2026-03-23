@@ -20,6 +20,18 @@ const SYSTEM_LABEL_ASSIGNEE_ALIAS_KEY = '__SYSTEM_LABEL_ASSIGNEE__';
 const PREVIEW_PLAN_SETTING_CATEGORY = 'call_center_import_preview';
 const PREVIEW_PLAN_SETTING_PREFIX = 'call_center_import.preview.';
 const PREVIEW_PLAN_SETTING_DESCRIPTION = 'Durable reviewed preview plan lock for call-center import';
+const REVIEWABLE_WARNING_CODES = new Set([
+  'OWNER_UNRESOLVED',
+  'LEAD_SETTER_UNRESOLVED',
+  'OWNER_LOW_CONFIDENCE',
+  'LEAD_SETTER_LOW_CONFIDENCE',
+  'OWNER_SPLIT_CREDIT_UNRESOLVED',
+  'AMBIGUOUS_NAME',
+  'AMBIGUOUS_PHONE',
+  'AMBIGUOUS_EMAIL',
+  'OWNER_INACTIVE_USER',
+  'LEAD_SETTER_INACTIVE_USER',
+]);
 
 const DEFAULT_USER_ALIAS_MAP = {};
 const SPLIT_OWNER_INPUT_PATTERN = /[\/,&]| and /i;
@@ -491,6 +503,11 @@ function hashValue(value) {
   return crypto.createHash('sha256').update(typeof value === 'string' ? value : stableStringify(value)).digest('hex');
 }
 
+function toJsonValue(value) {
+  if (value === null || value === undefined) return null;
+  return JSON.parse(JSON.stringify(value));
+}
+
 function createDeterministicRowId({ sourceFileName, sourceSheet, sourceRowNumber, rawRecord }) {
   const seed = {
     sourceFileName: normalizeText(sourceFileName || 'workbook'),
@@ -572,6 +589,10 @@ function createRowFingerprint(row) {
   }
 
   return hashValue(fingerprintSeed);
+}
+
+function getReviewableWarnings(warnings = []) {
+  return warnings.filter((warning) => REVIEWABLE_WARNING_CODES.has(warning?.code));
 }
 
 function getRowCompletenessScore(row) {
@@ -2960,6 +2981,100 @@ class CallCenterImportService {
     });
   }
 
+  buildImportReviewItems(analysis, results) {
+    const resultsByRowId = new Map(results.map((result) => [result.rowId, result]));
+
+    return analysis.flatMap((item) => {
+      const executionResult = resultsByRowId.get(item.row.rowId);
+      if (executionResult?.status !== 'applied') return [];
+
+      const reviewWarnings = getReviewableWarnings(item.warnings);
+      if (!reviewWarnings.length) return [];
+
+      return [{
+        sourceSheet: item.row.sourceSheet,
+        sourceRowNumber: item.row.sourceRowNumber,
+        rowFingerprint: item.rowFingerprint || null,
+        customerName: item.row.name || null,
+        phone: item.row.phone || null,
+        email: item.row.email || null,
+        state: item.row.state || null,
+        eventDate: item.row.date || null,
+        eventTime: item.row.time || null,
+        normalizedDisposition: item.row.normalizedDisposition || null,
+        warningCodes: reviewWarnings.map((warning) => warning.code),
+        warningMessages: reviewWarnings.map((warning) => warning.message),
+        rowDataJson: toJsonValue(serializeNormalizedRow(item.row)),
+        userMappingsJson: toJsonValue(item.userMappings),
+        executionResultJson: toJsonValue(executionResult),
+        matchedLeadId: item.leadMatch.record?.id || null,
+        matchedOpportunityId: item.opportunityMatch.record?.id || null,
+        matchedAppointmentId: item.appointmentMatch?.id || null,
+        createdLeadId: executionResult.lead?.action === 'created' ? executionResult.lead.id : null,
+        createdOpportunityId: executionResult.opportunity?.action === 'created' ? executionResult.opportunity.id : null,
+        createdAppointmentId: executionResult.appointment?.action === 'created' ? executionResult.appointment.id : null,
+      }];
+    });
+  }
+
+  async persistImportReviewRun({
+    prepared,
+    currentPreview,
+    results,
+    previewToken,
+    consumedPreview,
+    allowRiskOverride,
+    auditUser,
+  }, prismaClient) {
+    const executionSummary = this.summarizeExecution(results);
+    const reviewItems = this.buildImportReviewItems(prepared.analysisResult.analysis, results);
+
+    try {
+      const run = await prismaClient.callCenterImportRun.create({
+        data: {
+          previewToken,
+          workbookFileName: currentPreview.source?.fileName || prepared.fileName,
+          workbookSha256: currentPreview.source?.workbookHash || prepared.workbookHash,
+          executedAt: consumedPreview?.consumedAt ? new Date(consumedPreview.consumedAt) : new Date(),
+          executedByUserId: auditUser.userId || null,
+          summaryJson: toJsonValue({
+            execute: executionSummary,
+            preview: currentPreview.summary,
+            diagnostics: {
+              duplicates: currentPreview.diagnostics?.duplicates?.summary || null,
+              userMappings: currentPreview.diagnostics?.userMappings?.summary || null,
+              executionGuards: currentPreview.diagnostics?.executionGuards || null,
+            },
+            source: currentPreview.source,
+            reviewItemCount: reviewItems.length,
+            overrideApplied: allowRiskOverride,
+          }),
+          aliasMapJson: toJsonValue(prepared.analysisResult.aliasMapUsed),
+          reviewItems: reviewItems.length ? { create: reviewItems } : undefined,
+        },
+        select: {
+          id: true,
+          _count: {
+            select: {
+              reviewItems: true,
+            },
+          },
+        },
+      });
+
+      return {
+        runId: run.id,
+        reviewItemCount: run._count.reviewItems,
+      };
+    } catch (error) {
+      logger.error('Failed to persist call-center import review artifacts', {
+        previewToken,
+        error: error.message,
+      });
+      return null;
+    }
+  }
+
   summarizeExecution(results) {
     const summary = {
       totalRows: results.length,
@@ -3058,10 +3173,20 @@ class CallCenterImportService {
     }
 
     const consumedPreview = await markPreviewTokenConsumed(previewToken, prismaClient) || validatedPreview;
+    const executionSummary = this.summarizeExecution(results);
+    const reviewTracking = await this.persistImportReviewRun({
+      prepared,
+      currentPreview,
+      results,
+      previewToken,
+      consumedPreview,
+      allowRiskOverride,
+      auditUser,
+    }, prismaClient);
 
     return {
       source: currentPreview.source,
-      summary: this.summarizeExecution(results),
+      summary: executionSummary,
       results,
       preview: {
         previewToken,
@@ -3072,6 +3197,7 @@ class CallCenterImportService {
         diagnostics: currentPreview.diagnostics,
       },
       overrideApplied: allowRiskOverride,
+      review: reviewTracking,
     };
   }
 }

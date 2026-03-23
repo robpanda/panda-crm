@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import AdminLayout from '../../components/AdminLayout';
 import {
   Phone,
@@ -919,6 +920,13 @@ function ImportsTab({
             </div>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row">
+            <Link
+              to="/admin/call-center/import-review"
+              className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+            >
+              <ArrowRight className="mr-2 h-4 w-4" />
+              Open Post-Import Review Queue
+            </Link>
             <button
               onClick={onRunPreview}
               disabled={!importFile || previewing || executing}
