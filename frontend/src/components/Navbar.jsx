@@ -56,6 +56,7 @@ import {
   Trash2,
   Gift,
   Bot,
+  ExternalLink,
 } from 'lucide-react';
 
 const NavbarNotificationsPanel = lazy(() => import('./NavbarNotificationsPanel'));
