@@ -254,6 +254,23 @@ export async function sendCompletionEmailsSafely({
   }
 }
 
+export async function sendHostSigningCompletionEmailsSafely({
+  sendHostSigningCompletionEmails,
+  agreement,
+  hostSignature,
+  loggerInstance = logger,
+}) {
+  try {
+    await sendHostSigningCompletionEmails(agreement, hostSignature);
+    return { ok: true };
+  } catch (error) {
+    loggerInstance.warn(
+      `Agreement ${agreement?.id || 'unknown'} host signing completed but completion email delivery failed: ${error.message}`
+    );
+    return { ok: false, error };
+  }
+}
+
 function buildAgreementCreateData({
   agreementNumber,
   name,
@@ -2816,8 +2833,13 @@ ${agreement.signedDocumentUrl}
       ipAddress,
     }, null);
 
-    // Send completion emails to all parties
-    await this.sendHostSigningCompletionEmails(normalizedUpdated, signature);
+    // Send completion emails to all parties, but do not fail a completed host-signature
+    // flow if SES rejects or email delivery is temporarily unavailable.
+    await sendHostSigningCompletionEmailsSafely({
+      sendHostSigningCompletionEmails: this.sendHostSigningCompletionEmails.bind(this),
+      agreement: normalizedUpdated,
+      hostSignature: signature,
+    });
 
     logger.info(`Agreement completed with host signature: ${agreement.id}`);
 
