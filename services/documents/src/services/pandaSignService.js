@@ -353,6 +353,281 @@ function joinAddress(parts) {
     .join(', ');
 }
 
+function isPlainObject(value) {
+  return Boolean(value) && Object.prototype.toString.call(value) === '[object Object]';
+}
+
+function pickFirstText(...values) {
+  const flattened = values.flatMap((value) => (Array.isArray(value) ? value : [value]));
+  for (const value of flattened) {
+    const normalized = String(value || '').trim();
+    if (normalized) return normalized;
+  }
+  return '';
+}
+
+function parseSpecsDataValue(rawValue) {
+  if (!rawValue) return {};
+
+  if (isPlainObject(rawValue)) {
+    return deepCloneJson(rawValue, {});
+  }
+
+  if (typeof rawValue === 'string') {
+    try {
+      const parsed = JSON.parse(rawValue);
+      return isPlainObject(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  return {};
+}
+
+function deepMergeJson(baseValue, patchValue) {
+  if (patchValue === undefined) {
+    return deepCloneJson(baseValue, baseValue);
+  }
+
+  if (Array.isArray(patchValue)) {
+    return deepCloneJson(patchValue, []);
+  }
+
+  if (!isPlainObject(patchValue)) {
+    return patchValue;
+  }
+
+  const baseObject = isPlainObject(baseValue) ? baseValue : {};
+  const result = { ...deepCloneJson(baseObject, {}) };
+
+  Object.entries(patchValue).forEach(([key, value]) => {
+    if (value === undefined) return;
+
+    if (Array.isArray(value)) {
+      result[key] = deepCloneJson(value, []);
+      return;
+    }
+
+    if (isPlainObject(value)) {
+      result[key] = deepMergeJson(baseObject[key], value);
+      return;
+    }
+
+    result[key] = value;
+  });
+
+  return result;
+}
+
+function extractOrderContractFromSpecsData(specsDataValue) {
+  const specsData = parseSpecsDataValue(specsDataValue);
+  return isPlainObject(specsData.orderContract)
+    ? deepCloneJson(specsData.orderContract, {})
+    : {};
+}
+
+function normalizeAmountValue(value) {
+  if (value === null || value === undefined || value === '') return null;
+
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const parsed = Number(trimmed.replace(/,/g, ''));
+    return Number.isFinite(parsed) ? parsed : trimmed;
+  }
+
+  if (typeof value?.toNumber === 'function') {
+    try {
+      return value.toNumber();
+    } catch {
+      // fall through
+    }
+  }
+
+  if (typeof value?.toString === 'function') {
+    const asString = value.toString();
+    const parsed = Number(asString.replace(/,/g, ''));
+    return Number.isFinite(parsed) ? parsed : asString;
+  }
+
+  return value;
+}
+
+function normalizeOrderContractLineItem(item, index = 0) {
+  if (!isPlainObject(item)) return null;
+
+  return {
+    id: item.id || `line-item-${index + 1}`,
+    name: pickFirstText(item.name),
+    description: pickFirstText(item.description),
+    quantity: item.quantity ?? 1,
+    unitPrice: normalizeAmountValue(item.unitPrice),
+    total: normalizeAmountValue(item.total),
+  };
+}
+
+function normalizeOrderContractSigner(signer, defaults = {}) {
+  const source = isPlainObject(signer) ? signer : {};
+
+  return {
+    name: pickFirstText(source.name, defaults.name),
+    email: pickFirstText(source.email, defaults.email),
+    phone: pickFirstText(source.phone, defaults.phone),
+    title: pickFirstText(source.title, defaults.title),
+    role: pickFirstText(source.role, defaults.role),
+    label: pickFirstText(source.label, defaults.label),
+    required: source.required ?? defaults.required,
+  };
+}
+
+function renderOrderContractLineItemsText(lineItems = []) {
+  return lineItems
+    .map((item, index) => {
+      const parts = [
+        `${index + 1}. ${pickFirstText(item.name, `Line Item ${index + 1}`)}`,
+        pickFirstText(item.description),
+        item.quantity !== null && item.quantity !== undefined ? `Qty: ${item.quantity}` : '',
+        item.total !== null && item.total !== undefined ? `Total: ${item.total}` : '',
+      ].filter(Boolean);
+
+      return parts.join(' | ');
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+function renderOrderContractLineItemsHtml(lineItems = []) {
+  if (!Array.isArray(lineItems) || lineItems.length === 0) return '';
+
+  const itemsMarkup = lineItems
+    .map((item, index) => {
+      const parts = [
+        pickFirstText(item.description),
+        item.quantity !== null && item.quantity !== undefined ? `Qty: ${item.quantity}` : '',
+        item.total !== null && item.total !== undefined ? `Total: ${item.total}` : '',
+      ].filter(Boolean);
+
+      return `<li><strong>${pickFirstText(item.name, `Line Item ${index + 1}`)}</strong>${parts.length ? ` - ${parts.join(' | ')}` : ''}</li>`;
+    })
+    .join('');
+
+  return `<ul>${itemsMarkup}</ul>`;
+}
+
+export function buildOrderContractRuntimeData({
+  opportunity = null,
+  account = null,
+  contact = null,
+  mergeData = {},
+  territory = 'DEFAULT',
+  customerName = '',
+  customerEmail = '',
+  customerPhone = '',
+  projectAddress = '',
+} = {}) {
+  const storedOrderContract = extractOrderContractFromSpecsData(opportunity?.specsData);
+  const mergedOrderContract = deepMergeJson(storedOrderContract, mergeData?.orderContract || {});
+  const ownerName = pickFirstText(
+    opportunity?.owner?.fullName,
+    buildFullName(opportunity?.owner?.firstName, opportunity?.owner?.lastName),
+    mergeData?.salesRepName
+  );
+
+  const overview = deepMergeJson({
+    documentType: 'CONTRACT',
+    territory,
+    projectName: pickFirstText(opportunity?.name, mergeData?.job?.name),
+    jobNumber: pickFirstText(opportunity?.jobId, mergeData?.job?.number),
+    projectAddress: pickFirstText(projectAddress, mergeData?.job?.address?.full),
+    contractDate: '',
+    effectiveDate: '',
+    customerName,
+    customerEmail,
+    customerPhone,
+    salesRepName: ownerName,
+    salesRepEmail: pickFirstText(opportunity?.owner?.email),
+    salesRepPhone: pickFirstText(opportunity?.owner?.phone, opportunity?.owner?.mobilePhone),
+    salesRepTitle: pickFirstText(opportunity?.owner?.title, 'Sales Representative'),
+    notes: '',
+  }, mergedOrderContract?.overview || {});
+
+  const pricing = deepMergeJson({
+    contractAmount: normalizeAmountValue(opportunity?.contractTotal ?? opportunity?.amount),
+    depositAmount: null,
+    financedAmount: null,
+    scopeOfWork: '',
+    lineItems: [],
+  }, mergedOrderContract?.pricing || {});
+
+  const normalizedLineItems = Array.isArray(pricing.lineItems)
+    ? pricing.lineItems.map(normalizeOrderContractLineItem).filter(Boolean)
+    : [];
+
+  const pricingWithDerivedFields = {
+    ...pricing,
+    contractAmount: normalizeAmountValue(pricing.contractAmount),
+    depositAmount: normalizeAmountValue(pricing.depositAmount),
+    financedAmount: normalizeAmountValue(pricing.financedAmount),
+    lineItems: normalizedLineItems,
+    lineItemsText: renderOrderContractLineItemsText(normalizedLineItems),
+    lineItemsHtml: renderOrderContractLineItemsHtml(normalizedLineItems),
+  };
+
+  const signers = deepMergeJson({
+    customer: {
+      name: pickFirstText(overview.customerName, customerName, contact?.fullName, buildFullName(contact?.firstName, contact?.lastName), account?.name),
+      email: pickFirstText(overview.customerEmail, customerEmail, contact?.email, account?.email),
+      phone: pickFirstText(overview.customerPhone, customerPhone, contact?.mobilePhone, contact?.phone, account?.phone),
+      title: '',
+      role: 'CUSTOMER',
+      label: 'Customer',
+      required: true,
+    },
+    agent: {
+      name: pickFirstText(overview.salesRepName, ownerName),
+      email: pickFirstText(overview.salesRepEmail, opportunity?.owner?.email),
+      phone: pickFirstText(overview.salesRepPhone, opportunity?.owner?.phone, opportunity?.owner?.mobilePhone),
+      title: pickFirstText(overview.salesRepTitle, opportunity?.owner?.title, 'Sales Representative'),
+      role: 'AGENT',
+      label: 'Agent',
+      required: true,
+    },
+    additional: [],
+  }, mergedOrderContract?.signers || {});
+
+  const normalizedSigners = {
+    customer: normalizeOrderContractSigner(signers.customer, {
+      role: 'CUSTOMER',
+      label: 'Customer',
+      required: true,
+    }),
+    agent: normalizeOrderContractSigner(signers.agent, {
+      role: 'AGENT',
+      label: 'Agent',
+      required: true,
+    }),
+    additional: Array.isArray(signers.additional)
+      ? signers.additional.map((signer) => normalizeOrderContractSigner(signer)).filter((signer) => Object.values(signer).some(Boolean))
+      : [],
+  };
+
+  return {
+    orderContract: {
+      overview,
+      pricing: pricingWithDerivedFields,
+      signers: normalizedSigners,
+    },
+    overview,
+    pricing: pricingWithDerivedFields,
+    signers: normalizedSigners,
+  };
+}
+
 function getMergeValueByPath(data, fieldPath) {
   const parts = String(fieldPath || '').trim().split('.').filter(Boolean);
   let value = data;
@@ -1180,6 +1455,7 @@ ${agreement.signedDocumentUrl}
         include: {
           account: true,
           contact: true,
+          owner: true,
         },
       });
     }
@@ -1213,7 +1489,7 @@ ${agreement.signedDocumentUrl}
       'DEFAULT'
     ).trim().toUpperCase();
 
-    const customerName = buildFullName(
+    const baseCustomerName = buildFullName(
       recipientName,
       mergeData?.job?.customer?.name_full,
       mergeData?.customerName,
@@ -1223,8 +1499,8 @@ ${agreement.signedDocumentUrl}
       account?.name
     );
 
-    const customerEmail = recipientEmail || contact?.email || account?.email || mergeData?.customerEmail || '';
-    const customerPhone =
+    const baseCustomerEmail = recipientEmail || contact?.email || account?.email || mergeData?.customerEmail || '';
+    const baseCustomerPhone =
       contact?.mobilePhone ||
       contact?.phone ||
       account?.phone ||
@@ -1250,9 +1526,80 @@ ${agreement.signedDocumentUrl}
       opportunity?.postalCode,
     ]);
 
+    const orderContractRuntimeData = buildOrderContractRuntimeData({
+      opportunity,
+      account,
+      contact,
+      mergeData,
+      territory: opportunityState || 'DEFAULT',
+      customerName: baseCustomerName,
+      customerEmail: baseCustomerEmail,
+      customerPhone: baseCustomerPhone,
+      projectAddress: jobAddress || accountAddress || contactAddress || '',
+    });
+
+    const customerName = pickFirstText(
+      orderContractRuntimeData.overview.customerName,
+      orderContractRuntimeData.signers.customer?.name,
+      baseCustomerName
+    );
+    const customerEmail = pickFirstText(
+      orderContractRuntimeData.overview.customerEmail,
+      orderContractRuntimeData.signers.customer?.email,
+      baseCustomerEmail
+    );
+    const customerPhone = pickFirstText(
+      orderContractRuntimeData.overview.customerPhone,
+      orderContractRuntimeData.signers.customer?.phone,
+      baseCustomerPhone
+    );
+    const projectName = pickFirstText(
+      orderContractRuntimeData.overview.projectName,
+      opportunity?.name,
+      mergeData?.job?.name
+    );
+    const projectAddress = pickFirstText(
+      orderContractRuntimeData.overview.projectAddress,
+      jobAddress,
+      accountAddress,
+      contactAddress
+    );
+    const jobNumber = pickFirstText(
+      orderContractRuntimeData.overview.jobNumber,
+      opportunity?.jobId,
+      mergeData?.job?.number
+    );
+
     return {
       ...deepCloneJson(mergeData, {}),
+      orderContract: orderContractRuntimeData.orderContract,
+      pricing: orderContractRuntimeData.pricing,
+      signers: orderContractRuntimeData.signers,
       territory: opportunityState || 'DEFAULT',
+      projectName,
+      projectAddress,
+      jobNumber,
+      contractDate: orderContractRuntimeData.overview.contractDate || '',
+      effectiveDate: orderContractRuntimeData.overview.effectiveDate || '',
+      contractAmount: orderContractRuntimeData.pricing.contractAmount,
+      depositAmount: orderContractRuntimeData.pricing.depositAmount,
+      financedAmount: orderContractRuntimeData.pricing.financedAmount,
+      scopeOfWork: orderContractRuntimeData.pricing.scopeOfWork || '',
+      lineItems: orderContractRuntimeData.pricing.lineItems,
+      lineItemsText: orderContractRuntimeData.pricing.lineItemsText || '',
+      lineItemsHtml: orderContractRuntimeData.pricing.lineItemsHtml || '',
+      salesRepName: pickFirstText(
+        orderContractRuntimeData.overview.salesRepName,
+        orderContractRuntimeData.signers.agent?.name
+      ),
+      salesRepEmail: pickFirstText(
+        orderContractRuntimeData.overview.salesRepEmail,
+        orderContractRuntimeData.signers.agent?.email
+      ),
+      salesRepPhone: pickFirstText(
+        orderContractRuntimeData.overview.salesRepPhone,
+        orderContractRuntimeData.signers.agent?.phone
+      ),
       organization: {
         name: 'Panda Exteriors',
         phone: account?.phone || '',
@@ -1279,11 +1626,11 @@ ${agreement.signedDocumentUrl}
       job: {
         ...(deepCloneJson(mergeData?.job, {}) || {}),
         id: opportunity?.id || mergeData?.job?.id || opportunityId || null,
-        number: opportunity?.jobId || mergeData?.job?.number || '',
-        name: opportunity?.name || mergeData?.job?.name || '',
+        number: jobNumber,
+        name: projectName,
         address: {
           ...(deepCloneJson(mergeData?.job?.address, {}) || {}),
-          full: mergeData?.job?.address?.full || jobAddress || accountAddress || contactAddress || '',
+          full: projectAddress,
           street: opportunity?.street || mergeData?.job?.address?.street || '',
           city: opportunity?.city || mergeData?.job?.address?.city || '',
           state: opportunity?.state || account?.billingState || contact?.mailingState || mergeData?.job?.address?.state || '',
@@ -1299,7 +1646,7 @@ ${agreement.signedDocumentUrl}
       opportunity: {
         ...(deepCloneJson(mergeData?.opportunity, {}) || {}),
         id: opportunity?.id || opportunityId || mergeData?.opportunity?.id || null,
-        name: opportunity?.name || mergeData?.opportunity?.name || '',
+        name: projectName,
         stage: opportunity?.stage || mergeData?.opportunity?.stage || '',
         amount: opportunity?.amount || mergeData?.opportunity?.amount || null,
         state: opportunity?.state || mergeData?.opportunity?.state || '',
