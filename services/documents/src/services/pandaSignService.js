@@ -237,6 +237,23 @@ export function buildSignatureCreateData({
   };
 }
 
+export async function sendCompletionEmailsSafely({
+  sendCompletionEmails,
+  agreement,
+  signature,
+  loggerInstance = logger,
+}) {
+  try {
+    await sendCompletionEmails(agreement, signature);
+    return { ok: true };
+  } catch (error) {
+    loggerInstance.warn(
+      `Agreement ${agreement?.id || 'unknown'} signed but completion email delivery failed: ${error.message}`
+    );
+    return { ok: false, error };
+  }
+}
+
 function buildAgreementCreateData({
   agreementNumber,
   name,
@@ -1289,8 +1306,12 @@ Panda Exteriors
       ipAddress,
     }, null);
 
-    // Send confirmation emails
-    await this.sendCompletionEmails(normalizedUpdated, signature);
+    // Completion emails should not block a valid signature from completing.
+    await sendCompletionEmailsSafely({
+      sendCompletionEmails: this.sendCompletionEmails.bind(this),
+      agreement: normalizedUpdated,
+      signature,
+    });
 
     // If this is a change order that is now fully signed, trigger completion workflow
     if (finalStatus === 'COMPLETED' && agreement.mergeData?.changeDescription) {
