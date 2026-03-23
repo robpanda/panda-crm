@@ -15,6 +15,7 @@ import {
   getChecklist,
   getCustomerDisplayName,
   getMissingItems,
+  getPlaceholderDetailsByRole,
   getPlaceholderSummaryByRole,
   getPreviewHash,
   getPreviewMissingTokens,
@@ -67,6 +68,31 @@ function pickFirstNonEmpty(...values) {
   return '';
 }
 
+function normalizeRequiredFieldType(type) {
+  const normalized = String(type || '').trim().toUpperCase();
+  if (!normalized) return 'FIELD';
+  if (normalized.includes('INITIAL')) return 'INITIAL';
+  if (normalized.includes('SIGN')) return 'SIGNATURE';
+  return normalized;
+}
+
+function getFieldTypeBadgeClasses(type) {
+  const normalized = normalizeRequiredFieldType(type);
+  if (normalized === 'SIGNATURE') return 'bg-indigo-100 text-indigo-700 border-indigo-200';
+  if (normalized === 'INITIAL') return 'bg-amber-100 text-amber-700 border-amber-200';
+  if (normalized === 'DATE') return 'bg-cyan-100 text-cyan-700 border-cyan-200';
+  if (normalized === 'CHECKBOX') return 'bg-emerald-100 text-emerald-700 border-emerald-200';
+  return 'bg-gray-100 text-gray-700 border-gray-200';
+}
+
+function getMobileTabClasses(isActive) {
+  return `inline-flex items-center justify-center rounded-full px-3 py-2 text-sm font-medium transition ${
+    isActive
+      ? 'bg-panda-primary text-white shadow-sm'
+      : 'bg-white text-gray-600 hover:bg-gray-50'
+  }`;
+}
+
 /**
  * ContractSigningModal - PandaSign V2 contract signing modal
  *
@@ -109,6 +135,8 @@ export default function ContractSigningModal({
   const [v2Verification, setV2Verification] = useState(null);
   const [v2VerificationError, setV2VerificationError] = useState(null);
   const [v2Step, setV2Step] = useState(1);
+  const [v2PreviewPanel, setV2PreviewPanel] = useState('document');
+  const [v2SigningPanel, setV2SigningPanel] = useState('document');
   const [v2PreviewData, setV2PreviewData] = useState(null);
   const [v2PreviewUrl, setV2PreviewUrl] = useState(null);
   const [v2PreviewHash, setV2PreviewHash] = useState(null);
@@ -331,6 +359,8 @@ export default function ContractSigningModal({
       setV2Verification(null);
       setV2VerificationError(null);
       setV2Step(1);
+      setV2PreviewPanel('document');
+      setV2SigningPanel('document');
       setV2PreviewData(null);
       setV2PreviewUrl(null);
       setV2PreviewHash(null);
@@ -373,6 +403,16 @@ export default function ContractSigningModal({
     selectedV2TemplateContent,
     hasTouchedV2TemplateContent,
   ]);
+
+  useEffect(() => {
+    if (!FEATURE_PANDASIGN_V2 || !isOpen) return;
+    if (v2Step === 2) {
+      setV2PreviewPanel('document');
+    }
+    if (v2Step === 3 || v2Step === 4) {
+      setV2SigningPanel('document');
+    }
+  }, [FEATURE_PANDASIGN_V2, isOpen, v2Step]);
 
   const buildV2MergeData = () => {
     if (!hasTouchedV2TemplateContent) {
@@ -1022,6 +1062,7 @@ export default function ContractSigningModal({
     const previewMissingTokens = getPreviewMissingTokens(v2PreviewData);
     const previewWarnings = getPreviewWarnings(v2PreviewData);
     const placeholderSummary = getPlaceholderSummaryByRole(v2PreviewData);
+    const placeholderDetailsByRole = getPlaceholderDetailsByRole(v2PreviewData);
     const hasPreviewPayload = Boolean(v2PreviewData);
     const hasPreviewSource = Boolean(v2PreviewUrl);
     const hasAnyPlaceholders =
@@ -1038,10 +1079,121 @@ export default function ContractSigningModal({
     const v2AgreementDocumentUrl = getAgreementDocumentUrl(v2CompletionData) || getAgreementDocumentUrl(v2AgreementData);
     const customerLink = v2AgreementData?.signingUrl;
     const agentLink = v2SendToSignAgentLink?.hostSigningUrl || v2SendToSignAgentLink?.embeddedSigningUrl || null;
+    const currentSignerPreviewUrl =
+      currentV2SignSession?.documentUrl ||
+      currentV2SignSession?.signedDocumentUrl ||
+      v2AgreementDocumentUrl ||
+      v2PreviewUrl ||
+      null;
     const customerPolling = v2Mode === 'SEND_TO_SIGN' && v2Step === 3 && v2AgreementStatusQuery.isFetching;
     const agentPolling = v2Mode === 'SEND_TO_SIGN' && v2Step === 4 && v2AgreementStatusQuery.isFetching;
     const customerResendBusy = resendV2CustomerAgreementMutation.isPending;
     const agentLinkBusy = initiateV2SendToSignAgentMutation.isPending;
+    const currentSignerFieldCounts = currentV2RequiredFields.reduce(
+      (counts, field) => {
+        const type = normalizeRequiredFieldType(field?.type);
+        counts.total += 1;
+        if (type === 'SIGNATURE') counts.signature += 1;
+        else if (type === 'INITIAL') counts.initial += 1;
+        else counts.other += 1;
+        return counts;
+      },
+      { total: 0, signature: 0, initial: 0, other: 0 }
+    );
+    const currentSignerLabel = currentV2SignerRole === 'CUSTOMER' ? 'Customer' : 'Agent';
+    const renderPreviewFrame = (src, title, heightClass) => {
+      if (!src) {
+        return (
+          <div className="border border-amber-200 rounded-lg p-4 bg-amber-50">
+            <p className="text-sm font-medium text-amber-700">Preview unavailable</p>
+            <p className="text-xs text-amber-700 mt-1">
+              We could not render a preview URL from the current response. You can go back and adjust inputs.
+            </p>
+          </div>
+        );
+      }
+
+      return (
+        <div className="border border-gray-200 rounded-lg overflow-hidden bg-gray-100">
+          <iframe
+            src={src}
+            className={`w-full ${heightClass}`}
+            title={title}
+          />
+        </div>
+      );
+    };
+    const renderPreviewSignals = () => (
+      <>
+        <div className="rounded-lg border border-gray-200 p-3 bg-white">
+          <p className="text-xs font-semibold text-gray-600 mb-2">Missing Tokens</p>
+          {previewMissingTokens.length > 0 ? (
+            <ul className="space-y-1">
+              {previewMissingTokens.map((token, index) => (
+                <li key={`${token}-${index}`} className="text-xs text-amber-700">
+                  • {token}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-xs text-gray-500">
+              {hasPreviewPayload ? 'No missing tokens reported.' : 'No preview token data available.'}
+            </p>
+          )}
+        </div>
+
+        <div className="rounded-lg border border-gray-200 p-3 bg-white">
+          <p className="text-xs font-semibold text-gray-600 mb-2">Signature Fields By Role</p>
+          {hasAnyPlaceholders ? (
+            <div className="space-y-3">
+              {Object.entries(placeholderDetailsByRole)
+                .filter(([, fields]) => fields.length > 0)
+                .map(([role, fields]) => (
+                  <div key={role}>
+                    <p className="font-medium text-xs text-gray-800">{role}</p>
+                    <div className="mt-2 space-y-2">
+                      {fields.map((field) => (
+                        <div key={field.id} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-700">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="font-medium text-gray-800">{field.label}</p>
+                              {field.page ? <p className="mt-1 text-[11px] text-gray-500">Page {field.page}</p> : null}
+                            </div>
+                            <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${getFieldTypeBadgeClasses(field.type)}`}>
+                              {normalizeRequiredFieldType(field.type)}
+                            </span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+            </div>
+          ) : (
+            <p className="text-xs text-gray-500">
+              {hasPreviewPayload ? 'No placeholder map reported.' : 'No preview placeholder data available.'}
+            </p>
+          )}
+        </div>
+
+        <div className="rounded-lg border border-gray-200 p-3 bg-white">
+          <p className="text-xs font-semibold text-gray-600 mb-2">Warnings</p>
+          {previewWarnings.length > 0 ? (
+            <ul className="space-y-1">
+              {previewWarnings.map((warning, index) => (
+                <li key={`${warning}-${index}`} className="text-xs text-amber-700">
+                  • {warning}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-xs text-gray-500">
+              {hasPreviewPayload ? 'No warnings reported.' : 'No preview warnings available.'}
+            </p>
+          )}
+        </div>
+      </>
+    );
 
     return (
       <div className="fixed inset-0 z-50">
@@ -1249,33 +1401,141 @@ export default function ContractSigningModal({
                       )}
                     </section>
 
-                    <section className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+                    <div className="xl:hidden">
+                      <div className="flex items-center gap-2 rounded-full bg-gray-100 p-1">
+                        <button
+                          type="button"
+                          onClick={() => setV2PreviewPanel('document')}
+                          className={getMobileTabClasses(v2PreviewPanel === 'document')}
+                        >
+                          Document
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setV2PreviewPanel('fields')}
+                          className={getMobileTabClasses(v2PreviewPanel === 'fields')}
+                        >
+                          Fields
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setV2PreviewPanel('signatures')}
+                          className={getMobileTabClasses(v2PreviewPanel === 'signatures')}
+                        >
+                          Signatures
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="xl:hidden">
+                      {v2PreviewPanel === 'document' && (
+                        <section className="space-y-3">
+                          <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 p-3">
+                            <p className="text-sm font-semibold text-gray-900">Document Preview</p>
+                            <p className="mt-1 text-xs text-gray-600">
+                              Review the generated contract first, then switch to Fields to edit only the values this template actually uses.
+                            </p>
+                          </div>
+                          {previewBusy ? (
+                            <div className="border border-gray-200 rounded-lg p-6 text-center bg-gray-50">
+                              <Loader2 className="w-6 h-6 text-panda-primary animate-spin mx-auto mb-2" />
+                              <p className="text-sm text-gray-600">Generating preview...</p>
+                            </div>
+                          ) : (
+                            renderPreviewFrame(v2PreviewUrl, 'PandaSign V2 Preview', 'h-[62vh] sm:h-[70vh]')
+                          )}
+                        </section>
+                      )}
+
+                      {v2PreviewPanel === 'fields' && (
+                        <div className="space-y-4">
+                          <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 p-3">
+                            <p className="text-sm font-semibold text-gray-900">Edit Contract Data In Preview</p>
+                            <p className="mt-1 text-xs text-gray-600">
+                              Save the section you changed, then refresh the preview so the document and PDF stay in sync.
+                            </p>
+                          </div>
+                          <OrderContractBuilder
+                            opportunity={opportunity}
+                            account={account}
+                            contact={contact}
+                            templateDefinition={selectedV2TemplateDetail || selectedV2Template}
+                            showLaunchButton={false}
+                            embedded
+                            title="Editable Contract Fields"
+                            description="These saved values feed PandaSign V2. Only the fields used by this template stay visible here."
+                            onSectionSaved={() => {
+                              handleOpenV2Preview();
+                            }}
+                          />
+
+                          <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                              <div>
+                                <h3 className="text-sm font-semibold text-gray-900">Edit Selected Document Body</h3>
+                                <p className="mt-1 text-xs text-gray-600">
+                                  These changes apply only to this agreement flow. The published template remains reusable for other jobs.
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setHasTouchedV2TemplateContent(false);
+                                  setV2TemplateContentDraft(selectedV2TemplateContent);
+                                }}
+                                disabled={!hasTouchedV2TemplateContent && v2TemplateContentDraft === selectedV2TemplateContent}
+                                className="inline-flex items-center justify-center rounded-lg border border-gray-300 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                Reset to Template
+                              </button>
+                            </div>
+
+                            {selectedV2TemplateDetailQuery.isLoading ? (
+                              <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 px-4 py-6 text-center text-sm text-gray-500">
+                                Loading template body...
+                              </div>
+                            ) : (
+                              <div className="mt-4 space-y-3">
+                                <PandaSignRichTextEditor
+                                  value={v2TemplateContentDraft}
+                                  onChange={(content) => {
+                                    setHasTouchedV2TemplateContent(true);
+                                    setV2TemplateContentDraft(content);
+                                  }}
+                                  onInsertToken={() => {}}
+                                />
+                                <p className="text-xs text-gray-500">
+                                  Use <span className="font-semibold text-gray-700">Refresh Preview</span> after editing the body so the PDF matches the latest text before you send or sign.
+                                </p>
+                              </div>
+                            )}
+                          </section>
+                        </div>
+                      )}
+
+                      {v2PreviewPanel === 'signatures' && (
+                        <section className="space-y-3">
+                          <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 p-3">
+                            <p className="text-sm font-semibold text-gray-900">Signature and token checks</p>
+                            <p className="mt-1 text-xs text-gray-600">
+                              Confirm the signature lines and initials that will be attached when this agreement is signed.
+                            </p>
+                          </div>
+                          {renderPreviewSignals()}
+                        </section>
+                      )}
+                    </div>
+
+                    <section className="hidden gap-4 xl:grid xl:grid-cols-[1.15fr_0.85fr]">
                       <div className="space-y-3">
                         <h3 className="text-sm font-semibold text-gray-700">Preview</h3>
-                        {previewBusy && (
+                        {previewBusy ? (
                           <div className="border border-gray-200 rounded-lg p-6 text-center bg-gray-50">
                             <Loader2 className="w-6 h-6 text-panda-primary animate-spin mx-auto mb-2" />
                             <p className="text-sm text-gray-600">Generating preview...</p>
                           </div>
-                        )}
-
-                        {!previewBusy && hasPreviewSource && (
-                          <div className="border border-gray-200 rounded-lg overflow-hidden bg-gray-100">
-                            <iframe
-                              src={v2PreviewUrl}
-                              className="w-full h-[48vh] sm:h-[56vh] lg:h-[62vh]"
-                              title="PandaSign V2 Preview"
-                            />
-                          </div>
-                        )}
-
-                        {showPreviewUnavailable && (
-                          <div className="border border-amber-200 rounded-lg p-4 bg-amber-50">
-                            <p className="text-sm font-medium text-amber-700">Preview unavailable</p>
-                            <p className="text-xs text-amber-700 mt-1">
-                              We could not render a preview URL from the current response. You can go back and adjust inputs.
-                            </p>
-                          </div>
+                        ) : (
+                          renderPreviewFrame(v2PreviewUrl, 'PandaSign V2 Preview', 'h-[62vh]')
                         )}
                       </div>
 
@@ -1291,10 +1551,11 @@ export default function ContractSigningModal({
                             opportunity={opportunity}
                             account={account}
                             contact={contact}
+                            templateDefinition={selectedV2TemplateDetail || selectedV2Template}
                             showLaunchButton={false}
                             embedded
                             title="Editable Contract Fields"
-                            description="These saved values feed PandaSign V2. Each section save patches only that branch of orderContract and keeps unrelated specs data intact."
+                            description="These saved values feed PandaSign V2. Only the fields used by this template stay visible here."
                             onSectionSaved={() => {
                               handleOpenV2Preview();
                             }}
@@ -1345,74 +1606,8 @@ export default function ContractSigningModal({
                       </div>
                     </section>
 
-                    <section className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-                      <div className="rounded-lg border border-gray-200 p-3 bg-white">
-                        <p className="text-xs font-semibold text-gray-600 mb-2">Missing Tokens</p>
-                        {previewMissingTokens.length > 0 ? (
-                          <ul className="space-y-1">
-                            {previewMissingTokens.map((token, index) => (
-                              <li key={`${token}-${index}`} className="text-xs text-amber-700">
-                                • {token}
-                              </li>
-                            ))}
-                          </ul>
-                        ) : (
-                          <p className="text-xs text-gray-500">
-                            {hasPreviewPayload ? 'No missing tokens reported.' : 'No preview token data available.'}
-                          </p>
-                        )}
-                      </div>
-
-                      <div className="rounded-lg border border-gray-200 p-3 bg-white">
-                        <p className="text-xs font-semibold text-gray-600 mb-2">Signature Placeholders by Role</p>
-                        {hasAnyPlaceholders ? (
-                          <div className="space-y-2 text-xs text-gray-700">
-                            <div>
-                              <p className="font-medium text-gray-800">CUSTOMER</p>
-                              <p>
-                                Total: {placeholderSummary.CUSTOMER.total}
-                                {' • '}Signatures: {placeholderSummary.CUSTOMER.signature}
-                                {' • '}Initials: {placeholderSummary.CUSTOMER.initial}
-                              </p>
-                            </div>
-                            <div>
-                              <p className="font-medium text-gray-800">AGENT</p>
-                              <p>
-                                Total: {placeholderSummary.AGENT.total}
-                                {' • '}Signatures: {placeholderSummary.AGENT.signature}
-                                {' • '}Initials: {placeholderSummary.AGENT.initial}
-                              </p>
-                            </div>
-                            {placeholderSummary.OTHER.total > 0 && (
-                              <div>
-                                <p className="font-medium text-gray-800">OTHER</p>
-                                <p>Total: {placeholderSummary.OTHER.total}</p>
-                              </div>
-                            )}
-                          </div>
-                        ) : (
-                          <p className="text-xs text-gray-500">
-                            {hasPreviewPayload ? 'No placeholder map reported.' : 'No preview placeholder data available.'}
-                          </p>
-                        )}
-                      </div>
-
-                      <div className="rounded-lg border border-gray-200 p-3 bg-white">
-                        <p className="text-xs font-semibold text-gray-600 mb-2">Warnings</p>
-                        {previewWarnings.length > 0 ? (
-                          <ul className="space-y-1">
-                            {previewWarnings.map((warning, index) => (
-                              <li key={`${warning}-${index}`} className="text-xs text-amber-700">
-                                • {warning}
-                              </li>
-                            ))}
-                          </ul>
-                        ) : (
-                          <p className="text-xs text-gray-500">
-                            {hasPreviewPayload ? 'No warnings reported.' : 'No preview warnings available.'}
-                          </p>
-                        )}
-                      </div>
+                    <section className="hidden xl:grid xl:grid-cols-1 2xl:grid-cols-3 gap-3">
+                      {renderPreviewSignals()}
                     </section>
 
                     {v2Mode === 'SEND_TO_SIGN' && (
@@ -1429,13 +1624,30 @@ export default function ContractSigningModal({
                 {v2Mode === 'SIGN_NOW' && (v2Step === 3 || v2Step === 4) && (
                   <>
                     <section className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-                      <p className="text-xs text-gray-500">Current signer</p>
-                      <p className="text-sm font-medium text-gray-900">
-                        {currentV2SignerRole === 'CUSTOMER' ? 'Customer' : 'Agent'}
-                      </p>
-                      <p className="text-xs text-gray-500 mt-1">
-                        {currentV2SignerRole === 'CUSTOMER' ? v2CustomerEmail : v2AgentEmail}
-                      </p>
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <p className="text-xs text-gray-500">Current signer</p>
+                          <p className="text-sm font-medium text-gray-900">{currentSignerLabel}</p>
+                          <p className="text-xs text-gray-500 mt-1">
+                            {currentV2SignerRole === 'CUSTOMER' ? v2CustomerEmail : v2AgentEmail}
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2 text-xs">
+                          <span className="inline-flex items-center rounded-full bg-white px-2.5 py-1 text-gray-700 border border-gray-200">
+                            {currentSignerFieldCounts.total} required field{currentSignerFieldCounts.total !== 1 ? 's' : ''}
+                          </span>
+                          {currentSignerFieldCounts.signature > 0 && (
+                            <span className="inline-flex items-center rounded-full bg-indigo-100 px-2.5 py-1 text-indigo-700 border border-indigo-200">
+                              {currentSignerFieldCounts.signature} signature
+                            </span>
+                          )}
+                          {currentSignerFieldCounts.initial > 0 && (
+                            <span className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 text-amber-700 border border-amber-200">
+                              {currentSignerFieldCounts.initial} initial
+                            </span>
+                          )}
+                        </div>
+                      </div>
                       {!currentV2SignSession && (
                         <p className="text-xs text-red-600 mt-2">
                           Signing session data is unavailable. Go back to preview and restart Sign Now.
@@ -1443,123 +1655,317 @@ export default function ContractSigningModal({
                       )}
                     </section>
 
-                    <section className="rounded-lg border border-gray-200 p-3">
-                      <div className="flex items-center justify-between mb-3">
-                        <h3 className="text-sm font-semibold text-gray-700">Required Fields ({currentV2SignerRole})</h3>
+                    <div className="lg:hidden">
+                      <div className="flex items-center gap-2 rounded-full bg-gray-100 p-1">
                         <button
                           type="button"
-                          onClick={handleV2JumpToNextRequired}
-                          disabled={!currentV2RequiredFields.length}
-                          className="inline-flex items-center text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+                          onClick={() => setV2SigningPanel('document')}
+                          className={getMobileTabClasses(v2SigningPanel === 'document')}
                         >
-                          <SkipForward className="w-3.5 h-3.5 mr-1" />
-                          Jump Next
+                          Document
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setV2SigningPanel('fields')}
+                          className={getMobileTabClasses(v2SigningPanel === 'fields')}
+                        >
+                          Sign Fields
                         </button>
                       </div>
-                      {currentV2RequiredFields.length > 0 ? (
-                        <div className="space-y-2">
-                          {currentV2RequiredFields.map((field, index) => (
-                            <div
-                              key={`${field.id || field.key || field.label || index}`}
-                              className={`rounded p-2 text-xs border ${
-                                index === v2ActiveRequiredIndex
-                                  ? 'bg-panda-primary/10 border-panda-primary text-panda-primary'
-                                  : 'bg-white border-gray-200 text-gray-700'
-                              }`}
-                            >
-                              {field.label || field.name || `Required field ${index + 1}`}
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="text-xs text-gray-500">
-                          No role-specific required fields were provided for this signer.
-                        </p>
-                      )}
-                    </section>
+                    </div>
 
-                    <section className="rounded-lg border border-gray-200 p-3">
-                      <div className="flex items-center justify-between mb-3">
-                        <h3 className="text-sm font-semibold text-gray-700">Capture Signature</h3>
-                        <button
-                          type="button"
-                          onClick={clearV2SignatureCapture}
-                          className="inline-flex items-center text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
-                        >
-                          Clear
-                        </button>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2 mb-3">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setV2SignatureMode('DRAW');
-                            setV2TypedSignature('');
-                            setV2SignatureData(null);
-                          }}
-                          className={`inline-flex items-center justify-center px-3 py-2 text-sm rounded border ${
-                            v2SignatureMode === 'DRAW'
-                              ? 'border-panda-primary bg-panda-primary/10 text-panda-primary'
-                              : 'border-gray-300 text-gray-700'
-                          }`}
-                        >
-                          <Pencil className="w-4 h-4 mr-1" />
-                          Draw
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setV2SignatureMode('TYPE');
-                            setV2SignatureData(null);
-                          }}
-                          className={`inline-flex items-center justify-center px-3 py-2 text-sm rounded border ${
-                            v2SignatureMode === 'TYPE'
-                              ? 'border-panda-primary bg-panda-primary/10 text-panda-primary'
-                              : 'border-gray-300 text-gray-700'
-                          }`}
-                        >
-                          <Type className="w-4 h-4 mr-1" />
-                          Type
-                        </button>
-                      </div>
-
-                      {v2SignatureMode === 'DRAW' && (
-                        <div className="border border-dashed border-gray-300 rounded-lg bg-white p-2">
-                          <div className="w-full h-44">
-                            <canvas
-                              ref={v2CanvasRef}
-                              className="w-full h-full touch-none rounded"
-                              onMouseDown={startV2Drawing}
-                              onMouseMove={drawV2Signature}
-                              onMouseUp={stopV2Drawing}
-                              onMouseLeave={stopV2Drawing}
-                              onTouchStart={startV2Drawing}
-                              onTouchMove={drawV2Signature}
-                              onTouchEnd={stopV2Drawing}
-                            />
+                    <div className="lg:hidden">
+                      {v2SigningPanel === 'document' && (
+                        <section className="space-y-3">
+                          <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 p-3">
+                            <p className="text-sm font-semibold text-gray-900">Final document preview</p>
+                            <p className="mt-1 text-xs text-gray-600">
+                              Review the exact agreement for this signer before capturing the signature or initials below.
+                            </p>
                           </div>
-                          <p className="text-xs text-gray-500 mt-2 text-center">
-                            Draw signature with touch or mouse
+                          {renderPreviewFrame(currentSignerPreviewUrl, `PandaSign ${currentSignerLabel} Preview`, 'h-[62vh] sm:h-[70vh]')}
+                        </section>
+                      )}
+
+                      {v2SigningPanel === 'fields' && (
+                        <div className="space-y-4">
+                          <section className="rounded-lg border border-gray-200 p-3">
+                            <div className="flex items-center justify-between mb-3">
+                              <h3 className="text-sm font-semibold text-gray-700">Required Fields ({currentSignerLabel})</h3>
+                              <button
+                                type="button"
+                                onClick={handleV2JumpToNextRequired}
+                                disabled={!currentV2RequiredFields.length}
+                                className="inline-flex items-center text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+                              >
+                                <SkipForward className="w-3.5 h-3.5 mr-1" />
+                                Jump Next
+                              </button>
+                            </div>
+                            {currentV2RequiredFields.length > 0 ? (
+                              <div className="space-y-2">
+                                {currentV2RequiredFields.map((field, index) => (
+                                  <div
+                                    key={`${field.id || field.key || field.label || index}`}
+                                    className={`rounded-lg p-3 border ${
+                                      index === v2ActiveRequiredIndex
+                                        ? 'bg-panda-primary/10 border-panda-primary'
+                                        : 'bg-white border-gray-200'
+                                    }`}
+                                  >
+                                    <div className="flex items-start justify-between gap-3">
+                                      <div>
+                                        <p className={`text-sm font-medium ${index === v2ActiveRequiredIndex ? 'text-panda-primary' : 'text-gray-800'}`}>
+                                          {field.label || field.name || `Required field ${index + 1}`}
+                                        </p>
+                                        <p className="mt-1 text-xs text-gray-500">
+                                          This {normalizeRequiredFieldType(field.type).toLowerCase()} attaches to the {currentSignerLabel.toLowerCase()} portion of the agreement.
+                                        </p>
+                                      </div>
+                                      <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${getFieldTypeBadgeClasses(field.type)}`}>
+                                        {normalizeRequiredFieldType(field.type)}
+                                      </span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-xs text-gray-500">
+                                No role-specific required fields were provided for this signer.
+                              </p>
+                            )}
+                          </section>
+
+                          <section className="rounded-lg border border-gray-200 p-3">
+                            <div className="flex items-center justify-between mb-3">
+                              <h3 className="text-sm font-semibold text-gray-700">Capture Signature</h3>
+                              <button
+                                type="button"
+                                onClick={clearV2SignatureCapture}
+                                className="inline-flex items-center text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+                              >
+                                Clear
+                              </button>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-2 mb-3">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setV2SignatureMode('DRAW');
+                                  setV2TypedSignature('');
+                                  setV2SignatureData(null);
+                                }}
+                                className={`inline-flex items-center justify-center px-3 py-2 text-sm rounded border ${
+                                  v2SignatureMode === 'DRAW'
+                                    ? 'border-panda-primary bg-panda-primary/10 text-panda-primary'
+                                    : 'border-gray-300 text-gray-700'
+                                }`}
+                              >
+                                <Pencil className="w-4 h-4 mr-1" />
+                                Draw
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setV2SignatureMode('TYPE');
+                                  setV2SignatureData(null);
+                                }}
+                                className={`inline-flex items-center justify-center px-3 py-2 text-sm rounded border ${
+                                  v2SignatureMode === 'TYPE'
+                                    ? 'border-panda-primary bg-panda-primary/10 text-panda-primary'
+                                    : 'border-gray-300 text-gray-700'
+                                }`}
+                              >
+                                <Type className="w-4 h-4 mr-1" />
+                                Type
+                              </button>
+                            </div>
+
+                            {v2SignatureMode === 'DRAW' && (
+                              <div className="border border-dashed border-gray-300 rounded-lg bg-white p-2">
+                                <div className="w-full h-44">
+                                  <canvas
+                                    ref={v2CanvasRef}
+                                    className="w-full h-full touch-none rounded"
+                                    onMouseDown={startV2Drawing}
+                                    onMouseMove={drawV2Signature}
+                                    onMouseUp={stopV2Drawing}
+                                    onMouseLeave={stopV2Drawing}
+                                    onTouchStart={startV2Drawing}
+                                    onTouchMove={drawV2Signature}
+                                    onTouchEnd={stopV2Drawing}
+                                  />
+                                </div>
+                                <p className="text-xs text-gray-500 mt-2 text-center">
+                                  Draw signature with touch or mouse
+                                </p>
+                              </div>
+                            )}
+
+                            {v2SignatureMode === 'TYPE' && (
+                              <div>
+                                <label htmlFor="v2-typed-signature" className="block text-xs text-gray-600 mb-1">
+                                  Typed Signature
+                                </label>
+                                <input
+                                  id="v2-typed-signature"
+                                  type="text"
+                                  value={v2TypedSignature}
+                                  onChange={(e) => setV2TypedSignature(e.target.value)}
+                                  className="w-full px-3 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary"
+                                  placeholder="Type full name"
+                                />
+                              </div>
+                            )}
+                          </section>
+                        </div>
+                      )}
+                    </div>
+
+                    <section className="hidden lg:grid lg:grid-cols-[1.05fr_0.95fr] gap-4">
+                      <div className="space-y-3">
+                        <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 p-3">
+                          <p className="text-sm font-semibold text-gray-900">Final document preview</p>
+                          <p className="mt-1 text-xs text-gray-600">
+                            Review the exact agreement that will receive this signer’s signature or initials.
                           </p>
                         </div>
-                      )}
+                        {renderPreviewFrame(currentSignerPreviewUrl, `PandaSign ${currentSignerLabel} Preview`, 'h-[64vh]')}
+                      </div>
 
-                      {v2SignatureMode === 'TYPE' && (
-                        <div>
-                          <label htmlFor="v2-typed-signature" className="block text-xs text-gray-600 mb-1">
-                            Typed Signature
-                          </label>
-                          <input
-                            id="v2-typed-signature"
-                            type="text"
-                            value={v2TypedSignature}
-                            onChange={(e) => setV2TypedSignature(e.target.value)}
-                            className="w-full px-3 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary"
-                            placeholder="Type full name"
-                          />
-                        </div>
-                      )}
+                      <div className="space-y-4">
+                        <section className="rounded-lg border border-gray-200 p-3">
+                          <div className="flex items-center justify-between mb-3">
+                            <h3 className="text-sm font-semibold text-gray-700">Required Fields ({currentSignerLabel})</h3>
+                            <button
+                              type="button"
+                              onClick={handleV2JumpToNextRequired}
+                              disabled={!currentV2RequiredFields.length}
+                              className="inline-flex items-center text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+                            >
+                              <SkipForward className="w-3.5 h-3.5 mr-1" />
+                              Jump Next
+                            </button>
+                          </div>
+                          {currentV2RequiredFields.length > 0 ? (
+                            <div className="space-y-2">
+                              {currentV2RequiredFields.map((field, index) => (
+                                <div
+                                  key={`${field.id || field.key || field.label || index}`}
+                                  className={`rounded-lg p-3 border ${
+                                    index === v2ActiveRequiredIndex
+                                      ? 'bg-panda-primary/10 border-panda-primary'
+                                      : 'bg-white border-gray-200'
+                                  }`}
+                                >
+                                  <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                      <p className={`text-sm font-medium ${index === v2ActiveRequiredIndex ? 'text-panda-primary' : 'text-gray-800'}`}>
+                                        {field.label || field.name || `Required field ${index + 1}`}
+                                      </p>
+                                      <p className="mt-1 text-xs text-gray-500">
+                                        This {normalizeRequiredFieldType(field.type).toLowerCase()} attaches to the {currentSignerLabel.toLowerCase()} portion of the agreement.
+                                      </p>
+                                    </div>
+                                    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${getFieldTypeBadgeClasses(field.type)}`}>
+                                      {normalizeRequiredFieldType(field.type)}
+                                    </span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-xs text-gray-500">
+                              No role-specific required fields were provided for this signer.
+                            </p>
+                          )}
+                        </section>
+
+                        <section className="rounded-lg border border-gray-200 p-3">
+                          <div className="flex items-center justify-between mb-3">
+                            <h3 className="text-sm font-semibold text-gray-700">Capture Signature</h3>
+                            <button
+                              type="button"
+                              onClick={clearV2SignatureCapture}
+                              className="inline-flex items-center text-xs px-2 py-1 rounded border border-gray-300 text-gray-600 hover:bg-gray-50"
+                            >
+                              Clear
+                            </button>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 mb-3">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setV2SignatureMode('DRAW');
+                                setV2TypedSignature('');
+                                setV2SignatureData(null);
+                              }}
+                              className={`inline-flex items-center justify-center px-3 py-2 text-sm rounded border ${
+                                v2SignatureMode === 'DRAW'
+                                  ? 'border-panda-primary bg-panda-primary/10 text-panda-primary'
+                                  : 'border-gray-300 text-gray-700'
+                              }`}
+                            >
+                              <Pencil className="w-4 h-4 mr-1" />
+                              Draw
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setV2SignatureMode('TYPE');
+                                setV2SignatureData(null);
+                              }}
+                              className={`inline-flex items-center justify-center px-3 py-2 text-sm rounded border ${
+                                v2SignatureMode === 'TYPE'
+                                  ? 'border-panda-primary bg-panda-primary/10 text-panda-primary'
+                                  : 'border-gray-300 text-gray-700'
+                              }`}
+                            >
+                              <Type className="w-4 h-4 mr-1" />
+                              Type
+                            </button>
+                          </div>
+
+                          {v2SignatureMode === 'DRAW' && (
+                            <div className="border border-dashed border-gray-300 rounded-lg bg-white p-2">
+                              <div className="w-full h-44">
+                                <canvas
+                                  ref={v2CanvasRef}
+                                  className="w-full h-full touch-none rounded"
+                                  onMouseDown={startV2Drawing}
+                                  onMouseMove={drawV2Signature}
+                                  onMouseUp={stopV2Drawing}
+                                  onMouseLeave={stopV2Drawing}
+                                  onTouchStart={startV2Drawing}
+                                  onTouchMove={drawV2Signature}
+                                  onTouchEnd={stopV2Drawing}
+                                />
+                              </div>
+                              <p className="text-xs text-gray-500 mt-2 text-center">
+                                Draw signature with touch or mouse
+                              </p>
+                            </div>
+                          )}
+
+                          {v2SignatureMode === 'TYPE' && (
+                            <div>
+                              <label htmlFor="v2-typed-signature" className="block text-xs text-gray-600 mb-1">
+                                Typed Signature
+                              </label>
+                              <input
+                                id="v2-typed-signature"
+                                type="text"
+                                value={v2TypedSignature}
+                                onChange={(e) => setV2TypedSignature(e.target.value)}
+                                className="w-full px-3 py-3 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-panda-primary focus:border-panda-primary"
+                                placeholder="Type full name"
+                              />
+                            </div>
+                          )}
+                        </section>
+                      </div>
                     </section>
                   </>
                 )}

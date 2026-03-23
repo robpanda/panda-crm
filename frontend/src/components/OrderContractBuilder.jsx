@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle,
@@ -14,6 +14,136 @@ import { opportunitiesApi } from '../services/api';
 
 const DOCUMENT_TYPE_OPTIONS = ['CONTRACT', 'CHANGE_ORDER', 'WORK_ORDER', 'FINANCING', 'OTHER'];
 const TERRITORY_OPTIONS = ['DE', 'MD', 'NJ', 'PA', 'NC', 'VA', 'FL', 'DEFAULT'];
+
+const OVERVIEW_FIELD_DEFINITIONS = [
+  {
+    key: 'documentType',
+    label: 'Document Type',
+    control: 'select',
+    options: DOCUMENT_TYPE_OPTIONS,
+    aliases: ['orderContract.overview.documentType'],
+  },
+  {
+    key: 'territory',
+    label: 'Territory',
+    control: 'select',
+    options: TERRITORY_OPTIONS,
+    aliases: ['orderContract.overview.territory'],
+  },
+  {
+    key: 'projectName',
+    label: 'Project Name',
+    aliases: ['projectName', 'orderContract.overview.projectName'],
+  },
+  {
+    key: 'jobNumber',
+    label: 'Job Number',
+    aliases: ['jobNumber', 'orderContract.overview.jobNumber'],
+  },
+  {
+    key: 'projectAddress',
+    label: 'Project Address',
+    aliases: ['projectAddress', 'orderContract.overview.projectAddress'],
+  },
+  {
+    key: 'contractDate',
+    label: 'Contract Date',
+    type: 'date',
+    aliases: ['contractDate', 'orderContract.overview.contractDate'],
+  },
+  {
+    key: 'effectiveDate',
+    label: 'Effective Date',
+    type: 'date',
+    aliases: ['effectiveDate', 'orderContract.overview.effectiveDate'],
+  },
+  {
+    key: 'customerName',
+    label: 'Customer Name',
+    aliases: ['customerName', 'orderContract.overview.customerName'],
+  },
+  {
+    key: 'customerEmail',
+    label: 'Customer Email',
+    type: 'email',
+    aliases: ['customerEmail', 'orderContract.overview.customerEmail'],
+  },
+  {
+    key: 'customerPhone',
+    label: 'Customer Phone',
+    aliases: ['customerPhone', 'orderContract.overview.customerPhone'],
+  },
+  {
+    key: 'salesRepName',
+    label: 'Sales Rep Name',
+    aliases: ['salesRepName', 'orderContract.overview.salesRepName'],
+  },
+  {
+    key: 'salesRepEmail',
+    label: 'Sales Rep Email',
+    type: 'email',
+    aliases: ['salesRepEmail', 'orderContract.overview.salesRepEmail'],
+  },
+  {
+    key: 'salesRepPhone',
+    label: 'Sales Rep Phone',
+    aliases: ['salesRepPhone', 'orderContract.overview.salesRepPhone'],
+  },
+  {
+    key: 'salesRepTitle',
+    label: 'Sales Rep Title',
+    aliases: ['orderContract.overview.salesRepTitle'],
+  },
+  {
+    key: 'notes',
+    label: 'Notes',
+    control: 'textarea',
+    aliases: ['orderContract.overview.notes'],
+  },
+];
+
+const PRICING_FIELD_DEFINITIONS = [
+  {
+    key: 'contractAmount',
+    label: 'Contract Amount',
+    type: 'number',
+    aliases: ['contractAmount', 'orderContract.pricing.contractAmount'],
+  },
+  {
+    key: 'depositAmount',
+    label: 'Deposit Amount',
+    type: 'number',
+    aliases: ['depositAmount', 'orderContract.pricing.depositAmount'],
+  },
+  {
+    key: 'financedAmount',
+    label: 'Financed Amount',
+    type: 'number',
+    aliases: ['financedAmount', 'orderContract.pricing.financedAmount'],
+  },
+  {
+    key: 'scopeOfWork',
+    label: 'Scope of Work',
+    control: 'textarea',
+    aliases: ['scopeOfWork', 'orderContract.pricing.scopeOfWork'],
+  },
+];
+
+const LINE_ITEMS_ALIASES = [
+  'lineItemsText',
+  'lineItemsHtml',
+  'orderContract.pricing.lineItemsText',
+  'orderContract.pricing.lineItemsHtml',
+];
+
+const SIGNER_GROUP_FIELD_DEFINITIONS = [
+  { key: 'name', label: 'Name' },
+  { key: 'email', label: 'Email', type: 'email' },
+  { key: 'phone', label: 'Phone' },
+  { key: 'title', label: 'Title' },
+  { key: 'role', label: 'Role' },
+  { key: 'label', label: 'Label' },
+];
 
 function isPlainObject(value) {
   return Boolean(value) && Object.prototype.toString.call(value) === '[object Object]';
@@ -61,6 +191,107 @@ function deepMergeJson(baseValue, patchValue) {
   });
 
   return result;
+}
+
+function normalizeTemplateRole(value) {
+  return String(value || '').trim().toUpperCase();
+}
+
+function normalizeMergeFieldToken(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return '';
+  return trimmed.replace(/^\{\{\s*/, '').replace(/\s*\}\}$/, '').trim();
+}
+
+function extractTemplateMergeFieldSet(templateDefinition) {
+  const mergeFields = Array.isArray(templateDefinition?.mergeFields)
+    ? templateDefinition.mergeFields
+    : [];
+
+  if (mergeFields.length > 0) {
+    return new Set(mergeFields.map(normalizeMergeFieldToken).filter(Boolean));
+  }
+
+  const content = String(templateDefinition?.content || '');
+  const matches = content.match(/\{\{[^}]+\}\}/g) || [];
+  return new Set(matches.map(normalizeMergeFieldToken).filter(Boolean));
+}
+
+function buildVisibleTemplateFieldState(templateDefinition) {
+  const templateDocumentType = String(templateDefinition?.documentType || templateDefinition?.category || 'CONTRACT')
+    .trim()
+    .toUpperCase() || 'CONTRACT';
+  const mergeFieldSet = extractTemplateMergeFieldSet(templateDefinition);
+  const normalizedSignerRoles = Array.isArray(templateDefinition?.signerRoles)
+    ? templateDefinition.signerRoles.map((signer) => normalizeTemplateRole(signer?.role || signer)).filter(Boolean)
+    : [];
+  const useTemplateFiltering = mergeFieldSet.size > 0;
+
+  const hasToken = (aliases = []) => aliases.some((alias) => mergeFieldSet.has(alias));
+
+  const visibleOverviewFields = OVERVIEW_FIELD_DEFINITIONS.filter((field) => hasToken(field.aliases));
+  const visiblePricingFields = PRICING_FIELD_DEFINITIONS.filter((field) => hasToken(field.aliases));
+  const showLineItems = hasToken(LINE_ITEMS_ALIASES);
+
+  const visibleSignerGroups = [];
+  if (normalizedSignerRoles.includes('CUSTOMER') || hasToken([
+    'orderContract.signers.customer.name',
+    'orderContract.signers.customer.email',
+    'orderContract.signers.customer.phone',
+    'orderContract.signers.customer.title',
+    'signatures.customer.signature',
+    'signatures.customer.initials',
+  ])) {
+    visibleSignerGroups.push('customer');
+  }
+  if (normalizedSignerRoles.includes('AGENT') || normalizedSignerRoles.includes('PM') || hasToken([
+    'orderContract.signers.agent.name',
+    'orderContract.signers.agent.email',
+    'orderContract.signers.agent.phone',
+    'orderContract.signers.agent.title',
+    'signatures.agent.signature',
+    'signatures.agent.initials',
+  ])) {
+    visibleSignerGroups.push('agent');
+  }
+  const showAdditionalSigners =
+    normalizedSignerRoles.some((role) => role && role !== 'CUSTOMER' && role !== 'AGENT' && role !== 'PM');
+
+  const hasAnyTemplateMatchedFields =
+    visibleOverviewFields.length > 0 ||
+    visiblePricingFields.length > 0 ||
+    showLineItems ||
+    visibleSignerGroups.length > 0 ||
+    showAdditionalSigners;
+
+  if (!useTemplateFiltering || !hasAnyTemplateMatchedFields) {
+    const defaultSignerGroups = normalizedSignerRoles.length > 0
+      ? [
+          ...(normalizedSignerRoles.some((role) => role === 'CUSTOMER') ? ['customer'] : []),
+          ...(normalizedSignerRoles.some((role) => role === 'AGENT' || role === 'PM') ? ['agent'] : []),
+        ]
+      : ['customer', 'agent'];
+
+    return {
+      useTemplateFiltering: false,
+      templateDocumentType,
+      visibleOverviewFields: OVERVIEW_FIELD_DEFINITIONS,
+      visiblePricingFields: PRICING_FIELD_DEFINITIONS,
+      showLineItems: true,
+      visibleSignerGroups: defaultSignerGroups.length > 0 ? defaultSignerGroups : ['customer', 'agent'],
+      showAdditionalSigners,
+    };
+  }
+
+  return {
+    useTemplateFiltering: true,
+    templateDocumentType,
+    visibleOverviewFields,
+    visiblePricingFields,
+    showLineItems,
+    visibleSignerGroups,
+    showAdditionalSigners,
+  };
 }
 
 function pickFirstText(...values) {
@@ -281,6 +512,7 @@ export default function OrderContractBuilder({
   opportunity,
   account,
   contact,
+  templateDefinition = null,
   onLaunchPandaSign,
   onSectionSaved,
   showLaunchButton = true,
@@ -293,6 +525,10 @@ export default function OrderContractBuilder({
   const [hasHydrated, setHasHydrated] = useState(false);
   const [activeSaveSection, setActiveSaveSection] = useState('');
   const [feedback, setFeedback] = useState({ type: '', message: '' });
+  const templateFieldState = useMemo(
+    () => buildVisibleTemplateFieldState(templateDefinition),
+    [templateDefinition]
+  );
 
   const orderContractQuery = useQuery({
     queryKey: ['opportunityOrderContract', opportunity?.id],
@@ -501,6 +737,11 @@ export default function OrderContractBuilder({
             <h3 className={`${embedded ? 'text-base' : 'text-lg'} font-semibold text-gray-900`}>{title}</h3>
           </div>
           <p className="mt-2 max-w-3xl text-sm text-gray-600">{description}</p>
+          {templateFieldState.useTemplateFiltering && (
+            <p className="mt-2 max-w-3xl text-xs font-medium text-indigo-700">
+              Showing the contract fields used by this {templateFieldState.templateDocumentType} template.
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {orderContractQuery.isFetching && (
@@ -544,6 +785,7 @@ export default function OrderContractBuilder({
       )}
 
       <div className="space-y-6 p-5">
+        {templateFieldState.visibleOverviewFields.length > 0 && (
         <section className="rounded-2xl border border-gray-200 p-4">
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
@@ -561,70 +803,51 @@ export default function OrderContractBuilder({
             </button>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            <label className="block">
-              <span className="mb-1 block text-sm font-medium text-gray-700">Document Type</span>
-              <select
-                value={draft.overview.documentType}
-                onChange={(event) => updateOverview('documentType', event.target.value)}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-panda-primary focus:outline-none focus:ring-2 focus:ring-panda-primary/20"
-              >
-                {DOCUMENT_TYPE_OPTIONS.map((option) => (
-                  <option key={option} value={option}>{option}</option>
-                ))}
-              </select>
-            </label>
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {templateFieldState.visibleOverviewFields
+              .filter((field) => field.control !== 'textarea')
+              .map((field) => (
+                <label key={field.key} className="block">
+                  <span className="mb-1 block text-sm font-medium text-gray-700">{field.label}</span>
+                  {field.control === 'select' ? (
+                    <select
+                      value={draft.overview[field.key]}
+                      onChange={(event) => updateOverview(field.key, event.target.value)}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-panda-primary focus:outline-none focus:ring-2 focus:ring-panda-primary/20"
+                    >
+                      {field.options.map((option) => (
+                        <option key={option} value={option}>{option}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type={field.type || 'text'}
+                      value={field.type === 'date' ? toDateInputValue(draft.overview[field.key]) : draft.overview[field.key]}
+                      onChange={(event) => updateOverview(field.key, event.target.value)}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-panda-primary focus:outline-none focus:ring-2 focus:ring-panda-primary/20"
+                    />
+                  )}
+                </label>
+              ))}
+          </div>
 
-            <label className="block">
-              <span className="mb-1 block text-sm font-medium text-gray-700">Territory</span>
-              <select
-                value={draft.overview.territory}
-                onChange={(event) => updateOverview('territory', event.target.value)}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-panda-primary focus:outline-none focus:ring-2 focus:ring-panda-primary/20"
-              >
-                {TERRITORY_OPTIONS.map((option) => (
-                  <option key={option} value={option}>{option}</option>
-                ))}
-              </select>
-            </label>
-
-            {[
-              ['projectName', 'Project Name'],
-              ['jobNumber', 'Job Number'],
-              ['projectAddress', 'Project Address'],
-              ['contractDate', 'Contract Date', 'date'],
-              ['effectiveDate', 'Effective Date', 'date'],
-              ['customerName', 'Customer Name'],
-              ['customerEmail', 'Customer Email', 'email'],
-              ['customerPhone', 'Customer Phone'],
-              ['salesRepName', 'Sales Rep Name'],
-              ['salesRepEmail', 'Sales Rep Email', 'email'],
-              ['salesRepPhone', 'Sales Rep Phone'],
-              ['salesRepTitle', 'Sales Rep Title'],
-            ].map(([field, label, type]) => (
-              <label key={field} className="block">
-                <span className="mb-1 block text-sm font-medium text-gray-700">{label}</span>
-                <input
-                  type={type || 'text'}
-                  value={draft.overview[field]}
-                  onChange={(event) => updateOverview(field, event.target.value)}
+          {templateFieldState.visibleOverviewFields
+            .filter((field) => field.control === 'textarea')
+            .map((field) => (
+              <label key={field.key} className="mt-4 block">
+                <span className="mb-1 block text-sm font-medium text-gray-700">{field.label}</span>
+                <textarea
+                  value={draft.overview[field.key]}
+                  onChange={(event) => updateOverview(field.key, event.target.value)}
+                  rows={3}
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-panda-primary focus:outline-none focus:ring-2 focus:ring-panda-primary/20"
                 />
               </label>
             ))}
-          </div>
-
-          <label className="mt-4 block">
-            <span className="mb-1 block text-sm font-medium text-gray-700">Notes</span>
-            <textarea
-              value={draft.overview.notes}
-              onChange={(event) => updateOverview('notes', event.target.value)}
-              rows={3}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-panda-primary focus:outline-none focus:ring-2 focus:ring-panda-primary/20"
-            />
-          </label>
         </section>
+        )}
 
+        {(templateFieldState.visiblePricingFields.length > 0 || templateFieldState.showLineItems) && (
         <section className="rounded-2xl border border-gray-200 p-4">
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
@@ -643,34 +866,37 @@ export default function OrderContractBuilder({
           </div>
 
           <div className="grid gap-4 md:grid-cols-3">
-            {[
-              ['contractAmount', 'Contract Amount'],
-              ['depositAmount', 'Deposit Amount'],
-              ['financedAmount', 'Financed Amount'],
-            ].map(([field, label]) => (
-              <label key={field} className="block">
-                <span className="mb-1 block text-sm font-medium text-gray-700">{label}</span>
+            {templateFieldState.visiblePricingFields
+              .filter((field) => field.control !== 'textarea')
+              .map((field) => (
+              <label key={field.key} className="block">
+                <span className="mb-1 block text-sm font-medium text-gray-700">{field.label}</span>
                 <input
-                  type="number"
-                  step="0.01"
-                  value={draft.pricing[field]}
-                  onChange={(event) => updatePricing(field, event.target.value)}
+                  type={field.type || 'text'}
+                  step={field.type === 'number' ? '0.01' : undefined}
+                  value={draft.pricing[field.key]}
+                  onChange={(event) => updatePricing(field.key, event.target.value)}
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-panda-primary focus:outline-none focus:ring-2 focus:ring-panda-primary/20"
                 />
               </label>
             ))}
           </div>
 
-          <label className="mt-4 block">
-            <span className="mb-1 block text-sm font-medium text-gray-700">Scope of Work</span>
-            <textarea
-              value={draft.pricing.scopeOfWork}
-              onChange={(event) => updatePricing('scopeOfWork', event.target.value)}
-              rows={4}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-panda-primary focus:outline-none focus:ring-2 focus:ring-panda-primary/20"
-            />
-          </label>
+          {templateFieldState.visiblePricingFields
+            .filter((field) => field.control === 'textarea')
+            .map((field) => (
+              <label key={field.key} className="mt-4 block">
+                <span className="mb-1 block text-sm font-medium text-gray-700">{field.label}</span>
+                <textarea
+                  value={draft.pricing[field.key]}
+                  onChange={(event) => updatePricing(field.key, event.target.value)}
+                  rows={4}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-panda-primary focus:outline-none focus:ring-2 focus:ring-panda-primary/20"
+                />
+              </label>
+            ))}
 
+          {templateFieldState.showLineItems && (
           <div className="mt-4 rounded-xl border border-gray-200">
             <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
               <div>
@@ -762,8 +988,11 @@ export default function OrderContractBuilder({
               ))}
             </div>
           </div>
+          )}
         </section>
+        )}
 
+        {(templateFieldState.visibleSignerGroups.length > 0 || templateFieldState.showAdditionalSigners) && (
         <section className="rounded-2xl border border-gray-200 p-4">
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
@@ -785,24 +1014,19 @@ export default function OrderContractBuilder({
             {[
               ['customer', 'Customer Signer'],
               ['agent', 'Agent Signer'],
-            ].map(([group, label]) => (
+            ]
+              .filter(([group]) => templateFieldState.visibleSignerGroups.includes(group))
+              .map(([group, label]) => (
               <div key={group} className="rounded-xl border border-gray-200 p-4">
                 <h5 className="mb-3 text-sm font-semibold text-gray-900">{label}</h5>
                 <div className="grid gap-4 md:grid-cols-2">
-                  {[
-                    ['name', 'Name'],
-                    ['email', 'Email', 'email'],
-                    ['phone', 'Phone'],
-                    ['title', 'Title'],
-                    ['role', 'Role'],
-                    ['label', 'Label'],
-                  ].map(([field, fieldLabel, type]) => (
-                    <label key={field} className="block">
-                      <span className="mb-1 block text-sm font-medium text-gray-700">{fieldLabel}</span>
+                  {SIGNER_GROUP_FIELD_DEFINITIONS.map((field) => (
+                    <label key={field.key} className="block">
+                      <span className="mb-1 block text-sm font-medium text-gray-700">{field.label}</span>
                       <input
-                        type={type || 'text'}
-                        value={draft.signers[group][field]}
-                        onChange={(event) => updateSigner(group, field, event.target.value)}
+                        type={field.type || 'text'}
+                        value={draft.signers[group][field.key]}
+                        onChange={(event) => updateSigner(group, field.key, event.target.value)}
                         className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-panda-primary focus:outline-none focus:ring-2 focus:ring-panda-primary/20"
                       />
                     </label>
@@ -812,6 +1036,7 @@ export default function OrderContractBuilder({
             ))}
           </div>
 
+          {templateFieldState.showAdditionalSigners && (
           <div className="mt-4 rounded-xl border border-gray-200">
             <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
               <div>
@@ -873,7 +1098,9 @@ export default function OrderContractBuilder({
               ))}
             </div>
           </div>
+          )}
         </section>
+        )}
 
         <div className="flex items-center justify-between gap-3 rounded-xl border border-dashed border-indigo-200 bg-indigo-50/50 px-4 py-3 text-sm text-indigo-900">
           <div className="flex items-start gap-3">

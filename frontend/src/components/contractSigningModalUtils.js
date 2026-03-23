@@ -124,6 +124,60 @@ export function getPlaceholderSummaryByRole(previewData) {
   return summary;
 }
 
+export function getPlaceholderDetailsByRole(previewData) {
+  const details = {
+    CUSTOMER: [],
+    AGENT: [],
+    OTHER: [],
+  };
+
+  if (!previewData || typeof previewData !== 'object') return details;
+
+  const placeholders = [
+    ...getAsArray(previewData.fieldMapReport?.fields),
+    ...getAsArray(previewData.fieldMapReport),
+    ...getAsArray(previewData.previewReport?.fieldMapReport?.fields),
+    ...getAsArray(previewData.previewReport?.fieldMapReport),
+    ...getAsArray(previewData.signaturePlaceholders),
+    ...getAsArray(previewData.placeholders),
+  ];
+
+  placeholders.forEach((placeholder, index) => {
+    if (!placeholder || typeof placeholder !== 'object') return;
+    const rawRole = String(
+      placeholder.role ||
+      placeholder.signerRole ||
+      placeholder.dataPsRole ||
+      placeholder.ownerRole ||
+      'OTHER'
+    ).toUpperCase();
+    const role = rawRole === 'CUSTOMER' || rawRole === 'AGENT' ? rawRole : 'OTHER';
+    const rawType = String(
+      placeholder.type ||
+      placeholder.fieldType ||
+      placeholder.kind ||
+      placeholder.inputType ||
+      'FIELD'
+    ).toUpperCase();
+    const type = rawType.includes('INITIAL')
+      ? 'INITIAL'
+      : rawType.includes('SIGN')
+        ? 'SIGNATURE'
+        : rawType;
+
+    details[role].push({
+      ...placeholder,
+      role,
+      type,
+      id: placeholder.id || placeholder.fieldId || placeholder.dataPsId || `${role}-placeholder-${index + 1}`,
+      label: placeholder.label || placeholder.name || placeholder.key || placeholder.id || `${type} ${index + 1}`,
+      page: placeholder.page || placeholder.pageNumber || null,
+    });
+  });
+
+  return details;
+}
+
 function getAsArray(value) {
   return Array.isArray(value) ? value : [];
 }
