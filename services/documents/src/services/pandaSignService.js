@@ -211,6 +211,8 @@ function normalizeAgreementRecord(agreement) {
   };
 }
 
+export const SIGNED_DOCUMENT_URL_EXPIRES_IN_SECONDS = 60 * 60 * 24 * 7;
+
 export function buildSignatureCreateData({
   agreementId,
   signerName,
@@ -1457,7 +1459,7 @@ Panda Exteriors
     return await getSignedUrl(
       s3Client,
       new GetObjectCommand({ Bucket: S3_BUCKET, Key: signedKey }),
-      { expiresIn: 3600 * 24 * 365 } // 1 year
+      { expiresIn: SIGNED_DOCUMENT_URL_EXPIRES_IN_SECONDS }
     );
   },
 
@@ -2907,7 +2909,7 @@ ${agreement.signedDocumentUrl}
     return await getSignedUrl(
       s3Client,
       new GetObjectCommand({ Bucket: S3_BUCKET, Key: completedKey }),
-      { expiresIn: 3600 * 24 * 365 } // 1 year
+      { expiresIn: SIGNED_DOCUMENT_URL_EXPIRES_IN_SECONDS }
     );
   },
 
