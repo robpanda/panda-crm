@@ -74,3 +74,32 @@ test('wrapText preserves paragraph breaks for document rendering', () => {
   ]);
   assert.equal(lines[2], '');
 });
+
+test('buildTemplateDocumentText prefers mergeData templateContentOverride when provided', async () => {
+  const originalGetBrandingItems = pandaSignService.getBrandingItems;
+  const originalBuildTemplateMergeData = pandaSignService.buildTemplateMergeData;
+
+  pandaSignService.getBrandingItems = async () => [];
+  pandaSignService.buildTemplateMergeData = async (_template, mergeData) => ({
+    ...mergeData,
+    customerName: 'Jamie Customer',
+  });
+
+  try {
+    const output = await pandaSignService.buildTemplateDocumentText(
+      {
+        content: '<p>Original body</p>',
+        signatureFields: {},
+      },
+      {
+        templateContentOverride: '<p>Edited {{customerName}} body</p>',
+      }
+    );
+
+    assert.match(output, /Edited Jamie Customer body/);
+    assert.doesNotMatch(output, /Original body/);
+  } finally {
+    pandaSignService.getBrandingItems = originalGetBrandingItems;
+    pandaSignService.buildTemplateMergeData = originalBuildTemplateMergeData;
+  }
+});

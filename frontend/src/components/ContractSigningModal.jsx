@@ -2,6 +2,8 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import apiClient, { documentsApiV2, agreementsApi, opportunitiesApi } from '../services/api';
 import { useAuth } from '../context/AuthContext';
+import OrderContractBuilder from './OrderContractBuilder';
+import PandaSignRichTextEditor from './pandasign-v2/PandaSignRichTextEditor';
 import {
   extractHostSigningToken,
   extractSigningToken,
@@ -102,6 +104,8 @@ export default function ContractSigningModal({
   const [v2AgentEmail, setV2AgentEmail] = useState('');
   const [hasTouchedV2CustomerEmail, setHasTouchedV2CustomerEmail] = useState(false);
   const [hasTouchedV2AgentEmail, setHasTouchedV2AgentEmail] = useState(false);
+  const [v2TemplateContentDraft, setV2TemplateContentDraft] = useState('');
+  const [hasTouchedV2TemplateContent, setHasTouchedV2TemplateContent] = useState(false);
   const [v2Verification, setV2Verification] = useState(null);
   const [v2VerificationError, setV2VerificationError] = useState(null);
   const [v2Step, setV2Step] = useState(1);
@@ -193,6 +197,16 @@ export default function ContractSigningModal({
       || null,
     [territoryScopedTemplates, templates, v2TemplateId]
   );
+
+  const selectedV2TemplateDetailQuery = useQuery({
+    queryKey: ['pandasign-v2-template-detail', v2TemplateId],
+    enabled: FEATURE_PANDASIGN_V2 && isOpen && Boolean(v2TemplateId),
+    queryFn: async () => unwrapApiEnvelope(await agreementsApi.getTemplate(v2TemplateId)),
+    refetchOnWindowFocus: false,
+  });
+
+  const selectedV2TemplateDetail = selectedV2TemplateDetailQuery.data || selectedV2Template;
+  const selectedV2TemplateContent = String(selectedV2TemplateDetail?.content || selectedV2Template?.content || '');
 
   const resolvedV2Participants = useMemo(() => {
     const orderContract = orderContractQuery.data?.orderContract || {};
@@ -312,6 +326,8 @@ export default function ContractSigningModal({
       setV2AgentEmail('');
       setHasTouchedV2CustomerEmail(false);
       setHasTouchedV2AgentEmail(false);
+      setV2TemplateContentDraft('');
+      setHasTouchedV2TemplateContent(false);
       setV2Verification(null);
       setV2VerificationError(null);
       setV2Step(1);
@@ -338,6 +354,35 @@ export default function ContractSigningModal({
     resolvedV2Participants.customerEmail,
     resolvedV2Participants.agentEmail,
   ]);
+
+  useEffect(() => {
+    if (!FEATURE_PANDASIGN_V2 || !isOpen) return;
+    if (!v2TemplateId) {
+      setV2TemplateContentDraft('');
+      setHasTouchedV2TemplateContent(false);
+      return;
+    }
+
+    if (!hasTouchedV2TemplateContent) {
+      setV2TemplateContentDraft(selectedV2TemplateContent);
+    }
+  }, [
+    FEATURE_PANDASIGN_V2,
+    isOpen,
+    v2TemplateId,
+    selectedV2TemplateContent,
+    hasTouchedV2TemplateContent,
+  ]);
+
+  const buildV2MergeData = () => {
+    if (!hasTouchedV2TemplateContent) {
+      return {};
+    }
+
+    return {
+      templateContentOverride: v2TemplateContentDraft,
+    };
+  };
 
   // Preview generation mutation
   const previewMutation = useMutation({
@@ -459,6 +504,7 @@ export default function ContractSigningModal({
         contactId: contact?.id || opportunity?.contactId,
         recipientEmail: v2CustomerEmail || resolvedV2Participants.customerEmail,
         recipientName: customerName,
+        mergeData: buildV2MergeData(),
       }));
 
       const agreementId = created?.id || created?.agreementId;
@@ -500,6 +546,7 @@ export default function ContractSigningModal({
         contactId: contact?.id || opportunity?.contactId,
         recipientEmail: v2CustomerEmail || resolvedV2Participants.customerEmail,
         recipientName: customerName,
+        mergeData: buildV2MergeData(),
       }));
 
       const agreementId = getAgreementId(created);
@@ -811,6 +858,7 @@ export default function ContractSigningModal({
       customerEmail: v2CustomerEmail,
       agentEmail: v2AgentEmail,
       context: buildContext(),
+      mergeData: buildV2MergeData(),
     });
   };
 
@@ -822,7 +870,14 @@ export default function ContractSigningModal({
     v2PreviewMutation.mutate({
       templateId: v2TemplateId,
       mode: v2Mode,
+      customerEmail: v2CustomerEmail,
+      agentEmail: v2AgentEmail,
+      emails: {
+        customer: v2CustomerEmail,
+        agent: v2AgentEmail,
+      },
       context: buildContext(),
+      mergeData: buildV2MergeData(),
       returnUrl: true,
     });
   };
@@ -994,7 +1049,7 @@ export default function ContractSigningModal({
 
         <div className="relative flex h-[100dvh] w-full items-stretch justify-center p-0 sm:items-center sm:p-6">
           <div
-            className="relative flex w-full max-w-4xl flex-col bg-white shadow-2xl h-[100dvh] sm:h-auto sm:max-h-[92dvh] rounded-none sm:rounded-xl"
+            className="relative flex w-full max-w-6xl flex-col bg-white shadow-2xl h-[100dvh] sm:h-auto sm:max-h-[92dvh] rounded-none sm:rounded-xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-gray-200">
@@ -1194,33 +1249,100 @@ export default function ContractSigningModal({
                       )}
                     </section>
 
-                    <section className="space-y-3">
-                      <h3 className="text-sm font-semibold text-gray-700">Preview</h3>
-                      {previewBusy && (
-                        <div className="border border-gray-200 rounded-lg p-6 text-center bg-gray-50">
-                          <Loader2 className="w-6 h-6 text-panda-primary animate-spin mx-auto mb-2" />
-                          <p className="text-sm text-gray-600">Generating preview...</p>
-                        </div>
-                      )}
+                    <section className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+                      <div className="space-y-3">
+                        <h3 className="text-sm font-semibold text-gray-700">Preview</h3>
+                        {previewBusy && (
+                          <div className="border border-gray-200 rounded-lg p-6 text-center bg-gray-50">
+                            <Loader2 className="w-6 h-6 text-panda-primary animate-spin mx-auto mb-2" />
+                            <p className="text-sm text-gray-600">Generating preview...</p>
+                          </div>
+                        )}
 
-                      {!previewBusy && hasPreviewSource && (
-                        <div className="border border-gray-200 rounded-lg overflow-hidden bg-gray-100">
-                          <iframe
-                            src={v2PreviewUrl}
-                            className="w-full h-[48vh] sm:h-[56vh] lg:h-[62vh]"
-                            title="PandaSign V2 Preview"
-                          />
-                        </div>
-                      )}
+                        {!previewBusy && hasPreviewSource && (
+                          <div className="border border-gray-200 rounded-lg overflow-hidden bg-gray-100">
+                            <iframe
+                              src={v2PreviewUrl}
+                              className="w-full h-[48vh] sm:h-[56vh] lg:h-[62vh]"
+                              title="PandaSign V2 Preview"
+                            />
+                          </div>
+                        )}
 
-                      {showPreviewUnavailable && (
-                        <div className="border border-amber-200 rounded-lg p-4 bg-amber-50">
-                          <p className="text-sm font-medium text-amber-700">Preview unavailable</p>
-                          <p className="text-xs text-amber-700 mt-1">
-                            We could not render a preview URL from the current response. You can go back and adjust inputs.
+                        {showPreviewUnavailable && (
+                          <div className="border border-amber-200 rounded-lg p-4 bg-amber-50">
+                            <p className="text-sm font-medium text-amber-700">Preview unavailable</p>
+                            <p className="text-xs text-amber-700 mt-1">
+                              We could not render a preview URL from the current response. You can go back and adjust inputs.
+                            </p>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="space-y-3">
+                        <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 p-3">
+                          <p className="text-sm font-semibold text-gray-900">Edit Contract Data In Preview</p>
+                          <p className="mt-1 text-xs text-gray-600">
+                            Update the saved contract values here, save the section you changed, then refresh the preview to render the new document values.
                           </p>
                         </div>
-                      )}
+                        <div className="max-h-[72vh] space-y-4 overflow-y-auto rounded-2xl pr-1">
+                          <OrderContractBuilder
+                            opportunity={opportunity}
+                            account={account}
+                            contact={contact}
+                            showLaunchButton={false}
+                            embedded
+                            title="Editable Contract Fields"
+                            description="These saved values feed PandaSign V2. Each section save patches only that branch of orderContract and keeps unrelated specs data intact."
+                            onSectionSaved={() => {
+                              handleOpenV2Preview();
+                            }}
+                          />
+
+                          <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                              <div>
+                                <h3 className="text-sm font-semibold text-gray-900">Edit Selected Document Body</h3>
+                                <p className="mt-1 text-xs text-gray-600">
+                                  Use this to adjust the actual contract text before sending. These edits affect this live agreement flow and preview, but do not overwrite the published template.
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setHasTouchedV2TemplateContent(false);
+                                  setV2TemplateContentDraft(selectedV2TemplateContent);
+                                }}
+                                disabled={!hasTouchedV2TemplateContent && v2TemplateContentDraft === selectedV2TemplateContent}
+                                className="inline-flex items-center justify-center rounded-lg border border-gray-300 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                Reset to Template
+                              </button>
+                            </div>
+
+                            {selectedV2TemplateDetailQuery.isLoading ? (
+                              <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 px-4 py-6 text-center text-sm text-gray-500">
+                                Loading template body...
+                              </div>
+                            ) : (
+                              <div className="mt-4 space-y-3">
+                                <PandaSignRichTextEditor
+                                  value={v2TemplateContentDraft}
+                                  onChange={(content) => {
+                                    setHasTouchedV2TemplateContent(true);
+                                    setV2TemplateContentDraft(content);
+                                  }}
+                                  onInsertToken={() => {}}
+                                />
+                                <p className="text-xs text-gray-500">
+                                  After editing the document body, use <span className="font-semibold text-gray-700">Refresh Preview</span> so the PDF matches the latest text before you send or sign.
+                                </p>
+                              </div>
+                            )}
+                          </section>
+                        </div>
+                      </div>
                     </section>
 
                     <section className="grid grid-cols-1 lg:grid-cols-3 gap-3">
