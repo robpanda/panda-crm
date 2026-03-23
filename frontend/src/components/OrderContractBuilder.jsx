@@ -282,6 +282,11 @@ export default function OrderContractBuilder({
   account,
   contact,
   onLaunchPandaSign,
+  onSectionSaved,
+  showLaunchButton = true,
+  embedded = false,
+  title = 'Order Builder (Phase 1)',
+  description = 'Save structured contract data for PandaSign V2. Each section patches only its own `orderContract` branch and preserves unrelated job specs data.',
 }) {
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState(() => buildDefaultDraft({ opportunity, account, contact }));
@@ -353,6 +358,10 @@ export default function OrderContractBuilder({
       setFeedback({
         type: 'success',
         message: `${variables.sectionKey.charAt(0).toUpperCase()}${variables.sectionKey.slice(1)} saved to specsData.orderContract`,
+      });
+      onSectionSaved?.({
+        sectionKey: variables.sectionKey,
+        data,
       });
     },
     onError: (error) => {
@@ -484,17 +493,14 @@ export default function OrderContractBuilder({
   }
 
   return (
-    <div className="mb-6 rounded-2xl border border-indigo-100 bg-white shadow-sm">
-      <div className="flex flex-col gap-4 border-b border-indigo-100 bg-gradient-to-r from-indigo-50 to-white p-5 sm:flex-row sm:items-start sm:justify-between">
+    <div className={`${embedded ? 'rounded-2xl border border-indigo-100 bg-white shadow-sm' : 'mb-6 rounded-2xl border border-indigo-100 bg-white shadow-sm'}`}>
+      <div className={`flex flex-col gap-4 border-b border-indigo-100 ${embedded ? 'bg-white p-4' : 'bg-gradient-to-r from-indigo-50 to-white p-5'} sm:flex-row sm:items-start sm:justify-between`}>
         <div>
           <div className="flex items-center gap-2 text-indigo-700">
             <FileSignature className="h-5 w-5" />
-            <h3 className="text-lg font-semibold text-gray-900">Order Builder (Phase 1)</h3>
+            <h3 className={`${embedded ? 'text-base' : 'text-lg'} font-semibold text-gray-900`}>{title}</h3>
           </div>
-          <p className="mt-2 max-w-3xl text-sm text-gray-600">
-            Save structured contract data for PandaSign V2. Each section patches only its own `orderContract`
-            branch and preserves unrelated job specs data.
-          </p>
+          <p className="mt-2 max-w-3xl text-sm text-gray-600">{description}</p>
         </div>
         <div className="flex items-center gap-2">
           {orderContractQuery.isFetching && (
@@ -503,14 +509,16 @@ export default function OrderContractBuilder({
               Loading saved contract data...
             </span>
           )}
-          <button
-            type="button"
-            onClick={() => onLaunchPandaSign?.()}
-            className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-panda-primary to-panda-secondary px-4 py-2 text-sm font-medium text-white shadow-sm hover:opacity-90"
-          >
-            <FileSignature className="h-4 w-4" />
-            Launch PandaSign V2
-          </button>
+          {showLaunchButton && (
+            <button
+              type="button"
+              onClick={() => onLaunchPandaSign?.()}
+              className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-panda-primary to-panda-secondary px-4 py-2 text-sm font-medium text-white shadow-sm hover:opacity-90"
+            >
+              <FileSignature className="h-4 w-4" />
+              Launch PandaSign V2
+            </button>
+          )}
         </div>
       </div>
 

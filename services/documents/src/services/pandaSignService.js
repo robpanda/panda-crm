@@ -811,6 +811,14 @@ export function buildOrderContractRuntimeData({
   };
 }
 
+function resolveTemplateBodyContent(template = {}, mergeData = {}) {
+  if (mergeData && Object.prototype.hasOwnProperty.call(mergeData, 'templateContentOverride')) {
+    return String(mergeData.templateContentOverride || '');
+  }
+
+  return String(template?.content || '');
+}
+
 function getMergeValueByPath(data, fieldPath) {
   const parts = String(fieldPath || '').trim().split('.').filter(Boolean);
   let value = data;
@@ -1939,6 +1947,7 @@ ${agreement.signedDocumentUrl}
 
     const metadata = extractTemplateMetadata(template.signatureFields);
     const activeBrandingItems = (await this.getBrandingItems()).filter((item) => item.isActive !== false);
+    const templateContent = resolveTemplateBodyContent(template, mergeData);
     const runtimeMergeData = await this.buildRuntimeMergeData({
       opportunityId: context?.opportunityId,
       accountId: context?.accountId,
@@ -1954,7 +1963,7 @@ ${agreement.signedDocumentUrl}
 
     checklist.push('Template selected');
 
-    if (template.content?.trim()) {
+    if (templateContent.trim()) {
       checklist.push('Template body present');
     } else {
       requiredFieldFailures.push({ field: 'template.content', message: 'Template body content is required.' });
@@ -2022,7 +2031,7 @@ ${agreement.signedDocumentUrl}
     });
 
     const templateSource = [
-      template.content || '',
+      templateContent,
       ...activeBrandingItems
         .filter((item) => item.id === metadata.branding.headerId || item.id === metadata.branding.footerId)
         .map((item) => item.content || ''),
@@ -2119,6 +2128,7 @@ ${agreement.signedDocumentUrl}
 
   async buildTemplateDocumentText(template, mergeData = {}) {
     const metadata = extractTemplateMetadata(template.signatureFields);
+    const templateContent = resolveTemplateBodyContent(template, mergeData);
     const [brandingItems, resolvedMergeData] = await Promise.all([
       this.getBrandingItems(),
       this.buildTemplateMergeData(template, mergeData),
@@ -2134,7 +2144,7 @@ ${agreement.signedDocumentUrl}
 
     return [
       header ? renderHtmlToDocumentText(this.interpolateText(header.content, resolvedMergeData)) : '',
-      renderHtmlToDocumentText(this.interpolateText(template.content || '', resolvedMergeData)),
+      renderHtmlToDocumentText(this.interpolateText(templateContent, resolvedMergeData)),
       footer ? renderHtmlToDocumentText(this.interpolateText(footer.content, resolvedMergeData)) : '',
     ]
       .filter(Boolean)
