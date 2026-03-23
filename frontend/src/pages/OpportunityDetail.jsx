@@ -102,6 +102,7 @@ const MaterialLaborOrderWizard = lazy(() => import('../components/MaterialLaborO
 const CommissionsTab = lazy(() => import('../components/CommissionsTab'));
 const TasksTab = lazy(() => import('../components/TasksTab'));
 const ContractSigningModal = lazy(() => import('../components/ContractSigningModal'));
+const OrderContractBuilder = lazy(() => import('../components/OrderContractBuilder'));
 const ChangeOrderModal = lazy(() => import('../components/ChangeOrderModal'));
 const PayInvoiceModal = lazy(() => import('../components/PayInvoiceModal'));
 const SendInvoiceModal = lazy(() => import('../components/SendInvoiceModal'));
@@ -113,6 +114,7 @@ const DraggableMap = lazy(() => import('../components/DraggableMap'));
 const MilestoneTracker = lazy(() => import('../components/MilestoneTracker'));
 const WorkflowSidebar = lazy(() => import('../components/WorkflowSidebar'));
 const NotesSidebar = lazy(() => import('../components/NotesSidebar'));
+const FEATURE_PANDASIGN_V2 = import.meta.env.VITE_FEATURE_PANDASIGN_V2 === 'true';
 
 const CONTACT_METHOD_OPTIONS = [
   { value: 'Phone', label: 'Phone' },
@@ -8081,6 +8083,16 @@ export default function OpportunityDetail() {
                     {/* Contracts Sub-tab Content */}
                     {documentsSubTab === 'contracts' && (
                       <>
+                    {FEATURE_PANDASIGN_V2 && (
+                      <LazyPanel label="Loading order builder...">
+                        <OrderContractBuilder
+                          opportunity={opportunity}
+                          contact={contacts?.[0] || opportunity?.contact}
+                          account={opportunity?.account}
+                          onLaunchPandaSign={() => setShowContractSigningModal(true)}
+                        />
+                      </LazyPanel>
+                    )}
                     {/* Agreement Summary */}
                     {documents?.summary && (
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4 bg-gray-50 rounded-lg mb-4">

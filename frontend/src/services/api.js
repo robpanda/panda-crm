@@ -858,6 +858,20 @@ export const opportunitiesApi = {
     return response.data.data;
   },
 
+  // Get structured PandaSign V2 contract/order payload for an opportunity
+  async getOrderContract(opportunityId) {
+    const response = await api.get(`/api/opportunities/${opportunityId}/order-contract`);
+    return response.data.data;
+  },
+
+  // Additively update specsData.orderContract without clobbering unrelated specsData
+  async updateOrderContract(opportunityId, orderContractPatch) {
+    const response = await api.patch(`/api/opportunities/${opportunityId}/order-contract`, {
+      orderContract: orderContractPatch,
+    });
+    return response.data.data;
+  },
+
   // Complete specs preparation and trigger workflow
   // Creates WorkOrderLineItem and Contract Signing appointment
   async completeSpecs(opportunityId, specsData) {

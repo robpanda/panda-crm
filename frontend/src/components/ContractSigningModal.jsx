@@ -393,7 +393,6 @@ export default function ContractSigningModal({
         contactId: contact?.id || opportunity?.contactId,
         recipientEmail: v2CustomerEmail,
         recipientName: customerName,
-        mergeData: {},
       }));
 
       const agreementId = created?.id || created?.agreementId;
@@ -435,7 +434,6 @@ export default function ContractSigningModal({
         contactId: contact?.id || opportunity?.contactId,
         recipientEmail: v2CustomerEmail,
         recipientName: customerName,
-        mergeData: {},
       }));
 
       const agreementId = getAgreementId(created);

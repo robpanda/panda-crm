@@ -13,6 +13,11 @@ import {
   parseDateTimeParts,
   validateAppointmentResultPayload,
 } from './appointmentResultValidation.js';
+import {
+  extractOrderContractFromSpecsData,
+  mergeOrderContractIntoSpecsData,
+  parseSpecsDataValue,
+} from './orderContractSpecsData.js';
 
 const prisma = new PrismaClient();
 
@@ -1985,6 +1990,71 @@ Be factual and professional. Highlight anything that needs attention.`;
         draft: agreements.filter((a) => a.status === 'DRAFT').length,
         declined: agreements.filter((a) => a.status === 'DECLINED').length,
       },
+    };
+  }
+
+  async getOrderContract(id) {
+    const opportunity = await prisma.opportunity.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        specsData: true,
+        updatedAt: true,
+      },
+    });
+
+    if (!opportunity) {
+      throw new Error('Opportunity not found');
+    }
+
+    const specsData = parseSpecsDataValue(opportunity.specsData);
+    const orderContract = extractOrderContractFromSpecsData(opportunity.specsData);
+
+    return {
+      opportunityId: opportunity.id,
+      specsData,
+      orderContract,
+      updatedAt: opportunity.updatedAt,
+    };
+  }
+
+  async updateOrderContract(id, orderContractPatch = {}, userId = null) {
+    const opportunity = await prisma.opportunity.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        specsData: true,
+      },
+    });
+
+    if (!opportunity) {
+      throw new Error('Opportunity not found');
+    }
+
+    const { specsData, orderContract } = mergeOrderContractIntoSpecsData(
+      opportunity.specsData,
+      orderContractPatch
+    );
+
+    const updated = await prisma.opportunity.update({
+      where: { id },
+      data: {
+        specsData: JSON.stringify(specsData),
+      },
+      select: {
+        id: true,
+        specsData: true,
+        updatedAt: true,
+      },
+    });
+
+    logger.info(`Opportunity orderContract updated: ${id}${userId ? ` by ${userId}` : ''}`);
+
+    return {
+      opportunityId: updated.id,
+      specsData,
+      orderContract,
+      updatedAt: updated.updatedAt,
     };
   }
 
