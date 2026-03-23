@@ -179,6 +179,10 @@ async function getPresignedUrl(s3Url, expiresIn = 3600) {
   if (!s3Url) return null;
 
   try {
+    if (isPresignedS3Url(s3Url)) {
+      return s3Url;
+    }
+
     // Extract the key from the S3 URL
     // URL format: https://bucket.s3.region.amazonaws.com/key or s3://bucket/key
     let key;
@@ -201,7 +205,27 @@ async function getPresignedUrl(s3Url, expiresIn = 3600) {
     return await getSignedUrl(s3Client, command, { expiresIn });
   } catch (error) {
     logger.error(`Error generating pre-signed URL for ${s3Url}:`, error);
+    if (isPresignedS3Url(s3Url)) {
+      return s3Url;
+    }
     return null;
+  }
+}
+
+function isPresignedS3Url(url) {
+  if (!url || typeof url !== 'string' || !url.startsWith('http')) {
+    return false;
+  }
+
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.searchParams.has('X-Amz-Algorithm')
+      || parsed.searchParams.has('X-Amz-Signature')
+      || parsed.searchParams.has('AWSAccessKeyId')
+    );
+  } catch {
+    return false;
   }
 }
 
@@ -1942,7 +1966,11 @@ Be factual and professional. Highlight anything that needs attention.`;
     const documentsWithPresignedUrls = await Promise.all(
       agreements.map(async (a) => {
         // Check if the URL is an S3 URL that needs pre-signing
-        const needsPresigning = (url) => url && (url.includes('pandasign-documents') || url.includes('s3.'));
+        const needsPresigning = (url) => (
+          url
+          && !isPresignedS3Url(url)
+          && (url.startsWith('s3://') || url.includes('pandasign-documents') || url.includes('panda-crm-documents') || url.includes('.s3.'))
+        );
 
         const signedDocumentUrl = needsPresigning(a.signedDocumentUrl)
           ? await getPresignedUrl(a.signedDocumentUrl)
