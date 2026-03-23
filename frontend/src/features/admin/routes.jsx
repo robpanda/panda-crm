@@ -16,6 +16,7 @@ const ServiceAdmin = lazy(() => import('../../pages/admin/ServiceAdmin'));
 const TrainingBotAnalytics = lazy(() => import('../../pages/admin/TrainingBotAnalytics'));
 const RingCentral = lazy(() => import('../../pages/admin/RingCentral'));
 const CallCenterSettings = lazy(() => import('../../pages/admin/CallCenterSettings'));
+const CallCenterImportReview = lazy(() => import('../../pages/admin/CallCenterImportReview'));
 const AdminHelp = lazy(() => import('../../pages/admin/AdminHelp'));
 const AdminSupport = lazy(() => import('../../pages/admin/Support'));
 const AdminSupportTickets = lazy(() => import('../../pages/admin/AdminSupportTickets'));
@@ -47,6 +48,7 @@ export function renderAdminRoutes() {
       <Route path="admin/support/ticket/:id" element={renderLazyRoute(SupportTicketDetail, 'Loading support ticket...')} />
       <Route path="admin/ringcentral" element={renderLazyRoute(RingCentral, 'Loading RingCentral...')} />
       <Route path="admin/call-center" element={renderLazyRoute(CallCenterSettings, 'Loading call center settings...')} />
+      <Route path="admin/call-center/import-review" element={renderLazyRoute(CallCenterImportReview, 'Loading import review queue...')} />
       <Route path="admin/help" element={renderLazyRoute(AdminHelp, 'Loading admin help...')} />
       <Route path="admin/setup" element={renderLazyRoute(Setup, 'Loading setup...')} />
       <Route path="admin/google-calendar" element={renderLazyRoute(GoogleCalendar, 'Loading Google Calendar...')} />

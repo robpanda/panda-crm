@@ -5538,6 +5538,26 @@ export const callCenterImportsApi = {
     });
     return response.data;
   },
+
+  async getReviewRuns(params = {}) {
+    const response = await api.get('/api/integrations/call-center-import/review/runs', { params });
+    return response.data;
+  },
+
+  async getReviewItems(params = {}) {
+    const response = await api.get('/api/integrations/call-center-import/review/items', { params });
+    return response.data;
+  },
+
+  async getReviewItem(id) {
+    const response = await api.get(`/api/integrations/call-center-import/review/items/${id}`);
+    return response.data;
+  },
+
+  async updateReviewItem(id, data) {
+    const response = await api.patch(`/api/integrations/call-center-import/review/items/${id}`, data);
+    return response.data;
+  },
 };
 
 // Champions/Referral API

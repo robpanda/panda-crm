@@ -1573,6 +1573,8 @@ model User {
   push_tokens                                      push_tokens[]
   quotes                                           Quote[]
   createdReports                                   SavedReport[]           @relation("ReportCreator")
+  callCenterImportRunsExecuted                     CallCenterImportRun[]   @relation("CallCenterImportRunExecutedBy")
+  callCenterImportReviewItemsResolved              CallCenterImportReviewItem[] @relation("CallCenterImportReviewItemResolvedBy")
   scheduleOptimizationsApproved                    ScheduleOptimization[]
   serviceResource                                  ServiceResource?
   assignedTasks                                    Task[]                  @relation("TaskAssignee")
@@ -2417,6 +2419,65 @@ model MigrationMapping {
   @@map("migration_mappings")
 }
 
+model CallCenterImportRun {
+  id               String                      @id @default(cuid())
+  previewToken     String                      @unique @map("preview_token")
+  workbookFileName String                      @map("workbook_file_name")
+  workbookSha256   String                      @map("workbook_sha256")
+  executedAt       DateTime                    @default(now()) @map("executed_at")
+  executedByUserId String?                     @map("executed_by_user_id")
+  summaryJson      Json                        @map("summary_json")
+  aliasMapJson     Json?                       @map("alias_map_json")
+  createdAt        DateTime                    @default(now()) @map("created_at")
+  updatedAt        DateTime                    @updatedAt @map("updated_at")
+  executedBy       User?                       @relation("CallCenterImportRunExecutedBy", fields: [executedByUserId], references: [id])
+  reviewItems      CallCenterImportReviewItem[]
+
+  @@index([executedAt])
+  @@index([executedByUserId])
+  @@map("call_center_import_runs")
+}
+
+model CallCenterImportReviewItem {
+  id                    String                        @id @default(cuid())
+  runId                 String                        @map("run_id")
+  sourceSheet           String                        @map("source_sheet")
+  sourceRowNumber       Int                           @map("source_row_number")
+  rowFingerprint        String?                       @map("row_fingerprint")
+  customerName          String?                       @map("customer_name")
+  phone                 String?
+  email                 String?
+  state                 String?
+  eventDate             String?                       @map("event_date")
+  eventTime             String?                       @map("event_time")
+  normalizedDisposition String?                       @map("normalized_disposition")
+  warningCodes          String[]                      @default([]) @map("warning_codes")
+  warningMessages       String[]                      @default([]) @map("warning_messages")
+  rowDataJson           Json?                         @map("row_data_json")
+  userMappingsJson      Json?                         @map("user_mappings_json")
+  executionResultJson   Json?                         @map("execution_result_json")
+  matchedLeadId         String?                       @map("matched_lead_id")
+  matchedOpportunityId  String?                       @map("matched_opportunity_id")
+  matchedAppointmentId  String?                       @map("matched_appointment_id")
+  createdLeadId         String?                       @map("created_lead_id")
+  createdOpportunityId  String?                       @map("created_opportunity_id")
+  createdAppointmentId  String?                       @map("created_appointment_id")
+  status                CallCenterImportReviewStatus  @default(OPEN)
+  resolutionNote        String?                       @map("resolution_note")
+  resolvedByUserId      String?                       @map("resolved_by_user_id")
+  resolvedAt            DateTime?                     @map("resolved_at")
+  createdAt             DateTime                      @default(now()) @map("created_at")
+  updatedAt             DateTime                      @updatedAt @map("updated_at")
+  resolvedBy            User?                         @relation("CallCenterImportReviewItemResolvedBy", fields: [resolvedByUserId], references: [id])
+  run                   CallCenterImportRun           @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@index([status])
+  @@index([resolvedByUserId])
+  @@index([createdAt])
+  @@map("call_center_import_review_items")
+}
+
 // Enums for migration tracking
 enum MigrationRunStatus {
   RUNNING
@@ -2439,6 +2500,12 @@ enum MigrationRecordStatus {
   SKIPPED
   ERROR
   NEEDS_REVIEW
+}
+
+enum CallCenterImportReviewStatus {
+  OPEN
+  RESOLVED
+  IGNORED
 }
 
 model Permission {
