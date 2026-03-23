@@ -114,7 +114,9 @@ const DraggableMap = lazy(() => import('../components/DraggableMap'));
 const MilestoneTracker = lazy(() => import('../components/MilestoneTracker'));
 const WorkflowSidebar = lazy(() => import('../components/WorkflowSidebar'));
 const NotesSidebar = lazy(() => import('../components/NotesSidebar'));
-const FEATURE_PANDASIGN_V2 = import.meta.env.VITE_FEATURE_PANDASIGN_V2 === 'true';
+// Keep the job-side contract data entry path aligned with the live PandaSign V2
+// wizard so users can edit saved order-contract data before sending.
+const FEATURE_PANDASIGN_V2 = true;
 
 const CONTACT_METHOD_OPTIONS = [
   { value: 'Phone', label: 'Phone' },
