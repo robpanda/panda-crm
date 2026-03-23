@@ -213,12 +213,25 @@ async function getPresignedUrl(s3Url, expiresIn = 3600) {
 }
 
 function isPresignedS3Url(url) {
-  if (!url || typeof url !== 'string' || !url.startsWith('http')) {
+  if (!url) {
     return false;
   }
 
+  const normalized = String(url).trim().replace(/^['"]|['"]$/g, '');
+  if (!normalized.startsWith('http')) {
+    return false;
+  }
+
+  if (
+    normalized.includes('X-Amz-Algorithm=')
+    || normalized.includes('X-Amz-Signature=')
+    || normalized.includes('AWSAccessKeyId=')
+  ) {
+    return true;
+  }
+
   try {
-    const parsed = new URL(url);
+    const parsed = new URL(normalized);
     return (
       parsed.searchParams.has('X-Amz-Algorithm')
       || parsed.searchParams.has('X-Amz-Signature')
