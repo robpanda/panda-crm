@@ -126,6 +126,24 @@ function connectById(id) {
   return id ? { connect: { id } } : undefined;
 }
 
+async function resolveAgreementUserRelationInput(userId, relationField) {
+  if (!userId) return {};
+
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true },
+  });
+
+  if (!user) {
+    logger.warn(`Skipping agreement user relation ${relationField}; user ${userId} was not found in documents service database`);
+    return {};
+  }
+
+  return {
+    [relationField]: connectById(userId),
+  };
+}
+
 function normalizeSignatureRecord(signature) {
   if (!signature || typeof signature !== 'object') return signature;
   return {
@@ -191,7 +209,6 @@ function buildAgreementCreateData({
     ...(opportunityId ? { opportunities: connectById(opportunityId) } : {}),
     ...(accountId ? { accounts: connectById(accountId) } : {}),
     ...(contactId ? { contacts: connectById(contactId) } : {}),
-    ...(userId ? { users_agreements_created_by_idTousers: connectById(userId) } : {}),
   };
 }
 
@@ -785,23 +802,30 @@ export const pandaSignService = {
 
     // Generate signing token (used for secure access to signing page)
     const signingToken = crypto.randomBytes(32).toString('hex');
+    const createdByRelation = await resolveAgreementUserRelationInput(
+      userId,
+      'users_agreements_created_by_idTousers'
+    );
 
     // Create agreement record
     const agreement = await prisma.agreement.create({
-      data: buildAgreementCreateData({
-        agreementNumber,
-        name: this.interpolateText(template.name, resolvedMergeData),
-        templateId,
-        opportunityId,
-        accountId,
-        contactId,
-        recipientEmail,
-        recipientName,
-        signingToken,
-        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-        mergeData: resolvedMergeData,
-        userId,
-      }),
+      data: {
+        ...buildAgreementCreateData({
+          agreementNumber,
+          name: this.interpolateText(template.name, resolvedMergeData),
+          templateId,
+          opportunityId,
+          accountId,
+          contactId,
+          recipientEmail,
+          recipientName,
+          signingToken,
+          expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+          mergeData: resolvedMergeData,
+          userId,
+        }),
+        ...createdByRelation,
+      },
     });
     const normalizedAgreement = normalizeAgreementRecord(agreement);
 
@@ -969,6 +993,10 @@ export const pandaSignService = {
 
     // Send email with signing link
     await this.sendSigningEmail(agreement);
+    const sentByRelation = await resolveAgreementUserRelationInput(
+      userId,
+      'users_agreements_sent_by_idTousers'
+    );
 
     // Update status
     const updated = await prisma.agreement.update({
@@ -976,7 +1004,7 @@ export const pandaSignService = {
       data: {
         status: 'SENT',
         sentAt: new Date(),
-        ...(userId ? { users_agreements_sent_by_idTousers: connectById(userId) } : {}),
+        ...sentByRelation,
       },
     });
 
@@ -2181,28 +2209,35 @@ ${agreement.signedDocumentUrl}
     // Generate signing token
     const signingToken = crypto.randomBytes(32).toString('hex');
     const agreementNumber = `INV-ACK-${invoice.invoiceNumber}-${Date.now()}`;
+    const createdByRelation = await resolveAgreementUserRelationInput(
+      options.userId,
+      'users_agreements_created_by_idTousers'
+    );
 
     // Create agreement record linked to the invoice PDF
     const agreement = await prisma.agreement.create({
-      data: buildAgreementCreateData({
-        agreementNumber,
-        name: `Invoice Acknowledgment - ${invoice.invoiceNumber}`,
-        templateId: template.id,
-        accountId: invoice.accountId,
-        recipientEmail: options.recipientEmail || invoice.account?.email || invoice.account?.primaryContact?.email,
-        recipientName: options.recipientName || invoice.account?.primaryContact?.name || invoice.account?.name,
-        signingToken,
-        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-        documentUrl: pdfResult.downloadUrl,
-        mergeData: {
-          invoiceId,
-          invoiceNumber: invoice.invoiceNumber,
-          invoiceTotal: invoice.total,
-          invoiceDate: invoice.invoiceDate,
-          dueDate: invoice.dueDate,
-        },
-        userId: options.userId,
-      }),
+      data: {
+        ...buildAgreementCreateData({
+          agreementNumber,
+          name: `Invoice Acknowledgment - ${invoice.invoiceNumber}`,
+          templateId: template.id,
+          accountId: invoice.accountId,
+          recipientEmail: options.recipientEmail || invoice.account?.email || invoice.account?.primaryContact?.email,
+          recipientName: options.recipientName || invoice.account?.primaryContact?.name || invoice.account?.name,
+          signingToken,
+          expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+          documentUrl: pdfResult.downloadUrl,
+          mergeData: {
+            invoiceId,
+            invoiceNumber: invoice.invoiceNumber,
+            invoiceTotal: invoice.total,
+            invoiceDate: invoice.invoiceDate,
+            dueDate: invoice.dueDate,
+          },
+          userId: options.userId,
+        }),
+        ...createdByRelation,
+      },
     });
     const normalizedAgreement = normalizeAgreementRecord(agreement);
 
@@ -2265,31 +2300,38 @@ ${agreement.signedDocumentUrl}
 
     const signingToken = crypto.randomBytes(32).toString('hex');
     const agreementNumber = `QUOTE-${quote.quoteNumber}-${Date.now()}`;
+    const createdByRelation = await resolveAgreementUserRelationInput(
+      options.userId,
+      'users_agreements_created_by_idTousers'
+    );
 
     const contact = quote.opportunity?.contact;
     const account = quote.opportunity?.account;
 
     const agreement = await prisma.agreement.create({
-      data: buildAgreementCreateData({
-        agreementNumber,
-        name: `Quote Acceptance - ${quote.quoteNumber}`,
-        templateId: template.id,
-        opportunityId: quote.opportunityId,
-        accountId: account?.id,
-        contactId: contact?.id,
-        recipientEmail: options.recipientEmail || contact?.email || account?.email,
-        recipientName: options.recipientName || `${contact?.firstName || ''} ${contact?.lastName || ''}`.trim() || account?.name,
-        signingToken,
-        expiresAt: quote.expirationDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-        documentUrl: pdfResult.downloadUrl,
-        mergeData: {
-          quoteId,
-          quoteNumber: quote.quoteNumber,
-          quoteTotal: quote.grandTotal || quote.total,
-          projectName: quote.opportunity?.name,
-        },
-        userId: options.userId,
-      }),
+      data: {
+        ...buildAgreementCreateData({
+          agreementNumber,
+          name: `Quote Acceptance - ${quote.quoteNumber}`,
+          templateId: template.id,
+          opportunityId: quote.opportunityId,
+          accountId: account?.id,
+          contactId: contact?.id,
+          recipientEmail: options.recipientEmail || contact?.email || account?.email,
+          recipientName: options.recipientName || `${contact?.firstName || ''} ${contact?.lastName || ''}`.trim() || account?.name,
+          signingToken,
+          expiresAt: quote.expirationDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+          documentUrl: pdfResult.downloadUrl,
+          mergeData: {
+            quoteId,
+            quoteNumber: quote.quoteNumber,
+            quoteTotal: quote.grandTotal || quote.total,
+            projectName: quote.opportunity?.name,
+          },
+          userId: options.userId,
+        }),
+        ...createdByRelation,
+      },
     });
     const normalizedAgreement = normalizeAgreementRecord(agreement);
 
@@ -2351,31 +2393,38 @@ ${agreement.signedDocumentUrl}
 
     const signingToken = crypto.randomBytes(32).toString('hex');
     const agreementNumber = `WO-${workOrder.workOrderNumber}-${Date.now()}`;
+    const createdByRelation = await resolveAgreementUserRelationInput(
+      options.userId,
+      'users_agreements_created_by_idTousers'
+    );
 
     const contact = workOrder.opportunity?.contact;
     const account = workOrder.opportunity?.account;
 
     const agreement = await prisma.agreement.create({
-      data: buildAgreementCreateData({
-        agreementNumber,
-        name: `Work Order Authorization - ${workOrder.workOrderNumber}`,
-        templateId: template.id,
-        opportunityId: workOrder.opportunityId,
-        accountId: account?.id,
-        contactId: contact?.id,
-        recipientEmail: options.recipientEmail || contact?.email || account?.email,
-        recipientName: options.recipientName || `${contact?.firstName || ''} ${contact?.lastName || ''}`.trim() || account?.name,
-        signingToken,
-        expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-        documentUrl: pdfResult.downloadUrl,
-        mergeData: {
-          workOrderId,
-          workOrderNumber: workOrder.workOrderNumber,
-          workType: workOrder.workType,
-          status: workOrder.status,
-        },
-        userId: options.userId,
-      }),
+      data: {
+        ...buildAgreementCreateData({
+          agreementNumber,
+          name: `Work Order Authorization - ${workOrder.workOrderNumber}`,
+          templateId: template.id,
+          opportunityId: workOrder.opportunityId,
+          accountId: account?.id,
+          contactId: contact?.id,
+          recipientEmail: options.recipientEmail || contact?.email || account?.email,
+          recipientName: options.recipientName || `${contact?.firstName || ''} ${contact?.lastName || ''}`.trim() || account?.name,
+          signingToken,
+          expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+          documentUrl: pdfResult.downloadUrl,
+          mergeData: {
+            workOrderId,
+            workOrderNumber: workOrder.workOrderNumber,
+            workType: workOrder.workType,
+            status: workOrder.status,
+          },
+          userId: options.userId,
+        }),
+        ...createdByRelation,
+      },
     });
     const normalizedAgreement = normalizeAgreementRecord(agreement);
 
@@ -2433,23 +2482,30 @@ ${agreement.signedDocumentUrl}
 
     const signingToken = crypto.randomBytes(32).toString('hex');
     const agreementNumber = `DOC-${Date.now()}-${uuidv4().slice(0, 4).toUpperCase()}`;
+    const createdByRelation = await resolveAgreementUserRelationInput(
+      userId,
+      'users_agreements_created_by_idTousers'
+    );
 
     const agreement = await prisma.agreement.create({
-      data: buildAgreementCreateData({
-        agreementNumber,
-        name,
-        templateId: template.id,
-        accountId,
-        contactId,
-        opportunityId,
-        recipientEmail,
-        recipientName,
-        signingToken,
-        expiresAt: new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000),
-        documentUrl: pdfUrl,
-        mergeData,
-        userId,
-      }),
+      data: {
+        ...buildAgreementCreateData({
+          agreementNumber,
+          name,
+          templateId: template.id,
+          accountId,
+          contactId,
+          opportunityId,
+          recipientEmail,
+          recipientName,
+          signingToken,
+          expiresAt: new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000),
+          documentUrl: pdfUrl,
+          mergeData,
+          userId,
+        }),
+        ...createdByRelation,
+      },
     });
     const normalizedAgreement = normalizeAgreementRecord(agreement);
 
