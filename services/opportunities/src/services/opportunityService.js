@@ -2686,11 +2686,10 @@ Be factual and professional. Highlight anything that needs attention.`;
    */
   async deleteOpportunity(id, auditContext = {}, options = {}) {
     const action = options.action || 'DELETE';
-    const defaultLostReason = options.lostReason || 'Deleted';
     const deletedAt = new Date();
     const oldOpp = await prisma.opportunity.findUnique({
       where: { id },
-      select: { id: true, name: true, stage: true, lostReason: true, deletedAt: true },
+      select: { id: true, name: true, stage: true, deletedAt: true },
     });
 
     if (!oldOpp) {
@@ -2741,7 +2740,6 @@ Be factual and professional. Highlight anything that needs attention.`;
         data: {
           stage: 'CLOSED_LOST',
           closeDate: deletedAt,
-          lostReason: oldOpp.lostReason || defaultLostReason,
           deletedAt,
         },
       });
@@ -2763,10 +2761,9 @@ Be factual and professional. Highlight anything that needs attention.`;
         newValues: {
           stage: 'CLOSED_LOST',
           closeDate: deletedAt,
-          lostReason: oldOpp.lostReason || defaultLostReason,
           deletedAt,
         },
-        changedFields: ['stage', 'closeDate', 'lostReason', 'deletedAt'],
+        changedFields: ['stage', 'closeDate', 'deletedAt'],
         userId: auditContext.userId,
         userEmail: auditContext.userEmail,
         source: 'api',
