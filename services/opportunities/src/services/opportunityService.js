@@ -2733,58 +2733,71 @@ Be factual and professional. Highlight anything that needs attention.`;
       return { deleted: true, alreadyDeleted: true, id };
     }
 
-    const retiredRelated = await prisma.$transaction(async (tx) => {
-      const [workOrdersUpdated, appointmentsUpdated, tasks, cases] = await Promise.all([
-        tx.$executeRawUnsafe(
-          `UPDATE work_orders
-           SET status = 'CANCELED', updated_at = NOW()
-           WHERE opportunity_id = $1
-             AND status NOT IN ('CANCELED', 'CANCELLED', 'COMPLETED')`,
-          id
-        ),
-        tx.$executeRawUnsafe(
-          `UPDATE service_appointments
-           SET status = 'CANCELED', updated_at = NOW()
-           WHERE work_order_id IN (
-             SELECT id
-             FROM work_orders
-             WHERE opportunity_id = $1
-           )
-             AND status NOT IN ('CANCELED', 'COMPLETED')`,
-          id
-        ),
-        tx.task.updateMany({
-          where: {
-            opportunityId: id,
-            status: { notIn: ['COMPLETED', 'DEFERRED'] },
-          },
-          data: { status: 'DEFERRED' },
-        }),
-        tx.case.updateMany({
-          where: {
-            opportunityId: id,
-            status: { not: 'CLOSED' },
-          },
-          data: { status: 'CLOSED' },
-        }),
-      ]);
-
-      await tx.opportunity.update({
-        where: { id },
-        data: {
-          stage: 'CLOSED_LOST',
-          closeDate: deletedAt,
-          deletedAt,
-        },
-      });
-
-      return {
-        workOrders: Number(workOrdersUpdated || 0),
-        appointments: Number(appointmentsUpdated || 0),
-        tasks: tasks.count,
-        cases: cases.count,
-      };
+    await prisma.opportunity.update({
+      where: { id },
+      data: {
+        stage: 'CLOSED_LOST',
+        closeDate: deletedAt,
+        deletedAt,
+      },
     });
+
+    let retiredRelated = {
+      workOrders: 0,
+      appointments: 0,
+      tasks: 0,
+      cases: 0,
+    };
+
+    try {
+      retiredRelated = await prisma.$transaction(async (tx) => {
+        const [workOrdersUpdated, appointmentsUpdated, tasks, cases] = await Promise.all([
+          tx.$executeRawUnsafe(
+            `UPDATE work_orders
+             SET status = 'CANCELED', updated_at = NOW()
+             WHERE opportunity_id = $1
+               AND status NOT IN ('CANCELED', 'CANCELLED', 'COMPLETED')`,
+            id
+          ),
+          tx.$executeRawUnsafe(
+            `UPDATE service_appointments
+             SET status = 'CANCELED', updated_at = NOW()
+             WHERE work_order_id IN (
+               SELECT id
+               FROM work_orders
+               WHERE opportunity_id = $1
+             )
+               AND status NOT IN ('CANCELED', 'COMPLETED')`,
+            id
+          ),
+          tx.task.updateMany({
+            where: {
+              opportunityId: id,
+              status: { notIn: ['COMPLETED', 'DEFERRED'] },
+            },
+            data: { status: 'DEFERRED' },
+          }),
+          tx.case.updateMany({
+            where: {
+              opportunityId: id,
+              status: { not: 'CLOSED' },
+            },
+            data: { status: 'CLOSED' },
+          }),
+        ]);
+
+        return {
+          workOrders: Number(workOrdersUpdated || 0),
+          appointments: Number(appointmentsUpdated || 0),
+          tasks: tasks.count,
+          cases: cases.count,
+        };
+      });
+    } catch (cleanupError) {
+      logger.warn(`Opportunity ${id} soft deleted but related cleanup was incomplete`, {
+        cleanupError: cleanupError?.message || String(cleanupError),
+      });
+    }
 
     await prisma.auditLog.create({
       data: {
