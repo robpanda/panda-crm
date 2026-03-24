@@ -1,5 +1,5 @@
 // EagleView, GAF QuickMeasure & Hover Integration Routes
-import { Router } from 'express';
+import express, { Router } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { measurementService } from '../services/measurementService.js';
 import { logger } from '../middleware/logger.js';
@@ -7,6 +7,8 @@ import { authMiddleware, requireRole } from '../middleware/auth.js';
 
 const router = Router();
 const prisma = new PrismaClient();
+const gafWebhookFormParser = express.urlencoded({ extended: true, limit: '2mb' });
+const gafWebhookTextParser = express.text({ type: 'text/plain', limit: '2mb' });
 
 // Helper to handle Hover authorization errors
 function handleHoverAuthError(error, res) {
@@ -214,11 +216,19 @@ router.post('/gaf/order', authMiddleware, async (req, res, next) => {
 /**
  * POST /measurements/gaf/webhook - Handle GAF webhooks
  */
-router.post('/gaf/webhook', async (req, res, next) => {
+router.post('/gaf/webhook', gafWebhookFormParser, gafWebhookTextParser, async (req, res, next) => {
   try {
     // Verify webhook signature
     const signature = req.headers['x-gaf-signature'];
     // TODO: Implement signature verification
+
+    const bodyKeys = req.body && typeof req.body === 'object' && !Array.isArray(req.body)
+      ? Object.keys(req.body)
+      : [];
+    logger.info('GAF webhook received', {
+      contentType: req.headers['content-type'],
+      bodyKeys,
+    });
 
     await measurementService.handleGAFWebhook(req.body);
 
@@ -236,6 +246,19 @@ router.post('/gaf/poll/:id', authMiddleware, async (req, res, next) => {
   try {
     const result = await measurementService.pollGAFReport(req.params.id);
     res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /measurements/gaf/store-assets/:id - Rehydrate GAF assets from stored webhook payload
+ * Useful when measurement fields delivered but PDF/XML links were not stored.
+ */
+router.post('/gaf/store-assets/:id', authMiddleware, async (req, res, next) => {
+  try {
+    const report = await measurementService.hydrateGAFAssetsFromStoredPayload(req.params.id);
+    res.json({ success: true, data: report });
   } catch (error) {
     next(error);
   }
