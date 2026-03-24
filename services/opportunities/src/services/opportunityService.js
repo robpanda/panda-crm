@@ -2704,14 +2704,13 @@ Be factual and professional. Highlight anything that needs attention.`;
     }
 
     const retiredRelated = await prisma.$transaction(async (tx) => {
-      const [workOrders, appointments, tasks, cases] = await Promise.all([
-        tx.workOrder.updateMany({
-          where: {
-            opportunityId: id,
-            status: { notIn: ['CANCELED', 'CANCELLED', 'COMPLETED'] },
-          },
-          data: { status: 'CANCELED' },
-        }),
+      const [workOrdersUpdated, appointments, tasks, cases] = await Promise.all([
+        tx.$executeRaw`
+          UPDATE work_orders
+          SET status = 'CANCELED', updated_at = NOW()
+          WHERE opportunity_id = ${id}
+            AND status NOT IN ('CANCELED', 'CANCELLED', 'COMPLETED')
+        `,
         tx.serviceAppointment.updateMany({
           where: {
             workOrder: { opportunityId: id },
@@ -2745,7 +2744,7 @@ Be factual and professional. Highlight anything that needs attention.`;
       });
 
       return {
-        workOrders: workOrders.count,
+        workOrders: Number(workOrdersUpdated || 0),
         appointments: appointments.count,
         tasks: tasks.count,
         cases: cases.count,
