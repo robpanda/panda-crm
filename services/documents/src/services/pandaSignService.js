@@ -28,6 +28,92 @@ const DEFAULT_SIGNER_ROLES = [
   { role: 'CUSTOMER', label: 'Customer', required: true, order: 1 },
   { role: 'AGENT', label: 'Agent', required: true, order: 2 },
 ];
+const DEFAULT_FROM_EMAIL = process.env.FROM_EMAIL || 'documents@pandaexteriors.com';
+const DEFAULT_COMPANY_NAME = process.env.COMPANY_NAME || 'Panda Exteriors';
+const DEFAULT_COMPANY_PHONE = process.env.COMPANY_PHONE || '(240) 801-6665';
+const DEFAULT_COMPANY_EMAIL = process.env.COMPANY_EMAIL || DEFAULT_FROM_EMAIL;
+const DEFAULT_INTERNAL_NOTIFICATION_EMAIL = process.env.INTERNAL_NOTIFICATION_EMAIL || 'sales@pandaexteriors.com';
+const PANDASIGN_EMAIL_TEMPLATE_CATEGORIES = {
+  SIGN_REQUEST: 'PANDASIGN_SIGN_REQUEST',
+  SIGNED_CONFIRMATION: 'PANDASIGN_SIGNED_CONFIRMATION',
+  SIGNED_INTERNAL: 'PANDASIGN_SIGNED_INTERNAL',
+  COMPLETED_CUSTOMER: 'PANDASIGN_COMPLETED_CUSTOMER',
+  COMPLETED_AGENT: 'PANDASIGN_COMPLETED_AGENT',
+  COMPLETED_INTERNAL: 'PANDASIGN_COMPLETED_INTERNAL',
+};
+const DEFAULT_PANDASIGN_EMAIL_TEMPLATES = {
+  [PANDASIGN_EMAIL_TEMPLATE_CATEGORIES.SIGN_REQUEST]: {
+    subject: 'Please sign: {{agreement.name}}',
+    body: `
+<!DOCTYPE html>
+<html>
+  <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #111827; line-height: 1.6;">
+    <div style="max-width: 640px; margin: 0 auto; padding: 24px;">
+      <h2 style="margin-bottom: 16px;">Hello {{recipient.name}},</h2>
+      <p>You have a document waiting for your signature:</p>
+      <p><strong>{{agreement.name}}</strong></p>
+      <p>Please click the button below to review and sign the document:</p>
+      <p style="margin: 24px 0;">
+        <a href="{{links.signingUrl}}" style="display: inline-block; background: #4f46e5; color: #ffffff; padding: 12px 20px; border-radius: 8px; text-decoration: none; font-weight: 600;">Review &amp; Sign Document</a>
+      </p>
+      <p>This link will expire in 30 days.</p>
+      <p>If you have any questions, please contact us at <a href="tel:{{company.phoneRaw}}">{{company.phone}}</a>.</p>
+      <p style="margin-top: 32px; color: #6b7280; font-size: 13px;">{{company.name}}<br/>{{company.email}}</p>
+    </div>
+  </body>
+</html>
+    `.trim(),
+  },
+  [PANDASIGN_EMAIL_TEMPLATE_CATEGORIES.SIGNED_CONFIRMATION]: {
+    subject: 'Signed: {{agreement.name}}',
+    body: `
+<p>Your signature has been recorded for <strong>{{agreement.name}}</strong>.</p>
+<p>You can download your signed document here:</p>
+<p><a href="{{links.signedDocumentUrl}}">{{links.signedDocumentUrl}}</a></p>
+<p>Thank you for choosing {{company.name}}.</p>
+    `.trim(),
+  },
+  [PANDASIGN_EMAIL_TEMPLATE_CATEGORIES.SIGNED_INTERNAL]: {
+    subject: 'Document Signed: {{agreement.name}}',
+    body: `
+<p>Document signed by {{recipient.name}} ({{recipient.email}}).</p>
+<p><strong>Agreement #:</strong> {{agreement.agreementNumber}}<br/>
+<strong>Signed at:</strong> {{agreement.signedAt}}</p>
+<p><a href="{{links.signedDocumentUrl}}">View signed document</a></p>
+    `.trim(),
+  },
+  [PANDASIGN_EMAIL_TEMPLATE_CATEGORIES.COMPLETED_CUSTOMER]: {
+    subject: 'Completed: {{agreement.name}}',
+    body: `
+<p>Your document has been fully executed: <strong>{{agreement.name}}</strong>.</p>
+<p>All parties have signed. You can download your completed document here:</p>
+<p><a href="{{links.completedDocumentUrl}}">{{links.completedDocumentUrl}}</a></p>
+<p>Thank you for choosing {{company.name}}.</p>
+    `.trim(),
+  },
+  [PANDASIGN_EMAIL_TEMPLATE_CATEGORIES.COMPLETED_AGENT]: {
+    subject: 'Document Completed: {{agreement.name}}',
+    body: `
+<p>Your signature has been recorded on <strong>{{agreement.name}}</strong>.</p>
+<p>Customer: {{recipient.name}}</p>
+<p>Completed at: {{agreement.completedAt}}</p>
+<p>Download completed document:</p>
+<p><a href="{{links.completedDocumentUrl}}">{{links.completedDocumentUrl}}</a></p>
+    `.trim(),
+  },
+  [PANDASIGN_EMAIL_TEMPLATE_CATEGORIES.COMPLETED_INTERNAL]: {
+    subject: 'Document Fully Executed: {{agreement.name}}',
+    body: `
+<p>Document fully executed with all signatures.</p>
+<p><strong>Document:</strong> {{agreement.name}}<br/>
+<strong>Agreement #:</strong> {{agreement.agreementNumber}}<br/>
+<strong>Customer:</strong> {{recipient.name}} ({{recipient.email}})<br/>
+<strong>Host/Agent:</strong> {{hostSigner.name}} ({{hostSigner.email}})</p>
+<p><strong>Completed at:</strong> {{agreement.completedAt}}</p>
+<p><a href="{{links.completedDocumentUrl}}">View completed document</a></p>
+    `.trim(),
+  },
+};
 
 function deepCloneJson(value, fallback) {
   if (value === null || value === undefined) return fallback;
@@ -120,6 +206,223 @@ function renderHtmlToDocumentText(content) {
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+function hasHtmlMarkup(content) {
+  return /<[^>]+>/.test(String(content || ''));
+}
+
+function escapeHtml(content) {
+  return String(content || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function digitsOnly(value) {
+  return String(value || '').replace(/\D+/g, '');
+}
+
+function normalizePhoneHref(value) {
+  const digits = digitsOnly(value);
+  return digits ? `+${digits}` : '';
+}
+
+function getTemplateValue(source, path) {
+  const parts = String(path || '').split('.').filter(Boolean);
+  let current = source;
+
+  for (const part of parts) {
+    if (current === null || current === undefined) return '';
+    current = current[part];
+  }
+
+  if (current === null || current === undefined) return '';
+  if (Array.isArray(current)) {
+    return current
+      .map((item) => (typeof item === 'object' ? JSON.stringify(item) : String(item ?? '')))
+      .filter(Boolean)
+      .join(', ');
+  }
+  if (current instanceof Date) return current.toISOString();
+  if (typeof current === 'object') {
+    if (typeof current.fullName === 'string') return current.fullName;
+    if (typeof current.name === 'string') return current.name;
+    return '';
+  }
+  return String(current);
+}
+
+function interpolateEmailTemplate(content, data) {
+  return String(content || '').replace(/\{\{([^}]+)\}\}/g, (match, tokenPath) => {
+    const value = getTemplateValue(data, tokenPath.trim());
+    return value === '' ? '' : value;
+  });
+}
+
+function renderEmailHtml(content) {
+  if (hasHtmlMarkup(content)) {
+    return String(content || '');
+  }
+
+  return `
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #111827; line-height: 1.6; white-space: pre-wrap;">
+      ${escapeHtml(content).replace(/\n/g, '<br/>')}
+    </div>
+  `.trim();
+}
+
+function buildPandaSignEmailContext(agreement, extra = {}) {
+  const normalizedAgreement = normalizeAgreementRecord(agreement);
+  const mergeData = deepCloneJson(normalizedAgreement?.mergeData, {}) || {};
+  const orderContract = deepCloneJson(mergeData.orderContract, {}) || {};
+  const overview = deepCloneJson(orderContract.overview, {}) || {};
+  const pricing = deepCloneJson(orderContract.pricing, {}) || {};
+  const signers = deepCloneJson(orderContract.signers, {}) || {};
+  const recipient = extra.recipient || {};
+  const hostSigner = extra.hostSigner || {};
+  const signature = extra.signature || {};
+
+  const companyPhone = mergeData.organization?.phone || DEFAULT_COMPANY_PHONE;
+  const companyEmail = mergeData.organization?.email || DEFAULT_COMPANY_EMAIL;
+  const customerName = overview.customerName || mergeData.customerName || normalizedAgreement.recipientName || '';
+  const customerEmail = overview.customerEmail || mergeData.customerEmail || normalizedAgreement.recipientEmail || '';
+  const salesRepName = overview.salesRepName || mergeData.salesRepName || normalizedAgreement.hostSignerName || hostSigner.name || '';
+  const salesRepEmail = overview.salesRepEmail || mergeData.salesRepEmail || normalizedAgreement.hostSignerEmail || hostSigner.email || '';
+
+  return {
+    ...deepCloneJson(mergeData, {}),
+    agreement: {
+      id: normalizedAgreement.id,
+      name: normalizedAgreement.name || '',
+      agreementNumber: normalizedAgreement.agreementNumber || '',
+      signedAt: normalizedAgreement.signedAt || '',
+      completedAt: normalizedAgreement.completedAt || '',
+      status: normalizedAgreement.status || '',
+    },
+    recipient: {
+      name: recipient.name || customerName || 'there',
+      email: recipient.email || customerEmail || '',
+    },
+    hostSigner: {
+      name: hostSigner.name || salesRepName || '',
+      email: hostSigner.email || salesRepEmail || '',
+    },
+    signature: {
+      signerName: signature.signerName || '',
+      signerEmail: signature.signerEmail || '',
+      signedAt: signature.signedAt || '',
+    },
+    company: {
+      name: mergeData.organization?.name || DEFAULT_COMPANY_NAME,
+      email: companyEmail,
+      phone: companyPhone,
+      phoneRaw: normalizePhoneHref(companyPhone),
+    },
+    links: {
+      signingUrl: normalizedAgreement.signingUrl || '',
+      signedDocumentUrl: normalizedAgreement.signedDocumentUrl || normalizedAgreement.documentUrl || '',
+      completedDocumentUrl: normalizedAgreement.signedDocumentUrl || normalizedAgreement.documentUrl || '',
+    },
+    orderContract,
+    overview,
+    pricing,
+    signers,
+    projectName: overview.projectName || mergeData.projectName || mergeData.job?.name || '',
+    jobNumber: overview.jobNumber || mergeData.jobNumber || mergeData.job?.number || '',
+    projectAddress: overview.projectAddress || mergeData.projectAddress || mergeData.job?.address?.full || '',
+    contractDate: overview.contractDate || mergeData.contractDate || '',
+    effectiveDate: overview.effectiveDate || mergeData.effectiveDate || '',
+    customerName,
+    customerEmail,
+    customerPhone: overview.customerPhone || mergeData.customerPhone || '',
+    salesRepName,
+    salesRepEmail,
+    salesRepPhone: overview.salesRepPhone || mergeData.salesRepPhone || '',
+    contractAmount: pricing.contractAmount || mergeData.contractAmount || '',
+    depositAmount: pricing.depositAmount || mergeData.depositAmount || '',
+    financedAmount: pricing.financedAmount || mergeData.financedAmount || '',
+    scopeOfWork: pricing.scopeOfWork || mergeData.scopeOfWork || '',
+    lineItemsText: pricing.lineItemsText || mergeData.lineItemsText || '',
+    lineItemsHtml: pricing.lineItemsHtml || mergeData.lineItemsHtml || '',
+  };
+}
+
+async function getPandaSignEmailTemplate(category) {
+  const template = await prisma.messageTemplate.findFirst({
+    where: {
+      category,
+      type: 'EMAIL',
+      isActive: true,
+    },
+    orderBy: [
+      { isSystem: 'desc' },
+      { updatedAt: 'desc' },
+    ],
+  });
+
+  if (template) {
+    return template;
+  }
+
+  const fallback = DEFAULT_PANDASIGN_EMAIL_TEMPLATES[category];
+  if (!fallback) return null;
+
+  return {
+    category,
+    type: 'EMAIL',
+    subject: fallback.subject,
+    body: fallback.body,
+  };
+}
+
+async function buildPandaSignEmailMessage(category, agreement, extra = {}) {
+  const template = await getPandaSignEmailTemplate(category);
+  if (!template) {
+    throw new Error(`No PandaSign email template available for category ${category}`);
+  }
+
+  const context = buildPandaSignEmailContext(agreement, extra);
+  const rawSubject = template.subject || DEFAULT_PANDASIGN_EMAIL_TEMPLATES[category]?.subject || 'PandaSign Notification';
+  const subject = interpolateEmailTemplate(rawSubject, context);
+  const renderedBody = interpolateEmailTemplate(template.body || '', context);
+
+  return {
+    subject: subject || 'PandaSign Notification',
+    html: renderEmailHtml(renderedBody),
+    text: renderHtmlToDocumentText(renderedBody),
+  };
+}
+
+async function sendPandaSignTemplateEmail({ to, category, agreement, extra = {} }) {
+  if (!to) return;
+
+  const message = await buildPandaSignEmailMessage(category, agreement, extra);
+
+  await sesClient.send(new SendEmailCommand({
+    Source: DEFAULT_FROM_EMAIL,
+    Destination: {
+      ToAddresses: [to],
+    },
+    Message: {
+      Subject: {
+        Data: message.subject,
+        Charset: 'UTF-8',
+      },
+      Body: {
+        Html: {
+          Data: message.html,
+          Charset: 'UTF-8',
+        },
+        Text: {
+          Data: message.text,
+          Charset: 'UTF-8',
+        },
+      },
+    },
+  }));
 }
 
 function connectById(id) {
@@ -1283,90 +1586,11 @@ export const pandaSignService = {
    */
   async sendSigningEmail(agreement) {
     agreement = normalizeAgreementRecord(agreement);
-    const signingUrl = agreement.signingUrl;
-
-    const emailParams = {
-      Source: process.env.FROM_EMAIL || 'documents@pandaexteriors.com',
-      Destination: {
-        ToAddresses: [agreement.recipientEmail],
-      },
-      Message: {
-        Subject: {
-          Data: `Please sign: ${agreement.name}`,
-          Charset: 'UTF-8',
-        },
-        Body: {
-          Html: {
-            Data: `
-              <!DOCTYPE html>
-              <html>
-              <head>
-                <meta charset="utf-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <style>
-                  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
-                  .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-                  .header { text-align: center; margin-bottom: 30px; }
-                  .logo { max-width: 200px; }
-                  .btn { display: inline-block; background: linear-gradient(135deg, #667eea, #764ba2); color: white; padding: 15px 30px; text-decoration: none; border-radius: 8px; font-weight: 600; margin: 20px 0; }
-                  .btn:hover { opacity: 0.9; }
-                  .footer { margin-top: 30px; color: #666; font-size: 12px; text-align: center; }
-                </style>
-              </head>
-              <body>
-                <div class="container">
-                  <div class="header">
-                    <img src="https://pandaexteriors.com/logo.png" alt="Panda Exteriors" class="logo">
-                  </div>
-
-                  <h2>Hello ${agreement.recipientName || 'there'},</h2>
-
-                  <p>You have a document waiting for your signature:</p>
-
-                  <p><strong>${agreement.name}</strong></p>
-
-                  <p>Please click the button below to review and sign the document:</p>
-
-                  <p style="text-align: center;">
-                    <a href="${signingUrl}" class="btn">Review & Sign Document</a>
-                  </p>
-
-                  <p>This link will expire in 30 days.</p>
-
-                  <p>If you have any questions, please contact us at <a href="tel:+12408016665">(240) 801-6665</a>.</p>
-
-                  <div class="footer">
-                    <p>Panda Exteriors | 123 Main St, Baltimore, MD</p>
-                    <p>This is an automated message from PandaSign.</p>
-                  </div>
-                </div>
-              </body>
-              </html>
-            `,
-            Charset: 'UTF-8',
-          },
-          Text: {
-            Data: `
-Hello ${agreement.recipientName || 'there'},
-
-You have a document waiting for your signature: ${agreement.name}
-
-Please visit the following link to review and sign:
-${signingUrl}
-
-This link will expire in 30 days.
-
-If you have any questions, please contact us at (240) 801-6665.
-
-Panda Exteriors
-            `.trim(),
-            Charset: 'UTF-8',
-          },
-        },
-      },
-    };
-
-    await sesClient.send(new SendEmailCommand(emailParams));
+    await sendPandaSignTemplateEmail({
+      to: agreement.recipientEmail,
+      category: PANDASIGN_EMAIL_TEMPLATE_CATEGORIES.SIGN_REQUEST,
+      agreement,
+    });
   },
 
   /**
@@ -1674,62 +1898,23 @@ Panda Exteriors
    */
   async sendCompletionEmails(agreement, signature) {
     agreement = normalizeAgreementRecord(agreement);
-    // Send to signer
-    await sesClient.send(new SendEmailCommand({
-      Source: process.env.FROM_EMAIL || 'documents@pandaexteriors.com',
-      Destination: {
-        ToAddresses: [agreement.recipientEmail],
+    await sendPandaSignTemplateEmail({
+      to: agreement.recipientEmail,
+      category: PANDASIGN_EMAIL_TEMPLATE_CATEGORIES.SIGNED_CONFIRMATION,
+      agreement,
+      extra: {
+        signature,
       },
-      Message: {
-        Subject: {
-          Data: `Signed: ${agreement.name}`,
-          Charset: 'UTF-8',
-        },
-        Body: {
-          Text: {
-            Data: `
-Your signature has been recorded for: ${agreement.name}
+    });
 
-You can download your signed document here:
-${agreement.signedDocumentUrl}
-
-Thank you for choosing Panda Exteriors!
-            `.trim(),
-            Charset: 'UTF-8',
-          },
-        },
+    await sendPandaSignTemplateEmail({
+      to: DEFAULT_INTERNAL_NOTIFICATION_EMAIL,
+      category: PANDASIGN_EMAIL_TEMPLATE_CATEGORIES.SIGNED_INTERNAL,
+      agreement,
+      extra: {
+        signature,
       },
-    }));
-
-    // Send to internal notification
-    const internalEmail = process.env.INTERNAL_NOTIFICATION_EMAIL || 'sales@pandaexteriors.com';
-    await sesClient.send(new SendEmailCommand({
-      Source: process.env.FROM_EMAIL || 'documents@pandaexteriors.com',
-      Destination: {
-        ToAddresses: [internalEmail],
-      },
-      Message: {
-        Subject: {
-          Data: `Document Signed: ${agreement.name}`,
-          Charset: 'UTF-8',
-        },
-        Body: {
-          Text: {
-            Data: `
-Document signed by ${agreement.recipientName} (${agreement.recipientEmail})
-
-Document: ${agreement.name}
-Agreement #: ${agreement.agreementNumber}
-Signed at: ${agreement.signedAt}
-
-View signed document:
-${agreement.signedDocumentUrl}
-            `.trim(),
-            Charset: 'UTF-8',
-          },
-        },
-      },
-    }));
+    });
   },
 
   /**
@@ -3137,96 +3322,34 @@ ${agreement.signedDocumentUrl}
    */
   async sendHostSigningCompletionEmails(agreement, hostSignature) {
     agreement = normalizeAgreementRecord(agreement);
-    // Send to original customer
-    await sesClient.send(new SendEmailCommand({
-      Source: process.env.FROM_EMAIL || 'documents@pandaexteriors.com',
-      Destination: {
-        ToAddresses: [agreement.recipientEmail],
+    await sendPandaSignTemplateEmail({
+      to: agreement.recipientEmail,
+      category: PANDASIGN_EMAIL_TEMPLATE_CATEGORIES.COMPLETED_CUSTOMER,
+      agreement,
+      extra: {
+        hostSigner: hostSignature,
       },
-      Message: {
-        Subject: {
-          Data: `Completed: ${agreement.name}`,
-          Charset: 'UTF-8',
-        },
-        Body: {
-          Text: {
-            Data: `
-Your document has been fully executed: ${agreement.name}
+    });
 
-All parties have signed. You can download your completed document here:
-${agreement.signedDocumentUrl}
-
-Thank you for choosing Panda Exteriors!
-            `.trim(),
-            Charset: 'UTF-8',
-          },
-        },
-      },
-    }));
-
-    // Send to host signer
     if (hostSignature.signerEmail) {
-      await sesClient.send(new SendEmailCommand({
-        Source: process.env.FROM_EMAIL || 'documents@pandaexteriors.com',
-        Destination: {
-          ToAddresses: [hostSignature.signerEmail],
+      await sendPandaSignTemplateEmail({
+        to: hostSignature.signerEmail,
+        category: PANDASIGN_EMAIL_TEMPLATE_CATEGORIES.COMPLETED_AGENT,
+        agreement,
+        extra: {
+          hostSigner: hostSignature,
         },
-        Message: {
-          Subject: {
-            Data: `Document Completed: ${agreement.name}`,
-            Charset: 'UTF-8',
-          },
-          Body: {
-            Text: {
-              Data: `
-Your signature has been recorded on: ${agreement.name}
-
-Customer: ${agreement.recipientName}
-Completed at: ${agreement.completedAt}
-
-Download completed document:
-${agreement.signedDocumentUrl}
-              `.trim(),
-              Charset: 'UTF-8',
-            },
-          },
-        },
-      }));
+      });
     }
 
-    // Send to internal notification
-    const internalEmail = process.env.INTERNAL_NOTIFICATION_EMAIL || 'sales@pandaexteriors.com';
-    await sesClient.send(new SendEmailCommand({
-      Source: process.env.FROM_EMAIL || 'documents@pandaexteriors.com',
-      Destination: {
-        ToAddresses: [internalEmail],
+    await sendPandaSignTemplateEmail({
+      to: DEFAULT_INTERNAL_NOTIFICATION_EMAIL,
+      category: PANDASIGN_EMAIL_TEMPLATE_CATEGORIES.COMPLETED_INTERNAL,
+      agreement,
+      extra: {
+        hostSigner: hostSignature,
       },
-      Message: {
-        Subject: {
-          Data: `Document Fully Executed: ${agreement.name}`,
-          Charset: 'UTF-8',
-        },
-        Body: {
-          Text: {
-            Data: `
-Document fully executed with all signatures.
-
-Document: ${agreement.name}
-Agreement #: ${agreement.agreementNumber}
-
-Customer: ${agreement.recipientName} (${agreement.recipientEmail})
-Host/Agent: ${hostSignature.signerName} (${hostSignature.signerEmail || 'N/A'})
-
-Completed at: ${agreement.completedAt}
-
-View completed document:
-${agreement.signedDocumentUrl}
-            `.trim(),
-            Charset: 'UTF-8',
-          },
-        },
-      },
-    }));
+    });
   },
 
   /**

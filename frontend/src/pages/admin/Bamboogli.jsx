@@ -93,6 +93,46 @@ const AUTOMATION_CONFIG = {
   },
 };
 
+const TEMPLATE_CATEGORY_OPTIONS = [
+  { value: 'GENERAL', label: 'General' },
+  { value: 'APPOINTMENT', label: 'Appointment' },
+  { value: 'FOLLOW_UP', label: 'Follow Up' },
+  { value: 'PAYMENT', label: 'Payment' },
+  { value: 'PROJECT_UPDATE', label: 'Project Update' },
+  { value: 'MARKETING', label: 'Marketing' },
+  { value: 'PANDASIGN_SIGN_REQUEST', label: 'PandaSign - Sign Request' },
+  { value: 'PANDASIGN_SIGNED_CONFIRMATION', label: 'PandaSign - Signed Confirmation' },
+  { value: 'PANDASIGN_SIGNED_INTERNAL', label: 'PandaSign - Signed Internal' },
+  { value: 'PANDASIGN_COMPLETED_CUSTOMER', label: 'PandaSign - Completed Customer' },
+  { value: 'PANDASIGN_COMPLETED_AGENT', label: 'PandaSign - Completed Agent' },
+  { value: 'PANDASIGN_COMPLETED_INTERNAL', label: 'PandaSign - Completed Internal' },
+];
+
+const TEMPLATE_VARIABLE_HINTS = [
+  '{{agreement.name}}',
+  '{{agreement.agreementNumber}}',
+  '{{recipient.name}}',
+  '{{recipient.email}}',
+  '{{links.signingUrl}}',
+  '{{links.completedDocumentUrl}}',
+  '{{projectName}}',
+  '{{jobNumber}}',
+  '{{projectAddress}}',
+  '{{customerName}}',
+  '{{salesRepName}}',
+];
+
+function buildTemplateFormState(template) {
+  return {
+    name: template?.name || '',
+    type: template?.type || template?.channel || 'SMS',
+    category: template?.category || 'GENERAL',
+    subject: template?.subject || '',
+    body: template?.body || '',
+    isActive: template?.isActive ?? true,
+  };
+}
+
 export default function Bamboogli() {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -233,7 +273,7 @@ export default function Bamboogli() {
   const { data: templatesData, isLoading: loadingTemplates, refetch: refetchTemplates } = useQuery({
     queryKey: ['bamboogli-templates', channelFilter, searchTerm],
     queryFn: () => bamboogliApi.getMessageTemplates({
-      ...(channelFilter && { channel: channelFilter }),
+      ...(channelFilter && { type: channelFilter }),
       ...(searchTerm && { search: searchTerm }),
     }),
     enabled: activeTab === 'templates',
@@ -367,7 +407,7 @@ export default function Bamboogli() {
     needsAttention: 0,
     todayMessages: 0,
   };
-  const templates = templatesData || [];
+  const templates = templatesData?.data || [];
   const attentionQueue = attentionData?.conversations || attentionData || [];
   const messageStats = messageStatsData?.summary || {};
   const channelStatus = channelStatusData || { twilio: {}, sendgrid: {} };
@@ -439,15 +479,12 @@ export default function Bamboogli() {
 
   const TemplateModal = () => {
     const [formData, setFormData] = useState(
-      editingTemplate || {
-        name: '',
-        channel: 'SMS',
-        category: 'GENERAL',
-        subject: '',
-        body: '',
-        isActive: true,
-      }
+      buildTemplateFormState(editingTemplate)
     );
+
+    useEffect(() => {
+      setFormData(buildTemplateFormState(editingTemplate));
+    }, [editingTemplate]);
 
     const handleSubmit = (e) => {
       e.preventDefault();
@@ -486,8 +523,8 @@ export default function Bamboogli() {
                   Channel
                 </label>
                 <select
-                  value={formData.channel}
-                  onChange={(e) => setFormData({ ...formData, channel: e.target.value })}
+                  value={formData.type}
+                  onChange={(e) => setFormData({ ...formData, type: e.target.value })}
                   className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-white"
                 >
                   <option value="SMS">SMS</option>
@@ -503,17 +540,16 @@ export default function Bamboogli() {
                   onChange={(e) => setFormData({ ...formData, category: e.target.value })}
                   className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-white"
                 >
-                  <option value="GENERAL">General</option>
-                  <option value="APPOINTMENT">Appointment</option>
-                  <option value="FOLLOW_UP">Follow Up</option>
-                  <option value="PAYMENT">Payment</option>
-                  <option value="PROJECT_UPDATE">Project Update</option>
-                  <option value="MARKETING">Marketing</option>
+                  {TEMPLATE_CATEGORY_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
                 </select>
               </div>
             </div>
 
-            {formData.channel === 'EMAIL' && (
+            {formData.type === 'EMAIL' && (
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Subject
@@ -523,7 +559,7 @@ export default function Bamboogli() {
                   value={formData.subject}
                   onChange={(e) => setFormData({ ...formData, subject: e.target.value })}
                   className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
-                  required={formData.channel === 'EMAIL'}
+                  required={formData.type === 'EMAIL'}
                 />
               </div>
             )}
@@ -535,13 +571,13 @@ export default function Bamboogli() {
               <textarea
                 value={formData.body}
                 onChange={(e) => setFormData({ ...formData, body: e.target.value })}
-                rows={formData.channel === 'EMAIL' ? 8 : 4}
+                rows={formData.type === 'EMAIL' ? 8 : 4}
                 className="w-full px-4 py-2.5 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none resize-none"
                 placeholder="Use {{variableName}} for dynamic content"
                 required
               />
               <p className="text-xs text-gray-500 mt-1">
-                Available variables: {'{{firstName}}'}, {'{{lastName}}'}, {'{{companyName}}'}, {'{{appointmentDate}}'}, {'{{projectAddress}}'}
+                Available variables: {TEMPLATE_VARIABLE_HINTS.join(', ')}
               </p>
             </div>
 
@@ -914,7 +950,7 @@ export default function Bamboogli() {
                       className="border border-gray-200 rounded-xl p-4 hover:border-panda-primary hover:shadow-md transition-all"
                     >
                       <div className="flex items-start justify-between mb-3">
-                        <ChannelBadge channel={template.channel} />
+                        <ChannelBadge channel={template.type || template.channel} />
                         <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                           template.isActive
                             ? 'bg-green-100 text-green-700'
