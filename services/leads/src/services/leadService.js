@@ -2152,8 +2152,6 @@ class LeadService {
         body: note,
         leadId: leadId,
         createdById: createdBy,
-        isPinned: isPinned || false,
-        pinnedAt: isPinned ? new Date() : null,
       },
       include: {
         createdBy: {
