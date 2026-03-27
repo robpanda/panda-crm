@@ -4257,7 +4257,14 @@ Be factual and professional. Highlight anything that needs attention.`;
     const notes = await prisma.note.findMany({
       where: {
         opportunityId,
-        NOT: { title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } },
+        OR: [
+          { title: null },
+          {
+            NOT: {
+              title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+            },
+          },
+        ],
       },
       include: {
         createdBy: {
