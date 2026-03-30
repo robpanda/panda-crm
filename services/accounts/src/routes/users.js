@@ -1,6 +1,6 @@
 // User Routes
 import { Router } from 'express';
-import { param, query, validationResult } from 'express-validator';
+import { body, param, query, validationResult } from 'express-validator';
 import { userController } from '../controllers/userController.js';
 import { requireRole } from '../middleware/auth.js';
 
@@ -59,5 +59,34 @@ router.get('/:id/direct-reports', userController.getDirectReports);
 // Update user (admin only)
 router.put('/:id', requireRole('admin', 'super_admin', 'system'), userController.update);
 router.patch('/:id', requireRole('admin', 'super_admin', 'system'), userController.patch);
+router.delete('/:id', requireRole('admin', 'super_admin', 'system'), userController.delete);
+router.post(
+  '/:id/merge',
+  requireRole('admin', 'super_admin', 'system'),
+  body('targetUserId')
+    .optional()
+    .isString()
+    .withMessage('targetUserId must be a string'),
+  body('parentUserId')
+    .optional()
+    .isString()
+    .withMessage('parentUserId must be a string'),
+  handleValidation,
+  userController.merge
+);
+router.post(
+  '/:id/terminate-transfer',
+  requireRole('admin', 'super_admin', 'system'),
+  body('targetUserId')
+    .optional()
+    .isString()
+    .withMessage('targetUserId must be a string'),
+  body('transferToUserId')
+    .optional()
+    .isString()
+    .withMessage('transferToUserId must be a string'),
+  handleValidation,
+  userController.terminateAndTransfer
+);
 
 export default router;

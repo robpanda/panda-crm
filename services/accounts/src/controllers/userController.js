@@ -146,6 +146,53 @@ export const userController = {
     }
   },
 
+  // DELETE /users/:id
+  async delete(req, res, next) {
+    try {
+      const result = await userService.deleteUser(req.params.id, req.user?.id);
+      res.json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // POST /users/:id/merge
+  async merge(req, res, next) {
+    try {
+      const result = await userService.mergeUsers(
+        req.params.id,
+        req.body.targetUserId || req.body.parentUserId
+      );
+
+      res.json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  // POST /users/:id/terminate-transfer
+  async terminateAndTransfer(req, res, next) {
+    try {
+      const result = await userService.terminateAndTransferUser(
+        req.params.id,
+        req.body.targetUserId || req.body.transferToUserId
+      );
+
+      res.json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
   // GET /users/:id/direct-reports
   async getDirectReports(req, res, next) {
     try {

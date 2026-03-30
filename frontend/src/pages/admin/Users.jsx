@@ -56,6 +56,151 @@ const roleTypeLabels = {
   viewer: 'Viewer',
 };
 
+const API_BASE = import.meta.env.VITE_API_BASE || '';
+
+const formatUserOptionLabel = (userOption) => {
+  const name = userOption?.fullName || `${userOption?.firstName || ''} ${userOption?.lastName || ''}`.trim() || 'Unnamed User';
+  return userOption?.email ? `${name} (${userOption.email})` : name;
+};
+
+const identityStatusStyles = {
+  LINKED: 'bg-green-100 text-green-700',
+  PENDING_REVIEW: 'bg-amber-100 text-amber-700',
+  BROKEN: 'bg-red-100 text-red-700',
+  LEGACY_ONLY: 'bg-blue-100 text-blue-700',
+  NOT_LINKED: 'bg-gray-100 text-gray-700',
+};
+
+const getIdentityStatus = (user) => {
+  const linkState = user?.identityLink?.linkState?.toUpperCase?.();
+  const repairState = user?.identityLink?.repairState?.toUpperCase?.();
+
+  if (linkState === 'PENDING_REVIEW' || repairState === 'PENDING_REVIEW') {
+    return { label: 'Pending Review', tone: 'PENDING_REVIEW' };
+  }
+
+  if (linkState === 'BROKEN' || repairState === 'BROKEN') {
+    return { label: 'Broken', tone: 'BROKEN' };
+  }
+
+  if (user?.identityLink?.cognitoSub) {
+    return { label: 'Linked', tone: 'LINKED' };
+  }
+
+  if (user?.cognitoId) {
+    return { label: 'Legacy Only', tone: 'LEGACY_ONLY' };
+  }
+
+  return { label: 'Not Linked', tone: 'NOT_LINKED' };
+};
+
+function ActiveUserSearchPicker({
+  label,
+  placeholder,
+  value,
+  searchValue,
+  onSearchChange,
+  onSelect,
+  options,
+  excludeUserId,
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+
+  const selectedOption = options.find((userOption) => userOption.id === value) || null;
+  const normalizedQuery = searchValue.trim().toLowerCase();
+  const filteredOptions = options
+    .filter((userOption) => userOption.id !== excludeUserId)
+    .filter((userOption) => {
+      if (!normalizedQuery) return true;
+
+      const searchableText = [
+        userOption.fullName,
+        `${userOption.firstName || ''} ${userOption.lastName || ''}`.trim(),
+        userOption.email,
+        userOption.title,
+        userOption.department,
+        userOption.officeAssignment,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+
+      return searchableText.includes(normalizedQuery);
+    })
+    .slice(0, 8);
+
+  return (
+    <div>
+      <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>
+      <div className="relative">
+        <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+        <input
+          type="text"
+          value={searchValue}
+          onFocus={() => setIsOpen(true)}
+          onBlur={() => {
+            setTimeout(() => setIsOpen(false), 120);
+          }}
+          onChange={(e) => {
+            if (value) {
+              onSelect('');
+            }
+            onSearchChange(e.target.value);
+            setIsOpen(true);
+          }}
+          placeholder={placeholder}
+          className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+        />
+
+        {isOpen && (
+          <div className="absolute z-20 mt-2 w-full bg-white border border-gray-200 rounded-xl shadow-lg max-h-64 overflow-auto">
+            {filteredOptions.length > 0 ? (
+              filteredOptions.map((userOption) => {
+                const isSelected = userOption.id === value;
+                return (
+                  <button
+                    key={userOption.id}
+                    type="button"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      onSelect(userOption.id);
+                      onSearchChange(formatUserOptionLabel(userOption));
+                      setIsOpen(false);
+                    }}
+                    className={`w-full text-left px-4 py-3 hover:bg-gray-50 border-b border-gray-100 last:border-b-0 ${isSelected ? 'bg-panda-primary/5' : ''}`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-gray-900">
+                          {userOption.fullName || `${userOption.firstName || ''} ${userOption.lastName || ''}`.trim() || 'Unnamed User'}
+                        </div>
+                        <div className="text-xs text-gray-500 mt-0.5">
+                          {userOption.email}
+                        </div>
+                      </div>
+                      {isSelected && <Check className="w-4 h-4 text-panda-primary shrink-0 mt-0.5" />}
+                    </div>
+                  </button>
+                );
+              })
+            ) : (
+              <div className="px-4 py-3 text-sm text-gray-500">
+                No matching active users found.
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {selectedOption && (
+        <p className="mt-2 text-xs text-gray-500">
+          Selected: <span className="font-medium text-gray-700">{formatUserOptionLabel(selectedOption)}</span>
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function Users() {
   const [search, setSearch] = useState('');
   const [departmentFilter, setDepartmentFilter] = useState('');
@@ -71,8 +216,14 @@ export default function Users() {
   const [showAddUserModal, setShowAddUserModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [showMergeModal, setShowMergeModal] = useState(false);
+  const [showTerminateTransferModal, setShowTerminateTransferModal] = useState(false);
   const [newUserForm, setNewUserForm] = useState({ email: '', firstName: '', lastName: '', password: '', roleId: '' });
   const [passwordForm, setPasswordForm] = useState({ newPassword: '', confirmPassword: '' });
+  const [mergeForm, setMergeForm] = useState({ targetUserId: '' });
+  const [terminateTransferForm, setTerminateTransferForm] = useState({ targetUserId: '' });
+  const [mergeSearch, setMergeSearch] = useState('');
+  const [terminateTransferSearch, setTerminateTransferSearch] = useState('');
   const [actionError, setActionError] = useState('');
 
   const queryClient = useQueryClient();
@@ -83,7 +234,11 @@ export default function Users() {
     if (search) params.search = search;
     if (departmentFilter) params.department = departmentFilter;
     if (officeFilter) params.officeAssignment = officeFilter;
-    if (statusFilter) params.status = statusFilter;
+    if (statusFilter === 'true' || statusFilter === 'false') {
+      params.isActive = statusFilter;
+    } else if (statusFilter) {
+      params.status = statusFilter;
+    }
     return params;
   }, [search, departmentFilter, officeFilter, statusFilter, sortBy, sortOrder, page]);
 
@@ -160,6 +315,84 @@ export default function Users() {
     },
   });
 
+  const mergeUserMutation = useMutation({
+    mutationFn: async ({ id, data }) => {
+      const accessToken = localStorage.getItem('accessToken');
+      const response = await fetch(`${API_BASE}/api/users/${id}/merge`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
+        body: JSON.stringify(data),
+      });
+
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        const error = new Error(
+          payload?.error?.message || payload?.message || 'Failed to merge user'
+        );
+        error.response = { data: payload };
+        throw error;
+      }
+
+      return payload.data;
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries(['users']);
+      queryClient.invalidateQueries(['userStats']);
+      queryClient.invalidateQueries(['usersDropdown']);
+      setSelectedUser(result.user);
+      setShowMergeModal(false);
+      setMergeForm({ targetUserId: '' });
+      setMergeSearch('');
+      setActionError('');
+    },
+    onError: (error) => {
+      setActionError(error.response?.data?.error?.message || error.message || 'Failed to merge user');
+    },
+  });
+
+  const terminateTransferUserMutation = useMutation({
+    mutationFn: async ({ id, data }) => {
+      const accessToken = localStorage.getItem('accessToken');
+      const response = await fetch(`${API_BASE}/api/users/${id}/terminate-transfer`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
+        body: JSON.stringify(data),
+      });
+
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        const error = new Error(
+          payload?.error?.message || payload?.message || 'Failed to terminate and transfer user'
+        );
+        error.response = { data: payload };
+        throw error;
+      }
+
+      return payload.data;
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries(['users']);
+      queryClient.invalidateQueries(['userStats']);
+      queryClient.invalidateQueries(['usersDropdown']);
+      setSelectedUser(result.user);
+      setShowTerminateTransferModal(false);
+      setTerminateTransferForm({ targetUserId: '' });
+      setTerminateTransferSearch('');
+      setActionError('');
+    },
+    onError: (error) => {
+      setActionError(error.response?.data?.error?.message || error.message || 'Failed to terminate and transfer user');
+    },
+  });
+
   const users = data?.data || [];
   const pagination = data?.pagination || {};
   const stats = statsData || { total: 0, active: 0, inactive: 0, byDepartment: {}, byOffice: {} };
@@ -190,6 +423,11 @@ export default function Users() {
   const formatDate = (dateString) => {
     if (!dateString) return '-';
     return new Date(dateString).toLocaleDateString();
+  };
+
+  const formatDateTime = (dateString) => {
+    if (!dateString) return '-';
+    return new Date(dateString).toLocaleString();
   };
 
   const formatPercent = (value) => {
@@ -250,6 +488,8 @@ export default function Users() {
 
   const UserModal = ({ user, onClose }) => {
     if (!user) return null;
+    const canTerminateAndTransfer = user.isActive && user.status !== 'TERMINATED';
+    const identityStatus = getIdentityStatus(user);
 
     return (
       <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
@@ -272,6 +512,41 @@ export default function Users() {
               </div>
               {!isEditing && (
                 <div className="flex items-center space-x-2">
+                  <button
+                    onClick={() => {
+                      setShowMergeModal(true);
+                      setMergeForm({ targetUserId: '' });
+                      setMergeSearch('');
+                      setActionError('');
+                    }}
+                    className="px-3 py-2 border border-gray-200 rounded-lg text-gray-700 hover:bg-gray-50"
+                    title="Merge User"
+                  >
+                    Merge
+                  </button>
+                  {canTerminateAndTransfer ? (
+                    <button
+                      onClick={() => {
+                        setShowTerminateTransferModal(true);
+                        setTerminateTransferForm({ targetUserId: '' });
+                        setTerminateTransferSearch('');
+                        setActionError('');
+                      }}
+                      className="px-3 py-2 border border-amber-200 rounded-lg text-amber-700 hover:bg-amber-50"
+                      title="Terminate and Transfer"
+                    >
+                      Terminate &amp; Transfer
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled
+                      className="px-3 py-2 border border-gray-200 rounded-lg text-gray-400 bg-gray-50 cursor-not-allowed"
+                      title="Only active users can be terminated and transferred"
+                    >
+                      Already Inactive
+                    </button>
+                  )}
                   <button
                     onClick={() => {
                       setShowPasswordModal(true);
@@ -458,6 +733,72 @@ export default function Users() {
                     {user.role.roleType === 'project_manager' && 'Can view and manage work orders and production data.'}
                     {user.role.roleType === 'call_center' && 'Can view and manage leads and contacts for scheduling.'}
                     {user.role.roleType === 'viewer' && 'Read-only access to assigned records.'}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Identity & Cognito */}
+            <div>
+              <h4 className="font-medium text-gray-900 mb-3 flex items-center">
+                <Key className="w-4 h-4 mr-2 text-panda-primary" />
+                Identity & Cognito
+              </h4>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm text-gray-500 mb-1">Cognito Status</label>
+                  <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${identityStatusStyles[identityStatus.tone] || identityStatusStyles.NOT_LINKED}`}>
+                    {identityStatus.label}
+                  </span>
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-500 mb-1">Provider</label>
+                  <span className="text-gray-900">
+                    {user.identityLink?.authProvider || (user.cognitoId ? 'cognito' : '-')}
+                  </span>
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-500 mb-1">Cognito Username</label>
+                  <span className="text-gray-900 break-all">
+                    {user.identityLink?.cognitoUsername || '-'}
+                  </span>
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-500 mb-1">Cognito Sub</label>
+                  <span className="text-gray-900 break-all">
+                    {user.identityLink?.cognitoSub || '-'}
+                  </span>
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-500 mb-1">Legacy Cognito ID</label>
+                  <span className="text-gray-900 break-all">
+                    {user.cognitoId || '-'}
+                  </span>
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-500 mb-1">Normalized Email</label>
+                  <span className="text-gray-900 break-all">
+                    {user.identityLink?.emailNormalized || '-'}
+                  </span>
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-500 mb-1">Last Reconciled</label>
+                  <span className="text-gray-900">
+                    {formatDateTime(user.identityLink?.lastReconciledAt)}
+                  </span>
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-500 mb-1">Last Verified</label>
+                  <span className="text-gray-900">
+                    {formatDateTime(user.identityLink?.lastVerifiedAt)}
+                  </span>
+                </div>
+              </div>
+              {(user.identityLink?.repairState || user.identityLink?.repairReason) && (
+                <div className="mt-3 p-3 bg-gray-50 rounded-lg">
+                  <p className="text-xs text-gray-600">
+                    {user.identityLink?.repairState ? `Repair State: ${user.identityLink.repairState}` : 'Repair State: -'}
+                    {user.identityLink?.repairReason ? ` • Reason: ${user.identityLink.repairReason}` : ''}
                   </p>
                 </div>
               )}
@@ -1262,7 +1603,188 @@ export default function Users() {
             </div>
           </div>
         </div>
-        )}
+      )}
+
+      {/* Merge User Modal */}
+      {showMergeModal && selectedUser && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg">
+            <div className="p-6 border-b border-gray-100">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-bold text-gray-900">Merge User</h2>
+                  <p className="text-sm text-gray-500 mt-1">
+                    Keep one parent user active and merge this duplicate into it.
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowMergeModal(false);
+                    setMergeForm({ targetUserId: '' });
+                    setMergeSearch('');
+                    setActionError('');
+                  }}
+                  className="p-2 hover:bg-gray-100 rounded-full"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            <div className="p-6 space-y-4">
+              {actionError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2 text-red-700 text-sm">
+                  <AlertTriangle className="w-4 h-4" />
+                  {actionError}
+                </div>
+              )}
+
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                <p className="font-medium">Source User</p>
+                <p className="mt-1">{selectedUser.fullName || `${selectedUser.firstName} ${selectedUser.lastName}`} ({selectedUser.email})</p>
+                <p className="mt-2 text-amber-700">
+                  The kept parent user will remain the login identity. Safe profile data and reporting hierarchy will merge into the parent, and any duplicate Cognito identity on the source user will be severed.
+                  The source user will be deactivated.
+                </p>
+              </div>
+
+              <ActiveUserSearchPicker
+                label="Parent / Keep User *"
+                placeholder="Search all active users..."
+                value={mergeForm.targetUserId}
+                searchValue={mergeSearch}
+                onSearchChange={setMergeSearch}
+                onSelect={(targetUserId) => setMergeForm({ targetUserId })}
+                options={userOptions}
+                excludeUserId={selectedUser.id}
+              />
+            </div>
+            <div className="p-6 border-t border-gray-100 flex justify-end gap-3">
+              <button
+                onClick={() => {
+                  setShowMergeModal(false);
+                  setMergeForm({ targetUserId: '' });
+                  setMergeSearch('');
+                  setActionError('');
+                }}
+                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (!mergeForm.targetUserId) {
+                    setActionError('Please select the parent user to keep');
+                    return;
+                  }
+
+                  mergeUserMutation.mutate({
+                    id: selectedUser.id,
+                    data: {
+                      targetUserId: mergeForm.targetUserId,
+                      parentUserId: mergeForm.targetUserId,
+                    },
+                  });
+                }}
+                disabled={mergeUserMutation.isPending}
+                className="inline-flex items-center px-4 py-2 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg font-medium hover:opacity-90 disabled:opacity-50"
+              >
+                {mergeUserMutation.isPending ? 'Merging...' : 'Merge User'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Terminate & Transfer Modal */}
+      {showTerminateTransferModal && selectedUser && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg">
+            <div className="p-6 border-b border-gray-100">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-bold text-gray-900">Terminate &amp; Transfer</h2>
+                  <p className="text-sm text-gray-500 mt-1">
+                    Reassign active work to another user, then mark this user as terminated.
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowTerminateTransferModal(false);
+                    setTerminateTransferForm({ targetUserId: '' });
+                    setTerminateTransferSearch('');
+                    setActionError('');
+                  }}
+                  className="p-2 hover:bg-gray-100 rounded-full"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            <div className="p-6 space-y-4">
+              {actionError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2 text-red-700 text-sm">
+                  <AlertTriangle className="w-4 h-4" />
+                  {actionError}
+                </div>
+              )}
+
+              <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+                <p className="font-medium">User Being Terminated</p>
+                <p className="mt-1">{selectedUser.fullName || `${selectedUser.firstName} ${selectedUser.lastName}`} ({selectedUser.email})</p>
+                <p className="mt-2 text-red-700">
+                  This will transfer accounts, leads, jobs, appointments, tasks, quotes, documents, contracts,
+                  conversations, and reporting hierarchy references to another active user. Contacts remain attached
+                  through their account and job relationships. The terminated user will be set inactive.
+                </p>
+              </div>
+
+              <ActiveUserSearchPicker
+                label="Transfer To Active User *"
+                placeholder="Search all active users..."
+                value={terminateTransferForm.targetUserId}
+                searchValue={terminateTransferSearch}
+                onSearchChange={setTerminateTransferSearch}
+                onSelect={(targetUserId) => setTerminateTransferForm({ targetUserId })}
+                options={userOptions}
+                excludeUserId={selectedUser.id}
+              />
+            </div>
+            <div className="p-6 border-t border-gray-100 flex justify-end gap-3">
+              <button
+                onClick={() => {
+                  setShowTerminateTransferModal(false);
+                  setTerminateTransferForm({ targetUserId: '' });
+                  setTerminateTransferSearch('');
+                  setActionError('');
+                }}
+                className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (!terminateTransferForm.targetUserId) {
+                    setActionError('Please select the active user receiving these records');
+                    return;
+                  }
+
+                  terminateTransferUserMutation.mutate({
+                    id: selectedUser.id,
+                    data: {
+                      targetUserId: terminateTransferForm.targetUserId,
+                      transferToUserId: terminateTransferForm.targetUserId,
+                    },
+                  });
+                }}
+                disabled={terminateTransferUserMutation.isPending}
+                className="inline-flex items-center px-4 py-2 bg-red-600 text-white rounded-lg font-medium hover:bg-red-700 disabled:opacity-50"
+              >
+                {terminateTransferUserMutation.isPending ? 'Transferring...' : 'Terminate & Transfer'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       </div>
     </AdminLayout>
   );
