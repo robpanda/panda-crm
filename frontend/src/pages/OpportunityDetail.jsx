@@ -4365,7 +4365,10 @@ export default function OpportunityDetail() {
         )}
       </div>
 
-      <div className="relative self-start lg:self-auto" ref={actionsMenuRef}>
+      <div
+        className={`relative self-start lg:self-auto ${showActionsMenu ? 'z-[110]' : ''}`}
+        ref={actionsMenuRef}
+      >
         <button
           onClick={() => setShowActionsMenu(!showActionsMenu)}
           className="inline-flex items-center justify-center px-3.5 py-3 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors shadow-sm"
@@ -4375,7 +4378,7 @@ export default function OpportunityDetail() {
         </button>
 
         {showActionsMenu && (
-          <div className="absolute right-0 top-full mt-2 w-64 bg-white rounded-xl shadow-lg border border-gray-200 py-1 z-50">
+          <div className="absolute right-0 top-full mt-2 w-64 bg-white rounded-xl shadow-lg border border-gray-200 py-1 z-[120]">
             {(!workOrders || workOrders.length === 0) && (
               <button
                 onClick={() => {
@@ -4605,7 +4608,7 @@ export default function OpportunityDetail() {
 
       {/* Job Header */}
       <div className="px-4 sm:px-6 pb-4">
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-visible">
           <div className="p-5 sm:p-6 bg-gradient-to-r from-slate-50 via-white to-blue-50">
             <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-6">
               <div className="flex items-start gap-4 min-w-0 flex-1">
@@ -4715,7 +4718,7 @@ export default function OpportunityDetail() {
               </div>
             </div>
 
-            <div className="mt-6 rounded-2xl border border-gray-200 overflow-hidden bg-white">
+            <div className="relative z-10 mt-6 rounded-2xl border border-gray-200 overflow-visible bg-white">
               <LazyPanel label="Loading milestone tracker...">
                 <MilestoneTracker opportunity={opportunity} embedded />
               </LazyPanel>

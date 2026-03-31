@@ -154,11 +154,33 @@ export default function MilestoneTracker({ opportunity, onStageChange, embedded 
     mutationFn: async ({ opportunityId, stage }) => {
       return opportunitiesApi.updateOpportunity(opportunityId, { stage });
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries(['opportunity', opportunity.id]);
-      queryClient.invalidateQueries(['opportunities']);
+    onMutate: async ({ opportunityId, stage }) => {
+      const queryKey = ['opportunity', opportunityId];
+      await queryClient.cancelQueries({ queryKey });
+      const previousOpportunity = queryClient.getQueryData(queryKey);
+
+      if (previousOpportunity) {
+        queryClient.setQueryData(queryKey, {
+          ...previousOpportunity,
+          stage,
+          stageName: stage.replace(/_/g, ' '),
+        });
+      }
+
+      return { previousOpportunity, queryKey };
+    },
+    onError: (_error, _variables, context) => {
+      if (context?.previousOpportunity) {
+        queryClient.setQueryData(context.queryKey, context.previousOpportunity);
+      }
+    },
+    onSuccess: (updatedOpportunity, variables, context) => {
+      const queryKey = context?.queryKey || ['opportunity', variables.opportunityId];
+      queryClient.setQueryData(queryKey, updatedOpportunity);
+      queryClient.invalidateQueries({ queryKey });
+      queryClient.invalidateQueries({ queryKey: ['opportunities'] });
       setShowStageMenu(false);
-      if (onStageChange) onStageChange();
+      if (onStageChange) onStageChange(updatedOpportunity);
     },
   });
 
@@ -242,7 +264,7 @@ export default function MilestoneTracker({ opportunity, onStageChange, embedded 
   const currentStageIndex = STAGE_ORDER.indexOf(opportunity.stage);
 
   return (
-    <div className={embedded ? 'bg-white' : 'bg-white rounded-xl shadow-sm border border-gray-200'}>
+    <div className={embedded ? 'relative bg-white overflow-visible' : 'relative bg-white rounded-xl shadow-sm border border-gray-200 overflow-visible'}>
       {/* Header with current status summary */}
       <div className="px-4 py-3 bg-gradient-to-r from-gray-50 to-white border-b border-gray-100">
         <div className="flex items-center justify-between flex-wrap gap-2">
@@ -346,7 +368,7 @@ export default function MilestoneTracker({ opportunity, onStageChange, embedded 
         <div className="flex items-center justify-between text-xs">
           <div className="flex items-center space-x-4">
             {/* Stage Dropdown */}
-            <div className="relative">
+            <div className={`relative ${showStageMenu ? 'z-[110]' : ''}`}>
               <button
                 onClick={() => setShowStageMenu(!showStageMenu)}
                 className="flex items-center text-gray-700 hover:text-gray-900"
@@ -364,7 +386,7 @@ export default function MilestoneTracker({ opportunity, onStageChange, embedded 
 
               {/* Stage Selection Dropdown */}
               {showStageMenu && (
-                <div className="absolute left-0 mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50">
+                <div className="absolute left-0 mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-[120]">
                   {STAGE_ORDER.map((stage, idx) => (
                     <button
                       key={stage}
@@ -427,7 +449,7 @@ export default function MilestoneTracker({ opportunity, onStageChange, embedded 
       {/* Click outside to close dropdown */}
       {showStageMenu && (
         <div
-          className="fixed inset-0 z-40"
+          className="fixed inset-0 z-[100]"
           onClick={() => setShowStageMenu(false)}
         />
       )}
