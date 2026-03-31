@@ -4451,7 +4451,6 @@ Be factual and professional. Highlight anything that needs attention.`;
           data: {
             stage: 'CLOSED_LOST',
             closeDate: new Date(),
-            lostReason: 'Bulk Deleted',
             deletedAt: new Date(),
           },
         });
@@ -4463,8 +4462,8 @@ Be factual and professional. Highlight anything that needs attention.`;
             recordId: oppId,
             action: 'BULK_DELETE',
             oldValues: { stage: oldOpp.stage },
-            newValues: { stage: 'CLOSED_LOST', lostReason: 'Bulk Deleted', deletedAt: new Date() },
-            changedFields: ['stage', 'closeDate', 'lostReason', 'deletedAt'],
+            newValues: { stage: 'CLOSED_LOST', closeDate: new Date(), deletedAt: new Date() },
+            changedFields: ['stage', 'closeDate', 'deletedAt'],
             userId: auditContext.userId,
             userEmail: auditContext.userEmail,
             source: 'api',
