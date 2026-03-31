@@ -45,6 +45,22 @@ const DISPOSITION_STAGE_MAP = {
 
 function parseDate(value) {
   if (!value) return null;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    const dateOnlyMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+    if (dateOnlyMatch) {
+      const [, year, month, day] = dateOnlyMatch;
+      return new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), 12, 0, 0));
+    }
+
+    const parsedStringDate = new Date(trimmed);
+    return Number.isNaN(parsedStringDate.getTime()) ? null : parsedStringDate;
+  }
+
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
@@ -2639,8 +2655,10 @@ Be factual and professional. Highlight anything that needs attention.`;
         isPandaClaims: data.isPandaClaims,
         isApproved: data.isApproved,
         claimNumber: data.claimNumber,
-        claimFiledDate: data.claimFiledDate ? new Date(data.claimFiledDate) : undefined,
+        claimFiledDate: hasOwnField(data, 'claimFiledDate') ? parseDate(data.claimFiledDate) : undefined,
         insuranceCarrier: data.insuranceCarrier,
+        dateOfLoss: hasOwnField(data, 'dateOfLoss') ? parseDate(data.dateOfLoss) : undefined,
+        damageLocation: data.damageLocation,
         rcvAmount: data.rcvAmount,
         acvAmount: data.acvAmount,
         deductible: data.deductible,
