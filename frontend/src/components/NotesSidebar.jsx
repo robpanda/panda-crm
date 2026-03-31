@@ -17,8 +17,37 @@ import {
 import { opportunitiesApi } from '../services/api';
 import MentionTextarea from './MentionTextarea';
 
+function normalizeNotesResponse(payload) {
+  if (Array.isArray(payload)) {
+    return payload;
+  }
+
+  if (Array.isArray(payload?.notes)) {
+    return payload.notes;
+  }
+
+  if (Array.isArray(payload?.data)) {
+    return payload.data;
+  }
+
+  if (Array.isArray(payload?.data?.notes)) {
+    return payload.data.notes;
+  }
+
+  return [];
+}
+
+function sortNotes(notes) {
+  return [...notes].sort((a, b) => {
+    if (a?.isPinned && !b?.isPinned) return -1;
+    if (!a?.isPinned && b?.isPinned) return 1;
+    return new Date(b?.createdAt || 0) - new Date(a?.createdAt || 0);
+  });
+}
+
 export default function NotesSidebar({ opportunityId }) {
   const queryClient = useQueryClient();
+  const notesQueryKey = ['opportunityNotes', opportunityId];
   const [isAddingNote, setIsAddingNote] = useState(false);
   const [editingNoteId, setEditingNoteId] = useState(null);
   const [newNoteBody, setNewNoteBody] = useState('');
@@ -30,16 +59,40 @@ export default function NotesSidebar({ opportunityId }) {
 
   // Fetch notes for this opportunity
   const { data: notes = [], isLoading, error } = useQuery({
-    queryKey: ['opportunityNotes', opportunityId],
+    queryKey: notesQueryKey,
     queryFn: () => opportunitiesApi.getNotes(opportunityId),
     enabled: !!opportunityId,
+    select: normalizeNotesResponse,
   });
+
+  const upsertNoteInCache = (nextNote) => {
+    if (!nextNote?.id) {
+      queryClient.invalidateQueries({ queryKey: notesQueryKey });
+      return;
+    }
+
+    queryClient.setQueryData(notesQueryKey, (current) => {
+      const normalizedCurrent = normalizeNotesResponse(current);
+      return sortNotes([
+        nextNote,
+        ...normalizedCurrent.filter((note) => note.id !== nextNote.id),
+      ]);
+    });
+    queryClient.invalidateQueries({ queryKey: notesQueryKey });
+  };
+
+  const removeNoteFromCache = (noteId) => {
+    queryClient.setQueryData(notesQueryKey, (current) => (
+      normalizeNotesResponse(current).filter((note) => note.id !== noteId)
+    ));
+    queryClient.invalidateQueries({ queryKey: notesQueryKey });
+  };
 
   // Create note mutation
   const createNoteMutation = useMutation({
     mutationFn: (data) => opportunitiesApi.createNote(opportunityId, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries(['opportunityNotes', opportunityId]);
+    onSuccess: (createdNote) => {
+      upsertNoteInCache(createdNote);
       setIsAddingNote(false);
       setNewNoteBody('');
       setNewNoteMentions([]);
@@ -49,8 +102,8 @@ export default function NotesSidebar({ opportunityId }) {
   // Update note mutation
   const updateNoteMutation = useMutation({
     mutationFn: ({ noteId, data }) => opportunitiesApi.updateNote(opportunityId, noteId, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries(['opportunityNotes', opportunityId]);
+    onSuccess: (updatedNote) => {
+      upsertNoteInCache(updatedNote);
       setEditingNoteId(null);
       setEditBody('');
       setEditMentions([]);
@@ -60,8 +113,8 @@ export default function NotesSidebar({ opportunityId }) {
   // Delete note mutation
   const deleteNoteMutation = useMutation({
     mutationFn: (noteId) => opportunitiesApi.deleteNote(opportunityId, noteId),
-    onSuccess: () => {
-      queryClient.invalidateQueries(['opportunityNotes', opportunityId]);
+    onSuccess: (_data, noteId) => {
+      removeNoteFromCache(noteId);
       setConfirmDelete(null);
     },
   });
@@ -69,8 +122,8 @@ export default function NotesSidebar({ opportunityId }) {
   // Toggle pin mutation
   const togglePinMutation = useMutation({
     mutationFn: (noteId) => opportunitiesApi.toggleNotePin(opportunityId, noteId),
-    onSuccess: () => {
-      queryClient.invalidateQueries(['opportunityNotes', opportunityId]);
+    onSuccess: (updatedNote) => {
+      upsertNoteInCache(updatedNote);
     },
   });
 
@@ -449,7 +502,7 @@ function NoteCard({
           {note.createdBy && (
             <span className="flex items-center gap-1">
               <User className="w-3 h-3" />
-              {note.createdBy.firstName || note.createdBy.email?.split('@')[0] || 'Unknown'}
+              {note.createdBy.name || note.createdBy.firstName || note.createdBy.email?.split('@')[0] || 'Unknown'}
             </span>
           )}
           <span className="flex items-center gap-1">
