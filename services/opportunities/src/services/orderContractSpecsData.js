@@ -96,6 +96,34 @@ function normalizeSignerPatch(signer) {
   return normalized;
 }
 
+function normalizeNullableString(value) {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  const normalized = String(value).trim();
+  return normalized || null;
+}
+
+function normalizeDateOnlyValue(value) {
+  if (value === undefined) return undefined;
+  if (value === null || value === '') return null;
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    const match = /^(\d{4}-\d{2}-\d{2})/.exec(trimmed);
+    if (match) return match[1];
+    return null;
+  }
+
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    const year = value.getUTCFullYear();
+    const month = String(value.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(value.getUTCDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  return null;
+}
+
 export function normalizeOrderContractPatch(orderContractPatch = {}) {
   const patch = isPlainObject(orderContractPatch) ? orderContractPatch : {};
 
@@ -138,11 +166,81 @@ export function normalizeOrderContractPatch(orderContractPatch = {}) {
   return normalized;
 }
 
+export function normalizeInsuranceClaimPatch(insuranceClaimPatch = {}) {
+  const patch = isPlainObject(insuranceClaimPatch) ? insuranceClaimPatch : {};
+  const normalized = {};
+  const adjusterPatch = isPlainObject(patch.adjuster) ? patch.adjuster : patch;
+  const adjuster = {};
+
+  const fieldMap = {
+    adjusterName: 'name',
+    adjusterOfficePhone: 'officePhone',
+    adjusterOfficePhoneExt: 'officePhoneExt',
+    adjusterMobilePhone: 'mobilePhone',
+    adjusterEmail: 'email',
+  };
+
+  Object.entries(fieldMap).forEach(([sourceKey, targetKey]) => {
+    if (Object.prototype.hasOwnProperty.call(adjusterPatch, sourceKey)) {
+      adjuster[targetKey] = normalizeNullableString(adjusterPatch[sourceKey]);
+    }
+  });
+
+  ['name', 'officePhone', 'officePhoneExt', 'mobilePhone', 'email'].forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(adjusterPatch, key)) {
+      adjuster[key] = normalizeNullableString(adjusterPatch[key]);
+    }
+  });
+
+  if (Object.keys(adjuster).length > 0) {
+    normalized.adjuster = adjuster;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(patch, 'adjusterAssigned')) {
+    normalized.adjusterAssigned = Boolean(patch.adjusterAssigned);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(patch, 'adjusterMeetingComplete')) {
+    normalized.adjusterMeetingComplete = Boolean(patch.adjusterMeetingComplete);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(patch, 'adjusterMeetingDate')) {
+    normalized.adjusterMeetingDate = normalizeDateOnlyValue(patch.adjusterMeetingDate);
+  }
+
+  return normalized;
+}
+
 export function extractOrderContractFromSpecsData(specsDataValue) {
   const specsData = parseSpecsDataValue(specsDataValue);
   return isPlainObject(specsData.orderContract)
     ? deepCloneJson(specsData.orderContract, {})
     : {};
+}
+
+export function extractInsuranceClaimFromSpecsData(specsDataValue) {
+  const specsData = parseSpecsDataValue(specsDataValue);
+  const insuranceClaim = isPlainObject(specsData.insuranceClaim)
+    ? deepCloneJson(specsData.insuranceClaim, {})
+    : {};
+  const adjuster = isPlainObject(insuranceClaim.adjuster) ? insuranceClaim.adjuster : {};
+
+  return {
+    adjusterName: normalizeNullableString(adjuster.name) ?? null,
+    adjusterOfficePhone: normalizeNullableString(adjuster.officePhone) ?? null,
+    adjusterOfficePhoneExt: normalizeNullableString(adjuster.officePhoneExt) ?? null,
+    adjusterMobilePhone: normalizeNullableString(adjuster.mobilePhone) ?? null,
+    adjusterEmail: normalizeNullableString(adjuster.email) ?? null,
+    adjusterAssigned:
+      typeof insuranceClaim.adjusterAssigned === 'boolean'
+        ? insuranceClaim.adjusterAssigned
+        : null,
+    adjusterMeetingDate: normalizeDateOnlyValue(insuranceClaim.adjusterMeetingDate) ?? null,
+    adjusterMeetingComplete:
+      typeof insuranceClaim.adjusterMeetingComplete === 'boolean'
+        ? insuranceClaim.adjusterMeetingComplete
+        : null,
+  };
 }
 
 export function mergeOrderContractIntoSpecsData(specsDataValue, orderContractPatch = {}) {
@@ -157,5 +255,22 @@ export function mergeOrderContractIntoSpecsData(specsDataValue, orderContractPat
   return {
     specsData: mergedSpecsData,
     orderContract: mergedOrderContract,
+  };
+}
+
+export function mergeInsuranceClaimIntoSpecsData(specsDataValue, insuranceClaimPatch = {}) {
+  const specsData = parseSpecsDataValue(specsDataValue);
+  const existingInsuranceClaim = isPlainObject(specsData.insuranceClaim)
+    ? deepCloneJson(specsData.insuranceClaim, {})
+    : {};
+  const normalizedPatch = normalizeInsuranceClaimPatch(insuranceClaimPatch);
+  const mergedInsuranceClaim = deepMergeJson(existingInsuranceClaim, normalizedPatch);
+  const mergedSpecsData = deepMergeJson(specsData, {
+    insuranceClaim: mergedInsuranceClaim,
+  });
+
+  return {
+    specsData: mergedSpecsData,
+    insuranceClaim: mergedInsuranceClaim,
   };
 }

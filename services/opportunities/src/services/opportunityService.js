@@ -13,7 +13,9 @@ import {
   validateAppointmentResultPayload,
 } from './appointmentResultValidation.js';
 import {
+  extractInsuranceClaimFromSpecsData,
   extractOrderContractFromSpecsData,
+  mergeInsuranceClaimIntoSpecsData,
   mergeOrderContractIntoSpecsData,
   parseSpecsDataValue,
 } from './orderContractSpecsData.js';
@@ -69,6 +71,29 @@ const DEFAULT_IN_PERSON_DURATION_MINUTES = 120;
 
 function hasOwnField(obj, key) {
   return Object.prototype.hasOwnProperty.call(obj, key);
+}
+
+function buildInsuranceClaimMetadataPatch(data = {}) {
+  const patch = {};
+  let hasPatch = false;
+
+  [
+    'adjusterName',
+    'adjusterOfficePhone',
+    'adjusterOfficePhoneExt',
+    'adjusterMobilePhone',
+    'adjusterEmail',
+    'adjusterAssigned',
+    'adjusterMeetingDate',
+    'adjusterMeetingComplete',
+  ].forEach((field) => {
+    if (hasOwnField(data, field)) {
+      patch[field] = data[field];
+      hasPatch = true;
+    }
+  });
+
+  return hasPatch ? patch : null;
 }
 
 function normalizeDepartmentTag(value) {
@@ -2601,6 +2626,7 @@ Be factual and professional. Highlight anything that needs attention.`;
         insuranceCarrier: true,
         isPandaClaims: true,
         type: true,
+        specsData: true,
         rcvAmount: true,
         acvAmount: true,
         deductible: true,
@@ -2634,6 +2660,11 @@ Be factual and professional. Highlight anything that needs attention.`;
         });
       }
     }
+
+    const insuranceClaimMetadataPatch = buildInsuranceClaimMetadataPatch(data);
+    const mergedInsuranceClaimSpecsData = insuranceClaimMetadataPatch
+      ? mergeInsuranceClaimIntoSpecsData(previousState?.specsData, insuranceClaimMetadataPatch)
+      : null;
 
     const opportunity = await prisma.opportunity.update({
       where: { id },
@@ -2672,6 +2703,9 @@ Be factual and professional. Highlight anything that needs attention.`;
         contactId: data.contactId,
         ownerId: data.ownerId,
         projectManagerId: data.projectManagerId,
+        specsData: mergedInsuranceClaimSpecsData
+          ? JSON.stringify(mergedInsuranceClaimSpecsData.specsData)
+          : undefined,
         // Invoice workflow fields
         invoiceStatus: data.invoiceStatus,
         invoiceReadyDate: data.invoiceReadyDate ? new Date(data.invoiceReadyDate) : undefined,
@@ -3013,6 +3047,15 @@ Be factual and professional. Highlight anything that needs attention.`;
    * Create opportunity wrapper with computed fields
    */
   createOpportunityWrapper(opp, includeDetails = false) {
+    const insuranceClaimDetails = extractInsuranceClaimFromSpecsData(opp.specsData);
+    const hasManualAdjusterContactInfo = [
+      insuranceClaimDetails.adjusterName,
+      insuranceClaimDetails.adjusterOfficePhone,
+      insuranceClaimDetails.adjusterOfficePhoneExt,
+      insuranceClaimDetails.adjusterMobilePhone,
+      insuranceClaimDetails.adjusterEmail,
+    ].some(Boolean);
+
     const wrapper = {
       id: opp.id,
       name: opp.name,
@@ -3070,10 +3113,23 @@ Be factual and professional. Highlight anything that needs attention.`;
     };
 
     // Insurance fields
-    if (opp.type === 'INSURANCE') {
+    if (opp.type === 'INSURANCE' || String(opp.workType || '').toLowerCase().includes('insurance')) {
       wrapper.claimNumber = opp.claimNumber;
       wrapper.claimFiledDate = opp.claimFiledDate;
       wrapper.insuranceCarrier = opp.insuranceCarrier;
+      wrapper.adjusterName = insuranceClaimDetails.adjusterName;
+      wrapper.adjusterOfficePhone = insuranceClaimDetails.adjusterOfficePhone;
+      wrapper.adjusterOfficePhoneExt = insuranceClaimDetails.adjusterOfficePhoneExt;
+      wrapper.adjusterMobilePhone = insuranceClaimDetails.adjusterMobilePhone;
+      wrapper.adjusterEmail = insuranceClaimDetails.adjusterEmail;
+      wrapper.adjusterAssigned = Boolean(
+        insuranceClaimDetails.adjusterAssigned
+        || hasManualAdjusterContactInfo
+        || insuranceClaimDetails.adjusterMeetingDate
+        || insuranceClaimDetails.adjusterMeetingComplete
+      );
+      wrapper.adjusterMeetingDate = insuranceClaimDetails.adjusterMeetingDate;
+      wrapper.adjusterMeetingComplete = Boolean(insuranceClaimDetails.adjusterMeetingComplete);
       wrapper.rcvAmount = opp.rcvAmount ? Number(opp.rcvAmount) : null;
       wrapper.acvAmount = opp.acvAmount ? Number(opp.acvAmount) : null;
       wrapper.deductible = opp.deductible ? Number(opp.deductible) : null;
