@@ -34,6 +34,12 @@ const GAF_CLIENT_ID = process.env.GAF_CLIENT_ID;
 const GAF_CLIENT_SECRET = process.env.GAF_CLIENT_SECRET;
 const GAF_AUDIENCE = process.env.GAF_AUDIENCE || 'https://quickmeasureapi.gaf.com';
 const GAF_SCOPE = process.env.GAF_SCOPE || 'Subscriber:GetSubscriberDetails Subscriber:SiteStatus Subscriber:AccountCheck Subscriber:CoverageCheck Subscriber:OrderHistory Subscriber:OrderSearch Subscriber:Order Subscriber:Download';
+const GAF_DOWNLOAD_BASE = `${GAF_API_BASE.replace(/\/$/, '')}/download`;
+const GAF_ORDER_NOTIFICATION_EMAIL =
+  process.env.GAF_ORDER_NOTIFICATION_EMAIL ||
+  process.env.GAF_NOTIFICATION_EMAIL ||
+  process.env.FROM_EMAIL ||
+  '';
 
 // ==========================================
 // Hover API Configuration (OAuth2 Authorization Code Flow)
@@ -166,7 +172,7 @@ class MeasurementService {
     // Validate opportunity exists
     const opportunity = await prisma.opportunity.findUnique({
       where: { id: opportunityId },
-      include: { account: true },
+      include: { account: true, contact: true },
     });
 
     if (!opportunity) {
@@ -833,43 +839,52 @@ class MeasurementService {
       }
 
       const statusData = await response.json();
+      const normalizedStatus = this.normalizeGAFOrderStatus(
+        statusData.orderStatus || statusData.OrderStatus || statusData.status
+      );
 
-      // Check if report is complete
-      if (statusData.orderStatus === 'Completed' || statusData.orderStatus === 'Complete') {
-        // Fetch the actual measurement data
-        const measurementsUrl = `${GAF_API_BASE}/Download/${gafOrderNumber}`;
+      if (this.hasGAFMeasurementPayload(statusData)) {
+        await this.processGAFReport(measurementReportId, statusData);
+        logger.info(`GAF report ${gafOrderNumber} delivered for ${measurementReportId}`);
+        return { success: true, status: 'DELIVERED' };
+      }
 
-        const measurementsResponse = await fetch(measurementsUrl, {
-          method: 'GET',
-          headers: {
-            'Authorization': `Bearer ${accessToken}`,
-            'Content-Type': 'application/json',
+      if (normalizedStatus === 'FAILED') {
+        await prisma.measurementReport.update({
+          where: { id: measurementReportId },
+          data: {
+            orderStatus: 'FAILED',
+            rawData: {
+              ...(measurementReport.rawData || {}),
+              gafStatus: statusData,
+            },
           },
         });
 
-        if (measurementsResponse.ok) {
-          const measurementData = await measurementsResponse.json();
-          const measurements = this.parseGAFMeasurements(measurementData);
-
-          await prisma.measurementReport.update({
-            where: { id: measurementReportId },
-            data: {
-              orderStatus: 'DELIVERED',
-              deliveredAt: new Date(),
-              reportUrl: statusData.viewUrl || measurementData.viewUrl,
-              reportPdfUrl: statusData.pdfUrl || measurementData.pdfUrl,
-              ...measurements,
-              rawData: { statusData, measurementData },
-            },
-          });
-
-          logger.info(`GAF report ${gafOrderNumber} retrieved and stored for ${measurementReportId}`);
-          return { success: true, status: 'DELIVERED' };
-        }
+        return {
+          success: false,
+          status: 'FAILED',
+          error: statusData.ProblemCode || statusData.problemCode || 'GAF order failed',
+        };
       }
 
-      logger.info(`GAF report ${gafOrderNumber} still processing: ${statusData.orderStatus}`);
-      return { success: false, status: statusData.orderStatus };
+      await prisma.measurementReport.update({
+        where: { id: measurementReportId },
+        data: {
+          orderStatus: normalizedStatus === 'DELIVERED' ? 'PROCESSING' : normalizedStatus,
+          rawData: {
+            ...(measurementReport.rawData || {}),
+            gafStatus: statusData,
+          },
+        },
+      });
+
+      logger.info(`GAF report ${gafOrderNumber} still processing: ${normalizedStatus}`);
+      return {
+        success: false,
+        status: normalizedStatus,
+        waitingForWebhook: normalizedStatus === 'DELIVERED',
+      };
     } catch (error) {
       logger.error(`Error polling GAF report ${gafOrderNumber}:`, error);
       return { success: false, error: error.message };
@@ -977,6 +992,7 @@ class MeasurementService {
             measurementType,
             measurementInstructions,
             comments,
+            jobId: opportunity.jobId || null,
           },
         },
       });
@@ -993,6 +1009,12 @@ class MeasurementService {
         measurementInstructions,
         comments,
         referenceId: report.id,
+        jobId: opportunity.jobId || null,
+        ownerEmail:
+          opportunity.contact?.email ||
+          opportunity.account?.email ||
+          GAF_ORDER_NOTIFICATION_EMAIL ||
+          '',
       });
 
       await prisma.measurementReport.update({
@@ -1022,6 +1044,92 @@ class MeasurementService {
       'Commercial': 'COMMERCIAL',
     };
     return typeMap[type] || 'BASIC';
+  }
+
+  toNumericValue(value) {
+    const parsed = typeof value === 'string' && value.trim() === ''
+      ? Number.NaN
+      : Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  parseJsonValue(value, fallback = null) {
+    if (value === null || value === undefined) return fallback;
+    if (typeof value === 'object') return value;
+    if (typeof value !== 'string') return fallback;
+
+    try {
+      return JSON.parse(value);
+    } catch {
+      return fallback;
+    }
+  }
+
+  getGAFRoofMeasurement(data) {
+    return data?.RoofMeasurement || data?.roofMeasurement || data?.roof || {};
+  }
+
+  getGAFBuildings(data) {
+    const roofMeasurement = this.getGAFRoofMeasurement(data);
+    const buildings = roofMeasurement?.Buildings ?? data?.Buildings;
+    if (Array.isArray(buildings)) return buildings;
+    return this.parseJsonValue(buildings, []);
+  }
+
+  normalizeGAFOrderStatus(status) {
+    const normalized = String(status || '')
+      .trim()
+      .toUpperCase()
+      .replace(/[\s-]+/g, '_');
+
+    if (!normalized) return 'PROCESSING';
+    if (['COMPLETED', 'COMPLETE', 'DELIVERED'].includes(normalized)) return 'DELIVERED';
+    if (['FAILED', 'FAILURE', 'ERROR', 'CANCELLED'].includes(normalized)) return 'FAILED';
+    if (['PROCESSING', 'IN_PROGRESS', 'INPROGRESS'].includes(normalized)) return 'PROCESSING';
+    if (['PENDING', 'ORDERED', 'QUEUED', 'RECEIVED'].includes(normalized)) return 'ORDERED';
+    return normalized;
+  }
+
+  resolveGAFAssetUrl(asset) {
+    if (!asset) return null;
+
+    const rawValue = String(asset).trim();
+    if (!rawValue) return null;
+    if (/^https?:\/\//i.test(rawValue)) return rawValue;
+
+    return `${GAF_DOWNLOAD_BASE}/${encodeURIComponent(rawValue)}`;
+  }
+
+  getGAFAssetBundle(data) {
+    const roofMeasurement = this.getGAFRoofMeasurement(data);
+    const assets = roofMeasurement?.Assets || data?.Assets || {};
+    const buildings = this.getGAFBuildings(data);
+    const primaryBuilding = Array.isArray(buildings) && buildings.length > 0 ? buildings[0] : null;
+
+    return {
+      reportUrl:
+        assets.Report3D ||
+        this.resolveGAFAssetUrl(assets.HomeownerReport) ||
+        this.resolveGAFAssetUrl(assets.Report) ||
+        primaryBuilding?.homeownerUrl ||
+        primaryBuilding?.reportUrl ||
+        null,
+      reportPdfUrl:
+        this.resolveGAFAssetUrl(assets.Report) ||
+        primaryBuilding?.reportUrl ||
+        null,
+      reportXmlUrl:
+        this.resolveGAFAssetUrl(assets.Acculynx) ||
+        primaryBuilding?.acculynxUrl ||
+        null,
+      reportJsonUrl: primaryBuilding?.modelUrl || null,
+      suggestedWasteFactor: this.toNumericValue(primaryBuilding?.suggestedWaste),
+    };
+  }
+
+  hasGAFMeasurementPayload(data) {
+    const roofMeasurement = this.getGAFRoofMeasurement(data);
+    return roofMeasurement && Object.keys(roofMeasurement).length > 0;
   }
 
   /**
@@ -1070,8 +1178,8 @@ class MeasurementService {
     const orderPayload = {
       subscriberName: 'PAN',
       subscriberOrderNumber: orderData.referenceId || `GP-${Date.now()}`,
-      SubscriberCustomField1: orderData.referenceId || '',
-      emailAddress: orderData.ownerEmail || process.env.GAF_NOTIFICATION_EMAIL || 'jasondaniel@panda-exteriors.com',
+      SubscriberCustomField1: orderData.jobId || orderData.referenceId || '',
+      emailAddress: orderData.ownerEmail || GAF_ORDER_NOTIFICATION_EMAIL || '',
       productCode: this.getGAFProductCode(orderData.measurementType),
       address1: orderData.address,
       address2: '',
@@ -1089,7 +1197,7 @@ class MeasurementService {
       isServiceOpen: false,
       susbcriberId: 0,
       ignoreCache: true,
-      trackingId: '10',
+      trackingId: orderData.jobId || orderData.referenceId || `GAF-${Date.now()}`,
       checkForDuplicate: false,
       SuggestedWaste: '',
     };
@@ -1166,43 +1274,110 @@ class MeasurementService {
    * Handle GAF webhook delivery
    */
   async handleGAFWebhook(data) {
-    const { orderId, status, measurements } = data;
+    const gafOrderNumber = data?.GAFOrderNumber || data?.gafOrderNumber || data?.orderId;
+    const subscriberOrderNumber = data?.SubscriberOrderNumber || data?.subscriberOrderNumber;
+    const subscriberCustomField1 = data?.SubscriberCustomField1 || data?.subscriberCustomField1;
+    const problemCode = data?.ProblemCode || data?.problemCode;
 
-    logger.info(`GAF webhook: order ${orderId} status ${status}`);
+    const lookupCandidates = [];
+    if (gafOrderNumber) {
+      lookupCandidates.push({ externalId: String(gafOrderNumber) });
+      lookupCandidates.push({ orderNumber: String(gafOrderNumber) });
+    }
+    if (subscriberOrderNumber) {
+      lookupCandidates.push({ id: String(subscriberOrderNumber) });
+      lookupCandidates.push({ orderNumber: String(subscriberOrderNumber) });
+    }
+    if (subscriberCustomField1) {
+      lookupCandidates.push({
+        opportunity: {
+          is: {
+            jobId: String(subscriberCustomField1),
+          },
+        },
+      });
+    }
 
-    const measurementReport = await prisma.measurementReport.findFirst({
-      where: { externalId: orderId },
-    });
+    const reportedStatus =
+      data?.OrderStatus ||
+      data?.orderStatus ||
+      data?.status ||
+      (problemCode ? 'FAILED' : this.hasGAFMeasurementPayload(data) ? 'DELIVERED' : 'PROCESSING');
+
+    const normalizedStatus = this.normalizeGAFOrderStatus(reportedStatus);
+
+    logger.info(`GAF webhook: order ${gafOrderNumber || subscriberOrderNumber || 'unknown'} status ${normalizedStatus}`);
+
+    const measurementReport = lookupCandidates.length
+      ? await prisma.measurementReport.findFirst({
+          where: { OR: lookupCandidates },
+        })
+      : null;
 
     if (!measurementReport) {
-      logger.error(`No measurement report found for GAF order ${orderId}`);
+      logger.error(`No measurement report found for GAF order ${gafOrderNumber || subscriberOrderNumber || 'unknown'}`);
       return;
     }
 
-    if (status === 'COMPLETED' && measurements) {
-      await this.processGAFReport(measurementReport.id, measurements);
-    } else if (status === 'FAILED') {
+    if (problemCode || normalizedStatus === 'FAILED') {
       await prisma.measurementReport.update({
         where: { id: measurementReport.id },
-        data: { orderStatus: 'FAILED' },
+        data: {
+          orderStatus: 'FAILED',
+          rawData: {
+            ...(measurementReport.rawData || {}),
+            gafWebhook: data,
+          },
+        },
       });
+      return;
     }
+
+    if (this.hasGAFMeasurementPayload(data)) {
+      await this.processGAFReport(measurementReport.id, data);
+      return;
+    }
+
+    await prisma.measurementReport.update({
+      where: { id: measurementReport.id },
+      data: {
+        orderStatus: normalizedStatus === 'DELIVERED' ? 'PROCESSING' : normalizedStatus,
+        rawData: {
+          ...(measurementReport.rawData || {}),
+          gafWebhook: data,
+        },
+      },
+    });
   }
 
   async processGAFReport(reportId, gafData) {
+    const existingReport = await prisma.measurementReport.findUnique({
+      where: { id: reportId },
+    });
     const measurements = this.parseGAFMeasurements(gafData);
+    const assets = this.getGAFAssetBundle(gafData);
+    const deliveredOrderNumber = gafData?.GAFOrderNumber
+      ? String(gafData.GAFOrderNumber)
+      : existingReport?.orderNumber || null;
 
     await prisma.measurementReport.update({
       where: { id: reportId },
       data: {
         orderStatus: 'DELIVERED',
         deliveredAt: new Date(),
-        reportUrl: gafData.viewUrl,
-        reportPdfUrl: gafData.pdfUrl,
-        latitude: gafData.location?.latitude,
-        longitude: gafData.location?.longitude,
+        externalId: existingReport?.externalId || (deliveredOrderNumber || undefined),
+        orderNumber: deliveredOrderNumber,
+        reportUrl: assets.reportUrl || existingReport?.reportUrl,
+        reportPdfUrl: assets.reportPdfUrl || existingReport?.reportPdfUrl,
+        reportXmlUrl: assets.reportXmlUrl || existingReport?.reportXmlUrl,
+        reportJsonUrl: assets.reportJsonUrl || existingReport?.reportJsonUrl,
+        latitude: existingReport?.latitude,
+        longitude: existingReport?.longitude,
         ...measurements,
-        rawData: gafData,
+        rawData: {
+          ...(existingReport?.rawData || {}),
+          gafWebhook: gafData,
+        },
       },
     });
 
@@ -1210,22 +1385,33 @@ class MeasurementService {
   }
 
   parseGAFMeasurements(data) {
-    const roof = data.roof || {};
+    const roof = this.getGAFRoofMeasurement(data);
+    const pitchToArea = this.parseJsonValue(roof.PitchToArea || roof.pitchToArea, roof.PitchToArea || roof.pitchToArea || null);
+    const buildings = this.getGAFBuildings(data);
+    const primaryBuilding = Array.isArray(buildings) && buildings.length > 0 ? buildings[0] : null;
 
     return {
-      totalRoofArea: roof.totalSqFt,
-      totalRoofSquares: roof.totalSquares,
-      predominantPitch: roof.mainPitch,
-      pitches: roof.allPitches,
-      facets: roof.faceCount,
-      ridgeLength: roof.ridge,
-      hipLength: roof.hip,
-      valleyLength: roof.valley,
-      rakeLength: roof.rake,
-      eaveLength: roof.eave,
-      dripEdgeLength: roof.dripEdge,
-      roofComplexity: this.calculateComplexity(roof.faceCount),
-      suggestedWasteFactor: roof.recommendedWaste,
+      totalRoofArea: this.toNumericValue(roof.Area || roof.totalSqFt),
+      totalRoofSquares:
+        this.toNumericValue(roof.totalSquares) ||
+        (this.toNumericValue(roof.Area || roof.totalSqFt) !== null
+          ? this.toNumericValue(roof.Area || roof.totalSqFt) / 100
+          : null),
+      predominantPitch: roof.Pitch || roof.mainPitch || null,
+      pitches: pitchToArea,
+      facets: this.toNumericValue(roof.Facets || roof.faceCount),
+      ridgeLength: this.toNumericValue(roof.Ridges || roof.ridge),
+      hipLength: this.toNumericValue(roof.Hips || roof.hip),
+      valleyLength: this.toNumericValue(roof.Valleys || roof.valley),
+      rakeLength: this.toNumericValue(roof.Rakes || roof.rake),
+      eaveLength: this.toNumericValue(roof.Eaves || roof.eave),
+      flashingLength: this.toNumericValue(roof.Flash || roof.flashing),
+      stepFlashingLength: this.toNumericValue(roof.Step || roof.step),
+      dripEdgeLength: this.toNumericValue(roof.DripEdge || roof.dripEdge),
+      roofComplexity: this.calculateComplexity(this.toNumericValue(roof.Facets || roof.faceCount)),
+      suggestedWasteFactor:
+        this.toNumericValue(primaryBuilding?.suggestedWaste) ||
+        this.toNumericValue(roof.recommendedWaste),
     };
   }
 
@@ -4009,7 +4195,7 @@ class MeasurementService {
         success: false,
         error: 'No NAIP coverage for this location',
         details: coverage,
-        suggestion: 'NAIP covers continental US only. Use EagleView or GAF for this location.',
+        suggestion: 'NAIP covers continental US only. Use GAF for this location.',
       };
     }
 
@@ -4021,7 +4207,7 @@ class MeasurementService {
       if (result.confidence < NAIP_CONFIDENCE_THRESHOLD) {
         logger.warn(`NAIP Pipeline: Low confidence ${result.confidence} < ${NAIP_CONFIDENCE_THRESHOLD}`);
         result.lowConfidence = true;
-        result.suggestion = 'Consider ordering EagleView report for more accurate measurements';
+        result.suggestion = 'Consider ordering a GAF QuickMeasure report for more accurate measurements';
       }
 
       // Store in database if opportunityId provided
@@ -4087,7 +4273,7 @@ class MeasurementService {
       return {
         success: false,
         error: error.message,
-        suggestion: 'NAIP pipeline failed. Consider using EagleView or GAF for this measurement.',
+        suggestion: 'NAIP pipeline failed. Consider using GAF for this measurement.',
       };
     }
   }

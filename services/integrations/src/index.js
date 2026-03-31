@@ -1,5 +1,5 @@
 // Integrations Service - Entry Point
-// Handles CompanyCam, Google Calendar, RingCentral, EagleView/GAF, ABC Supply, Scheduling, and Mobile integrations
+// Handles CompanyCam, Google Calendar, RingCentral, GAF, ABC Supply, Scheduling, and Mobile integrations
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -90,7 +90,6 @@ app.get('/health', (req, res) => {
       'companycam',
       'google-calendar',
       'ringcentral',
-      'eagleview',
       'gaf-quickmeasure',
       'abc-supply',
       'hover-3d',
@@ -108,12 +107,6 @@ app.get('/api/integrations/diagnostics', (req, res) => {
   res.json({
     success: true,
     data: {
-      eagleView: {
-        clientId: checkEnv('EAGLEVIEW_CLIENT_ID'),
-        clientSecret: checkEnv('EAGLEVIEW_CLIENT_SECRET'),
-        apiUrl: checkEnv('EAGLEVIEW_API_URL'),
-        tokenUrl: checkEnv('EAGLEVIEW_TOKEN_URL'),
-      },
       gaf: {
         clientId: checkEnv('GAF_CLIENT_ID'),
         clientSecret: checkEnv('GAF_CLIENT_SECRET'),
@@ -121,6 +114,7 @@ app.get('/api/integrations/diagnostics', (req, res) => {
         tokenUrl: checkEnv('GAF_TOKEN_URL'),
         audience: checkEnv('GAF_AUDIENCE'),
         scope: checkEnv('GAF_SCOPE'),
+        orderEmail: checkEnv('GAF_ORDER_NOTIFICATION_EMAIL'),
       },
       hover: {
         clientId: checkEnv('HOVER_CLIENT_ID'),
@@ -137,49 +131,11 @@ app.get('/api/integrations/diagnostics', (req, res) => {
   });
 });
 
-// Test connection endpoint - attempts to get OAuth tokens from EagleView and GAF
+// Test connection endpoint - attempts to get OAuth tokens from GAF
 app.get('/api/integrations/test-connection', async (req, res) => {
   const results = {
-    eagleView: { status: 'unknown', error: null },
     gaf: { status: 'unknown', error: null },
   };
-
-  // Test EagleView token acquisition
-  try {
-    const evClientId = process.env.EAGLEVIEW_CLIENT_ID;
-    const evClientSecret = process.env.EAGLEVIEW_CLIENT_SECRET;
-    const evTokenUrl = process.env.EAGLEVIEW_TOKEN_URL || 'https://apicenter.eagleview.com/oauth2/v1/token';
-
-    if (!evClientId || !evClientSecret) {
-      results.eagleView = { status: 'not_configured', error: 'Missing credentials' };
-    } else {
-      const requestBody = `grant_type=client_credentials&client_id=${encodeURIComponent(evClientId)}&client_secret=${encodeURIComponent(evClientSecret)}`;
-
-      const response = await fetch(evTokenUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: requestBody,
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        results.eagleView = {
-          status: 'connected',
-          tokenType: data.token_type,
-          expiresIn: data.expires_in,
-        };
-      } else {
-        const errorText = await response.text();
-        results.eagleView = {
-          status: 'auth_failed',
-          httpStatus: response.status,
-          error: errorText.substring(0, 500),
-        };
-      }
-    }
-  } catch (error) {
-    results.eagleView = { status: 'error', error: error.message };
-  }
 
   // Test GAF token acquisition
   try {
@@ -220,7 +176,7 @@ app.get('/api/integrations/test-connection', async (req, res) => {
     results.gaf = { status: 'error', error: error.message };
   }
 
-  const allConnected = results.eagleView.status === 'connected' && results.gaf.status === 'connected';
+  const allConnected = results.gaf.status === 'connected';
 
   res.json({
     success: allConnected,
@@ -254,21 +210,14 @@ app.use((req, res) => {
 });
 
 // Scheduled job to process pending measurement reports (runs every 5 minutes)
-// Replicates Salesforce "EagleView_Scheduled_Report_Retrieval" batch job
 const measurementPollingJob = new CronJob('*/5 * * * *', async () => {
   try {
     logger.info('Starting scheduled measurement report polling...');
 
-    // Process EagleView pending reports
-    const eagleViewResult = await measurementService.processPendingEagleViewReports();
-    if (eagleViewResult.processed > 0 || eagleViewResult.failed > 0) {
-      logger.info(`EagleView polling: ${eagleViewResult.processed} completed, ${eagleViewResult.failed} failed`);
-    }
-
     // Process GAF pending reports
     const gafResult = await measurementService.processPendingGAFReports();
-    if (gafResult.processed > 0 || gafResult.failed > 0) {
-      logger.info(`GAF polling: ${gafResult.processed} completed, ${gafResult.failed} failed`);
+    if (gafResult.total > 0 || gafResult.failed > 0) {
+      logger.info(`GAF polling: ${gafResult.delivered} delivered, ${gafResult.failed} failed, ${gafResult.stillPending} pending`);
     }
   } catch (error) {
     logger.error('Measurement polling job error:', error);

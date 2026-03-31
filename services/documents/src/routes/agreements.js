@@ -212,6 +212,72 @@ router.post('/templates/:id/archive', authMiddleware, requireRole('admin', 'supe
   }
 });
 
+router.post('/verify-required-fields', authMiddleware, async (req, res, next) => {
+  try {
+    const result = await pandaSignService.verifyRequiredFields(req.body || {});
+    res.json({ success: true, data: result });
+  } catch (error) {
+    if (error.message === 'templateId is required' || error.message === 'recipientEmail is required') {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: error.message },
+      });
+    }
+    if (error.message === 'Template not found') {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: error.message },
+      });
+    }
+    next(error);
+  }
+});
+
+router.post('/preview', authMiddleware, async (req, res, next) => {
+  try {
+    const preview = await pandaSignService.previewTemplate(req.body || {});
+    res.json({ success: true, data: preview });
+  } catch (error) {
+    if (error.message === 'templateId is required') {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: error.message },
+      });
+    }
+    if (error.message === 'Template not found') {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: error.message },
+      });
+    }
+    next(error);
+  }
+});
+
+router.post('/send', authMiddleware, async (req, res, next) => {
+  try {
+    const agreement = await pandaSignService.sendAgreementV2({
+      ...(req.body || {}),
+      userId: req.user.id,
+    });
+    res.json({ success: true, data: agreement });
+  } catch (error) {
+    if (error.message === 'templateId is required') {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: error.message },
+      });
+    }
+    if (error.message === 'Template not found') {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: error.message },
+      });
+    }
+    next(error);
+  }
+});
+
 /**
  * GET /agreements/:id - Get single agreement (authenticated)
  */

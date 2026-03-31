@@ -2521,74 +2521,6 @@ export default function OpportunityDetail() {
     },
   });
 
-  // EagleView Measurements form state
-  const [eagleviewForm, setEagleviewForm] = useState({
-    measurementType: 'ResidentialPremium',
-    deliveryMethod: 'Regular',
-    measurementInstructions: 'Primary Structure Only',
-    comments: '',
-    street: '',
-    city: '',
-    state: '',
-    zip: '',
-    country: 'United States',
-    latitude: '',
-    longitude: '',
-  });
-
-  // Initialize EagleView form with opportunity address when opportunity loads
-  useEffect(() => {
-    if (opportunity) {
-      setEagleviewForm(prev => ({
-        ...prev,
-        street: opportunity.street || opportunity.account?.billingStreet || '',
-        city: opportunity.city || opportunity.account?.billingCity || '',
-        state: opportunity.state || opportunity.account?.billingState || '',
-        zip: opportunity.postalCode || opportunity.account?.billingPostalCode || '',
-      }));
-    }
-  }, [opportunity]);
-
-  // EagleView Measurements mutation
-  const orderEagleViewMutation = useMutation({
-    mutationFn: (data) => measurementsApi.orderEagleViewReport({
-      opportunityId: id,
-      address: data.street,
-      city: data.city,
-      state: data.state,
-      zip: data.zip,
-      country: data.country,
-      measurementType: data.measurementType,
-      deliveryMethod: data.deliveryMethod,
-      measurementInstructions: data.measurementInstructions,
-      latitude: data.latitude ? parseFloat(data.latitude) : null,
-      longitude: data.longitude ? parseFloat(data.longitude) : null,
-      comments: data.comments,
-    }),
-    onSuccess: () => {
-      queryClient.invalidateQueries(['opportunity', id]);
-      setActionSuccess('EagleView measurement order submitted successfully');
-      setShowQuickActionModal(false);
-      setEagleviewForm({
-        measurementType: 'ResidentialPremium',
-        deliveryMethod: 'Regular',
-        measurementInstructions: 'Primary Structure Only',
-        comments: '',
-        street: opportunity?.street || '',
-        city: opportunity?.city || '',
-        state: opportunity?.state || '',
-        zip: opportunity?.postalCode || '',
-        country: 'United States',
-        latitude: '',
-        longitude: '',
-      });
-      setTimeout(() => setActionSuccess(null), 3000);
-    },
-    onError: (error) => {
-      setActionError(error.message || 'Failed to submit EagleView order');
-    },
-  });
-
   // Hover 3D Capture form state
   const [hoverCaptureForm, setHoverCaptureForm] = useState({
     captureType: 'EXTERIOR',
@@ -3419,17 +3351,6 @@ export default function OpportunityDetail() {
                       </button>
                       <button
                         onClick={() => {
-                          setActiveQuickAction('eagleviewMeasure');
-                          setShowQuickActionModal(true);
-                          setShowActionsMenu(false);
-                        }}
-                        className="w-full flex items-center space-x-3 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
-                      >
-                        <Eye className="w-4 h-4 text-orange-600" />
-                        <span>EagleView Measurements</span>
-                      </button>
-                      <button
-                        onClick={() => {
                           setActiveQuickAction('hoverCapture');
                           setShowQuickActionModal(true);
                           setShowActionsMenu(false);
@@ -4028,16 +3949,6 @@ export default function OpportunityDetail() {
                           >
                             <Ruler className="w-4 h-4" />
                             Order GAF QuickMeasure
-                          </button>
-                          <button
-                            onClick={() => {
-                              setActiveQuickAction('eagleviewMeasure');
-                              setShowQuickActionModal(true);
-                            }}
-                            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium transition-colors"
-                          >
-                            <Ruler className="w-4 h-4" />
-                            Order EagleView
                           </button>
                           <button
                             onClick={() => {
@@ -7627,7 +7538,7 @@ export default function OpportunityDetail() {
       {showQuickActionModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className={`bg-white rounded-xl shadow-xl w-full mx-4 max-h-[90vh] overflow-y-auto ${
-            ['gafQuickMeasure', 'eagleviewMeasure', 'hoverCapture', 'instantMeasure'].includes(activeQuickAction)
+            ['gafQuickMeasure', 'hoverCapture', 'instantMeasure'].includes(activeQuickAction)
               ? 'max-w-3xl'
               : 'max-w-lg'
           }`}>
@@ -7639,7 +7550,6 @@ export default function OpportunityDetail() {
                 {activeQuickAction?.type === 'scheduleAppointment' && 'Schedule Appointment'}
                 {activeQuickAction?.type === 'editAppointment' && 'Edit Appointment'}
                 {activeQuickAction === 'gafQuickMeasure' && 'GAF Quick Measure'}
-                {activeQuickAction === 'eagleviewMeasure' && 'Get EagleView Measurements'}
                 {activeQuickAction === 'hoverCapture' && 'Hover 3D Capture'}
                 {activeQuickAction === 'instantMeasure' && 'Instant Measurement'}
                 {activeQuickAction === 'requestEstimate' && 'Request Estimate'}
@@ -7648,7 +7558,7 @@ export default function OpportunityDetail() {
                 {activeQuickAction === 'composeEmail' && 'Compose Email'}
                 {activeQuickAction === 'sendMessage' && 'Send Message'}
                 {activeQuickAction === 'addContact' && 'Add Contact'}
-                {!activeQuickAction?.type && !['createWorkOrder', 'gafQuickMeasure', 'eagleviewMeasure', 'hoverCapture', 'instantMeasure', 'requestEstimate', 'updateMeetingOutcome', 'createCase', 'composeEmail', 'sendMessage', 'addContact'].includes(activeQuickAction) && 'Quick Action'}
+                {!activeQuickAction?.type && !['createWorkOrder', 'gafQuickMeasure', 'hoverCapture', 'instantMeasure', 'requestEstimate', 'updateMeetingOutcome', 'createCase', 'composeEmail', 'sendMessage', 'addContact'].includes(activeQuickAction) && 'Quick Action'}
               </h2>
               <button
                 onClick={() => {
@@ -7946,242 +7856,6 @@ export default function OpportunityDetail() {
                       ) : (
                         <>
                           <Ruler className="w-4 h-4" />
-                          <span>Submit Order</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
-                </form>
-              )}
-
-              {/* EagleView Measurements Form */}
-              {activeQuickAction === 'eagleviewMeasure' && (
-                <form onSubmit={(e) => {
-                  e.preventDefault();
-                  orderEagleViewMutation.mutate(eagleviewForm);
-                }} className="space-y-4">
-                  {/* Measurement Type */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Measurement Type *</label>
-                    <select
-                      value={eagleviewForm.measurementType}
-                      onChange={(e) => setEagleviewForm(prev => ({ ...prev, measurementType: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
-                      required
-                    >
-                      <option value="">--None--</option>
-                      <option value="ResidentialPremium">Residential Premium</option>
-                      <option value="CommercialPremium">Commercial Premium</option>
-                      <option value="SolarResidential">Solar Residential</option>
-                      <option value="SolarAdvancedResidential">Solar Advanced Residential</option>
-                      <option value="QuickSquares">QuickSquares</option>
-                      <option value="ResidentialGutter">Residential Gutter</option>
-                      <option value="WholeHome">Whole Home</option>
-                      <option value="SolarInformEssentialsResidential">Solar Inform Essentials Residential</option>
-                      <option value="ResidentialWallsWindowsDoors">Residential Walls, Windows & Doors</option>
-                      <option value="ResidentialBidPerfect">Residential Bid Perfect</option>
-                      <option value="CommercialGutter">Commercial Gutter</option>
-                      <option value="CommercialWalls">Commercial Walls</option>
-                      <option value="CommercialBidPerfect">Commercial Bid Perfect</option>
-                      <option value="SolarInformEssentialsCommercial">Solar Inform Essentials Commercial</option>
-                      <option value="SolarInformAdvancedResidential">Solar Inform Advanced Residential</option>
-                    </select>
-                  </div>
-
-                  {/* Delivery Method */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Delivery Method *</label>
-                    <select
-                      value={eagleviewForm.deliveryMethod}
-                      onChange={(e) => setEagleviewForm(prev => ({ ...prev, deliveryMethod: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
-                      required
-                    >
-                      <option value="Regular">Regular</option>
-                    </select>
-                  </div>
-
-                  {/* Measurement Instructions */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Measurement Instructions *</label>
-                    <select
-                      value={eagleviewForm.measurementInstructions}
-                      onChange={(e) => setEagleviewForm(prev => ({ ...prev, measurementInstructions: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
-                      required
-                    >
-                      <option value="Primary Structure Only">Primary Structure Only</option>
-                      <option value="Primary Structure & Detached Garage">Primary Structure & Detached Garage</option>
-                      <option value="All Structures on Parcel">All Structures on Parcel</option>
-                      <option value="Commercial Complex">Commercial Complex</option>
-                    </select>
-                  </div>
-
-                  {/* Comments */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Comments</label>
-                    <textarea
-                      value={eagleviewForm.comments}
-                      onChange={(e) => setEagleviewForm(prev => ({ ...prev, comments: e.target.value }))}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
-                      rows={2}
-                      placeholder="Add any special instructions..."
-                    />
-                  </div>
-
-                  {/* Address Section */}
-                  <div className="border-t border-gray-200 pt-4 mt-4">
-                    <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center">
-                      <MapPin className="w-4 h-4 mr-2 text-gray-500" />
-                      Property Address
-                    </h3>
-                    <p className="text-xs text-red-500 mb-3">
-                      Use the coordinates below to verify the pin placement
-                    </p>
-
-                    <div className="space-y-3">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Street *</label>
-                        <textarea
-                          value={eagleviewForm.street}
-                          onChange={(e) => setEagleviewForm(prev => ({ ...prev, street: e.target.value }))}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
-                          rows={2}
-                          placeholder="123 Main St"
-                          required
-                        />
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">City *</label>
-                          <input
-                            type="text"
-                            value={eagleviewForm.city}
-                            onChange={(e) => setEagleviewForm(prev => ({ ...prev, city: e.target.value }))}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
-                            required
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">State/Province *</label>
-                          <input
-                            type="text"
-                            value={eagleviewForm.state}
-                            onChange={(e) => setEagleviewForm(prev => ({ ...prev, state: e.target.value }))}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
-                            placeholder="NJ"
-                            required
-                          />
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">Zip/Postal Code *</label>
-                          <input
-                            type="text"
-                            value={eagleviewForm.zip}
-                            onChange={(e) => setEagleviewForm(prev => ({ ...prev, zip: e.target.value }))}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
-                            placeholder="08859"
-                            required
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">Country</label>
-                          <input
-                            type="text"
-                            value={eagleviewForm.country}
-                            onChange={(e) => setEagleviewForm(prev => ({ ...prev, country: e.target.value }))}
-                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
-                            placeholder="United States"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Draggable Map for Pin Placement */}
-                  <div className="border-t border-gray-200 pt-4">
-                    <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center">
-                      <MapPin className="w-4 h-4 mr-2 text-red-500" />
-                      Verify Property Location
-                    </h3>
-                    <p className="text-xs text-red-500 mb-3">
-                      Use the coordinates below to verify the pin placement. Drag the pin or click on the map to adjust.
-                    </p>
-                    <DraggableMap
-                      latitude={eagleviewForm.latitude}
-                      longitude={eagleviewForm.longitude}
-                      address={`${eagleviewForm.street}, ${eagleviewForm.city}, ${eagleviewForm.state} ${eagleviewForm.zip}`}
-                      onLocationChange={(lat, lng) => {
-                        setEagleviewForm(prev => ({
-                          ...prev,
-                          latitude: lat.toFixed(6),
-                          longitude: lng.toFixed(6),
-                        }));
-                      }}
-                      height={350}
-                    />
-                  </div>
-
-                  {/* Coordinates Section */}
-                  <div className="border-t border-gray-200 pt-4">
-                    <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center">
-                      <Globe className="w-4 h-4 mr-2 text-gray-500" />
-                      Geo Coordinates
-                    </h3>
-                    <p className="text-xs text-gray-500 mb-3">
-                      These values update automatically when you move the pin on the map.
-                    </p>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Latitude</label>
-                        <input
-                          type="text"
-                          value={eagleviewForm.latitude}
-                          onChange={(e) => setEagleviewForm(prev => ({ ...prev, latitude: e.target.value }))}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-gray-50"
-                          placeholder="40.458339"
-                          readOnly
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Longitude</label>
-                        <input
-                          type="text"
-                          value={eagleviewForm.longitude}
-                          onChange={(e) => setEagleviewForm(prev => ({ ...prev, longitude: e.target.value }))}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none bg-gray-50"
-                          placeholder="-74.27022"
-                          readOnly
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-end space-x-3 pt-4 border-t border-gray-200">
-                    <button
-                      type="button"
-                      onClick={() => setShowQuickActionModal(false)}
-                      className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={orderEagleViewMutation.isPending || !eagleviewForm.street || !eagleviewForm.city || !eagleviewForm.state || !eagleviewForm.zip || !eagleviewForm.measurementType}
-                      className="px-4 py-2 bg-gradient-to-r from-orange-500 to-red-600 text-white rounded-lg hover:from-orange-600 hover:to-red-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
-                    >
-                      {orderEagleViewMutation.isPending ? (
-                        <>
-                          <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                          <span>Submitting...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Eye className="w-4 h-4" />
                           <span>Submit Order</span>
                         </>
                       )}

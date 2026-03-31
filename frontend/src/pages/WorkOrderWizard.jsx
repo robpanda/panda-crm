@@ -1391,7 +1391,7 @@ export default function WorkOrderWizard() {
 
                 <p className="text-xs text-gray-500 flex items-center">
                   <AlertCircle className="w-3.5 h-3.5 mr-1" />
-                  Click "Get Coordinates" to auto-fill from address, or enter manually. Coordinates are required for EagleView/GAF Quick Measurements.
+                  Click "Get Coordinates" to auto-fill from address, or enter manually. Coordinates are required for GAF Quick Measurements.
                 </p>
               </div>
             </div>

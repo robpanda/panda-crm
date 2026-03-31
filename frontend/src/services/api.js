@@ -3313,7 +3313,7 @@ export const googleCalendarApi = {
   },
 };
 
-// Measurements API (EagleView, GAF QuickMeasure & Hover)
+// Measurements API (GAF QuickMeasure, Hover, and instant measurement)
 export const measurementsApi = {
   // GAF QuickMeasure
   async orderGAFReport(data) {
@@ -3323,17 +3323,6 @@ export const measurementsApi = {
 
   async getGAFReportStatus(reportId) {
     const response = await api.get(`/api/integrations/measurements/gaf/${reportId}/status`);
-    return response.data;
-  },
-
-  // EagleView
-  async orderEagleViewReport(data) {
-    const response = await api.post('/api/integrations/measurements/eagleview/order', data);
-    return response.data;
-  },
-
-  async getEagleViewReportStatus(reportId) {
-    const response = await api.get(`/api/integrations/measurements/eagleview/${reportId}/status`);
     return response.data;
   },
 
@@ -3393,6 +3382,16 @@ export const measurementsApi = {
 
   // Get measurement reports for an opportunity (all reports including pending)
   async getOpportunityReports(opportunityId) {
+    const response = await api.get(`/api/integrations/measurements/opportunity/${opportunityId}?all=true`);
+    return response.data;
+  },
+
+  // Backwards-compatible alias still used by the material/labor wizard.
+  async getMeasurementReports(params = {}) {
+    const opportunityId =
+      typeof params === 'string'
+        ? params
+        : params?.opportunityId;
     const response = await api.get(`/api/integrations/measurements/opportunity/${opportunityId}?all=true`);
     return response.data;
   },
@@ -4638,37 +4637,18 @@ export const documentsApiV2 = {
   },
 
   async verifyRequiredFields(payload = {}) {
-    const paths = [];
-    if (payload.agreementId) {
-      paths.push(`/api/documents/agreements/${payload.agreementId}/verify-required-fields`);
-    }
-    paths.push('/api/documents/pandasign/agreements/verify-required-fields');
-    paths.push('/api/documents/pandasign/verify-required-fields');
-    paths.push('/api/documents/agreements/verify-required-fields');
-
-    return postFirstAvailable(paths, payload);
+    const response = await api.post('/api/documents/agreements/verify-required-fields', payload);
+    return response.data;
   },
 
   async preview(payload = {}) {
-    return postFirstAvailable(
-      [
-        '/api/documents/pandasign/preview',
-        '/api/documents/pandasign/v2/preview',
-        '/api/documents/agreements/preview',
-      ],
-      payload
-    );
+    const response = await api.post('/api/documents/agreements/preview', payload);
+    return response.data;
   },
 
   async send(payload = {}) {
-    return postFirstAvailable(
-      [
-        '/api/documents/pandasign/send',
-        '/api/documents/pandasign/v2/send',
-        '/api/documents/agreements/send',
-      ],
-      payload
-    );
+    const response = await api.post('/api/documents/agreements/send', payload);
+    return response.data;
   },
 };
 

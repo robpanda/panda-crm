@@ -1,9 +1,9 @@
-// EagleView, GAF QuickMeasure & Hover Integration Routes
+// GAF QuickMeasure, Hover, and measurement utility routes
 import { Router } from 'express';
 import { PrismaClient } from '@prisma/client';
 import { measurementService } from '../services/measurementService.js';
 import { logger } from '../middleware/logger.js';
-import { authMiddleware, requireRole } from '../middleware/auth.js';
+import { authMiddleware } from '../middleware/auth.js';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -23,113 +23,6 @@ function handleHoverAuthError(error, res) {
   }
   return null; // Not a Hover auth error
 }
-
-// ==========================================
-// EagleView Routes
-// ==========================================
-
-/**
- * POST /measurements/eagleview/order - Order EagleView report
- */
-router.post('/eagleview/order', authMiddleware, async (req, res, next) => {
-  try {
-    const report = await measurementService.orderEagleViewReport({
-      ...req.body,
-      userId: req.user.id,
-    });
-
-    logger.info(`EagleView order placed: ${report.id} by ${req.user.email}`);
-
-    res.status(201).json({ success: true, data: report });
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * POST /measurements/eagleview/webhook - Handle EagleView webhooks
- */
-router.post('/eagleview/webhook', async (req, res, next) => {
-  try {
-    // Verify webhook signature
-    const signature = req.headers['x-eagleview-signature'];
-    // TODO: Implement signature verification
-
-    await measurementService.handleEagleViewWebhook(req.body);
-
-    res.sendStatus(200);
-  } catch (error) {
-    logger.error('EagleView webhook error:', error);
-    res.sendStatus(500);
-  }
-});
-
-/**
- * GET /measurements/eagleview/report/:reportId - Fetch EagleView report by ID
- * Manual trigger to fetch a specific report
- */
-router.get('/eagleview/report/:reportId', authMiddleware, async (req, res, next) => {
-  try {
-    const reportData = await measurementService.fetchEagleViewReport(req.params.reportId);
-    res.json({ success: true, data: reportData });
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * GET /measurements/eagleview/waste/:reportId - Fetch EagleView waste data
- */
-router.get('/eagleview/waste/:reportId', authMiddleware, async (req, res, next) => {
-  try {
-    const wasteData = await measurementService.fetchEagleViewWasteData(req.params.reportId);
-    res.json({ success: true, data: wasteData });
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * GET /measurements/eagleview/pdf/:reportId - Download EagleView PDF
- */
-router.get('/eagleview/pdf/:reportId', authMiddleware, async (req, res, next) => {
-  try {
-    const { response, contentType, contentDisposition } = await measurementService.downloadEagleViewPdf(req.params.reportId);
-
-    if (contentType) res.setHeader('Content-Type', contentType);
-    if (contentDisposition) res.setHeader('Content-Disposition', contentDisposition);
-    else res.setHeader('Content-Disposition', `attachment; filename="eagleview-report-${req.params.reportId}.pdf"`);
-
-    const buffer = await response.arrayBuffer();
-    res.send(Buffer.from(buffer));
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * POST /measurements/eagleview/store-pdf/:id - Download and store PDF to S3 for a measurement report
- */
-router.post('/eagleview/store-pdf/:id', authMiddleware, async (req, res, next) => {
-  try {
-    // Get measurement report to find EagleView report ID
-    const report = await prisma.measurementReport.findUnique({
-      where: { id: req.params.id },
-    });
-
-    if (!report || !report.externalId) {
-      return res.status(404).json({
-        success: false,
-        error: { code: 'NOT_FOUND', message: 'Report not found or no external ID' },
-      });
-    }
-
-    const result = await measurementService.downloadAndStorePdf(report.externalId, req.params.id);
-    res.json({ success: true, data: result });
-  } catch (error) {
-    next(error);
-  }
-});
 
 /**
  * GET /measurements/pdf-url/:id - Get a fresh presigned URL for a stored PDF
@@ -162,36 +55,6 @@ router.get('/pdf-url/:id', authMiddleware, async (req, res, next) => {
     next(error);
   }
 });
-
-/**
- * POST /measurements/eagleview/poll/:id - Manually poll for a specific report
- */
-router.post('/eagleview/poll/:id', authMiddleware, async (req, res, next) => {
-  try {
-    const result = await measurementService.pollEagleViewReport(req.params.id);
-    res.json({ success: true, data: result });
-  } catch (error) {
-    next(error);
-  }
-});
-
-/**
- * POST /measurements/eagleview/process-pending - Process all pending EagleView reports
- * Batch job endpoint - can be called by scheduler or manually
- */
-router.post('/eagleview/process-pending', authMiddleware, async (req, res, next) => {
-  try {
-    const results = await measurementService.processPendingEagleViewReports();
-    logger.info('EagleView batch processing triggered', results);
-    res.json({ success: true, data: results });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// ==========================================
-// GAF QuickMeasure Routes
-// ==========================================
 
 /**
  * POST /measurements/gaf/order - Order GAF QuickMeasure report
@@ -230,6 +93,39 @@ router.post('/gaf/webhook', async (req, res, next) => {
 });
 
 /**
+ * GET /measurements/gaf/:id/status - Get current GAF report status
+ */
+router.get('/gaf/:id/status', authMiddleware, async (req, res, next) => {
+  try {
+    const report = await prisma.measurementReport.findUnique({
+      where: { id: req.params.id },
+    });
+
+    if (!report || report.provider !== 'GAF_QUICKMEASURE') {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'GAF report not found' },
+      });
+    }
+
+    if (
+      report.externalId &&
+      ['PENDING', 'ORDERED', 'PROCESSING', 'IN_PROGRESS'].includes(String(report.orderStatus || '').toUpperCase())
+    ) {
+      await measurementService.pollGAFReport(req.params.id);
+    }
+
+    const refreshed = await prisma.measurementReport.findUnique({
+      where: { id: req.params.id },
+    });
+
+    res.json({ success: true, data: refreshed || report });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
  * POST /measurements/gaf/poll/:id - Manually poll for a specific GAF report
  */
 router.post('/gaf/poll/:id', authMiddleware, async (req, res, next) => {
@@ -256,29 +152,13 @@ router.post('/gaf/process-pending', authMiddleware, async (req, res, next) => {
 });
 
 /**
- * POST /measurements/process-all-pending - Process all pending reports (all providers)
- * Combined batch job endpoint
+ * POST /measurements/process-all-pending - Process all pending GAF reports
  */
 router.post('/process-all-pending', authMiddleware, async (req, res, next) => {
   try {
-    const [eagleViewResults, gafResults] = await Promise.all([
-      measurementService.processPendingEagleViewReports(),
-      measurementService.processPendingGAFReports(),
-    ]);
-
-    const combinedResults = {
-      eagleView: eagleViewResults,
-      gaf: gafResults,
-      summary: {
-        total: eagleViewResults.total + gafResults.total,
-        delivered: eagleViewResults.delivered + gafResults.delivered,
-        stillPending: eagleViewResults.stillPending + gafResults.stillPending,
-        failed: eagleViewResults.failed + gafResults.failed,
-      },
-    };
-
-    logger.info('All providers batch processing complete', combinedResults.summary);
-    res.json({ success: true, data: combinedResults });
+    const results = await measurementService.processPendingGAFReports();
+    logger.info('GAF batch processing complete', results);
+    res.json({ success: true, data: { gaf: results, summary: results } });
   } catch (error) {
     next(error);
   }
@@ -1350,14 +1230,6 @@ router.get('/best-imagery', authMiddleware, async (req, res, next) => {
 router.get('/report-types', authMiddleware, async (req, res, next) => {
   try {
     const reportTypes = {
-      eagleView: [
-        { code: 'BASIC', name: 'Residential Basic', price: 25.00 },
-        { code: 'PREMIUM', name: 'Residential Premium', price: 45.00 },
-        { code: 'ULTRA_PREMIUM', name: 'Residential Ultra Premium', price: 65.00 },
-        { code: 'COMMERCIAL', name: 'Commercial', price: 95.00 },
-        { code: 'WALLS_ONLY', name: 'Walls Only', price: 35.00 },
-        { code: 'ROOF_AND_WALLS', name: 'Roof and Walls', price: 75.00 },
-      ],
       gaf: [
         { code: 'BASIC', name: 'QuickMeasure Basic', price: 20.00 },
         { code: 'PREMIUM', name: 'QuickMeasure Premium', price: 40.00 },
@@ -1369,12 +1241,6 @@ router.get('/report-types', authMiddleware, async (req, res, next) => {
       ],
       // Comparison guide for choosing provider
       comparison: {
-        eagleView: {
-          source: 'Satellite/Aerial imagery',
-          turnaround: '1-3 business days',
-          bestFor: 'Quick roof measurements without site visit',
-          limitations: 'No interior, limited siding detail',
-        },
         gaf: {
           source: 'Satellite/Aerial imagery',
           turnaround: '1-2 business days',
