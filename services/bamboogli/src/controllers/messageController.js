@@ -1,6 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import { sendSmsMessage } from '../providers/twilioProvider.js';
-import { sendEmailMessage } from '../providers/emailProvider.js';
+import { getEmailSenderIdentity, sendEmailMessage } from '../providers/emailProvider.js';
 
 const prisma = new PrismaClient();
 
@@ -109,6 +109,7 @@ export async function sendMessage(req, res, next) {
 
     let conversation;
     let detectedChannel = channel;
+    let emailSenderIdentity = null;
 
     if (conversationId) {
       conversation = await prisma.conversation.findUnique({
@@ -156,6 +157,10 @@ export async function sendMessage(req, res, next) {
       });
     }
 
+    if (detectedChannel === 'EMAIL') {
+      emailSenderIdentity = await getEmailSenderIdentity();
+    }
+
     // Create the message record
     const message = await prisma.message.create({
       data: {
@@ -170,7 +175,7 @@ export async function sendMessage(req, res, next) {
         contactId,
         sentById,
         fromAddress: detectedChannel === 'EMAIL'
-          ? process.env.EMAIL_FROM_ADDRESS || 'noreply@pandaexteriors.com'
+          ? emailSenderIdentity?.fromAddress || 'noreply@pandaexteriors.com'
           : process.env.TWILIO_PHONE_NUMBER,
         toAddresses: detectedChannel === 'EMAIL'
           ? [conversation.email]
@@ -243,6 +248,7 @@ export async function sendMessage(req, res, next) {
               conversationId: conversation.id,
               providerId: sendResult.providerId,
               channel: detectedChannel,
+              providerName: sendResult.providerName || emailSenderIdentity?.providerName || null,
             },
             occurredAt: new Date(),
           },

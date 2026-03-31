@@ -1,28 +1,84 @@
 /**
  * Email Provider for Bamboogli
- * Supports SendGrid and AWS SES
+ * Uses SendGrid only for outbound email delivery.
  */
 
+import { PrismaClient } from '@prisma/client';
 import sgMail from '@sendgrid/mail';
-import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses';
 
-// Provider type from environment
-const EMAIL_PROVIDER = process.env.EMAIL_PROVIDER || 'sendgrid'; // 'sendgrid' or 'ses'
+const prisma = new PrismaClient();
 
-// Initialize SendGrid
-if (EMAIL_PROVIDER === 'sendgrid' && process.env.SENDGRID_API_KEY) {
-  sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+const SETTING_KEYS = {
+  SENDGRID_ENABLED: 'bamboogli.sendgrid.enabled',
+  SENDGRID_API_KEY: 'bamboogli.sendgrid.apiKey',
+  SENDGRID_FROM_EMAIL: 'bamboogli.sendgrid.fromEmail',
+  SENDGRID_FROM_NAME: 'bamboogli.sendgrid.fromName',
+};
+
+let configuredSendGridApiKey = null;
+let cachedConfig = null;
+let cachedConfigAt = 0;
+const CONFIG_CACHE_MS = 30 * 1000;
+
+async function loadSendGridConfig() {
+  const now = Date.now();
+  if (cachedConfig && now - cachedConfigAt < CONFIG_CACHE_MS) {
+    return cachedConfig;
+  }
+
+  const settings = await prisma.systemSetting.findMany({
+    where: {
+      key: {
+        in: Object.values(SETTING_KEYS),
+      },
+    },
+  });
+
+  const settingsMap = {};
+  settings.forEach((setting) => {
+    settingsMap[setting.key] = setting.value;
+  });
+
+  const config = {
+    enabled: settingsMap[SETTING_KEYS.SENDGRID_ENABLED]
+      ? settingsMap[SETTING_KEYS.SENDGRID_ENABLED] === 'true'
+      : true,
+    apiKey: settingsMap[SETTING_KEYS.SENDGRID_API_KEY] || process.env.SENDGRID_API_KEY || '',
+    fromEmail: settingsMap[SETTING_KEYS.SENDGRID_FROM_EMAIL]
+      || process.env.EMAIL_FROM_ADDRESS
+      || 'info@pandaexteriors.com',
+    fromName: settingsMap[SETTING_KEYS.SENDGRID_FROM_NAME]
+      || process.env.EMAIL_FROM_NAME
+      || 'Panda Exteriors',
+  };
+
+  cachedConfig = config;
+  cachedConfigAt = now;
+  return config;
 }
 
-// Initialize SES client (lazy)
-let sesClient = null;
-function getSesClient() {
-  if (!sesClient) {
-    sesClient = new SESClient({
-      region: process.env.AWS_REGION || 'us-east-2',
-    });
+function ensureSendGridApiKey(apiKey) {
+  if (!apiKey) {
+    throw {
+      code: 'SENDGRID_NOT_CONFIGURED',
+      message: 'SendGrid API key is not configured',
+    };
   }
-  return sesClient;
+
+  if (configuredSendGridApiKey !== apiKey) {
+    sgMail.setApiKey(apiKey);
+    configuredSendGridApiKey = apiKey;
+  }
+}
+
+export async function getEmailSenderIdentity() {
+  const config = await loadSendGridConfig();
+  return {
+    fromAddress: config.fromEmail,
+    fromName: config.fromName,
+    providerName: 'sendgrid',
+    enabled: config.enabled,
+  };
 }
 
 /**
@@ -54,36 +110,28 @@ export async function sendEmailMessage(options) {
     messageId,
   } = options;
 
-  const fromAddress = from || process.env.EMAIL_FROM_ADDRESS || 'info@pandaexteriors.com';
-  const fromDisplayName = fromName || process.env.EMAIL_FROM_NAME || 'Panda Exteriors';
-
-  if (EMAIL_PROVIDER === 'sendgrid') {
-    return sendViaSendGrid({
-      to,
-      subject,
-      body,
-      bodyHtml,
-      from: fromAddress,
-      fromName: fromDisplayName,
-      replyTo,
-      cc,
-      bcc,
-      messageId,
-    });
-  } else {
-    return sendViaSes({
-      to,
-      subject,
-      body,
-      bodyHtml,
-      from: fromAddress,
-      fromName: fromDisplayName,
-      replyTo,
-      cc,
-      bcc,
-      messageId,
-    });
+  const config = await loadSendGridConfig();
+  if (!config.enabled) {
+    throw {
+      code: 'SENDGRID_DISABLED',
+      message: 'SendGrid email sending is disabled',
+    };
   }
+
+  ensureSendGridApiKey(config.apiKey);
+
+  return sendViaSendGrid({
+    to,
+    subject,
+    body,
+    bodyHtml,
+    from: from || config.fromEmail,
+    fromName: fromName || config.fromName,
+    replyTo,
+    cc,
+    bcc,
+    messageId,
+  });
 }
 
 /**
@@ -138,69 +186,6 @@ async function sendViaSendGrid(options) {
       code: error.code || 'SENDGRID_ERROR',
       message: error.message,
       response: error.response?.body,
-    };
-  }
-}
-
-/**
- * Send via AWS SES
- */
-async function sendViaSes(options) {
-  const { to, subject, body, bodyHtml, from, fromName, replyTo, cc, bcc } = options;
-
-  const client = getSesClient();
-
-  const toAddresses = Array.isArray(to) ? to : [to];
-
-  const params = {
-    Source: `${fromName} <${from}>`,
-    Destination: {
-      ToAddresses: toAddresses,
-      CcAddresses: cc || [],
-      BccAddresses: bcc || [],
-    },
-    Message: {
-      Subject: {
-        Data: subject,
-        Charset: 'UTF-8',
-      },
-      Body: {
-        Text: {
-          Data: body,
-          Charset: 'UTF-8',
-        },
-      },
-    },
-  };
-
-  // Add HTML body if provided
-  if (bodyHtml) {
-    params.Message.Body.Html = {
-      Data: bodyHtml,
-      Charset: 'UTF-8',
-    };
-  }
-
-  // Add reply-to if provided
-  if (replyTo) {
-    params.ReplyToAddresses = [replyTo];
-  }
-
-  try {
-    const command = new SendEmailCommand(params);
-    const response = await client.send(command);
-
-    return {
-      success: true,
-      providerId: response.MessageId,
-      providerName: 'ses',
-      emailMessageId: response.MessageId,
-    };
-  } catch (error) {
-    console.error('SES error:', error);
-    throw {
-      code: error.Code || 'SES_ERROR',
-      message: error.message,
     };
   }
 }
