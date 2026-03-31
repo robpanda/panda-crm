@@ -1,22 +1,34 @@
 # Jobs Issue Matrix: March 31, 2026
 
-This matrix records confirmed Jobs failures against the rolled-back production baseline captured in [prod-baseline-20260331.md](./prod-baseline-20260331.md). These are evidence-backed issues from live production behavior and logs, not guesses from branch drift.
+This matrix records confirmed Jobs failures and recoveries against the verified `/Volumes/ExternalSSD` release chain. These are evidence-backed items from live production behavior, logs, and verified smoke checks, not guesses from branch drift.
 
 ## Latest Verified Source Ref
 
-Until a newer slice is deployed and verified, new Jobs repair branches must start from:
+The default parent for new Jobs repair branches is now:
 
-- `origin/codex/messaging-rebaseline-20260331`
+- `origin/codex/jobs-universal-source-20260331`
+- commit `fb9f785f38ecdfb5b4aa7fd45f6cbf2437b3a1c3`
 - release ledger entry: [jobs-release-ledger-20260331.md](./jobs-release-ledger-20260331.md)
+
+If a P0 must stay lane-local, start from the current live lane ref recorded in the release ledger and merge that fix back into the universal source branch immediately after verification.
+
+## Resolved On March 31, 2026
+
+| ID | Lane | Resolution | Verified by |
+| --- | --- | --- | --- |
+| `JOBS-GAF-001` | Integrations / GAF | Fixed on `codex/gaf-stabilization-20260331` at `1ac0f020ff49f4da41f4fc9bfc685faee86a2a3e` | Production deploy `23802501382`; successful live GAF retry confirmed by user |
+| `JOBS-DOCS-001` | Documents / repository | Fixed on `codex/documents-repository-fix-20260331` at `215f08ac289c707d36ed41017db43855a2d69d17` | Production deploy `23803924510`; by-job repository endpoints returned 200 for previously failing jobs |
+| `JOBS-OPP-001` | Opportunities / internal comments routes | Fixed on `codex/opportunities-notes-replies-fix-20260331` at `9f8111cbfc115c595a8886df55b1f814c0dfe931` | Production comment loading and posting verified in live Jobs |
+| `JOBS-OPP-002` | Opportunities / comment departments route order | Fixed on `codex/opportunities-notes-replies-fix-20260331` at `9f8111cbfc115c595a8886df55b1f814c0dfe931` | Production comments UI restored with department choices loading correctly |
+| `JOBS-NOTIFY-001` | Notifications / bell, email, SMS mentions | Fixed on `codex/opportunities-notes-replies-fix-20260331` at `9f8111cbfc115c595a8886df55b1f814c0dfe931` | User confirmed bell, email, and SMS mentions all worked in production |
+| `JOBS-FE-001` | Frontend / internal notes visibility and threaded replies | Fixed on `codex/frontend-notes-replies-fix-20260331` at `b6469dbbe8d8a8383fb2a6c8540f466fad4a95c2` | User confirmed notes render again and threaded replies are back in production |
 
 ## Active Issues
 
 | ID | Severity | Lane | Live route or screen | Example evidence | Current behavior | Likely owner |
 | --- | --- | --- | --- | --- | --- | --- |
-| `JOBS-GAF-001` | P0 | Integrations / GAF | `POST /api/integrations/measurements/gaf/order` | Job `cmneki1dz005ooujdvug6ax4m`; production 500s on March 31, 2026 | GAF order succeeds upstream, then save fails locally with a Prisma unique constraint on `measurement_reports.external_id`, returning a 500 to the UI | `services/integrations/src/services/measurementService.js` |
-| `JOBS-DOCS-001` | P0 | Documents | `GET /api/documents/repository/by-job/:opportunityId` | 500s for jobs including `cmkem4pi424jxho5pou557q72`, `cmkelye0h1vwnho5p3v0841le`, and `cmmuyzzmn00k1xysm92k54yw0` | Job Documents tab fails to load repository data; logs indicate a Prisma include/select mismatch around `agreements` | `services/documents/src/routes/repository.js` and the repository query/service path it calls |
-| `JOBS-OPP-001` | P1 | Opportunities / Comments | `GET /api/opportunities/:id/internal-comments` | Production returned 404 for live Jobs comment requests on March 31, 2026 | Jobs internal comments and mentions do not load reliably on the rollback baseline | `services/opportunities/src/routes/opportunities.js` and `services/opportunities/src/services/opportunityService.js` |
-| `JOBS-OPP-002` | P1 | Opportunities / Comments | `GET /api/opportunities/comment-departments` | Production routed `comment-departments` through `getOpportunityDetails("comment-departments")` and returned `Opportunity not found: comment-departments` | The department list endpoint is missing or ordered incorrectly in production, so Jobs comments cannot populate department choices | `services/opportunities/src/routes/opportunities.js` |
+| `JOBS-INV-001` | P1 | Invoices / Financial | Jobs Financial tab and invoice flows | User-reported invoice regressions on March 31, 2026 after the branch-drift deploys | Financial and invoice behavior still needs a clean repro, isolated patch lane, and production smoke from the current universal baseline | `frontend/src/pages/OpportunityDetail.jsx`, invoice modal components, and `services/invoices` |
+| `JOBS-PS-001` | P1 | PandaSign V2 | Jobs Documents -> PandaSign V2 preview, send, sign | User-reported PandaSign regressions on March 31, 2026 after the branch-drift deploys | Frontend direct wiring is back on the verified frontend line, but the end-to-end V2 preview/send/sign flow still needs isolated smoke and any remaining backend cleanup | `frontend/src/services/api.js`, PandaSign V2 components, and `services/documents` |
 | `JOBS-OPP-003` | P1 | Opportunities / Activity | `GET /api/opportunities/:id/activity` | Production 500 included `Value 'CHATTER_POST' not found in enum 'ActivityType'` | Job activity feed crashes on enum values the current service line does not recognize | `services/opportunities/src/services/opportunityService.js` |
 | `JOBS-OPP-004` | P1 | Opportunities / Save path | `PUT /api/opportunities/:id` | Production 500 included `Unknown field stageName for select statement on model Opportunity` | Saving stage or claim-related updates can fail because the service selects a field the deployed schema does not have | `services/opportunities/src/services/opportunityService.js` |
 
@@ -26,21 +38,19 @@ Until a newer slice is deployed and verified, new Jobs repair branches must star
 2. A deploy slice can close only one lane at a time unless the second change is required for the first lane to function.
 3. No issue is considered fixed until the matching smoke item is checked on production after deploy.
 
-## Smoke Checks For The First Slice
+## Next Intake Order
 
-The first isolated repair slice is `JOBS-GAF-001`. Its minimum smoke checklist is:
+- `JOBS-INV-001` invoice and financial repro, repair, and smoke from the universal source branch
+- `JOBS-PS-001` PandaSign V2 end-to-end preview/send/sign smoke and repair
+- `JOBS-OPP-003` activity enum compatibility
+- `JOBS-OPP-004` save-path compatibility
 
-- [ ] `POST /api/integrations/measurements/gaf/order` returns success for a real Job.
-- [ ] Ordered GAF report remains visible in the Job after refresh.
-- [ ] Polling or webhook delivery can move the report to delivered.
-- [ ] Delivered report shows measurement data.
-- [ ] Delivered report exposes a PDF link.
-- [ ] GAF PDF is saved into Job Documents -> Files.
-- [ ] Shared frontend load and Jobs detail page still render without console runtime errors.
+## Next Lane Smoke Minimums
 
-## Current Next Lanes
+The next lane, `JOBS-INV-001`, is not ready to patch until it has a fresh repro against the current universal source baseline. Its minimum smoke set after repair is:
 
-- Notification delivery hardening for Jobs mentions.
-- Invoice and financial regression repro plus isolated repair.
-- PandaSign V2 end-to-end smoke and backend cleanup.
-- Remaining opportunities activity/save-path compatibility items.
+- [ ] Financial tab loads without runtime or API errors on a known affected Job.
+- [ ] Existing invoices list correctly.
+- [ ] Invoice detail or preview opens.
+- [ ] Pay/send invoice action completes without regression.
+- [ ] Shared job header, Messages tabs, Documents, and GAF surfaces still load on the same Job after deploy.

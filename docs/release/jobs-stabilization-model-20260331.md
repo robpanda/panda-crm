@@ -10,8 +10,16 @@ Ship narrow, traceable, reversible Jobs fixes from one verified release chain.
 
 Use only these as the start of new work:
 
-1. `codex/prod-baseline-20260331`
-2. the latest verified release branch that was actually deployed successfully
+1. `origin/codex/jobs-universal-source-20260331`
+2. the current live lane ref from [`jobs-release-ledger-20260331.md`](./jobs-release-ledger-20260331.md) only when an urgent fix must stay lane-local
+
+The universal source branch is a non-deploying coordination baseline synthesized from the currently verified live slices:
+
+- workflow anchor: `origin/codex/deploy-workflow-fix-20260331`
+- integrations lane: `origin/codex/gaf-stabilization-20260331`
+- documents lane: `origin/codex/documents-repository-fix-20260331`
+- opportunities lane: `origin/codex/opportunities-notes-replies-fix-20260331`
+- frontend lane: `origin/codex/frontend-notes-replies-fix-20260331`
 
 Do not start from:
 
@@ -51,7 +59,7 @@ If a fix needs a second lane, stop and open a second branch unless the dependenc
 
 ## Release Chain Workflow
 
-1. Start from the frozen prod baseline or the latest verified release branch.
+1. Start from `origin/codex/jobs-universal-source-20260331` unless the fix is an urgent lane-only hotfix.
 2. Create a dedicated `codex/` branch and `/Volumes/ExternalSSD` worktree.
 3. Capture a fresh frontend backup and rollback artifact before deploy.
 4. Make only the lane-specific changes.
@@ -59,7 +67,8 @@ If a fix needs a second lane, stop and open a second branch unless the dependenc
 6. Deploy only that lane.
 7. Verify the live asset hash, task definition, or service image actually changed.
 8. Record the release result and rollback path.
-9. Cut the next branch from this verified branch if the deploy is clean.
+9. Merge or replay the verified lane fix back into `codex/jobs-universal-source-20260331`.
+10. Cut the next branch from the refreshed universal source ref if the deploy is clean.
 
 ## Required Release Ledger
 
@@ -77,10 +86,10 @@ Record each deployed slice in [`jobs-release-ledger-20260331.md`](./jobs-release
 
 ## Current Stabilization Order
 
-1. frontend shell/messages/PandaSign V2 direct wiring
-2. notification delivery hardening
-3. invoice/financial regressions
-4. remaining documents and opportunities Jobs issues from the matrix
+1. invoice/financial regression repro and isolated repair
+2. PandaSign V2 end-to-end smoke and isolated repair
+3. opportunities activity enum compatibility
+4. opportunities save-path compatibility
 
 ## Stop Conditions
 
@@ -90,3 +99,4 @@ Stop and rollback immediately if:
 - a shared smoke check fails
 - an unrelated Jobs lane regresses
 - the branch includes drift outside its declared lane
+- the branch was cut from any ref other than the universal source branch or the explicitly approved live lane ref
