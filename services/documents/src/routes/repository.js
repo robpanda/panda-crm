@@ -6,6 +6,7 @@ import { PrismaClient } from '@prisma/client';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { logger } from '../middleware/logger.js';
+import { findOpportunityByIdOrJobId } from './repositoryOpportunityLookup.js';
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -234,10 +235,11 @@ router.get('/by-job/:opportunityId', async (req, res, next) => {
     const { includeAccountDocs = 'true' } = req.query;
 
     // Get the opportunity to get its account ID
-    const opportunity = await prisma.opportunity.findUnique({
-      where: { id: opportunityId },
-      select: { id: true, name: true, accountId: true },
-    });
+    const opportunity = await findOpportunityByIdOrJobId(
+      prisma,
+      opportunityId,
+      { select: { id: true, name: true, accountId: true } },
+    );
 
     if (!opportunity) {
       return res.status(404).json({
@@ -246,6 +248,8 @@ router.get('/by-job/:opportunityId', async (req, res, next) => {
       });
     }
 
+    const internalOpportunityId = opportunity.id;
+
     // Build OR conditions for document links
     // For the main query, we need documents linked to this opportunity OR its account
     const whereCondition = includeAccountDocs === 'true' && opportunity.accountId
@@ -253,7 +257,7 @@ router.get('/by-job/:opportunityId', async (req, res, next) => {
           links: {
             some: {
               OR: [
-                { opportunityId: opportunityId },
+                { opportunityId: internalOpportunityId },
                 { accountId: opportunity.accountId },
               ],
             },
@@ -262,7 +266,7 @@ router.get('/by-job/:opportunityId', async (req, res, next) => {
       : {
           links: {
             some: {
-              opportunityId: opportunityId,
+              opportunityId: internalOpportunityId,
             },
           },
         };
@@ -271,11 +275,11 @@ router.get('/by-job/:opportunityId', async (req, res, next) => {
     const linkFilter = includeAccountDocs === 'true' && opportunity.accountId
       ? {
           OR: [
-            { opportunityId: opportunityId },
+            { opportunityId: internalOpportunityId },
             { accountId: opportunity.accountId },
           ],
         }
-      : { opportunityId: opportunityId };
+      : { opportunityId: internalOpportunityId };
 
     const documents = await prisma.document.findMany({
       where: whereCondition,

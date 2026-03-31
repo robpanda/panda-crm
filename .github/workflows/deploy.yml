@@ -107,10 +107,12 @@ jobs:
 
       - name: Build, tag, and push Docker image
         if: steps.check.outputs.should_deploy == 'true'
+        id: build-image
         env:
           IMAGE_TAG: ${{ github.sha }}
           SERVICE_NAME: ${{ matrix.service.name }}
         run: |
+          set -euo pipefail
           BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           IMAGE_REPO=""
 
@@ -123,26 +125,41 @@ jobs:
             exit 1
           fi
 
+          IMAGE_URI="$ECR_REGISTRY/$IMAGE_REPO:$IMAGE_TAG"
+
           echo "Using ECR repository: $IMAGE_REPO"
+          echo "Using image URI: $IMAGE_URI"
 
           # Build Docker image
           docker build \
             --build-arg BUILD_SHA=$IMAGE_TAG \
             --build-arg BUILD_TIME="$BUILD_TIME" \
-            -t $ECR_REGISTRY/$IMAGE_REPO:$IMAGE_TAG \
-            -t $ECR_REGISTRY/$IMAGE_REPO:latest \
-            -f services/$SERVICE_NAME/Dockerfile \
+            -t "$IMAGE_URI" \
+            -t "$ECR_REGISTRY/$IMAGE_REPO:latest" \
+            -f "services/$SERVICE_NAME/Dockerfile" \
             .
 
           # Push to ECR
-          docker push $ECR_REGISTRY/$IMAGE_REPO:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$IMAGE_REPO:latest
+          docker push "$IMAGE_URI"
+          docker push "$ECR_REGISTRY/$IMAGE_REPO:latest"
 
-      - name: Update ECS Service
+          echo "image_repo=$IMAGE_REPO" >> "$GITHUB_OUTPUT"
+          echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Register task definition revision and update ECS service
         if: steps.check.outputs.should_deploy == 'true'
         env:
           SERVICE_NAME: ${{ matrix.service.name }}
+          IMAGE_URI: ${{ steps.build-image.outputs.image_uri }}
         run: |
+          set -euo pipefail
+
+          if [ -z "${IMAGE_URI:-}" ]; then
+            echo "::error::Build step did not produce an image URI"
+            exit 1
+          fi
+
           ECS_SERVICE=""
           for candidate in "$SERVICE_NAME-service" "panda-crm-$SERVICE_NAME" "$SERVICE_NAME"; do
             if aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$candidate" --region "$AWS_REGION" --query 'services[0].status' --output text 2>/dev/null | grep -qE 'ACTIVE|DRAINING'; then
@@ -156,12 +173,94 @@ jobs:
             exit 0
           fi
 
+          CURRENT_TASK_DEF_ARN="$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --region "$AWS_REGION" \
+            --query 'services[0].taskDefinition' \
+            --output text)"
+
+          if [ "$CURRENT_TASK_DEF_ARN" = "None" ] || [ -z "$CURRENT_TASK_DEF_ARN" ]; then
+            echo "::error::Could not determine the current task definition for $ECS_SERVICE"
+            exit 1
+          fi
+
+          TASK_DEF_FILE="$(mktemp)"
+          RENDERED_TASK_DEF_FILE="$(mktemp)"
+
+          aws ecs describe-task-definition \
+            --task-definition "$CURRENT_TASK_DEF_ARN" \
+            --region "$AWS_REGION" \
+            --query 'taskDefinition' \
+            --output json > "$TASK_DEF_FILE"
+
+          CONTAINER_NAME="$(jq -r '.containerDefinitions[0].name' "$TASK_DEF_FILE")"
+
+          if [ -z "$CONTAINER_NAME" ] || [ "$CONTAINER_NAME" = "null" ]; then
+            echo "::error::Could not determine the primary container name for $CURRENT_TASK_DEF_ARN"
+            exit 1
+          fi
+
+          jq \
+            --arg CONTAINER_NAME "$CONTAINER_NAME" \
+            --arg IMAGE_URI "$IMAGE_URI" \
+            '
+              del(
+                .taskDefinitionArn,
+                .revision,
+                .status,
+                .requiresAttributes,
+                .compatibilities,
+                .registeredAt,
+                .registeredBy,
+                .deregisteredAt
+              )
+              | .containerDefinitions = (
+                  .containerDefinitions
+                  | map(
+                      if .name == $CONTAINER_NAME
+                      then .image = $IMAGE_URI
+                      else .
+                      end
+                    )
+                )
+            ' "$TASK_DEF_FILE" > "$RENDERED_TASK_DEF_FILE"
+
+          NEW_TASK_DEF_ARN="$(aws ecs register-task-definition \
+            --cli-input-json "file://$RENDERED_TASK_DEF_FILE" \
+            --region "$AWS_REGION" \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)"
+
           echo "Updating ECS service: $ECS_SERVICE"
+          echo "Current task definition: $CURRENT_TASK_DEF_ARN"
+          echo "New task definition: $NEW_TASK_DEF_ARN"
+
           aws ecs update-service \
-            --cluster $ECS_CLUSTER \
-            --service $ECS_SERVICE \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --task-definition "$NEW_TASK_DEF_ARN" \
             --force-new-deployment \
-            --region $AWS_REGION
+            --region "$AWS_REGION"
+
+          aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --region "$AWS_REGION"
+
+          DEPLOYED_TASK_DEF_ARN="$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE" \
+            --region "$AWS_REGION" \
+            --query 'services[0].taskDefinition' \
+            --output text)"
+
+          echo "Service task definition after deploy: $DEPLOYED_TASK_DEF_ARN"
+
+          if [ "$DEPLOYED_TASK_DEF_ARN" != "$NEW_TASK_DEF_ARN" ]; then
+            echo "::error::Service $ECS_SERVICE did not settle on the expected task definition"
+            exit 1
+          fi
 
   notify:
     name: Deployment Notification

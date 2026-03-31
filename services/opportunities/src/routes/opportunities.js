@@ -664,12 +664,7 @@ router.patch('/:id', async (req, res, next) => {
 // Delete opportunity
 router.delete('/:id', async (req, res, next) => {
   try {
-    const result = await opportunityService.deleteOpportunity(req.params.id, {
-      userId: req.user?.id,
-      userEmail: req.user?.email,
-      ipAddress: req.ip || req.headers['x-forwarded-for']?.split(',')[0],
-      userAgent: req.headers['user-agent'],
-    });
+    const result = await opportunityService.deleteOpportunity(req.params.id);
     res.json({ success: true, data: result });
   } catch (error) {
     next(error);
@@ -938,61 +933,6 @@ router.get('/:id/specs', async (req, res, next) => {
   }
 });
 
-/**
- * GET /:id/order-contract
- * Get structured PandaSign V2 contract payload for an opportunity
- */
-router.get('/:id/order-contract', async (req, res, next) => {
-  try {
-    const result = await opportunityService.getOrderContract(req.params.id);
-    res.json({ success: true, data: result });
-  } catch (error) {
-    if (error.message === 'Opportunity not found') {
-      return res.status(404).json({
-        success: false,
-        error: { code: 'NOT_FOUND', message: error.message },
-      });
-    }
-    next(error);
-  }
-});
-
-/**
- * PATCH /:id/order-contract
- * Additively update specsData.orderContract without clobbering unrelated specsData
- */
-router.patch('/:id/order-contract', async (req, res, next) => {
-  try {
-    const orderContractPatch = req.body?.orderContract ?? req.body;
-
-    if (!orderContractPatch || typeof orderContractPatch !== 'object' || Array.isArray(orderContractPatch)) {
-      return res.status(400).json({
-        success: false,
-        error: {
-          code: 'VALIDATION_ERROR',
-          message: 'orderContract patch must be an object',
-        },
-      });
-    }
-
-    const result = await opportunityService.updateOrderContract(
-      req.params.id,
-      orderContractPatch,
-      req.user?.id || null
-    );
-
-    res.json({ success: true, data: result });
-  } catch (error) {
-    if (error.message === 'Opportunity not found') {
-      return res.status(404).json({
-        success: false,
-        error: { code: 'NOT_FOUND', message: error.message },
-      });
-    }
-    next(error);
-  }
-});
-
 // Admin: Restore a soft-deleted opportunity
 router.post('/:id/restore', async (req, res, next) => {
   try {
@@ -1100,10 +1040,9 @@ router.post('/:id/notes', async (req, res, next) => {
       title,
       body,
       isPinned: isPinned || false,
-      mentions,
       createdById: req.user?.id,
-      actor: req.user,
-    });
+      mentions: Array.isArray(mentions) ? mentions : [],
+    }, req.user);
     res.status(201).json({ success: true, data: note });
   } catch (error) {
     next(error);
@@ -1121,9 +1060,8 @@ router.put('/:id/notes/:noteId', async (req, res, next) => {
       title,
       body,
       isPinned,
-      mentions,
-      actor: req.user,
-    });
+      mentions: Array.isArray(mentions) ? mentions : [],
+    }, req.user);
     res.json({ success: true, data: note });
   } catch (error) {
     next(error);
