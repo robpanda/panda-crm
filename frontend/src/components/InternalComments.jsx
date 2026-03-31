@@ -19,6 +19,14 @@ const apiByEntity = {
   opportunity: opportunitiesApi,
 };
 
+function normalizeCommentsPayload(payload) {
+  if (Array.isArray(payload)) return payload;
+  if (Array.isArray(payload?.comments)) return payload.comments;
+  if (Array.isArray(payload?.items)) return payload.items;
+  if (Array.isArray(payload?.data)) return payload.data;
+  return [];
+}
+
 function normalizeDepartment(dept) {
   if (!dept) return null;
   if (typeof dept === 'string') {
@@ -35,16 +43,28 @@ function normalizeDepartment(dept) {
 export default function InternalComments({ entityType, entityId }) {
   const api = apiByEntity[entityType];
   const queryClient = useQueryClient();
+  const commentsQueryKey = ['internalComments', entityType, entityId];
   const [newContent, setNewContent] = useState('');
   const [newMentions, setNewMentions] = useState([]);
   const [newDepartment, setNewDepartment] = useState('general');
   const [editingId, setEditingId] = useState(null);
   const [editContent, setEditContent] = useState('');
   const [editMentions, setEditMentions] = useState([]);
+  const [replyingToId, setReplyingToId] = useState(null);
+  const [replyContent, setReplyContent] = useState('');
+  const [replyMentions, setReplyMentions] = useState([]);
 
   const { data: comments = [], isLoading, error } = useQuery({
-    queryKey: ['internalComments', entityType, entityId],
-    queryFn: () => api?.getInternalComments?.(entityId),
+    queryKey: commentsQueryKey,
+    queryFn: async () => {
+      try {
+        const payload = await api?.getInternalComments?.(entityId);
+        return normalizeCommentsPayload(payload);
+      } catch (err) {
+        if (err?.response?.status === 404) return [];
+        throw err;
+      }
+    },
     enabled: !!entityId && !!api?.getInternalComments,
   });
 
@@ -69,17 +89,27 @@ export default function InternalComments({ entityType, entityId }) {
   const createMutation = useMutation({
     mutationFn: (data) => api.createInternalComment(entityId, data),
     onSuccess: () => {
-      queryClient.invalidateQueries(['internalComments', entityType, entityId]);
+      queryClient.invalidateQueries({ queryKey: commentsQueryKey });
       setNewContent('');
       setNewMentions([]);
       setNewDepartment('general');
     },
   });
 
+  const createReplyMutation = useMutation({
+    mutationFn: ({ parentCommentId, data }) => api.createInternalComment(entityId, { ...data, parentCommentId }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: commentsQueryKey });
+      setReplyingToId(null);
+      setReplyContent('');
+      setReplyMentions([]);
+    },
+  });
+
   const updateMutation = useMutation({
     mutationFn: ({ commentId, data }) => api.updateInternalComment(entityId, commentId, data),
     onSuccess: () => {
-      queryClient.invalidateQueries(['internalComments', entityType, entityId]);
+      queryClient.invalidateQueries({ queryKey: commentsQueryKey });
       setEditingId(null);
       setEditContent('');
       setEditMentions([]);
@@ -89,14 +119,14 @@ export default function InternalComments({ entityType, entityId }) {
   const deleteMutation = useMutation({
     mutationFn: (commentId) => api.deleteInternalComment(entityId, commentId),
     onSuccess: () => {
-      queryClient.invalidateQueries(['internalComments', entityType, entityId]);
+      queryClient.invalidateQueries({ queryKey: commentsQueryKey });
     },
   });
 
   const toggleResolvedMutation = useMutation({
     mutationFn: ({ commentId, isResolved }) => api.updateInternalComment(entityId, commentId, { isResolved }),
     onSuccess: () => {
-      queryClient.invalidateQueries(['internalComments', entityType, entityId]);
+      queryClient.invalidateQueries({ queryKey: commentsQueryKey });
     },
   });
 
@@ -118,6 +148,18 @@ export default function InternalComments({ entityType, entityId }) {
     setEditMentions([]);
   };
 
+  const startReply = (commentId) => {
+    setReplyingToId(commentId);
+    setReplyContent('');
+    setReplyMentions([]);
+  };
+
+  const cancelReply = () => {
+    setReplyingToId(null);
+    setReplyContent('');
+    setReplyMentions([]);
+  };
+
   const handleCreate = () => {
     if (!newContent.trim()) return;
     createMutation.mutate({
@@ -134,6 +176,17 @@ export default function InternalComments({ entityType, entityId }) {
       data: {
         content: editContent.trim(),
         mentions: editMentions,
+      },
+    });
+  };
+
+  const handleCreateReply = (commentId) => {
+    if (!replyContent.trim()) return;
+    createReplyMutation.mutate({
+      parentCommentId: commentId,
+      data: {
+        content: replyContent.trim(),
+        mentions: replyMentions,
       },
     });
   };
@@ -185,6 +238,13 @@ export default function InternalComments({ entityType, entityId }) {
             <div className="text-xs text-gray-400">{formatDate(comment.createdAt)}</div>
           </div>
           <div className="flex items-center gap-2 text-xs text-gray-400">
+            <button
+              onClick={() => startReply(comment.id)}
+              className="flex items-center gap-1 hover:text-panda-primary"
+              title="Reply"
+            >
+              <MessageCircle className="w-4 h-4" />
+            </button>
             {!comment.isResolved ? (
               <button
                 onClick={() => toggleResolvedMutation.mutate({ commentId: comment.id, isResolved: true })}
@@ -250,6 +310,36 @@ export default function InternalComments({ entityType, entityId }) {
             <p className="text-sm text-gray-700 whitespace-pre-wrap">{contentText}</p>
           )}
           {renderAttachments(attachmentUrls)}
+          {replyingToId === comment.id && (
+            <div className="mt-3 p-3 rounded-lg border border-gray-200 bg-gray-50 space-y-2">
+              <MentionTextarea
+                value={replyContent}
+                onChange={setReplyContent}
+                mentions={replyMentions}
+                onMentionsChange={setReplyMentions}
+                rows={2}
+                placeholder="Write a reply..."
+                className="w-full text-sm text-gray-700 bg-white border border-gray-200 rounded-lg p-2 focus:outline-none"
+              />
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleCreateReply(comment.id)}
+                  disabled={!replyContent.trim() || createReplyMutation.isPending}
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs bg-panda-primary text-white rounded-lg disabled:opacity-50"
+                >
+                  <Check className="w-3 h-3" />
+                  Reply
+                </button>
+                <button
+                  onClick={cancelReply}
+                  className="flex items-center gap-1 px-3 py-1.5 text-xs bg-gray-100 text-gray-700 rounded-lg"
+                >
+                  <X className="w-3 h-3" />
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
         {comment.replies && comment.replies.length > 0 && (
           <div className="mt-4 space-y-4">
