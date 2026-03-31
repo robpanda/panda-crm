@@ -2579,7 +2579,6 @@ Be factual and professional. Highlight anything that needs attention.`;
       select: {
         stage: true,
         status: true,
-        stageName: true,
         isApproved: true,
         claimNumber: true,
         claimFiledDate: true,
@@ -2627,7 +2626,6 @@ Be factual and professional. Highlight anything that needs attention.`;
         description: data.description,
         stage: data.stage,
         status: data.status,
-        stageName: data.stageName,
         probability: data.probability,
         closeDate: data.closeDate ? new Date(data.closeDate) : undefined,
         appointmentDate: data.appointmentDate ? new Date(data.appointmentDate) : undefined,
@@ -2680,21 +2678,31 @@ Be factual and professional. Highlight anything that needs attention.`;
     // ============================================================================
     if (previousState && (opportunity.type === 'INSURANCE' || data.type === 'INSURANCE')) {
       try {
+        const previousStageName = previousState.stage
+          ? this.formatStageName(previousState.stage)
+          : null;
+        const nextStage = hasOwnField(data, 'stage')
+          ? data.stage
+          : previousState.stage;
+        const nextStageName = nextStage
+          ? this.formatStageName(nextStage)
+          : null;
+
         // Build changes object to pass to triggers
         const changes = {
-          stageName: data.stageName,
-          stage: data.stage,
-          status: data.status,
-          isApproved: data.isApproved,
-          claimNumber: data.claimNumber,
-          insuranceCarrier: data.insuranceCarrier,
-          claimFiledDate: data.claimFiledDate,
-          isPandaClaims: data.isPandaClaims,
-          rcvAmount: data.rcvAmount,
-          acvAmount: data.acvAmount,
-          deductible: data.deductible,
+          stageName: nextStageName,
+          stage: nextStage,
+          status: hasOwnField(data, 'status') ? data.status : previousState.status,
+          isApproved: hasOwnField(data, 'isApproved') ? data.isApproved : previousState.isApproved,
+          claimNumber: hasOwnField(data, 'claimNumber') ? data.claimNumber : previousState.claimNumber,
+          insuranceCarrier: hasOwnField(data, 'insuranceCarrier') ? data.insuranceCarrier : previousState.insuranceCarrier,
+          claimFiledDate: hasOwnField(data, 'claimFiledDate') ? data.claimFiledDate : previousState.claimFiledDate,
+          isPandaClaims: hasOwnField(data, 'isPandaClaims') ? data.isPandaClaims : previousState.isPandaClaims,
+          rcvAmount: hasOwnField(data, 'rcvAmount') ? data.rcvAmount : previousState.rcvAmount,
+          acvAmount: hasOwnField(data, 'acvAmount') ? data.acvAmount : previousState.acvAmount,
+          deductible: hasOwnField(data, 'deductible') ? data.deductible : previousState.deductible,
           // Include previous values for comparison
-          _previousStageName: previousState.stageName,
+          _previousStageName: previousStageName,
           _previousStage: previousState.stage,
           _previousStatus: previousState.status,
           _previousIsApproved: previousState.isApproved,
@@ -2703,7 +2711,7 @@ Be factual and professional. Highlight anything that needs attention.`;
 
         // Only trigger if there was an actual change in relevant fields
         const hasRelevantChange =
-          changes.stageName !== previousState.stageName ||
+          changes.stageName !== previousStageName ||
           changes.stage !== previousState.stage ||
           changes.status !== previousState.status ||
           changes.isApproved !== previousState.isApproved ||
