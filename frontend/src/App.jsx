@@ -24,6 +24,7 @@ const MyCommissions = lazy(() => import('./pages/MyCommissions'));
 const SalesRepDashboard = lazy(() => import('./pages/SalesRepDashboard'));
 const ChampionRegister = lazy(() => import('./pages/ChampionRegister'));
 const ChampionJoin = lazy(() => import('./pages/ChampionJoin'));
+const PublicAgreementSigningPage = lazy(() => import('./pages/PublicAgreementSigningPage'));
 const More = lazy(() => import('./pages/More'));
 const PriceBooks = lazy(() => import('./pages/PriceBooks'));
 const PriceBookDetail = lazy(() => import('./pages/PriceBookDetail'));
@@ -52,6 +53,8 @@ export default function App() {
       {/* Public Champion Routes */}
       <Route path="/champion/register" element={renderLazyRoute(ChampionRegister, 'Loading champion registration...')} />
       <Route path="/champion/join/:token" element={renderLazyRoute(ChampionJoin, 'Loading champion join...')} />
+      <Route path="/sign/:token" element={renderLazyRoute(PublicAgreementSigningPage, 'Loading signing page...')} />
+      <Route path="/host-sign/:token" element={renderLazyRoute(PublicAgreementSigningPage, 'Loading signing page...')} />
 
       {renderPublicPortalRoutes()}
 

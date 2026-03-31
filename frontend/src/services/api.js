@@ -6834,4 +6834,34 @@ export const customerPortalApi = {
   },
 };
 
+export const publicAgreementsApi = {
+  async getAgreementForSigning(token) {
+    const response = await publicApi.get(`/api/documents/agreements/sign/${token}`);
+    return response.data;
+  },
+
+  async applySignature(token, signatureData, signerInfo = {}) {
+    const response = await publicApi.post(`/api/documents/agreements/sign/${token}`, {
+      signatureData,
+      signerName: signerInfo.name,
+      signerEmail: signerInfo.email,
+    });
+    return response.data;
+  },
+
+  async getAgreementForHostSigning(token) {
+    const response = await publicApi.get(`/api/documents/agreements/host-sign/${token}`);
+    return response.data;
+  },
+
+  async applyHostSignature(token, signatureData, signerInfo = {}) {
+    const response = await publicApi.post(`/api/documents/agreements/host-sign/${token}`, {
+      signatureData,
+      signerName: signerInfo.name,
+      signerEmail: signerInfo.email,
+    });
+    return response.data;
+  },
+};
+
 export default api;
