@@ -173,6 +173,25 @@ function buildMentionEmailContent({
   };
 }
 
+function toAbsoluteCrmUrl(actionPath = '/') {
+  if (/^https?:\/\//i.test(actionPath)) {
+    return actionPath;
+  }
+
+  const normalizedPath = actionPath.startsWith('/') ? actionPath : `/${actionPath}`;
+  return `${APP_BASE_URL}${normalizedPath}`;
+}
+
+async function postToBamboogli(path, payload) {
+  return fetch(`${BAMBOOGLI_SERVICE_URL}${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+}
+
 function normalizeOpportunityType(value) {
   if (!value) return null;
   const normalizedValue = `${value}`.trim().toUpperCase();
@@ -1823,8 +1842,21 @@ Be factual and professional. Highlight anything that needs attention.`;
 
     if (explicitUserIds.length > 0) {
       mentionedUsers = await prisma.user.findMany({
-        where: { id: { in: explicitUserIds } },
-        select: { id: true, email: true, firstName: true, lastName: true },
+        where: {
+          OR: [
+            { id: { in: explicitUserIds } },
+            { cognitoId: { in: explicitUserIds } },
+          ],
+        },
+        select: {
+          id: true,
+          cognitoId: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+          mobilePhone: true,
+          phone: true,
+        },
       });
     } else {
       const typedMentionNames = extractTypedMentionNames(content);
@@ -1850,7 +1882,15 @@ Be factual and professional. Highlight anything that needs attention.`;
 
       mentionedUsers = (await prisma.user.findMany({
         where: { OR: exactNameClauses },
-        select: { id: true, email: true, firstName: true, lastName: true },
+        select: {
+          id: true,
+          cognitoId: true,
+          email: true,
+          firstName: true,
+          lastName: true,
+          mobilePhone: true,
+          phone: true,
+        },
       })).filter((user) => {
         const displayName = normalizeMentionDisplayName(
           `${user.firstName || ''} ${user.lastName || ''}`,
@@ -1868,6 +1908,9 @@ Be factual and professional. Highlight anything that needs attention.`;
         lastName: user.lastName,
         name: `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email,
         email: user.email,
+        cognitoId: user.cognitoId,
+        mobilePhone: user.mobilePhone,
+        phone: user.phone,
       });
     });
 
@@ -1905,6 +1948,7 @@ Be factual and professional. Highlight anything that needs attention.`;
     const actionUrl = commentId
       ? `/jobs/${opportunityId}?tab=messages&subtab=internalComments&internalCommentId=${commentId}`
       : `/jobs/${opportunityId}`;
+    const absoluteActionUrl = toAbsoluteCrmUrl(actionUrl);
 
     const results = await Promise.all(mentionUserIds.map(async (userId) => {
       const mentionedUser = mentionedUserById.get(userId);
@@ -1926,6 +1970,17 @@ Be factual and professional. Highlight anything that needs attention.`;
         },
       });
 
+      const smsTarget = mentionedUser.mobilePhone || mentionedUser.phone || null;
+      if (smsTarget) {
+        await this.sendMentionSms({
+          toPhone: smsTarget,
+          mentionerName,
+          opportunityName,
+          actionUrl: absoluteActionUrl,
+          notificationId: notification.id,
+        }).catch((error) => logger.warn(`Failed to send opportunity mention SMS to ${smsTarget}: ${error.message}`));
+      }
+
       if (mentionedUser.email) {
         await this.sendMentionEmail({
           toEmail: mentionedUser.email,
@@ -1942,6 +1997,38 @@ Be factual and professional. Highlight anything that needs attention.`;
     }));
 
     return results.reduce((sum, value) => sum + value, 0);
+  }
+
+  async sendMentionSms({
+    toPhone,
+    mentionerName,
+    opportunityName,
+    actionUrl,
+    notificationId = null,
+  }) {
+    const smsBody = `${mentionerName || 'Someone'} mentioned you on ${opportunityName || 'a job'}. View: ${toAbsoluteCrmUrl(actionUrl || '/jobs')}`;
+    const response = await postToBamboogli('/api/messages/send/sms', {
+      to: toPhone,
+      body: smsBody,
+      sentById: 'system',
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      throw new Error(`SMS delivery failed with status ${response.status}${errorText ? `: ${errorText}` : ''}`);
+    }
+
+    if (notificationId) {
+      await prisma.notification.update({
+        where: { id: notificationId },
+        data: {
+          smsSent: true,
+          smsSentAt: new Date(),
+        },
+      });
+    }
+
+    logger.info(`Mention SMS sent to ${toPhone} via Bamboogli`);
   }
 
   /**
