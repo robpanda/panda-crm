@@ -5,7 +5,7 @@ This repo is high-risk to deploy because multiple customer-facing modules share 
 ## Non-Negotiable Rules
 
 1. Work only from `/Volumes/ExternalSSD/panda-crm` lineage.
-2. Create a clean branch/worktree from `origin/main` for each release slice.
+2. Create each release slice from the frozen prod baseline or the latest verified release branch, not `origin/main` by default.
 3. Keep scope narrow: one module slice at a time.
 4. Do not mix unrelated fixes into the same deploy.
 5. Capture the production baseline before building or deploying.
@@ -15,7 +15,9 @@ This repo is high-risk to deploy because multiple customer-facing modules share 
 
 ## Branch and Worktree Workflow
 
-1. Start from `origin/main`.
+1. Choose the source ref:
+   - `codex/prod-baseline-20260331` when starting a new repair train from the frozen rollback state.
+   - the latest verified release branch when continuing forward after a clean deploy.
 2. Create a dedicated branch using the `codex/` prefix.
 3. Create a dedicated worktree for that branch.
 4. Leave other long-lived branches and worktrees untouched.
@@ -25,9 +27,19 @@ Example:
 ```bash
 cd /Volumes/ExternalSSD/panda-crm
 git fetch origin
-git switch -c codex/example-fix origin/main
+git switch -c codex/example-fix origin/codex/prod-baseline-20260331
 git worktree add /Volumes/ExternalSSD/panda-crm-example-fix codex/example-fix
 ```
+
+## Verified Release Chain Rule
+
+After each successful slice deploy:
+
+1. Record the deployed branch, commit SHA, workflow run, and rollback path.
+2. Treat that deployed branch as the new source ref for the next slice.
+3. Do not branch the next fix from an older hotfix branch, backup restore, or `origin/main` unless you are intentionally rebuilding the release train.
+
+This is the rule that prevents "fix one thing, reintroduce three old regressions" branch drift.
 
 ## Baseline Capture Workflow
 
@@ -107,6 +119,7 @@ Before deploying, write down:
 3. Exact build/test commands run.
 4. Exact smoke tests to run after deploy.
 5. Exact rollback file path.
+6. Exact source ref the branch was cut from.
 
 If any of those are missing, stop and fill them in first.
 
@@ -124,6 +137,19 @@ If we are fixing regressions:
 - restore the last known good behavior first
 - then add hardening/tests second
 - do not combine restore + new feature + unrelated cleanup in the same release
+
+## Jobs Lane Rule
+
+For Jobs-related fixes, create and ship separate slices for:
+
+- frontend shell and tab/layout issues
+- PandaSign V2 frontend wiring
+- documents service/API issues
+- opportunities comments/activity/save-path issues
+- notification delivery issues
+- invoice/financial issues
+
+Even if multiple issues are user-visible on the same Job record, they are not allowed in the same deploy unless one change is strictly required for the other to function.
 
 ## Minimum Future Protection
 

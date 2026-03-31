@@ -2,6 +2,13 @@
 
 This matrix records confirmed Jobs failures against the rolled-back production baseline captured in [prod-baseline-20260331.md](./prod-baseline-20260331.md). These are evidence-backed issues from live production behavior and logs, not guesses from branch drift.
 
+## Latest Verified Source Ref
+
+Until a newer slice is deployed and verified, new Jobs repair branches must start from:
+
+- `origin/codex/messaging-rebaseline-20260331`
+- release ledger entry: [jobs-release-ledger-20260331.md](./jobs-release-ledger-20260331.md)
+
 ## Active Issues
 
 | ID | Severity | Lane | Live route or screen | Example evidence | Current behavior | Likely owner |
@@ -31,10 +38,9 @@ The first isolated repair slice is `JOBS-GAF-001`. Its minimum smoke checklist i
 - [ ] GAF PDF is saved into Job Documents -> Files.
 - [ ] Shared frontend load and Jobs detail page still render without console runtime errors.
 
-## Deferred Until GAF Lane Is Stable
+## Current Next Lanes
 
-- PandaSign V2 cleanup and direct endpoint validation.
-- Job Documents repository query repair.
-- Jobs internal comments and comment-department repair.
-- Jobs activity enum compatibility.
-- Jobs stage and claim save-path compatibility.
+- Notification delivery hardening for Jobs mentions.
+- Invoice and financial regression repro plus isolated repair.
+- PandaSign V2 end-to-end smoke and backend cleanup.
+- Remaining opportunities activity/save-path compatibility items.

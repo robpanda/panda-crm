@@ -38,7 +38,10 @@ Use this checklist after every deploy. Run only the sections for the module you 
 - [ ] Job header layout and finance cards match the intended current UX.
 - [ ] Result Appointment button exists and opens the current wizard.
 - [ ] Result Appointment flow supports back navigation and path changes without stale state.
-- [ ] Customer Comms shows the correct tabs only; deprecated extra tabs are absent.
+- [ ] Messages shows `Internal Comments`, `Internal Notes`, `Communications`, `Conversations`, `Notifications`, and `Activity` in the intended order.
+- [ ] `Internal Comments` is the default Messages tab.
+- [ ] `Communications` remains visible and `Activity` owns the Live/Archive history split.
+- [ ] `Internal Notes` does not show the removed legacy title field.
 - [ ] SMS / Email / Call tools are visible and usable in Jobs.
 - [ ] Internal comments / notes / mentions match the current lead-side behavior.
 - [ ] Job Team shows owner, transfer, PM, and crew controls when expected.
