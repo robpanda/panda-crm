@@ -145,7 +145,7 @@ function formatDate(date) {
   });
 }
 
-export default function MilestoneTracker({ opportunity, onStageChange }) {
+export default function MilestoneTracker({ opportunity, onStageChange, embedded = false }) {
   const [showStageMenu, setShowStageMenu] = useState(false);
   const queryClient = useQueryClient();
 
@@ -242,7 +242,7 @@ export default function MilestoneTracker({ opportunity, onStageChange }) {
   const currentStageIndex = STAGE_ORDER.indexOf(opportunity.stage);
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-200">
+    <div className={embedded ? 'bg-white' : 'bg-white rounded-xl shadow-sm border border-gray-200'}>
       {/* Header with current status summary */}
       <div className="px-4 py-3 bg-gradient-to-r from-gray-50 to-white border-b border-gray-100">
         <div className="flex items-center justify-between flex-wrap gap-2">

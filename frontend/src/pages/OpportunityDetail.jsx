@@ -4125,8 +4125,78 @@ export default function OpportunityDetail() {
     );
   }
 
-  // Calculate days open
-  const daysOpen = Math.floor((Date.now() - new Date(opportunity.createdAt).getTime()) / (1000 * 60 * 60 * 24));
+  const primaryContact = opportunity.contact
+    || contacts?.find((contact) => contact?.isPrimaryContact || contact?.isPrimary)
+    || contacts?.[0]
+    || null;
+
+  const headerName = opportunity.contact?.firstName && opportunity.contact?.lastName
+    ? `${opportunity.contact.firstName} ${opportunity.contact.lastName}`
+    : primaryContact?.firstName && primaryContact?.lastName
+    ? `${primaryContact.firstName} ${primaryContact.lastName}`
+    : getOpportunityDisplayName(opportunity.name);
+
+  const headerLocation = [
+    opportunity.city || opportunity.account?.billingCity,
+    [
+      opportunity.state || opportunity.account?.billingState,
+      opportunity.zip || opportunity.account?.billingPostalCode,
+    ].filter(Boolean).join(' '),
+  ].filter(Boolean).join(', ');
+
+  const headerAddress = [
+    opportunity.street || opportunity.account?.billingStreet,
+    headerLocation,
+  ].filter(Boolean).join(', ');
+
+  const headerPhone = primaryContact?.mobilePhone
+    || primaryContact?.phone
+    || opportunity.contact?.mobilePhone
+    || opportunity.contact?.phone
+    || opportunity.mobilePhone
+    || opportunity.phone
+    || '';
+
+  const headerWorkType = opportunity.workType || opportunity.type?.replace(/_/g, ' ') || 'Job';
+  const headerStage = opportunity.stage?.replace(/_/g, ' ') || 'Lead';
+
+  const contractValue = Number(summary?.financials?.contractValue || opportunity.amount || 0);
+  const totalPaidValue = Number(summary?.financials?.totalPaid || 0);
+  const balanceDueValue = Number(
+    invoices?.reduce((sum, invoice) => sum + (parseFloat(invoice.balanceDue) || 0), 0)
+      || summary?.financials?.balanceDue
+      || 0
+  );
+
+  const formatHeaderCurrency = (value) => `$${Number(value || 0).toLocaleString('en-US', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  })}`;
+
+  const closeDateMeta = (() => {
+    if (!opportunity.closeDate) {
+      return 'Close date not set';
+    }
+
+    const closeDate = new Date(opportunity.closeDate);
+    if (Number.isNaN(closeDate.getTime())) {
+      return 'Close date not set';
+    }
+
+    closeDate.setHours(0, 0, 0, 0);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const diffDays = Math.floor((closeDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+    if (diffDays < 0) {
+      return `Close date ${Math.abs(diffDays)} day${Math.abs(diffDays) === 1 ? '' : 's'} overdue`;
+    }
+    if (diffDays === 0) {
+      return 'Close date is today';
+    }
+    return `Close date in ${diffDays} day${diffDays === 1 ? '' : 's'}`;
+  })();
 
   // Keep legacy tabs array for backward compatibility
   const tabs = [
@@ -4149,6 +4219,198 @@ export default function OpportunityDetail() {
     { id: 'tasks', label: 'Tasks', icon: CheckSquare, count: tasks?.filter(t => t.status !== 'COMPLETED')?.length || 0 },
     { id: 'checklist', label: 'Checklist', icon: ClipboardList },
   ];
+
+  const primaryActions = (
+    <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+      <div className="flex flex-col sm:flex-row gap-3">
+        {isEditMode ? (
+          <>
+            <button
+              onClick={handleEditSave}
+              disabled={updateMutation.isPending}
+              className="inline-flex items-center justify-center space-x-2 px-5 py-3 bg-green-600 text-white rounded-xl hover:bg-green-700 transition-colors text-sm font-semibold disabled:opacity-50"
+            >
+              {updateMutation.isPending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <CheckCircle className="w-4 h-4" />
+              )}
+              <span>Save Changes</span>
+            </button>
+            <button
+              onClick={cancelEditMode}
+              className="inline-flex items-center justify-center px-5 py-3 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors text-sm font-semibold"
+            >
+              Cancel
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              onClick={enterEditMode}
+              className="inline-flex items-center justify-center space-x-2 px-5 py-3 bg-panda-primary text-white rounded-xl hover:bg-panda-primary/90 transition-colors text-sm font-semibold shadow-sm"
+            >
+              <Edit className="w-4 h-4" />
+              <span>Edit Job</span>
+            </button>
+            <button
+              onClick={() => setShowResultAppointmentWizard(true)}
+              className="inline-flex items-center justify-center space-x-2 px-5 py-3 bg-green-600 text-white rounded-xl hover:bg-green-700 transition-colors text-sm font-semibold shadow-sm"
+            >
+              <ClipboardCheck className="w-4 h-4" />
+              <span>Result Appointment</span>
+            </button>
+          </>
+        )}
+      </div>
+
+      <div className="relative self-start lg:self-auto" ref={actionsMenuRef}>
+        <button
+          onClick={() => setShowActionsMenu(!showActionsMenu)}
+          className="inline-flex items-center justify-center px-3.5 py-3 bg-white border border-gray-200 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors shadow-sm"
+          title="More Actions"
+        >
+          <MoreVertical className="w-4 h-4" />
+        </button>
+
+        {showActionsMenu && (
+          <div className="absolute right-0 top-full mt-2 w-64 bg-white rounded-xl shadow-lg border border-gray-200 py-1 z-50">
+            {(!workOrders || workOrders.length === 0) && (
+              <button
+                onClick={() => {
+                  setActiveQuickAction('createWorkOrder');
+                  setShowQuickActionModal(true);
+                  setShowActionsMenu(false);
+                }}
+                className="w-full flex items-center space-x-3 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+              >
+                <Wrench className="w-4 h-4 text-green-600" />
+                <span>Build Work Order</span>
+              </button>
+            )}
+
+            <div className="border-t border-gray-100 my-1" />
+            <div className="px-4 py-1.5 text-xs font-medium text-gray-400 uppercase">Measurements</div>
+            <button
+              onClick={() => {
+                setActiveQuickAction('gafQuickMeasure');
+                setShowQuickActionModal(true);
+                setShowActionsMenu(false);
+              }}
+              className="w-full flex items-center space-x-3 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+            >
+              <Ruler className="w-4 h-4 text-blue-600" />
+              <span>GAF Quick Measure</span>
+            </button>
+            <button
+              onClick={() => {
+                setActiveQuickAction('eagleviewMeasure');
+                setShowQuickActionModal(true);
+                setShowActionsMenu(false);
+              }}
+              className="w-full flex items-center space-x-3 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+            >
+              <Eye className="w-4 h-4 text-orange-600" />
+              <span>EagleView Measurements</span>
+            </button>
+            <button
+              onClick={() => {
+                setActiveQuickAction('hoverCapture');
+                setShowQuickActionModal(true);
+                setShowActionsMenu(false);
+              }}
+              className="w-full flex items-center space-x-3 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+            >
+              <Camera className="w-4 h-4 text-purple-600" />
+              <span>Hover 3D Capture</span>
+            </button>
+            <button
+              onClick={() => {
+                setActiveQuickAction('instantMeasure');
+                setShowQuickActionModal(true);
+                setShowActionsMenu(false);
+              }}
+              className="w-full flex items-center space-x-3 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+            >
+              <Zap className="w-4 h-4 text-green-600" />
+              <span>Instant Measurement</span>
+              <span className="ml-auto text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded">FREE</span>
+            </button>
+
+            <div className="border-t border-gray-100 my-1" />
+            <div className="px-4 py-1.5 text-xs font-medium text-gray-400 uppercase">Sales Actions</div>
+            <button
+              onClick={() => {
+                setActiveQuickAction('requestEstimate');
+                setShowQuickActionModal(true);
+                setShowActionsMenu(false);
+              }}
+              className="w-full flex items-center space-x-3 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+            >
+              <FileText className="w-4 h-4 text-teal-600" />
+              <span>Request Estimate</span>
+            </button>
+            <button
+              onClick={() => {
+                setActiveQuickAction('updateMeetingOutcome');
+                setShowQuickActionModal(true);
+                setShowActionsMenu(false);
+              }}
+              className="w-full flex items-center space-x-3 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+            >
+              <ClipboardCheck className="w-4 h-4 text-amber-600" />
+              <span>Update Meeting Outcome</span>
+            </button>
+            {(opportunity.type === 'INSURANCE' || opportunity.workType?.toLowerCase().includes('insurance')) && (
+              <button
+                onClick={() => {
+                  setShowSpecsPreparation(true);
+                  setShowActionsMenu(false);
+                }}
+                className="w-full flex items-center space-x-3 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+              >
+                <ClipboardList className="w-4 h-4 text-blue-600" />
+                <span>Prepare Specs</span>
+                {opportunity.specsPrepped && (
+                  <CheckCircle className="w-4 h-4 text-green-500 ml-auto" />
+                )}
+              </button>
+            )}
+            {opportunity.specsPrepped && (
+              <button
+                onClick={async () => {
+                  setShowActionsMenu(false);
+                  try {
+                    const response = await fetch(`${import.meta.env.VITE_API_BASE || ''}/api/workflows/triggers/contract/generate`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        opportunityId: id,
+                        userId: null,
+                      }),
+                    });
+                    if (response.ok) {
+                      setActionSuccess('Contract generation triggered successfully');
+                      queryClient.invalidateQueries(['opportunity', id]);
+                    } else {
+                      const error = await response.json();
+                      setActionError(error.message || 'Failed to generate contract');
+                    }
+                  } catch (err) {
+                    setActionError('Failed to trigger contract generation');
+                  }
+                }}
+                className="w-full flex items-center space-x-3 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
+              >
+                <FileSignature className="w-4 h-4 text-green-600" />
+                <span>Generate Contract</span>
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
 
   // Onboarding checklist - wired to actual opportunity data
   const onboardingChecklist = [
@@ -4240,120 +4502,129 @@ export default function OpportunityDetail() {
         </button>
       </div>
 
-      {/* Compact Header with Gradient */}
+      {/* Job Header */}
       <div className="px-4 sm:px-6 pb-4">
-        <div className="bg-gradient-to-r from-slate-50 via-white to-blue-50 rounded-xl shadow-sm border border-gray-200">
-          {/* Top Bar - Name and Key Info */}
-          <div className="p-4 sm:p-5">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              {/* Left: Icon + Name + Badges */}
-              <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-lg bg-gradient-to-br from-panda-primary to-panda-secondary flex items-center justify-center flex-shrink-0 shadow-sm">
-                  <Target className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+          <div className="p-5 sm:p-6 bg-gradient-to-r from-slate-50 via-white to-blue-50">
+            <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-6">
+              <div className="flex items-start gap-4 min-w-0 flex-1">
+                <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl bg-gradient-to-br from-panda-primary to-panda-secondary flex items-center justify-center flex-shrink-0 shadow-sm">
+                  <Target className="w-6 h-6 sm:w-7 sm:h-7 text-white" />
                 </div>
-                <div className="min-w-0">
-                  <h1 className="text-lg sm:text-xl font-bold text-gray-900 truncate">
-                    {opportunity.contact?.firstName && opportunity.contact?.lastName
-                      ? `${opportunity.contact.firstName} ${opportunity.contact.lastName}`
-                      : getOpportunityDisplayName(opportunity.name)}
+                <div className="min-w-0 flex-1">
+                  <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 truncate">
+                    {headerName}
                   </h1>
-                  <div className="flex items-center gap-2 mt-1 flex-wrap">
-                    {opportunity.workType && (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-blue-100 text-blue-700">
-                        {opportunity.workType}
-                      </span>
-                    )}
-                    <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-emerald-100 text-emerald-700">
-                      {opportunity.stage?.replace(/_/g, ' ') || 'Lead'}
+                  {headerAddress && (
+                    <div className="mt-2 flex items-center gap-2 text-sm sm:text-base text-gray-600">
+                      <MapPin className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                      <span className="truncate">{headerAddress}</span>
+                    </div>
+                  )}
+                  {headerPhone && (
+                    <div className="mt-1 flex items-center gap-2 text-sm text-gray-600">
+                      <Phone className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                      <a href={`tel:${headerPhone}`} className="hover:text-panda-primary transition-colors">
+                        {headerPhone}
+                      </a>
+                    </div>
+                  )}
+
+                  <div className="mt-4 flex flex-wrap items-center gap-2">
+                    <span className="inline-flex items-center px-3 py-1 rounded-lg text-xs sm:text-sm font-semibold bg-blue-100 text-blue-700">
+                      {headerWorkType}
                     </span>
-                    {opportunity.isApproved ? (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-green-100 text-green-700">
-                        <CheckCircle className="w-3 h-3 mr-1" />
-                        Approved
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium bg-amber-100 text-amber-700">
-                        <AlertTriangle className="w-3 h-3 mr-1" />
-                        Pending Approval
-                      </span>
-                    )}
+                    <span className="inline-flex items-center px-3 py-1 rounded-lg text-xs sm:text-sm font-semibold bg-emerald-100 text-emerald-700">
+                      {headerStage}
+                    </span>
                   </div>
                 </div>
               </div>
 
-              {/* Right: Job # and Priority */}
-              <div className="flex items-center gap-4 sm:gap-5">
-                {/* Job Number */}
-                <div className="bg-white/80 backdrop-blur-sm rounded-lg px-3 py-2 border border-gray-100 shadow-sm">
-                  <div className="text-xs text-gray-500 font-medium">Job #</div>
-                  <div className="text-sm sm:text-base font-bold text-panda-primary">
-                    {opportunity.jobId || (
-                      <button
-                        onClick={async () => {
-                          try {
-                            const jobId = await assignMissingJobId();
-                            if (jobId) {
-                              setActionSuccess(`Assigned Job #${jobId}`);
-                            }
-                          } catch (err) {
-                            setActionError('Failed to assign Job #');
-                          }
-                        }}
-                        className="text-xs text-gray-400 hover:text-panda-primary underline"
-                      >
-                        Assign
-                      </button>
-                    )}
+              <div className="xl:w-[320px] xl:min-w-[320px]">
+                <div className="rounded-2xl border border-gray-200 bg-white/90 backdrop-blur-sm shadow-sm px-4 py-4">
+                  <div className="space-y-3 text-sm">
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="text-gray-500 font-medium">Job #</span>
+                      <div className="font-bold text-base text-panda-primary text-right">
+                        {opportunity.jobId || (
+                          <button
+                            onClick={async () => {
+                              try {
+                                const jobId = await assignMissingJobId();
+                                if (jobId) {
+                                  setActionSuccess(`Assigned Job #${jobId}`);
+                                }
+                              } catch (err) {
+                                setActionError('Failed to assign Job #');
+                              }
+                            }}
+                            className="text-sm text-gray-400 hover:text-panda-primary underline"
+                          >
+                            Assign
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="text-gray-500 font-medium">Insurance</span>
+                      <span className="font-semibold text-gray-900 text-right">{opportunity.insuranceCarrier || '-'}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <span className="text-gray-500 font-medium">Claim #</span>
+                      <span className="font-semibold text-gray-900 text-right">{opportunity.claimNumber || '-'}</span>
+                    </div>
                   </div>
-                </div>
-                {/* Priority */}
-                <div className="hidden sm:block">
-                  <JobPriority opportunity={opportunity} />
+
+                  <div className="mt-4 pt-4 border-t border-gray-200 space-y-2">
+                    <JobPriority opportunity={opportunity} />
+                    <div className="flex items-center gap-2 text-sm text-gray-500">
+                      <Clock className="w-4 h-4 flex-shrink-0" />
+                      <span>{closeDateMeta}</span>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
 
-          {/* Metrics Bar - Compact single row (financials + key counts only) */}
-          <div className="px-4 sm:px-5 pb-4">
-            <div className="grid grid-cols-4 sm:grid-cols-6 gap-2 sm:gap-3">
-              {/* Financials with colors */}
-              <div className="col-span-2 sm:col-span-1 bg-emerald-50 rounded-lg p-2 sm:p-3 text-center border border-emerald-100">
-                <div className="text-[10px] sm:text-xs text-emerald-600 font-medium uppercase tracking-wide">Contract</div>
-                <div className="text-sm sm:text-base font-bold text-emerald-700">${(summary?.financials?.contractValue || opportunity.amount || 0).toLocaleString()}</div>
+            <div className="mt-6 grid grid-cols-2 xl:grid-cols-6 gap-3">
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Contract</div>
+                <div className="mt-1 text-2xl font-bold text-emerald-800">{formatHeaderCurrency(contractValue)}</div>
               </div>
-              <div className="bg-blue-50 rounded-lg p-2 sm:p-3 text-center border border-blue-100">
-                <div className="text-[10px] sm:text-xs text-blue-600 font-medium uppercase tracking-wide">Paid</div>
-                <div className="text-sm sm:text-base font-bold text-blue-700">${(summary?.financials?.totalPaid || 0).toLocaleString()}</div>
+              <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3">
+                <div className="text-xs font-semibold uppercase tracking-wide text-blue-700">Paid</div>
+                <div className="mt-1 text-2xl font-bold text-blue-800">{formatHeaderCurrency(totalPaidValue)}</div>
               </div>
-              <div className="bg-amber-50 rounded-lg p-2 sm:p-3 text-center border border-amber-100">
-                <div className="text-[10px] sm:text-xs text-amber-600 font-medium uppercase tracking-wide">Due</div>
-                <div className="text-sm sm:text-base font-bold text-amber-700">${(summary?.financials?.balanceDue || 0).toLocaleString()}</div>
+              <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+                <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">Due</div>
+                <div className="mt-1 text-2xl font-bold text-amber-800">{formatHeaderCurrency(balanceDueValue)}</div>
               </div>
+              <div className="rounded-xl border border-gray-200 bg-white px-4 py-3">
+                <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Quotes</div>
+                <div className="mt-1 text-2xl font-bold text-gray-800">{summary?.counts?.quotes || quotes?.length || 0}</div>
+              </div>
+              <div className="rounded-xl border border-gray-200 bg-white px-4 py-3">
+                <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Work Orders</div>
+                <div className="mt-1 text-2xl font-bold text-gray-800">{summary?.counts?.workOrders || workOrders?.length || 0}</div>
+              </div>
+              <div className="rounded-xl border border-gray-200 bg-white px-4 py-3">
+                <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Appts</div>
+                <div className="mt-1 text-2xl font-bold text-gray-800">{summary?.counts?.appointments || appointments?.length || 0}</div>
+              </div>
+            </div>
 
-              {/* Counts */}
-              <div className="hidden sm:block bg-white rounded-lg p-2 sm:p-3 text-center border border-gray-100">
-                <div className="text-[10px] sm:text-xs text-gray-500 font-medium uppercase tracking-wide">Quotes</div>
-                <div className="text-sm sm:text-base font-bold text-gray-700">{summary?.counts?.quotes || quotes?.length || 0}</div>
-              </div>
-              <div className="hidden sm:block bg-white rounded-lg p-2 sm:p-3 text-center border border-gray-100">
-                <div className="text-[10px] sm:text-xs text-gray-500 font-medium uppercase tracking-wide">Work Orders</div>
-                <div className="text-sm sm:text-base font-bold text-gray-700">{summary?.counts?.workOrders || workOrders?.length || 0}</div>
-              </div>
-              <div className="hidden sm:block bg-white rounded-lg p-2 sm:p-3 text-center border border-gray-100">
-                <div className="text-[10px] sm:text-xs text-gray-500 font-medium uppercase tracking-wide">Appts</div>
-                <div className="text-sm sm:text-base font-bold text-gray-700">{summary?.counts?.appointments || 0}</div>
-              </div>
+            <div className="mt-6 rounded-2xl border border-gray-200 overflow-hidden bg-white">
+              <LazyPanel label="Loading milestone tracker...">
+                <MilestoneTracker opportunity={opportunity} embedded />
+              </LazyPanel>
+            </div>
+
+            <div className="mt-4 border-t border-gray-200 pt-4">
+              {primaryActions}
             </div>
           </div>
         </div>
-      </div>
-
-      {/* Milestone Tracker */}
-      <div className="px-4 sm:px-6 pb-4">
-        <LazyPanel label="Loading milestone tracker...">
-          <MilestoneTracker opportunity={opportunity} />
-        </LazyPanel>
       </div>
 
       {/* Main Content - Two Column Layout */}
@@ -4362,201 +4633,6 @@ export default function OpportunityDetail() {
           {/* Left Sidebar - Compact actions and info */}
           <div className="w-full lg:w-80 xl:w-96 flex-shrink-0 order-2 lg:order-1">
             <div className="lg:sticky lg:top-24 space-y-3 max-h-[calc(100vh-120px)] overflow-y-auto pb-4">
-              {/* Primary Actions Row */}
-              <div className="flex gap-2">
-                {isEditMode ? (
-                  <>
-                    <button
-                      onClick={handleEditSave}
-                      disabled={updateMutation.isPending}
-                      className="flex-1 flex items-center justify-center space-x-2 px-4 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium disabled:opacity-50"
-                    >
-                      {updateMutation.isPending ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <CheckCircle className="w-4 h-4" />
-                      )}
-                      <span>Save Changes</span>
-                    </button>
-                    <button
-                      onClick={cancelEditMode}
-                      className="px-4 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium"
-                    >
-                      Cancel
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      onClick={enterEditMode}
-                      className="flex-1 flex items-center justify-center space-x-2 px-4 py-2.5 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90 transition-colors text-sm font-medium"
-                    >
-                      <Edit className="w-4 h-4" />
-                      <span>Edit Job</span>
-                    </button>
-                    <button
-                      onClick={() => setShowResultAppointmentWizard(true)}
-                      className="flex-1 flex items-center justify-center space-x-2 px-4 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium"
-                    >
-                      <ClipboardCheck className="w-4 h-4" />
-                      <span>Result Appointment</span>
-                    </button>
-                  </>
-                )}
-
-                {/* Actions Dropdown */}
-                <div className="relative" ref={actionsMenuRef}>
-                  <button
-                    onClick={() => setShowActionsMenu(!showActionsMenu)}
-                    className="px-3 py-2.5 bg-white border border-gray-200 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
-                    title="More Actions"
-                  >
-                    <MoreVertical className="w-4 h-4" />
-                  </button>
-
-                  {showActionsMenu && (
-                    <div className="absolute right-0 top-full mt-1 w-56 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50">
-                      {/* Work Order */}
-                      {(!workOrders || workOrders.length === 0) && (
-                        <button
-                          onClick={() => {
-                            setActiveQuickAction('createWorkOrder');
-                            setShowQuickActionModal(true);
-                            setShowActionsMenu(false);
-                          }}
-                          className="w-full flex items-center space-x-3 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
-                        >
-                          <Wrench className="w-4 h-4 text-green-600" />
-                          <span>Build Work Order</span>
-                        </button>
-                      )}
-
-                      {/* Measurements Section */}
-                      <div className="border-t border-gray-100 my-1" />
-                      <div className="px-4 py-1.5 text-xs font-medium text-gray-400 uppercase">Measurements</div>
-                      <button
-                        onClick={() => {
-                          setActiveQuickAction('gafQuickMeasure');
-                          setShowQuickActionModal(true);
-                          setShowActionsMenu(false);
-                        }}
-                        className="w-full flex items-center space-x-3 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
-                      >
-                        <Ruler className="w-4 h-4 text-blue-600" />
-                        <span>GAF Quick Measure</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          setActiveQuickAction('eagleviewMeasure');
-                          setShowQuickActionModal(true);
-                          setShowActionsMenu(false);
-                        }}
-                        className="w-full flex items-center space-x-3 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
-                      >
-                        <Eye className="w-4 h-4 text-orange-600" />
-                        <span>EagleView Measurements</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          setActiveQuickAction('hoverCapture');
-                          setShowQuickActionModal(true);
-                          setShowActionsMenu(false);
-                        }}
-                        className="w-full flex items-center space-x-3 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
-                      >
-                        <Camera className="w-4 h-4 text-purple-600" />
-                        <span>Hover 3D Capture</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          setActiveQuickAction('instantMeasure');
-                          setShowQuickActionModal(true);
-                          setShowActionsMenu(false);
-                        }}
-                        className="w-full flex items-center space-x-3 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
-                      >
-                        <Zap className="w-4 h-4 text-green-600" />
-                        <span>Instant Measurement</span>
-                        <span className="ml-auto text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded">FREE</span>
-                      </button>
-
-                      {/* Sales Actions Section */}
-                      <div className="border-t border-gray-100 my-1" />
-                      <div className="px-4 py-1.5 text-xs font-medium text-gray-400 uppercase">Sales Actions</div>
-                      <button
-                        onClick={() => {
-                          setActiveQuickAction('requestEstimate');
-                          setShowQuickActionModal(true);
-                          setShowActionsMenu(false);
-                        }}
-                        className="w-full flex items-center space-x-3 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
-                      >
-                        <FileText className="w-4 h-4 text-teal-600" />
-                        <span>Request Estimate</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          setActiveQuickAction('updateMeetingOutcome');
-                          setShowQuickActionModal(true);
-                          setShowActionsMenu(false);
-                        }}
-                        className="w-full flex items-center space-x-3 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
-                      >
-                        <ClipboardCheck className="w-4 h-4 text-amber-600" />
-                        <span>Update Meeting Outcome</span>
-                      </button>
-                      {/* Prepare Specs - Only show for insurance opportunities after claim approved */}
-                      {(opportunity.type === 'INSURANCE' || opportunity.workType?.toLowerCase().includes('insurance')) && (
-                        <button
-                          onClick={() => {
-                            setShowSpecsPreparation(true);
-                            setShowActionsMenu(false);
-                          }}
-                          className="w-full flex items-center space-x-3 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
-                        >
-                          <ClipboardList className="w-4 h-4 text-blue-600" />
-                          <span>Prepare Specs</span>
-                          {opportunity.specsPrepped && (
-                            <CheckCircle className="w-4 h-4 text-green-500 ml-auto" />
-                          )}
-                        </button>
-                      )}
-                      {/* Generate Contract - Show after specs are prepped */}
-                      {opportunity.specsPrepped && (
-                        <button
-                          onClick={async () => {
-                            setShowActionsMenu(false);
-                            try {
-                              const response = await fetch(`${import.meta.env.VITE_API_BASE || ''}/api/workflows/triggers/contract/generate`, {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({
-                                  opportunityId: id,
-                                  userId: null, // Will be filled by backend from auth
-                                }),
-                              });
-                              if (response.ok) {
-                                setActionSuccess('Contract generation triggered successfully');
-                                queryClient.invalidateQueries(['opportunity', id]);
-                              } else {
-                                const error = await response.json();
-                                setActionError(error.message || 'Failed to generate contract');
-                              }
-                            } catch (err) {
-                              setActionError('Failed to trigger contract generation');
-                            }
-                          }}
-                          className="w-full flex items-center space-x-3 px-4 py-2.5 text-left text-sm text-gray-700 hover:bg-gray-50"
-                        >
-                          <FileSignature className="w-4 h-4 text-green-600" />
-                          <span>Generate Contract</span>
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-
               {/* Notes Sidebar - Pinned note at top, others chronological */}
               <LazyPanel label="Loading notes...">
                 <NotesSidebar opportunityId={id} />
