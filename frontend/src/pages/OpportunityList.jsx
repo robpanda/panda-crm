@@ -273,12 +273,29 @@ export default function OpportunityList() {
 
   const bulkDeleteMutation = useMutation({
     mutationFn: ({ opportunityIds }) => opportunitiesApi.bulkDeleteOpportunities(opportunityIds),
-    onSuccess: () => {
+    onSuccess: (result) => {
+      const deletedCount = result?.results?.success?.length || 0;
+      const failedCount = result?.results?.failed?.length || 0;
+
+      if (deletedCount === 0 && failedCount > 0) {
+        const firstFailure = result?.results?.failed?.[0]?.error || 'Failed to delete selected jobs.';
+        window.alert(firstFailure);
+        return;
+      }
+
       queryClient.invalidateQueries({ queryKey: ['opportunities'] });
       queryClient.invalidateQueries({ queryKey: ['opportunityStageCounts'] });
+      queryClient.invalidateQueries({ queryKey: ['deleted-opportunities'] });
       setShowDeleteModal(false);
       setSelectedJobs([]);
       setSelectionMode(false);
+
+      if (failedCount > 0) {
+        window.alert(`Deleted ${deletedCount} job(s). ${failedCount} job(s) could not be deleted.`);
+      }
+    },
+    onError: (error) => {
+      window.alert(error?.message || 'Failed to delete selected jobs.');
     },
   });
 
@@ -894,7 +911,7 @@ export default function OpportunityList() {
           <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md">
             <h3 className="text-lg font-semibold mb-4 text-red-600">Delete {selectedJobs.length} Job(s)?</h3>
             <p className="text-gray-600 mb-4">
-              This will mark the selected jobs as Closed Lost. This action can be undone by changing the stage back.
+              This will soft-delete the selected jobs. They will be moved to Deleted Records and can be restored within 30 days.
             </p>
             <div className="flex justify-end space-x-3">
               <button
