@@ -3,7 +3,6 @@
 // This is the HUB - Opportunity is the central object in Panda CRM
 import { PrismaClient, Prisma } from '@prisma/client';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
-import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { logger } from '../middleware/logger.js';
 import crypto from 'crypto';
@@ -20,9 +19,11 @@ const prisma = new PrismaClient();
 const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-east-2' });
 const S3_BUCKET = process.env.S3_BUCKET || 'pandasign-documents';
 
-// SES client for email notifications
-const sesClient = new SESClient({ region: process.env.AWS_REGION || 'us-east-2' });
-const FROM_EMAIL = process.env.SES_FROM_EMAIL || 'notifications@pandaexteriors.com';
+const APP_BASE_URL = process.env.APP_BASE_URL || 'https://crm.pandaadmin.com';
+const BAMBOOGLI_SERVICE_URL =
+  process.env.BAMBOOGLI_SERVICE_URL
+  || process.env.NOTIFICATION_SERVICE_URL
+  || 'https://bamboo.pandaadmin.com';
 const INTERNAL_COMMENT_TITLE_PREFIX = 'INTERNAL_COMMENT|';
 
 const DISPOSITION_STAGE_MAP = {
@@ -99,6 +100,44 @@ function mapInternalCommentNote(comment) {
       : null,
     replies: [],
     attachmentUrls: [],
+  };
+}
+
+function buildMentionEmailContent({
+  toName,
+  mentionerName,
+  opportunityName,
+  opportunityId,
+  messagePreview,
+}) {
+  const safeToName = toName || 'there';
+  const safeMentionerName = mentionerName || 'Someone';
+  const safeOpportunityName = opportunityName || 'a job';
+  const safePreview = messagePreview || '';
+  const opportunityUrl = `${APP_BASE_URL}/jobs/${opportunityId}`;
+  const subject = `${safeMentionerName} mentioned you on ${safeOpportunityName}`;
+  const htmlBody = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2 style="color: #333;">You were mentioned in a conversation</h2>
+      <p>Hi ${safeToName},</p>
+      <p><strong>${safeMentionerName}</strong> mentioned you on <strong>${safeOpportunityName}</strong>:</p>
+      <div style="background: #f5f5f5; padding: 15px; border-radius: 8px; margin: 15px 0;">
+        <p style="margin: 0; color: #666;">"${safePreview}"</p>
+      </div>
+      <a href="${opportunityUrl}" style="display: inline-block; background: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin-top: 10px;">
+        View Job
+      </a>
+      <p style="color: #999; font-size: 12px; margin-top: 30px;">
+        This is an automated notification from Panda CRM.
+      </p>
+    </div>
+  `;
+  const textBody = `You were mentioned by ${safeMentionerName} on ${safeOpportunityName}: "${safePreview}"\n\nView at: ${opportunityUrl}`;
+
+  return {
+    subject,
+    htmlBody,
+    textBody,
   };
 }
 
@@ -1683,49 +1722,66 @@ Be factual and professional. Highlight anything that needs attention.`;
   /**
    * Send email notification for @mention
    */
-  async sendMentionEmail({ toEmail, toName, mentionerName, opportunityName, opportunityId, messagePreview }) {
+  async sendMentionEmail({
+    toEmail,
+    toName,
+    mentionerName,
+    opportunityName,
+    opportunityId,
+    messagePreview,
+    notificationId = null,
+  }) {
+    const { subject, htmlBody, textBody } = buildMentionEmailContent({
+      toName,
+      mentionerName,
+      opportunityName,
+      opportunityId,
+      messagePreview,
+    });
+
     try {
-      const opportunityUrl = `https://bamboo.pandaadmin.com/opportunities/${opportunityId}`;
+      await this.sendMentionEmailViaBamboogli({
+        toEmail,
+        subject,
+        htmlBody,
+        textBody,
+      });
 
-      await sesClient.send(new SendEmailCommand({
-        Source: FROM_EMAIL,
-        Destination: {
-          ToAddresses: [toEmail],
-        },
-        Message: {
-          Subject: {
-            Data: `${mentionerName} mentioned you on ${opportunityName}`,
+      if (notificationId) {
+        await prisma.notification.update({
+          where: { id: notificationId },
+          data: {
+            emailSent: true,
+            emailSentAt: new Date(),
           },
-          Body: {
-            Html: {
-              Data: `
-                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-                  <h2 style="color: #333;">You were mentioned in a conversation</h2>
-                  <p>Hi ${toName},</p>
-                  <p><strong>${mentionerName}</strong> mentioned you in a reply on <strong>${opportunityName}</strong>:</p>
-                  <div style="background: #f5f5f5; padding: 15px; border-radius: 8px; margin: 15px 0;">
-                    <p style="margin: 0; color: #666;">"${messagePreview}"</p>
-                  </div>
-                  <a href="${opportunityUrl}" style="display: inline-block; background: #667eea; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin-top: 10px;">
-                    View Conversation
-                  </a>
-                  <p style="color: #999; font-size: 12px; margin-top: 30px;">
-                    This is an automated notification from Panda CRM.
-                  </p>
-                </div>
-              `,
-            },
-            Text: {
-              Data: `You were mentioned by ${mentionerName} on ${opportunityName}: "${messagePreview}"\n\nView at: ${opportunityUrl}`,
-            },
-          },
-        },
-      }));
+        });
+      }
 
-      console.log(`Mention email sent to ${toEmail}`);
+      logger.info(`Mention email sent to ${toEmail} via Bamboogli`);
+      return;
     } catch (error) {
-      console.error('Error sending mention email:', error);
+      logger.error(`SendGrid mention email failed for ${toEmail}: ${error.message}`);
       throw error;
+    }
+  }
+
+  async sendMentionEmailViaBamboogli({ toEmail, subject, htmlBody, textBody }) {
+    const response = await fetch(`${BAMBOOGLI_SERVICE_URL}/api/messages/send/email`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        to: toEmail,
+        subject,
+        body: textBody,
+        bodyHtml: htmlBody,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      throw new Error(`Bamboogli email returned ${response.status}${errorText ? `: ${errorText}` : ''}`);
     }
   }
 
@@ -1769,7 +1825,7 @@ Be factual and professional. Highlight anything that needs attention.`;
       if (!mentionedUser) return 0;
       if (actorUserId && mentionedUser.id === actorUserId) return 0;
 
-      await prisma.notification.create({
+      const notification = await prisma.notification.create({
         data: {
           userId: mentionedUser.id,
           type: 'MENTION',
@@ -1792,6 +1848,7 @@ Be factual and professional. Highlight anything that needs attention.`;
           opportunityName,
           opportunityId,
           messagePreview: truncatedPreview,
+          notificationId: notification.id,
         }).catch((error) => logger.warn(`Failed to send opportunity mention email to ${mentionedUser.email}: ${error.message}`));
       }
 
