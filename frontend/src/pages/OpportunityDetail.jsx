@@ -2496,6 +2496,14 @@ export default function OpportunityDetail() {
     dateOfLoss: '',
     claimFiledDate: '',
     damageLocation: '',
+    adjusterAssigned: false,
+    adjusterName: '',
+    adjusterOfficePhone: '',
+    adjusterOfficePhoneExt: '',
+    adjusterMobilePhone: '',
+    adjusterEmail: '',
+    adjusterMeetingDate: '',
+    adjusterMeetingComplete: false,
   });
 
   // Inline edit mode for job details
@@ -2781,6 +2789,16 @@ export default function OpportunityDetail() {
   const adjusterAssigned = useMemo(() => (
     Boolean(adjusterAppointment || adjusterMeetingComplete)
   ), [adjusterAppointment, adjusterMeetingComplete]);
+  const displayedAdjusterAssigned = Boolean(opportunity?.adjusterAssigned || adjusterAssigned);
+  const displayedAdjusterMeetingDate = opportunity?.adjusterMeetingDate || adjusterMeetingDate;
+  const displayedAdjusterMeetingComplete = Boolean(
+    opportunity?.adjusterMeetingComplete || adjusterMeetingComplete
+  );
+  const displayedAdjusterName = opportunity?.adjusterName || '';
+  const displayedAdjusterOfficePhone = opportunity?.adjusterOfficePhone || '';
+  const displayedAdjusterOfficePhoneExt = opportunity?.adjusterOfficePhoneExt || '';
+  const displayedAdjusterMobilePhone = opportunity?.adjusterMobilePhone || '';
+  const displayedAdjusterEmail = opportunity?.adjusterEmail || '';
   // Cases (linked via Account) - service not yet deployed, disable retries
   const { data: cases } = useQuery({
     queryKey: ['opportunityCases', id],
@@ -2851,16 +2869,35 @@ export default function OpportunityDetail() {
 
   // Initialize claim form when opportunity data loads
   useEffect(() => {
-    if (opportunity) {
+    if (opportunity && !isEditingClaim) {
       setClaimForm({
         insuranceCarrier: opportunity.insuranceCarrier || '',
         claimNumber: opportunity.claimNumber || '',
         dateOfLoss: toDateInputValue(opportunity.dateOfLoss),
         claimFiledDate: toDateInputValue(opportunity.claimFiledDate),
         damageLocation: opportunity.damageLocation || '',
+        adjusterAssigned: displayedAdjusterAssigned,
+        adjusterName: displayedAdjusterName,
+        adjusterOfficePhone: displayedAdjusterOfficePhone,
+        adjusterOfficePhoneExt: displayedAdjusterOfficePhoneExt,
+        adjusterMobilePhone: displayedAdjusterMobilePhone,
+        adjusterEmail: displayedAdjusterEmail,
+        adjusterMeetingDate: toDateInputValue(displayedAdjusterMeetingDate),
+        adjusterMeetingComplete: displayedAdjusterMeetingComplete,
       });
     }
-  }, [opportunity]);
+  }, [
+    opportunity,
+    isEditingClaim,
+    displayedAdjusterAssigned,
+    displayedAdjusterName,
+    displayedAdjusterOfficePhone,
+    displayedAdjusterOfficePhoneExt,
+    displayedAdjusterMobilePhone,
+    displayedAdjusterEmail,
+    displayedAdjusterMeetingDate,
+    displayedAdjusterMeetingComplete,
+  ]);
 
   // Initialize edit form when entering edit mode
   const enterEditMode = useCallback(() => {
@@ -2934,6 +2971,14 @@ export default function OpportunityDetail() {
       dateOfLoss: claimForm.dateOfLoss || null,
       claimFiledDate: claimForm.claimFiledDate || null,
       damageLocation: claimForm.damageLocation || null,
+      adjusterAssigned: claimForm.adjusterAssigned,
+      adjusterName: claimForm.adjusterName || null,
+      adjusterOfficePhone: claimForm.adjusterOfficePhone || null,
+      adjusterOfficePhoneExt: claimForm.adjusterOfficePhoneExt || null,
+      adjusterMobilePhone: claimForm.adjusterMobilePhone || null,
+      adjusterEmail: claimForm.adjusterEmail || null,
+      adjusterMeetingDate: claimForm.adjusterMeetingDate || null,
+      adjusterMeetingComplete: claimForm.adjusterMeetingComplete,
     };
     updateMutation.mutate(updateData, {
       onSuccess: () => {
@@ -8983,28 +9028,87 @@ export default function OpportunityDetail() {
                           />
                         </div>
                         <div className="col-span-2 rounded-lg border border-gray-200 bg-gray-50 p-4">
-                          <div className="text-sm font-medium text-gray-700">Adjuster Workflow</div>
+                          <div className="text-sm font-medium text-gray-700">Adjuster Contact & Meeting</div>
                           <p className="mt-1 text-xs text-gray-500">
-                            Adjuster assignment and meeting status are driven by job appointments and workflow progress.
+                            Enter the adjuster details the homeowner provides and confirm the meeting schedule here.
                           </p>
-                          <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-4">
+                          <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <label className="flex items-center gap-2 text-sm text-gray-700">
+                              <input
+                                type="checkbox"
+                                checked={claimForm.adjusterAssigned}
+                                onChange={(e) => setClaimForm({ ...claimForm, adjusterAssigned: e.target.checked })}
+                                className="rounded border-gray-300 text-panda-primary focus:ring-panda-primary/20"
+                              />
+                              Adjuster assigned
+                            </label>
+                            <label className="flex items-center gap-2 text-sm text-gray-700">
+                              <input
+                                type="checkbox"
+                                checked={claimForm.adjusterMeetingComplete}
+                                onChange={(e) => setClaimForm({ ...claimForm, adjusterMeetingComplete: e.target.checked })}
+                                className="rounded border-gray-300 text-panda-primary focus:ring-panda-primary/20"
+                              />
+                              Adjuster meeting complete
+                            </label>
                             <div>
-                              <label className="block text-sm text-gray-500 mb-1">Adjuster Assigned</label>
-                              <p className={`font-medium ${adjusterAssigned ? 'text-gray-900' : 'text-gray-500 italic'}`}>
-                                {adjusterAssigned ? 'Yes' : 'Not set'}
-                              </p>
+                              <label className="block text-sm text-gray-500 mb-1">Adjuster Name</label>
+                              <input
+                                type="text"
+                                value={claimForm.adjusterName}
+                                onChange={(e) => setClaimForm({ ...claimForm, adjusterName: e.target.value })}
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                                placeholder="Enter adjuster name"
+                              />
                             </div>
                             <div>
-                              <label className="block text-sm text-gray-500 mb-1">Adjuster Meeting</label>
-                              <p className={`font-medium ${adjusterMeetingDate ? 'text-gray-900' : 'text-gray-500 italic'}`}>
-                                {formatCalendarDate(adjusterMeetingDate) || 'Not set'}
-                              </p>
+                              <label className="block text-sm text-gray-500 mb-1">Adjuster Email</label>
+                              <input
+                                type="email"
+                                value={claimForm.adjusterEmail}
+                                onChange={(e) => setClaimForm({ ...claimForm, adjusterEmail: e.target.value })}
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                                placeholder="adjuster@insurance.com"
+                              />
                             </div>
                             <div>
-                              <label className="block text-sm text-gray-500 mb-1">Meeting Complete</label>
-                              <p className={`font-medium ${adjusterMeetingComplete ? 'text-gray-900' : 'text-gray-500 italic'}`}>
-                                {adjusterMeetingComplete ? 'Yes' : 'No'}
-                              </p>
+                              <label className="block text-sm text-gray-500 mb-1">Office Phone</label>
+                              <input
+                                type="text"
+                                value={claimForm.adjusterOfficePhone}
+                                onChange={(e) => setClaimForm({ ...claimForm, adjusterOfficePhone: e.target.value })}
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                                placeholder="Enter office phone"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-sm text-gray-500 mb-1">Office Ext</label>
+                              <input
+                                type="text"
+                                value={claimForm.adjusterOfficePhoneExt}
+                                onChange={(e) => setClaimForm({ ...claimForm, adjusterOfficePhoneExt: e.target.value })}
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                                placeholder="Optional extension"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-sm text-gray-500 mb-1">Mobile Phone</label>
+                              <input
+                                type="text"
+                                value={claimForm.adjusterMobilePhone}
+                                onChange={(e) => setClaimForm({ ...claimForm, adjusterMobilePhone: e.target.value })}
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                                placeholder="Enter mobile phone"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-sm text-gray-500 mb-1">Adjuster Meeting Date</label>
+                              <input
+                                type="date"
+                                value={claimForm.adjusterMeetingDate}
+                                onChange={(e) => setClaimForm({ ...claimForm, adjusterMeetingDate: e.target.value })}
+                                className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary outline-none"
+                              />
                             </div>
                           </div>
                         </div>
@@ -9063,20 +9167,45 @@ export default function OpportunityDetail() {
                       </div>
                       <div>
                         <label className="text-sm text-gray-500">Adjuster Assigned</label>
-                        <p className={`font-medium ${adjusterAssigned ? 'text-gray-900' : 'text-gray-500 italic'}`}>
-                          {adjusterAssigned ? 'Yes' : 'Not set'}
+                        <p className={`font-medium ${displayedAdjusterAssigned ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                          {displayedAdjusterAssigned ? 'Yes' : 'Not set'}
                         </p>
                       </div>
                       <div>
                         <label className="text-sm text-gray-500">Adjuster Meeting</label>
-                        <p className={`font-medium ${adjusterMeetingDate ? 'text-gray-900' : 'text-gray-500 italic'}`}>
-                          {formatCalendarDate(adjusterMeetingDate) || 'Not set'}
+                        <p className={`font-medium ${displayedAdjusterMeetingDate ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                          {formatCalendarDate(displayedAdjusterMeetingDate) || 'Not set'}
                         </p>
                       </div>
                       <div>
                         <label className="text-sm text-gray-500">Meeting Complete</label>
-                        <p className={`font-medium ${adjusterMeetingComplete ? 'text-gray-900' : 'text-gray-500 italic'}`}>
-                          {adjusterMeetingComplete ? 'Yes' : 'No'}
+                        <p className={`font-medium ${displayedAdjusterMeetingComplete ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                          {displayedAdjusterMeetingComplete ? 'Yes' : 'No'}
+                        </p>
+                      </div>
+                      <div>
+                        <label className="text-sm text-gray-500">Adjuster Name</label>
+                        <p className={`font-medium ${displayedAdjusterName ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                          {displayedAdjusterName || 'Not set'}
+                        </p>
+                      </div>
+                      <div>
+                        <label className="text-sm text-gray-500">Adjuster Email</label>
+                        <p className={`font-medium ${displayedAdjusterEmail ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                          {displayedAdjusterEmail || 'Not set'}
+                        </p>
+                      </div>
+                      <div>
+                        <label className="text-sm text-gray-500">Office Phone</label>
+                        <p className={`font-medium ${displayedAdjusterOfficePhone ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                          {displayedAdjusterOfficePhone || 'Not set'}
+                          {displayedAdjusterOfficePhoneExt ? ` x${displayedAdjusterOfficePhoneExt}` : ''}
+                        </p>
+                      </div>
+                      <div>
+                        <label className="text-sm text-gray-500">Mobile Phone</label>
+                        <p className={`font-medium ${displayedAdjusterMobilePhone ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                          {displayedAdjusterMobilePhone || 'Not set'}
                         </p>
                       </div>
                     </div>
