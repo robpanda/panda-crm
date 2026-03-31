@@ -33,6 +33,8 @@ import PhotoCamTab from '../components/photocam/PhotoCamTab';
 import useJobCategories from '../hooks/useJobCategories';
 import WorkflowSidebar from '../components/WorkflowSidebar';
 import NotesSidebar from '../components/NotesSidebar';
+import InternalNotesTabs from '../components/InternalNotesTabs';
+import InternalComments from '../components/InternalComments';
 import AddressAutocomplete from '../components/AddressAutocomplete';
 import ExpediterChecklist from '../components/ExpediterChecklist';
 import {
@@ -7166,6 +7168,20 @@ export default function OpportunityDetail() {
                       setShowActivityModal(true);
                     }}
                     opportunityId={id}
+                  />
+                )}
+
+                {activeTab === 'internalNotes' && (
+                  <InternalNotesTabs
+                    entityType="opportunity"
+                    entityId={id}
+                  />
+                )}
+
+                {activeTab === 'internalComments' && (
+                  <InternalComments
+                    entityType="opportunity"
+                    entityId={id}
                   />
                 )}
 
