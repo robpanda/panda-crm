@@ -86,10 +86,10 @@ Record each deployed slice in [`jobs-release-ledger-20260331.md`](./jobs-release
 
 ## Current Stabilization Order
 
-1. invoice/financial regression repro and isolated repair
-2. PandaSign V2 end-to-end smoke and isolated repair
-3. opportunities activity enum compatibility
-4. opportunities save-path compatibility
+1. PandaSign V2 end-to-end smoke and isolated repair
+2. opportunities activity enum compatibility
+3. opportunities save-path compatibility
+4. invoice/financial only if a fresh repro is captured against production
 
 ## Stop Conditions
 

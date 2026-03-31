@@ -23,11 +23,16 @@ If a P0 must stay lane-local, start from the current live lane ref recorded in t
 | `JOBS-NOTIFY-001` | Notifications / bell, email, SMS mentions | Fixed on `codex/opportunities-notes-replies-fix-20260331` at `9f8111cbfc115c595a8886df55b1f814c0dfe931` | User confirmed bell, email, and SMS mentions all worked in production |
 | `JOBS-FE-001` | Frontend / internal notes visibility and threaded replies | Fixed on `codex/frontend-notes-replies-fix-20260331` at `b6469dbbe8d8a8383fb2a6c8540f466fad4a95c2` | User confirmed notes render again and threaded replies are back in production |
 
+## Monitoring / Needs Fresh Repro
+
+| ID | Lane | Current status | Last verification |
+| --- | --- | --- | --- |
+| `JOBS-INV-001` | Invoices / Financial | Not currently reproducing in the live Jobs flow; do not open a fix branch unless a fresh production repro is captured against the universal source baseline | User confirmed on March 31, 2026 that the finance and invoice items in the Job are currently working correctly |
+
 ## Active Issues
 
 | ID | Severity | Lane | Live route or screen | Example evidence | Current behavior | Likely owner |
 | --- | --- | --- | --- | --- | --- | --- |
-| `JOBS-INV-001` | P1 | Invoices / Financial | Jobs Financial tab and invoice flows | User-reported invoice regressions on March 31, 2026 after the branch-drift deploys | Financial and invoice behavior still needs a clean repro, isolated patch lane, and production smoke from the current universal baseline | `frontend/src/pages/OpportunityDetail.jsx`, invoice modal components, and `services/invoices` |
 | `JOBS-PS-001` | P1 | PandaSign V2 | Jobs Documents -> PandaSign V2 preview, send, sign | User-reported PandaSign regressions on March 31, 2026 after the branch-drift deploys | Frontend direct wiring is back on the verified frontend line, but the end-to-end V2 preview/send/sign flow still needs isolated smoke and any remaining backend cleanup | `frontend/src/services/api.js`, PandaSign V2 components, and `services/documents` |
 | `JOBS-OPP-003` | P1 | Opportunities / Activity | `GET /api/opportunities/:id/activity` | Production 500 included `Value 'CHATTER_POST' not found in enum 'ActivityType'` | Job activity feed crashes on enum values the current service line does not recognize | `services/opportunities/src/services/opportunityService.js` |
 | `JOBS-OPP-004` | P1 | Opportunities / Save path | `PUT /api/opportunities/:id` | Production 500 included `Unknown field stageName for select statement on model Opportunity` | Saving stage or claim-related updates can fail because the service selects a field the deployed schema does not have | `services/opportunities/src/services/opportunityService.js` |
@@ -40,17 +45,16 @@ If a P0 must stay lane-local, start from the current live lane ref recorded in t
 
 ## Next Intake Order
 
-- `JOBS-INV-001` invoice and financial repro, repair, and smoke from the universal source branch
 - `JOBS-PS-001` PandaSign V2 end-to-end preview/send/sign smoke and repair
 - `JOBS-OPP-003` activity enum compatibility
 - `JOBS-OPP-004` save-path compatibility
 
 ## Next Lane Smoke Minimums
 
-The next lane, `JOBS-INV-001`, is not ready to patch until it has a fresh repro against the current universal source baseline. Its minimum smoke set after repair is:
+The next lane, `JOBS-PS-001`, must prove the V2 path end to end without falling back to legacy PandaSign or legacy documents endpoints. Its minimum smoke set after repair is:
 
-- [ ] Financial tab loads without runtime or API errors on a known affected Job.
-- [ ] Existing invoices list correctly.
-- [ ] Invoice detail or preview opens.
-- [ ] Pay/send invoice action completes without regression.
-- [ ] Shared job header, Messages tabs, Documents, and GAF surfaces still load on the same Job after deploy.
+- [ ] PandaSign V2 preview succeeds from a real Job.
+- [ ] PandaSign V2 send succeeds from a real Job.
+- [ ] Signed document or signing link remains accessible after refresh.
+- [ ] Job Documents and repository views still load after a PandaSign V2 action.
+- [ ] Shared job header, Messages tabs, GAF, and Financial surfaces still load on the same Job after deploy.
