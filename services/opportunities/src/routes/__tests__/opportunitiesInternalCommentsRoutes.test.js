@@ -10,6 +10,8 @@ test('opportunity service exposes the internal comment handlers used by the rout
   assert.equal(typeof opportunityService.createOpportunityInternalComment, 'function');
   assert.equal(typeof opportunityService.updateOpportunityInternalComment, 'function');
   assert.equal(typeof opportunityService.deleteOpportunityInternalComment, 'function');
+  assert.equal(typeof opportunityService.getOrderContract, 'function');
+  assert.equal(typeof opportunityService.updateOrderContract, 'function');
 });
 
 const createTestServer = async () => {
@@ -91,4 +93,82 @@ test('GET /:id/internal-comments returns opportunity comment data', async (t) =>
   assert.equal(payload.success, true);
   assert.deepEqual(payload.data, [{ id: 'comment-1', content: 'Internal note' }]);
   assert.equal(requestedOpportunityId, 'opp-123');
+});
+
+test('GET /:id/order-contract returns structured specs-backed order contract data', async (t) => {
+  const originalGetOrderContract = opportunityService.getOrderContract;
+  let requestedOpportunityId = null;
+
+  opportunityService.getOrderContract = async (opportunityId) => {
+    requestedOpportunityId = opportunityId;
+    return {
+      opportunityId,
+      specsData: { selectedTrades: ['roofing'] },
+      orderContract: { overview: { projectName: 'Test Project' } },
+    };
+  };
+
+  t.after(() => {
+    opportunityService.getOrderContract = originalGetOrderContract;
+  });
+
+  const { baseUrl, close } = await createTestServer();
+  t.after(close);
+
+  const response = await fetch(`${baseUrl}/opp-123/order-contract`);
+  const payload = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.success, true);
+  assert.equal(requestedOpportunityId, 'opp-123');
+  assert.equal(payload.data.orderContract.overview.projectName, 'Test Project');
+});
+
+test('PATCH /:id/order-contract forwards the additive patch body', async (t) => {
+  const originalUpdateOrderContract = opportunityService.updateOrderContract;
+  let requestedOpportunityId = null;
+  let requestedPatch = null;
+  let requestedUserId = null;
+
+  opportunityService.updateOrderContract = async (opportunityId, orderContractPatch, userId) => {
+    requestedOpportunityId = opportunityId;
+    requestedPatch = orderContractPatch;
+    requestedUserId = userId;
+    return {
+      opportunityId,
+      orderContract: orderContractPatch,
+    };
+  };
+
+  t.after(() => {
+    opportunityService.updateOrderContract = originalUpdateOrderContract;
+  });
+
+  const { baseUrl, close } = await createTestServer();
+  t.after(close);
+
+  const response = await fetch(`${baseUrl}/opp-123/order-contract`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      orderContract: {
+        overview: {
+          projectName: 'Updated Project',
+        },
+      },
+    }),
+  });
+  const payload = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.success, true);
+  assert.equal(requestedOpportunityId, 'opp-123');
+  assert.deepEqual(requestedPatch, {
+    overview: {
+      projectName: 'Updated Project',
+    },
+  });
+  assert.equal(requestedUserId, null);
 });
