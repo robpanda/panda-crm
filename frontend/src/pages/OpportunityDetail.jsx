@@ -171,11 +171,34 @@ function createInvoiceEditorItem(item = {}) {
   };
 }
 
-function toDateInputValue(value) {
+function extractDatePart(value) {
   if (!value) return '';
-  const date = new Date(value);
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    const dateMatch = /^(\d{4}-\d{2}-\d{2})/.exec(trimmed);
+    if (dateMatch) return dateMatch[1];
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return '';
-  return date.toISOString().slice(0, 10);
+
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function toDateInputValue(value) {
+  return extractDatePart(value);
+}
+
+function formatCalendarDate(value, options = { month: 'short', day: 'numeric', year: 'numeric' }) {
+  const datePart = extractDatePart(value);
+  if (!datePart) return '';
+
+  const [year, month, day] = datePart.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0)).toLocaleDateString('en-US', options);
 }
 
 function buildInvoiceEditorState(invoice) {
@@ -2728,6 +2751,36 @@ export default function OpportunityDetail() {
 
     return crewList.filter((member) => member?.id);
   }, [primaryCrewAssignmentAppointment]);
+  const adjusterAppointment = useMemo(() => {
+    const candidates = appointments.filter((appointment) => {
+      const searchText = [
+        appointment?.subject,
+        appointment?.workOrder?.subject,
+        appointment?.workOrder?.workTypeName,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+
+      return searchText.includes('adjuster');
+    });
+
+    if (candidates.length === 0) return null;
+
+    return [...candidates].sort((left, right) => {
+      const leftTime = left?.scheduledStart ? new Date(left.scheduledStart).getTime() : Number.NEGATIVE_INFINITY;
+      const rightTime = right?.scheduledStart ? new Date(right.scheduledStart).getTime() : Number.NEGATIVE_INFINITY;
+      return rightTime - leftTime;
+    })[0];
+  }, [appointments]);
+  const adjusterMeetingDate = adjusterAppointment?.scheduledStart || null;
+  const adjusterMeetingComplete = useMemo(() => {
+    if (adjusterAppointment?.status === 'COMPLETED') return true;
+    return ['ADJUSTER_MEETING_COMPLETE', 'APPROVED', 'CONTRACT_SIGNED', 'IN_PRODUCTION', 'COMPLETED', 'CLOSED_WON'].includes(opportunity?.stage);
+  }, [adjusterAppointment, opportunity?.stage]);
+  const adjusterAssigned = useMemo(() => (
+    Boolean(adjusterAppointment || adjusterMeetingComplete)
+  ), [adjusterAppointment, adjusterMeetingComplete]);
   // Cases (linked via Account) - service not yet deployed, disable retries
   const { data: cases } = useQuery({
     queryKey: ['opportunityCases', id],
@@ -2802,8 +2855,8 @@ export default function OpportunityDetail() {
       setClaimForm({
         insuranceCarrier: opportunity.insuranceCarrier || '',
         claimNumber: opportunity.claimNumber || '',
-        dateOfLoss: opportunity.dateOfLoss ? new Date(opportunity.dateOfLoss).toISOString().split('T')[0] : '',
-        claimFiledDate: opportunity.claimFiledDate ? new Date(opportunity.claimFiledDate).toISOString().split('T')[0] : '',
+        dateOfLoss: toDateInputValue(opportunity.dateOfLoss),
+        claimFiledDate: toDateInputValue(opportunity.claimFiledDate),
         damageLocation: opportunity.damageLocation || '',
       });
     }
@@ -2878,12 +2931,15 @@ export default function OpportunityDetail() {
     const updateData = {
       insuranceCarrier: claimForm.insuranceCarrier || null,
       claimNumber: claimForm.claimNumber || null,
-      dateOfLoss: claimForm.dateOfLoss ? new Date(claimForm.dateOfLoss).toISOString() : null,
-      claimFiledDate: claimForm.claimFiledDate ? new Date(claimForm.claimFiledDate).toISOString() : null,
+      dateOfLoss: claimForm.dateOfLoss || null,
+      claimFiledDate: claimForm.claimFiledDate || null,
       damageLocation: claimForm.damageLocation || null,
     };
-    updateMutation.mutate(updateData);
-    setIsEditingClaim(false);
+    updateMutation.mutate(updateData, {
+      onSuccess: () => {
+        setIsEditingClaim(false);
+      },
+    });
   };
 
   // Work Order mutations
@@ -7493,7 +7549,7 @@ export default function OpportunityDetail() {
                                 <div className="flex justify-between">
                                   <span className="text-sm text-gray-500">Date of Loss</span>
                                   <span className="text-sm font-medium text-gray-900">
-                                    {opportunity.dateOfLoss ? new Date(opportunity.dateOfLoss).toLocaleDateString() : '-'}
+                                    {formatCalendarDate(opportunity.dateOfLoss) || '-'}
                                   </span>
                                 </div>
                                 <div className="flex justify-between">
@@ -8926,6 +8982,32 @@ export default function OpportunityDetail() {
                             placeholder="e.g., Roof, Siding, Gutters"
                           />
                         </div>
+                        <div className="col-span-2 rounded-lg border border-gray-200 bg-gray-50 p-4">
+                          <div className="text-sm font-medium text-gray-700">Adjuster Workflow</div>
+                          <p className="mt-1 text-xs text-gray-500">
+                            Adjuster assignment and meeting status are driven by job appointments and workflow progress.
+                          </p>
+                          <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-4">
+                            <div>
+                              <label className="block text-sm text-gray-500 mb-1">Adjuster Assigned</label>
+                              <p className={`font-medium ${adjusterAssigned ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                                {adjusterAssigned ? 'Yes' : 'Not set'}
+                              </p>
+                            </div>
+                            <div>
+                              <label className="block text-sm text-gray-500 mb-1">Adjuster Meeting</label>
+                              <p className={`font-medium ${adjusterMeetingDate ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                                {formatCalendarDate(adjusterMeetingDate) || 'Not set'}
+                              </p>
+                            </div>
+                            <div>
+                              <label className="block text-sm text-gray-500 mb-1">Meeting Complete</label>
+                              <p className={`font-medium ${adjusterMeetingComplete ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                                {adjusterMeetingComplete ? 'Yes' : 'No'}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
                       </div>
                       <div className="flex justify-end space-x-3 pt-2">
                         <button
@@ -8961,7 +9043,7 @@ export default function OpportunityDetail() {
                         <label className="text-sm text-gray-500">Date of Loss</label>
                         <p className={`font-medium ${opportunity.dateOfLoss ? 'text-gray-900' : 'text-gray-500 italic'}`}>
                           {opportunity.dateOfLoss
-                            ? new Date(opportunity.dateOfLoss).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                            ? formatCalendarDate(opportunity.dateOfLoss, { month: 'short', day: 'numeric', year: 'numeric' })
                             : 'Not set'}
                         </p>
                       </div>
@@ -8969,7 +9051,7 @@ export default function OpportunityDetail() {
                         <label className="text-sm text-gray-500">Claim Filed Date</label>
                         <p className={`font-medium ${opportunity.claimFiledDate ? 'text-gray-900' : 'text-gray-500 italic'}`}>
                           {opportunity.claimFiledDate
-                            ? new Date(opportunity.claimFiledDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                            ? formatCalendarDate(opportunity.claimFiledDate, { month: 'short', day: 'numeric', year: 'numeric' })
                             : 'Not set'}
                         </p>
                       </div>
@@ -8977,6 +9059,24 @@ export default function OpportunityDetail() {
                         <label className="text-sm text-gray-500">Damage Location</label>
                         <p className={`font-medium ${opportunity.damageLocation ? 'text-gray-900' : 'text-gray-500 italic'}`}>
                           {opportunity.damageLocation || 'Not set'}
+                        </p>
+                      </div>
+                      <div>
+                        <label className="text-sm text-gray-500">Adjuster Assigned</label>
+                        <p className={`font-medium ${adjusterAssigned ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                          {adjusterAssigned ? 'Yes' : 'Not set'}
+                        </p>
+                      </div>
+                      <div>
+                        <label className="text-sm text-gray-500">Adjuster Meeting</label>
+                        <p className={`font-medium ${adjusterMeetingDate ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                          {formatCalendarDate(adjusterMeetingDate) || 'Not set'}
+                        </p>
+                      </div>
+                      <div>
+                        <label className="text-sm text-gray-500">Meeting Complete</label>
+                        <p className={`font-medium ${adjusterMeetingComplete ? 'text-gray-900' : 'text-gray-500 italic'}`}>
+                          {adjusterMeetingComplete ? 'Yes' : 'No'}
                         </p>
                       </div>
                     </div>

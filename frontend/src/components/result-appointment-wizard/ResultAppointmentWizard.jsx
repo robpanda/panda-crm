@@ -33,7 +33,25 @@ import {
   VIRTUAL_TASK_TYPES,
 } from './wizardConstants';
 
-const toDateInputValue = (value) => value || '';
+const extractDatePart = (value) => {
+  if (!value) return '';
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    const dateMatch = /^(\d{4}-\d{2}-\d{2})/.exec(trimmed);
+    if (dateMatch) return dateMatch[1];
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const toDateInputValue = (value) => extractDatePart(value);
 const toTimeInputValue = (value, fallback = '09:00') => value || fallback;
 
 const formatDateTime = (value) => {
@@ -51,9 +69,10 @@ const formatDateTime = (value) => {
 
 const formatDate = (value) => {
   if (!value) return '-';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString('en-US');
+  const datePart = extractDatePart(value);
+  if (!datePart) return value;
+  const [year, month, day] = datePart.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0)).toLocaleDateString('en-US');
 };
 
 export default function ResultAppointmentWizard({
