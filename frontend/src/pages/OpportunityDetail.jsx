@@ -2276,9 +2276,9 @@ export default function OpportunityDetail() {
   const activeTab = legacyTabId;
   const setActiveTab = navigateToTab;
   const activeMessagesSubTab = activeCategory === 'messages'
-    ? ['internalNotes', 'internalComments', 'customerComms', 'notifications', 'activity'].includes(activeSubTab)
+    ? ['internalNotes', 'internalComments', 'communications', 'conversations', 'notifications', 'activity'].includes(activeSubTab)
       ? activeSubTab
-      : 'customerComms'
+      : 'internalComments'
     : activeSubTab;
 
   const [showQuickActionModal, setShowQuickActionModal] = useState(false);
@@ -4601,9 +4601,10 @@ export default function OpportunityDetail() {
                   {activeCategory === 'messages' ? (
                     <div className="flex gap-1 border-b border-gray-200 mb-4">
                       {[
-                        { id: 'internalNotes', label: 'Internal Notes' },
                         { id: 'internalComments', label: 'Internal Comments' },
-                        { id: 'customerComms', label: 'Customer Comms' },
+                        { id: 'internalNotes', label: 'Internal Notes' },
+                        { id: 'communications', label: 'Communications' },
+                        { id: 'conversations', label: 'Conversations' },
                         { id: 'notifications', label: 'Notifications' },
                         { id: 'activity', label: 'Activity' },
                       ].map((subTab) => {
@@ -8457,7 +8458,7 @@ export default function OpportunityDetail() {
                   </LazyPanel>
                 )}
 
-                {activeTab === 'activity' && (
+                {activeTab === 'activity' && activeCategory !== 'messages' && (
                   <ActivityTimelineTab
                     activities={activityData?.activities?.filter(a => a.sourceType !== 'ACCULYNX_IMPORT') || []}
                     onActivityClick={(item) => {
@@ -8477,8 +8478,8 @@ export default function OpportunityDetail() {
                   <InternalComments entityType="opportunity" entityId={id} />
                 )}
 
-                {activeCategory === 'messages' && activeMessagesSubTab === 'customerComms' && (
-                  <LazyPanel label="Loading customer communications...">
+                {activeCategory === 'messages' && activeMessagesSubTab === 'communications' && (
+                  <LazyPanel label="Loading communications...">
                     <CommunicationsTab
                       phone={opportunity?.contact?.phone || opportunity?.contact?.mobilePhone}
                       email={opportunity?.contact?.email}
@@ -8489,8 +8490,23 @@ export default function OpportunityDetail() {
                         setShowActivityModal(true);
                       }}
                       opportunityId={id}
+                      showArchiveChannel={false}
                     />
                   </LazyPanel>
+                )}
+
+                {activeCategory === 'messages' && activeMessagesSubTab === 'activity' && (
+                  <LegacyCommunicationsTab
+                    phone={opportunity?.contact?.phone || opportunity?.contact?.mobilePhone}
+                    email={opportunity?.contact?.email}
+                    contactName={opportunity?.contact?.name || `${opportunity?.contact?.firstName || ''} ${opportunity?.contact?.lastName || ''}`}
+                    archivedActivities={activityData?.activities?.filter(a => a.sourceType === 'ACCULYNX_IMPORT') || []}
+                    onActivityClick={(item) => {
+                      setSelectedActivity(item);
+                      setShowActivityModal(true);
+                    }}
+                    opportunityId={id}
+                  />
                 )}
 
                 {activeTab === 'checklist' && (

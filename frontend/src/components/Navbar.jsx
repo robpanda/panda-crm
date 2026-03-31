@@ -1,12 +1,12 @@
-import { lazy, useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Link, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../context/AuthContext';
 import { useRingCentral } from '../context/RingCentralContext';
 import { getRecentItems } from '../utils/recentItems';
-import { attentionApi, notificationsApi } from '../services/api';
+import { usersApi, attentionApi, notificationsApi } from '../services/api';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import LazyBoundary from './LazyBoundary';
+import CreateTicketModal from './CreateTicketModal';
 import {
   Bell,
   Search,
@@ -37,12 +37,15 @@ import {
   PhoneCall,
   PhoneOff,
   Eye,
+  EyeOff,
   HelpCircle,
   Headphones,
   Settings,
   Calculator,
   MessageCircle,
   Check,
+  AtSign,
+  ExternalLink,
   LifeBuoy,
   Ticket,
   ChevronRight,
@@ -56,13 +59,7 @@ import {
   Trash2,
   Gift,
   Bot,
-  ExternalLink,
 } from 'lucide-react';
-
-const NavbarNotificationsPanel = lazy(() => import('./NavbarNotificationsPanel'));
-const NavbarSearchModal = lazy(() => import('./NavbarSearchModal'));
-const NavbarSupportSurface = lazy(() => import('./NavbarSupportSurface'));
-const NavbarViewAsMenu = lazy(() => import('./NavbarViewAsMenu'));
 
 const leadsNavItems = [
   { path: '/leads', icon: BarChart3, label: 'Lead Dashboard' },
@@ -161,8 +158,10 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
   const [showAdminMenu, setShowAdminMenu] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchModule, setSearchModule] = useState('all');
   const [showViewAsMenu, setShowViewAsMenu] = useState(false);
+  const [viewAsSearch, setViewAsSearch] = useState('');
+  const [viewAsUsers, setViewAsUsers] = useState([]);
+  const [viewAsLoading, setViewAsLoading] = useState(false);
   const [recentLeads, setRecentLeads] = useState([]);
   const [recentJobs, setRecentJobs] = useState([]);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -259,11 +258,7 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
   const handleSearch = (e) => {
     e.preventDefault();
     if (searchQuery.trim()) {
-      const params = new URLSearchParams({ q: searchQuery.trim() });
-      if (searchModule && searchModule !== 'all') {
-        params.set('module', searchModule);
-      }
-      navigate(`/search?${params.toString()}`);
+      navigate(`/search?q=${encodeURIComponent(searchQuery.trim())}`);
       setSearchQuery('');
       setShowSearch(false);
     }
@@ -281,6 +276,46 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
   const isMoreActive = moreNavItems.some(item => isActive(item.path));
   const isAdminActive = adminNavItems.some(item => isActive(item.path));
 
+  // Load users for View As dropdown when opened
+  useEffect(() => {
+    if (showViewAsMenu && canImpersonate && viewAsUsers.length === 0) {
+      setViewAsLoading(true);
+      usersApi.getUsersForDropdown({ limit: 100 })
+        .then(response => {
+          // Response is { success: true, data: [...users...] }
+          const users = response?.data || response || [];
+          setViewAsUsers(Array.isArray(users) ? users : []);
+        })
+        .catch(err => {
+          console.error('Failed to load users for View As:', err);
+        })
+        .finally(() => {
+          setViewAsLoading(false);
+        });
+    }
+  }, [showViewAsMenu, canImpersonate, viewAsUsers.length]);
+
+  // Filter users based on search
+  const filteredViewAsUsers = viewAsUsers.filter(u => {
+    if (!viewAsSearch) return true;
+    const search = viewAsSearch.toLowerCase();
+    const name = `${u.firstName || ''} ${u.lastName || ''}`.toLowerCase();
+    const email = (u.email || '').toLowerCase();
+    return name.includes(search) || email.includes(search);
+  });
+
+  // Handle selecting a user to impersonate
+  const handleViewAsUser = async (targetUser) => {
+    try {
+      await startImpersonation(targetUser);
+      setShowViewAsMenu(false);
+      setViewAsSearch('');
+      // Navigate to home to see the view as that user
+      navigate('/');
+    } catch (err) {
+      console.error('Failed to impersonate user:', err);
+    }
+  };
 
   // Close menus when clicking outside
   useEffect(() => {
@@ -506,17 +541,30 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
                 <ChevronDown className={`w-3 h-3 transition-transform ${showSupportMenu ? 'rotate-180' : ''}`} />
               </button>
 
-              {(showSupportMenu || showCreateTicketModal) && (
-                <LazyBoundary label="Loading support tools...">
-                  <NavbarSupportSurface
-                    currentPath={location.pathname}
-                    showMenu={showSupportMenu}
-                    showCreateTicketModal={showCreateTicketModal}
-                    onCloseMenu={() => setShowSupportMenu(false)}
-                    onOpenCreateTicket={() => setShowCreateTicketModal(true)}
-                    onCloseCreateTicket={() => setShowCreateTicketModal(false)}
-                  />
-                </LazyBoundary>
+              {showSupportMenu && (
+                <div className="absolute top-full left-0 mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50">
+                  <NavLink
+                    to="/support"
+                    className={`flex items-center space-x-3 px-4 py-2.5 text-sm transition-colors ${
+                      location.pathname === '/support'
+                        ? 'bg-panda-primary/10 text-panda-primary'
+                        : 'text-gray-700 hover:bg-gray-100'
+                    }`}
+                  >
+                    <List className="w-4 h-4" />
+                    <span>My Tickets</span>
+                  </NavLink>
+                  <button
+                    onClick={() => {
+                      setShowSupportMenu(false);
+                      setShowCreateTicketModal(true);
+                    }}
+                    className="flex items-center space-x-3 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-100 w-full"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>New Ticket</span>
+                  </button>
+                </div>
               )}
             </div>
 
@@ -699,24 +747,28 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
           </div>
         </div>
 
-        {/* Center - Search Trigger */}
-        <button
-          type="button"
-          onClick={() => setShowSearch(true)}
-          className="hidden md:flex flex-1 max-w-3xl mx-4 h-10 items-center gap-3 rounded-xl border border-gray-300 bg-white px-4 text-left text-sm text-gray-500 shadow-sm transition-colors hover:border-panda-primary/30 hover:bg-gray-50"
-        >
-          <Search className="h-4 w-4 text-gray-400" />
-          <span className="min-w-0 flex-1 truncate">Search</span>
-        </button>
+        {/* Center - Search */}
+        <form onSubmit={handleSearch} className="hidden md:flex flex-1 max-w-md mx-4">
+          <div className="relative w-full">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
+            <input
+              type="text"
+              placeholder="Search accounts, contacts, opportunities..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-9 pr-4 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none transition-shadow bg-gray-50 focus:bg-white"
+            />
+          </div>
+        </form>
 
         {/* Right side */}
         <div className="flex items-center space-x-2">
           {/* Mobile search toggle */}
           <button
-            onClick={() => setShowSearch(true)}
+            onClick={() => setShowSearch(!showSearch)}
             className="p-2 text-gray-600 hover:bg-gray-100 active:bg-gray-200 rounded-lg md:hidden"
           >
-            <Search className="w-5 h-5" />
+            {showSearch ? <X className="w-5 h-5" /> : <Search className="w-5 h-5" />}
           </button>
 
           {/* RingCentral Phone Status */}
@@ -771,16 +823,78 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
               </button>
 
               {showViewAsMenu && (
-                <LazyBoundary label="Loading user list...">
-                  <NavbarViewAsMenu
-                    user={user}
-                    actualUser={actualUser}
-                    isImpersonating={isImpersonating}
-                    startImpersonation={startImpersonation}
-                    stopImpersonation={stopImpersonation}
-                    onClose={() => setShowViewAsMenu(false)}
-                  />
-                </LazyBoundary>
+                <div className="absolute right-0 mt-1 w-72 bg-white rounded-lg shadow-lg border border-gray-200 py-2 z-50">
+                  <div className="px-3 pb-2 border-b border-gray-100">
+                    <input
+                      type="text"
+                      placeholder="Search users..."
+                      value={viewAsSearch}
+                      onChange={(e) => setViewAsSearch(e.target.value)}
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none"
+                      autoFocus
+                    />
+                  </div>
+
+                  {isImpersonating && (
+                    <button
+                      onClick={() => {
+                        stopImpersonation();
+                        setShowViewAsMenu(false);
+                      }}
+                      className="flex items-center w-full px-4 py-2.5 text-sm text-amber-700 hover:bg-amber-50 border-b border-gray-100"
+                    >
+                      <EyeOff className="w-4 h-4 mr-3" />
+                      <span>Stop Viewing As</span>
+                      <span className="ml-auto text-xs text-gray-500">
+                        Back to {actualUser?.firstName || 'you'}
+                      </span>
+                    </button>
+                  )}
+
+                  <div className="max-h-64 overflow-y-auto">
+                    {viewAsLoading ? (
+                      <div className="px-4 py-3 text-sm text-gray-500 text-center">
+                        Loading users...
+                      </div>
+                    ) : filteredViewAsUsers.length === 0 ? (
+                      <div className="px-4 py-3 text-sm text-gray-500 text-center">
+                        {viewAsSearch ? 'No users found' : 'No users available'}
+                      </div>
+                    ) : (
+                      filteredViewAsUsers.slice(0, 20).map((u) => (
+                        <button
+                          key={u.id}
+                          onClick={() => handleViewAsUser(u)}
+                          className={`flex items-center w-full px-4 py-2 text-sm hover:bg-gray-100 ${
+                            user?.id === u.id ? 'bg-panda-primary/5' : ''
+                          }`}
+                        >
+                          <div className="w-7 h-7 rounded-full bg-gradient-to-br from-gray-400 to-gray-500 flex items-center justify-center mr-3 flex-shrink-0">
+                            <span className="text-white text-xs font-medium">
+                              {(u.firstName || u.email || '?').charAt(0).toUpperCase()}
+                            </span>
+                          </div>
+                          <div className="flex-1 min-w-0 text-left">
+                            <p className="font-medium text-gray-900 truncate">
+                              {u.firstName && u.lastName ? `${u.firstName} ${u.lastName}` : u.email}
+                            </p>
+                            <p className="text-xs text-gray-500 truncate">{u.role?.name || u.department || ''}</p>
+                          </div>
+                          {user?.id === u.id && (
+                            <span className="ml-2 text-xs bg-panda-primary/10 text-panda-primary px-2 py-0.5 rounded">
+                              Current
+                            </span>
+                          )}
+                        </button>
+                      ))
+                    )}
+                    {filteredViewAsUsers.length > 20 && (
+                      <div className="px-4 py-2 text-xs text-gray-500 text-center border-t border-gray-100">
+                        Showing first 20 results. Type to search more.
+                      </div>
+                    )}
+                  </div>
+                </div>
               )}
             </div>
           )}
@@ -805,17 +919,110 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
             </button>
 
             {showNotifications && (
-              <LazyBoundary label="Loading notifications...">
-                <NavbarNotificationsPanel
-                  unreadCount={unreadCount}
-                  notifications={notifications}
-                  notificationsLoading={notificationsLoading}
-                  onMarkAllAsRead={() => markAllAsReadMutation.mutate()}
-                  isMarkingAllAsRead={markAllAsReadMutation.isPending}
-                  onNotificationClick={handleNotificationClick}
-                  onClose={() => setShowNotifications(false)}
-                />
-              </LazyBoundary>
+              <div className="absolute right-0 mt-1 w-80 sm:w-96 bg-white rounded-lg shadow-lg border border-gray-200 z-50 overflow-hidden">
+                {/* Header */}
+                <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-gray-50">
+                  <h3 className="text-sm font-semibold text-gray-900">Notifications</h3>
+                  {unreadCount > 0 && (
+                    <button
+                      onClick={() => markAllAsReadMutation.mutate()}
+                      disabled={markAllAsReadMutation.isPending}
+                      className="text-xs text-panda-primary hover:text-panda-secondary font-medium flex items-center gap-1"
+                    >
+                      <Check className="w-3 h-3" />
+                      Mark all read
+                    </button>
+                  )}
+                </div>
+
+                {/* Notifications List */}
+                <div className="max-h-96 overflow-y-auto">
+                  {notificationsLoading ? (
+                    <div className="px-4 py-8 text-center text-gray-500 text-sm">
+                      <div className="animate-spin w-5 h-5 border-2 border-panda-primary border-t-transparent rounded-full mx-auto mb-2"></div>
+                      Loading notifications...
+                    </div>
+                  ) : !Array.isArray(notifications) || notifications.length === 0 ? (
+                    <div className="px-4 py-8 text-center text-gray-500">
+                      <Bell className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+                      <p className="text-sm">No notifications yet</p>
+                      <p className="text-xs text-gray-400 mt-1">You'll see @mentions and updates here</p>
+                    </div>
+                  ) : (
+                    notifications.map((notification) => (
+                      <button
+                        key={notification.id}
+                        onClick={() => handleNotificationClick(notification)}
+                        className={`w-full px-4 py-3 text-left hover:bg-gray-50 border-b border-gray-100 last:border-b-0 transition-colors ${
+                          notification.status === 'UNREAD' ? 'bg-blue-50/50' : ''
+                        }`}
+                      >
+                        <div className="flex items-start gap-3">
+                          {/* Icon based on notification type */}
+                          <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center ${
+                            notification.type === 'MENTION'
+                              ? 'bg-blue-100 text-blue-600'
+                              : notification.type === 'MESSAGE'
+                              ? 'bg-green-100 text-green-600'
+                              : 'bg-gray-100 text-gray-600'
+                          }`}>
+                            {notification.type === 'MENTION' ? (
+                              <AtSign className="w-4 h-4" />
+                            ) : notification.type === 'MESSAGE' ? (
+                              <MessageCircle className="w-4 h-4" />
+                            ) : (
+                              <Bell className="w-4 h-4" />
+                            )}
+                          </div>
+
+                          {/* Content */}
+                          <div className="flex-1 min-w-0">
+                            <p className={`text-sm ${notification.status === 'UNREAD' ? 'font-medium text-gray-900' : 'text-gray-700'}`}>
+                              {notification.title || 'Notification'}
+                            </p>
+                            <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">
+                              {notification.message}
+                            </p>
+                            <p className="text-xs text-gray-400 mt-1">
+                              {notification.createdAt
+                                ? new Date(notification.createdAt).toLocaleDateString('en-US', {
+                                    month: 'short',
+                                    day: 'numeric',
+                                    hour: 'numeric',
+                                    minute: '2-digit',
+                                  })
+                                : ''}
+                            </p>
+                          </div>
+
+                          {/* Unread indicator */}
+                          {notification.status === 'UNREAD' && (
+                            <div className="flex-shrink-0 w-2 h-2 bg-blue-500 rounded-full mt-2"></div>
+                          )}
+
+                          {/* Link indicator */}
+                          {notification.actionUrl && (
+                            <ExternalLink className="flex-shrink-0 w-3 h-3 text-gray-400 mt-1" />
+                          )}
+                        </div>
+                      </button>
+                    ))
+                  )}
+                </div>
+
+                {/* Footer */}
+                {Array.isArray(notifications) && notifications.length > 0 && (
+                  <div className="px-4 py-2 border-t border-gray-100 bg-gray-50">
+                    <Link
+                      to="/notifications"
+                      onClick={() => setShowNotifications(false)}
+                      className="text-xs text-panda-primary hover:text-panda-secondary font-medium"
+                    >
+                      View all notifications →
+                    </Link>
+                  </div>
+                )}
+              </div>
             )}
           </div>
 
@@ -873,17 +1080,45 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
         </div>
       </div>
 
+      {/* Mobile search overlay */}
       {showSearch && (
-        <LazyBoundary label="Loading search...">
-          <NavbarSearchModal
-            searchQuery={searchQuery}
-            searchModule={searchModule}
-            onSearchQueryChange={setSearchQuery}
-            onSearchModuleChange={setSearchModule}
-            onClose={() => setShowSearch(false)}
-            onSubmit={handleSearch}
-          />
-        </LazyBoundary>
+        <div className="absolute top-16 left-0 right-0 bg-white border-b border-gray-200 p-4 md:hidden shadow-lg">
+          <form onSubmit={handleSearch} className="relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
+            <input
+              type="text"
+              placeholder="Search accounts, contacts, opportunities..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              autoFocus
+              className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent outline-none text-base"
+            />
+          </form>
+        </div>
+      )}
+
+      {/* Create Ticket Modal */}
+      {showCreateTicketModal && (
+        <CreateTicketModal
+          onClose={() => setShowCreateTicketModal(false)}
+          onSubmit={async (ticketData) => {
+            // Submit ticket to API
+            const response = await fetch(`${import.meta.env.VITE_API_BASE || ''}/api/support/tickets`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${localStorage.getItem('accessToken')}`,
+              },
+              body: ticketData, // FormData - don't set Content-Type, browser will set it with boundary
+            });
+            if (!response.ok) {
+              const error = await response.json().catch(() => ({ error: 'Failed to create ticket' }));
+              throw new Error(error.error || 'Failed to create ticket');
+            }
+            setShowCreateTicketModal(false);
+            // Navigate to support page to see the new ticket
+            navigate('/support');
+          }}
+        />
       )}
     </nav>
   );

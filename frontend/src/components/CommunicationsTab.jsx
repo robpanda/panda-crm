@@ -376,6 +376,7 @@ export default function CommunicationsTab({
   archivedActivities = [],
   onActivityClick,
   opportunityId,
+  showArchiveChannel = true,
 }) {
   const queryClient = useQueryClient();
   const [activeChannel, setActiveChannel] = useState('sms');
@@ -630,7 +631,7 @@ export default function CommunicationsTab({
               color="bg-green-50 text-green-700 ring-green-200"
             />
           )}
-          {counts.archive > 0 && (
+          {showArchiveChannel && counts.archive > 0 && (
             <ChannelTab
               icon={Archive}
               label="Archive"
@@ -856,7 +857,7 @@ export default function CommunicationsTab({
       )}
 
       {/* ── Archive Channel: Legacy Activities ───────────────────────────────── */}
-      {!isLoading && showArchive && (
+      {!isLoading && showArchiveChannel && showArchive && (
         <div className="flex-1 overflow-y-auto px-4 py-3 [&::-webkit-scrollbar]:hidden" style={{ scrollbarWidth: 'none' }}>
           {archivedActivities.length === 0 ? (
             <div className="text-center py-12 text-gray-400">

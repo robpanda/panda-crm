@@ -123,8 +123,10 @@ export default function useJobCategories(initialCategory = 'schedule') {
         counts.approvals = 0; // Calculate if needed
         break;
       case 'messages':
-        counts.conversations = data.conversations?.length || 0;
+        counts.internalComments = data.internalComments?.length || 0;
+        counts.internalNotes = data.internalNotes?.length || 0;
         counts.communications = data.communications?.length || 0;
+        counts.conversations = data.conversations?.length || 0;
         counts.notifications = data.notifications?.length || 0;
         counts.activity = data.activities?.length || 0;
         break;

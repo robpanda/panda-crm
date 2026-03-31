@@ -4733,37 +4733,21 @@ export const documentsApiV2 = {
   },
 
   async verifyRequiredFields(payload = {}) {
-    const paths = [];
-    if (payload.agreementId) {
-      paths.push(`/api/documents/agreements/${payload.agreementId}/verify-required-fields`);
-    }
-    paths.push('/api/documents/pandasign/agreements/verify-required-fields');
-    paths.push('/api/documents/pandasign/verify-required-fields');
-    paths.push('/api/documents/agreements/verify-required-fields');
-
-    return postFirstAvailable(paths, payload);
+    const path = payload.agreementId
+      ? `/api/documents/agreements/${payload.agreementId}/verify-required-fields`
+      : '/api/documents/agreements/verify-required-fields';
+    const response = await api.post(path, payload);
+    return response.data;
   },
 
   async preview(payload = {}) {
-    return postFirstAvailable(
-      [
-        '/api/documents/pandasign/preview',
-        '/api/documents/pandasign/v2/preview',
-        '/api/documents/agreements/preview',
-      ],
-      payload
-    );
+    const response = await api.post('/api/documents/agreements/preview', payload);
+    return response.data;
   },
 
   async send(payload = {}) {
-    return postFirstAvailable(
-      [
-        '/api/documents/pandasign/send',
-        '/api/documents/pandasign/v2/send',
-        '/api/documents/agreements/send',
-      ],
-      payload
-    );
+    const response = await api.post('/api/documents/agreements/send', payload);
+    return response.data;
   },
 };
 

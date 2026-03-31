@@ -21,10 +21,8 @@ export default function NotesSidebar({ opportunityId }) {
   const queryClient = useQueryClient();
   const [isAddingNote, setIsAddingNote] = useState(false);
   const [editingNoteId, setEditingNoteId] = useState(null);
-  const [newNoteTitle, setNewNoteTitle] = useState('');
   const [newNoteBody, setNewNoteBody] = useState('');
   const [newNoteMentions, setNewNoteMentions] = useState([]);
-  const [editTitle, setEditTitle] = useState('');
   const [editBody, setEditBody] = useState('');
   const [editMentions, setEditMentions] = useState([]);
   const [expandedNotes, setExpandedNotes] = useState(new Set());
@@ -43,7 +41,6 @@ export default function NotesSidebar({ opportunityId }) {
     onSuccess: () => {
       queryClient.invalidateQueries(['opportunityNotes', opportunityId]);
       setIsAddingNote(false);
-      setNewNoteTitle('');
       setNewNoteBody('');
       setNewNoteMentions([]);
     },
@@ -55,7 +52,6 @@ export default function NotesSidebar({ opportunityId }) {
     onSuccess: () => {
       queryClient.invalidateQueries(['opportunityNotes', opportunityId]);
       setEditingNoteId(null);
-      setEditTitle('');
       setEditBody('');
       setEditMentions([]);
     },
@@ -81,7 +77,6 @@ export default function NotesSidebar({ opportunityId }) {
   const handleCreateNote = () => {
     if (!newNoteBody.trim()) return;
     createNoteMutation.mutate({
-      title: newNoteTitle.trim() || null,
       body: newNoteBody.trim(),
       isPinned: false,
       mentions: newNoteMentions,
@@ -93,7 +88,6 @@ export default function NotesSidebar({ opportunityId }) {
     updateNoteMutation.mutate({
       noteId,
       data: {
-        title: editTitle.trim() || null,
         body: editBody.trim(),
         mentions: editMentions,
       },
@@ -102,13 +96,12 @@ export default function NotesSidebar({ opportunityId }) {
 
   const startEditing = (note) => {
     setEditingNoteId(note.id);
-    setEditTitle(note.title || '');
-    setEditBody(note.body || '');
+    setEditBody(note.body || note.title || '');
+    setEditMentions(note.mentions || []);
   };
 
   const cancelEditing = () => {
     setEditingNoteId(null);
-    setEditTitle('');
     setEditBody('');
     setEditMentions([]);
   };
@@ -156,7 +149,7 @@ export default function NotesSidebar({ opportunityId }) {
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
         <div className="flex items-center gap-2 mb-4">
           <StickyNote className="w-5 h-5 text-yellow-500" />
-          <h3 className="font-semibold text-gray-900">Notes</h3>
+          <h3 className="font-semibold text-gray-900">Internal Notes</h3>
         </div>
         <div className="animate-pulse space-y-3">
           <div className="h-16 bg-gray-100 rounded-lg"></div>
@@ -172,7 +165,7 @@ export default function NotesSidebar({ opportunityId }) {
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
         <div className="flex items-center gap-2 mb-4">
           <StickyNote className="w-5 h-5 text-yellow-500" />
-          <h3 className="font-semibold text-gray-900">Notes</h3>
+          <h3 className="font-semibold text-gray-900">Internal Notes</h3>
         </div>
         <p className="text-sm text-red-500">Failed to load notes</p>
       </div>
@@ -185,7 +178,7 @@ export default function NotesSidebar({ opportunityId }) {
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
           <StickyNote className="w-5 h-5 text-yellow-500" />
-          <h3 className="font-semibold text-gray-900">Notes</h3>
+          <h3 className="font-semibold text-gray-900">Internal Notes</h3>
           <span className="text-xs text-gray-400">({notes.length})</span>
         </div>
         {!isAddingNote && (
@@ -202,13 +195,6 @@ export default function NotesSidebar({ opportunityId }) {
       {/* Add Note Form */}
       {isAddingNote && (
         <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-          <input
-            type="text"
-            placeholder="Title (optional)"
-            value={newNoteTitle}
-            onChange={(e) => setNewNoteTitle(e.target.value)}
-            className="w-full text-sm font-medium text-gray-900 bg-transparent border-none focus:outline-none placeholder-gray-400 mb-2"
-          />
           <MentionTextarea
             placeholder="Write your note... (type @ to mention someone)"
             value={newNoteBody}
@@ -223,7 +209,6 @@ export default function NotesSidebar({ opportunityId }) {
             <button
               onClick={() => {
                 setIsAddingNote(false);
-                setNewNoteTitle('');
                 setNewNoteBody('');
                 setNewNoteMentions([]);
               }}
@@ -258,10 +243,10 @@ export default function NotesSidebar({ opportunityId }) {
             isPinned={true}
             isExpanded={expandedNotes.has(pinnedNote.id)}
             isEditing={editingNoteId === pinnedNote.id}
-            editTitle={editTitle}
             editBody={editBody}
-            setEditTitle={setEditTitle}
             setEditBody={setEditBody}
+            editMentions={editMentions}
+            setEditMentions={setEditMentions}
             onToggleExpand={() => toggleExpand(pinnedNote.id)}
             onTogglePin={() => togglePinMutation.mutate(pinnedNote.id)}
             onStartEdit={() => startEditing(pinnedNote)}
@@ -291,10 +276,10 @@ export default function NotesSidebar({ opportunityId }) {
             isPinned={false}
             isExpanded={expandedNotes.has(note.id)}
             isEditing={editingNoteId === note.id}
-            editTitle={editTitle}
             editBody={editBody}
-            setEditTitle={setEditTitle}
             setEditBody={setEditBody}
+            editMentions={editMentions}
+            setEditMentions={setEditMentions}
             onToggleExpand={() => toggleExpand(note.id)}
             onTogglePin={() => togglePinMutation.mutate(note.id)}
             onStartEdit={() => startEditing(note)}
@@ -315,7 +300,7 @@ export default function NotesSidebar({ opportunityId }) {
         {notes.length === 0 && !isAddingNote && (
           <div className="text-center py-6 text-gray-400">
             <StickyNote className="w-8 h-8 mx-auto mb-2 opacity-50" />
-            <p className="text-sm">No notes yet</p>
+            <p className="text-sm">No internal notes yet</p>
             <button
               onClick={() => setIsAddingNote(true)}
               className="text-xs text-panda-primary hover:underline mt-1"
@@ -335,10 +320,10 @@ function NoteCard({
   isPinned,
   isExpanded,
   isEditing,
-  editTitle,
   editBody,
-  setEditTitle,
   setEditBody,
+  editMentions,
+  setEditMentions,
   onToggleExpand,
   onTogglePin,
   onStartEdit,
@@ -356,13 +341,6 @@ function NoteCard({
   if (isEditing) {
     return (
       <div className={`p-3 rounded-lg border ${isPinned ? 'bg-yellow-50 border-yellow-200' : 'bg-gray-50 border-gray-200'}`}>
-        <input
-          type="text"
-          placeholder="Title (optional)"
-          value={editTitle}
-          onChange={(e) => setEditTitle(e.target.value)}
-          className="w-full text-sm font-medium text-gray-900 bg-transparent border-none focus:outline-none placeholder-gray-400 mb-2"
-        />
         <MentionTextarea
           value={editBody}
           onChange={setEditBody}
@@ -427,11 +405,8 @@ function NoteCard({
       {/* Note Header */}
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
-          {note.title && (
-            <h4 className="text-sm font-medium text-gray-900 truncate">{note.title}</h4>
-          )}
           <p className={`text-sm text-gray-600 ${isExpanded ? '' : 'line-clamp-2'}`}>
-            {isExpanded ? note.body : truncateText(note.body, 80)}
+            {isExpanded ? (note.body || note.title) : truncateText(note.body || note.title, 80)}
           </p>
         </div>
         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
