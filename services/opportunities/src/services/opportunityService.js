@@ -76,6 +76,38 @@ function extractMentionUserId(mention) {
   return mention.userId || mention.id || null;
 }
 
+function normalizeMentionDisplayName(value) {
+  return String(value || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/[.,!?;:]+$/g, '');
+}
+
+function splitMentionDisplayName(value) {
+  const normalized = normalizeMentionDisplayName(value);
+  const parts = normalized.split(' ').filter(Boolean);
+  if (parts.length < 2) return null;
+  return {
+    firstName: parts[0],
+    lastName: parts.slice(1).join(' '),
+  };
+}
+
+function extractTypedMentionNames(content) {
+  const text = String(content || '');
+  const matches = text.matchAll(/@([A-Za-z0-9][A-Za-z0-9.'&-]*(?:\s+[A-Za-z0-9][A-Za-z0-9.'&-]*){1,3})/g);
+  const names = new Set();
+
+  for (const match of matches) {
+    const normalized = normalizeMentionDisplayName(match[1]);
+    if (normalized.split(' ').length >= 2) {
+      names.add(normalized);
+    }
+  }
+
+  return Array.from(names);
+}
+
 function mapInternalCommentNote(comment) {
   const meta = parseInternalCommentTitle(comment.title) || {
     departmentTag: 'general',
@@ -1785,6 +1817,63 @@ Be factual and professional. Highlight anything that needs attention.`;
     }
   }
 
+  async resolveOpportunityMentionPayload({ mentions = [], content = '' }) {
+    const explicitUserIds = [...new Set((mentions || []).map(extractMentionUserId).filter(Boolean))];
+    let mentionedUsers = [];
+
+    if (explicitUserIds.length > 0) {
+      mentionedUsers = await prisma.user.findMany({
+        where: { id: { in: explicitUserIds } },
+        select: { id: true, email: true, firstName: true, lastName: true },
+      });
+    } else {
+      const typedMentionNames = extractTypedMentionNames(content);
+      if (typedMentionNames.length === 0) {
+        return [];
+      }
+
+      const exactNameClauses = typedMentionNames
+        .map(splitMentionDisplayName)
+        .filter(Boolean)
+        .map(({ firstName, lastName }) => ({
+          firstName: { equals: firstName, mode: 'insensitive' },
+          lastName: { equals: lastName, mode: 'insensitive' },
+        }));
+
+      if (exactNameClauses.length === 0) {
+        return [];
+      }
+
+      const requestedNames = new Set(
+        typedMentionNames.map((name) => normalizeMentionDisplayName(name).toLowerCase()),
+      );
+
+      mentionedUsers = (await prisma.user.findMany({
+        where: { OR: exactNameClauses },
+        select: { id: true, email: true, firstName: true, lastName: true },
+      })).filter((user) => {
+        const displayName = normalizeMentionDisplayName(
+          `${user.firstName || ''} ${user.lastName || ''}`,
+        ).toLowerCase();
+        return requestedNames.has(displayName);
+      });
+    }
+
+    const mentionPayloadById = new Map();
+    mentionedUsers.forEach((user) => {
+      mentionPayloadById.set(user.id, {
+        id: user.id,
+        userId: user.id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        name: `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email,
+        email: user.email,
+      });
+    });
+
+    return Array.from(mentionPayloadById.values());
+  }
+
   async notifyOpportunityMentions({
     opportunityId,
     commentId = null,
@@ -1793,23 +1882,20 @@ Be factual and professional. Highlight anything that needs attention.`;
     actor = null,
     actorUserId = null,
   }) {
-    const mentionUserIds = [...new Set((mentions || []).map(extractMentionUserId).filter(Boolean))];
+    const resolvedMentions = await this.resolveOpportunityMentionPayload({ mentions, content });
+    const mentionUserIds = [...new Set(resolvedMentions.map(extractMentionUserId).filter(Boolean))];
     if (mentionUserIds.length === 0) {
       return 0;
     }
 
-    const [opportunity, mentionedUsers] = await Promise.all([
-      prisma.opportunity.findUnique({
-        where: { id: opportunityId },
-        select: { id: true, name: true, jobId: true },
-      }),
-      prisma.user.findMany({
-        where: { id: { in: mentionUserIds } },
-        select: { id: true, email: true, firstName: true, lastName: true },
-      }),
-    ]);
+    const opportunity = await prisma.opportunity.findUnique({
+      where: { id: opportunityId },
+      select: { id: true, name: true, jobId: true },
+    });
 
-    const mentionedUserById = new Map(mentionedUsers.map((user) => [user.id, user]));
+    const mentionedUserById = new Map(
+      resolvedMentions.map((mention) => [mention.userId || mention.id, mention]),
+    );
     const mentionerName = `${actor?.firstName || ''} ${actor?.lastName || ''}`.trim()
       || actor?.email
       || 'Someone';
@@ -4133,6 +4219,7 @@ Be factual and professional. Highlight anything that needs attention.`;
       data: {
         title: data.title,
         body: data.body,
+        mentions: data.mentions?.length ? data.mentions : Prisma.JsonNull,
         isPinned: data.isPinned || false,
         pinnedAt: data.isPinned ? new Date() : null,
         opportunityId,
@@ -4145,10 +4232,23 @@ Be factual and professional. Highlight anything that needs attention.`;
       },
     });
 
+    const noteContent = [data.title, data.body].filter(Boolean).join('\n\n');
+    const mentionPayload = await this.resolveOpportunityMentionPayload({
+      mentions: data.mentions || [],
+      content: noteContent,
+    });
+
+    if (mentionPayload.length > 0 && !note.mentions) {
+      await prisma.note.update({
+        where: { id: note.id },
+        data: { mentions: mentionPayload },
+      });
+    }
+
     const mentionsNotified = await this.notifyOpportunityMentions({
       opportunityId,
-      content: [data.title, data.body].filter(Boolean).join('\n\n'),
-      mentions: data.mentions || [],
+      content: noteContent,
+      mentions: mentionPayload,
       actor,
       actorUserId: createdById,
     });
@@ -4201,6 +4301,16 @@ Be factual and professional. Highlight anything that needs attention.`;
       updateData.pinnedAt = data.isPinned ? new Date() : null;
     }
 
+    const noteContent = [
+      data.title !== undefined ? data.title : existingNote.title,
+      data.body !== undefined ? data.body : existingNote.body,
+    ].filter(Boolean).join('\n\n');
+    const mentionPayload = await this.resolveOpportunityMentionPayload({
+      mentions: data.mentions || [],
+      content: noteContent,
+    });
+    updateData.mentions = mentionPayload.length > 0 ? mentionPayload : Prisma.JsonNull;
+
     const note = await prisma.note.update({
       where: { id: noteId },
       data: updateData,
@@ -4213,8 +4323,8 @@ Be factual and professional. Highlight anything that needs attention.`;
 
     const mentionsNotified = await this.notifyOpportunityMentions({
       opportunityId: existingNote.opportunityId,
-      content: [note.title, note.body].filter(Boolean).join('\n\n'),
-      mentions: data.mentions || [],
+      content: noteContent,
+      mentions: mentionPayload,
       actor,
       actorUserId: await this.resolveActorUserId(actor),
     });
@@ -4306,6 +4416,7 @@ Be factual and professional. Highlight anything that needs attention.`;
         opportunityId,
         title: toInternalCommentTitle(departmentTag, isResolved),
         body: content,
+        mentions: payload.mentions?.length ? payload.mentions : Prisma.JsonNull,
         createdById: actorUserId,
       },
       include: {
@@ -4315,11 +4426,23 @@ Be factual and professional. Highlight anything that needs attention.`;
       },
     });
 
+    const mentionPayload = await this.resolveOpportunityMentionPayload({
+      mentions: payload.mentions || [],
+      content,
+    });
+
+    if (mentionPayload.length > 0 && !comment.mentions) {
+      await prisma.note.update({
+        where: { id: comment.id },
+        data: { mentions: mentionPayload },
+      });
+    }
+
     const mentionsNotified = await this.notifyOpportunityMentions({
       opportunityId,
       commentId: comment.id,
       content,
-      mentions: payload.mentions || [],
+      mentions: mentionPayload,
       actor,
       actorUserId,
     });
@@ -4371,11 +4494,17 @@ Be factual and professional. Highlight anything that needs attention.`;
       throw error;
     }
 
+    const mentionPayload = await this.resolveOpportunityMentionPayload({
+      mentions: payload.mentions || [],
+      content: nextContent,
+    });
+
     const updated = await prisma.note.update({
       where: { id: commentId },
       data: {
         title: toInternalCommentTitle(nextDepartment, nextResolved),
         body: nextContent,
+        mentions: mentionPayload.length > 0 ? mentionPayload : Prisma.JsonNull,
       },
       include: {
         createdBy: {
@@ -4388,7 +4517,7 @@ Be factual and professional. Highlight anything that needs attention.`;
       opportunityId,
       commentId,
       content: nextContent,
-      mentions: payload.mentions || [],
+      mentions: mentionPayload,
       actor,
       actorUserId: await this.resolveActorUserId(actor),
     });
