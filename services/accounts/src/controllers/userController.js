@@ -3,6 +3,19 @@ import { userService } from '../services/userService.js';
 import { logger } from '../middleware/logger.js';
 
 export const userController = {
+  // POST /users
+  async create(req, res, next) {
+    try {
+      const user = await userService.createUser(req.body);
+      res.status(201).json({
+        success: true,
+        data: user,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
   // GET /users
   async list(req, res, next) {
     try {

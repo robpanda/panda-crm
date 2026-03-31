@@ -1,6 +1,6 @@
 // User Routes
 import { Router } from 'express';
-import { param, query, validationResult } from 'express-validator';
+import { body, param, query, validationResult } from 'express-validator';
 import { userController } from '../controllers/userController.js';
 import { requireRole } from '../middleware/auth.js';
 
@@ -12,6 +12,13 @@ const validatePagination = [
   query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
   query('sortBy').optional().isIn(['createdAt', 'updatedAt', 'lastName', 'firstName', 'email', 'department', 'officeAssignment']),
   query('sortOrder').optional().isIn(['asc', 'desc']),
+];
+
+const validateCreateUser = [
+  body('email').isEmail().withMessage('A valid email is required'),
+  body('firstName').trim().notEmpty().withMessage('First name is required'),
+  body('lastName').trim().notEmpty().withMessage('Last name is required'),
+  body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
 ];
 
 // Validation error handler
@@ -43,6 +50,9 @@ router.get('/dropdown', userController.dropdown);
 
 // List users
 router.get('/', validatePagination, handleValidation, userController.list);
+
+// Create user (admin only)
+router.post('/', requireRole('admin', 'super_admin', 'system'), validateCreateUser, handleValidation, userController.create);
 
 // Get by Salesforce ID
 router.get('/salesforce/:salesforceId', userController.getBySalesforceId);

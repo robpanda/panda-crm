@@ -56,6 +56,35 @@ const roleTypeLabels = {
   viewer: 'Viewer',
 };
 
+const EMPTY_NEW_USER_FORM = {
+  email: '',
+  firstName: '',
+  lastName: '',
+  password: '',
+  roleId: '',
+  title: '',
+  department: '',
+  division: '',
+  officeAssignment: '',
+  phone: '',
+  mobilePhone: '',
+  employeeNumber: '',
+  startDate: '',
+  salesforceId: '',
+  managerId: '',
+  directorId: '',
+  regionalManagerId: '',
+  executiveId: '',
+  companyLeadRate: '',
+  selfGenRate: '',
+  preCommissionRate: '',
+  commissionRate: '',
+  overridePercent: '',
+  supplementsCommissionable: false,
+  x5050CommissionSplit: false,
+  isActive: true,
+};
+
 export default function Users() {
   const [search, setSearch] = useState('');
   const [departmentFilter, setDepartmentFilter] = useState('');
@@ -71,7 +100,7 @@ export default function Users() {
   const [showAddUserModal, setShowAddUserModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
-  const [newUserForm, setNewUserForm] = useState({ email: '', firstName: '', lastName: '', password: '', roleId: '' });
+  const [newUserForm, setNewUserForm] = useState(EMPTY_NEW_USER_FORM);
   const [passwordForm, setPasswordForm] = useState({ newPassword: '', confirmPassword: '' });
   const [actionError, setActionError] = useState('');
 
@@ -124,9 +153,7 @@ export default function Users() {
     onSuccess: () => {
       queryClient.invalidateQueries(['users']);
       queryClient.invalidateQueries(['userStats']);
-      setShowAddUserModal(false);
-      setNewUserForm({ email: '', firstName: '', lastName: '', password: '', roleId: '' });
-      setActionError('');
+      resetNewUserModal();
     },
     onError: (error) => {
       setActionError(error.response?.data?.error?.message || error.message || 'Failed to create user');
@@ -206,6 +233,55 @@ export default function Users() {
   };
 
   const hasActiveFilters = search || departmentFilter || officeFilter || statusFilter;
+
+  const resetNewUserModal = () => {
+    setShowAddUserModal(false);
+    setNewUserForm(EMPTY_NEW_USER_FORM);
+    setActionError('');
+  };
+
+  const sanitizeNewUserForm = () => {
+    const trimToNull = (value) => {
+      if (value === undefined || value === null) return null;
+      const trimmed = String(value).trim();
+      return trimmed ? trimmed : null;
+    };
+
+    const toNumberOrNull = (value) => {
+      if (value === '' || value === null || value === undefined) return null;
+      const numberValue = Number(value);
+      return Number.isFinite(numberValue) ? numberValue : null;
+    };
+
+    return {
+      email: newUserForm.email.trim().toLowerCase(),
+      firstName: newUserForm.firstName.trim(),
+      lastName: newUserForm.lastName.trim(),
+      password: newUserForm.password,
+      roleId: trimToNull(newUserForm.roleId),
+      title: trimToNull(newUserForm.title),
+      department: trimToNull(newUserForm.department),
+      division: trimToNull(newUserForm.division),
+      officeAssignment: trimToNull(newUserForm.officeAssignment),
+      phone: trimToNull(newUserForm.phone),
+      mobilePhone: trimToNull(newUserForm.mobilePhone),
+      employeeNumber: trimToNull(newUserForm.employeeNumber),
+      startDate: trimToNull(newUserForm.startDate),
+      salesforceId: trimToNull(newUserForm.salesforceId),
+      managerId: trimToNull(newUserForm.managerId),
+      directorId: trimToNull(newUserForm.directorId),
+      regionalManagerId: trimToNull(newUserForm.regionalManagerId),
+      executiveId: trimToNull(newUserForm.executiveId),
+      companyLeadRate: toNumberOrNull(newUserForm.companyLeadRate),
+      selfGenRate: toNumberOrNull(newUserForm.selfGenRate),
+      preCommissionRate: toNumberOrNull(newUserForm.preCommissionRate),
+      commissionRate: toNumberOrNull(newUserForm.commissionRate),
+      overridePercent: toNumberOrNull(newUserForm.overridePercent),
+      supplementsCommissionable: Boolean(newUserForm.supplementsCommissionable),
+      x5050CommissionSplit: Boolean(newUserForm.x5050CommissionSplit),
+      isActive: Boolean(newUserForm.isActive),
+    };
+  };
 
   const startEditing = (user) => {
     setEditForm({
@@ -1021,23 +1097,19 @@ export default function Users() {
       {/* Add User Modal */}
       {showAddUserModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-5xl max-h-[92vh] overflow-hidden flex flex-col">
             <div className="p-6 border-b border-gray-100">
               <div className="flex items-center justify-between">
                 <h2 className="text-xl font-bold text-gray-900">Add New User</h2>
                 <button
-                  onClick={() => {
-                    setShowAddUserModal(false);
-                    setNewUserForm({ email: '', firstName: '', lastName: '', password: '', roleId: '' });
-                    setActionError('');
-                  }}
+                  onClick={resetNewUserModal}
                   className="p-2 hover:bg-gray-100 rounded-full"
                 >
                   <X className="w-5 h-5" />
                 </button>
               </div>
             </div>
-            <div className="p-6 space-y-4">
+            <div className="p-6 space-y-6 overflow-y-auto">
               {actionError && (
                 <div className="p-3 bg-red-50 border border-red-200 rounded-lg flex items-center gap-2 text-red-700 text-sm">
                   <AlertTriangle className="w-4 h-4" />
@@ -1045,66 +1117,297 @@ export default function Users() {
                 </div>
               )}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
-                <input
-                  type="email"
-                  value={newUserForm.email}
-                  onChange={(e) => setNewUserForm({ ...newUserForm, email: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
-                  placeholder="user@pandaexteriors.com"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">First Name *</label>
-                  <input
-                    type="text"
-                    value={newUserForm.firstName}
-                    onChange={(e) => setNewUserForm({ ...newUserForm, firstName: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
-                  />
+                <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wide mb-3">Identity</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
+                    <input
+                      type="email"
+                      value={newUserForm.email}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, email: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                      placeholder="user@pandaexteriors.com"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Permanent Password *</label>
+                    <input
+                      type="password"
+                      value={newUserForm.password}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, password: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                      placeholder="Min 8 characters"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">First Name *</label>
+                    <input
+                      type="text"
+                      value={newUserForm.firstName}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, firstName: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Last Name *</label>
+                    <input
+                      type="text"
+                      value={newUserForm.lastName}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, lastName: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
+                    <select
+                      value={newUserForm.roleId}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, roleId: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    >
+                      <option value="">Select a role...</option>
+                      {(Array.isArray(roles) ? roles : []).map((role) => (
+                        <option key={role.id} value={role.id}>
+                          {role.name} ({roleTypeLabels[role.roleType] || role.roleType || 'Unknown'})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Title</label>
+                    <input
+                      type="text"
+                      value={newUserForm.title}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, title: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Employee #</label>
+                    <input
+                      type="text"
+                      value={newUserForm.employeeNumber}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, employeeNumber: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
+                    <input
+                      type="date"
+                      value={newUserForm.startDate}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, startDate: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Salesforce ID</label>
+                    <input
+                      type="text"
+                      value={newUserForm.salesforceId}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, salesforceId: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Active Status</label>
+                    <select
+                      value={newUserForm.isActive ? 'true' : 'false'}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, isActive: e.target.value === 'true' })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    >
+                      <option value="true">Active</option>
+                      <option value="false">Inactive</option>
+                    </select>
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Last Name *</label>
-                  <input
-                    type="text"
-                    value={newUserForm.lastName}
-                    onChange={(e) => setNewUserForm({ ...newUserForm, lastName: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
-                  />
+              </div>
+
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wide mb-3">Contact & Organization</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
+                    <input
+                      type="text"
+                      value={newUserForm.phone}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, phone: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Mobile Phone</label>
+                    <input
+                      type="text"
+                      value={newUserForm.mobilePhone}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, mobilePhone: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Department</label>
+                    <input
+                      type="text"
+                      value={newUserForm.department}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, department: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Division</label>
+                    <input
+                      type="text"
+                      value={newUserForm.division}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, division: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Office Assignment</label>
+                    <input
+                      type="text"
+                      value={newUserForm.officeAssignment}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, officeAssignment: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    />
+                  </div>
                 </div>
               </div>
+
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Temporary Password *</label>
-                <input
-                  type="password"
-                  value={newUserForm.password}
-                  onChange={(e) => setNewUserForm({ ...newUserForm, password: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
-                  placeholder="Min 8 characters"
-                />
+                <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wide mb-3">Reporting Hierarchy</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Manager</label>
+                    <select
+                      value={newUserForm.managerId}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, managerId: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    >
+                      <option value="">No Manager</option>
+                      {userOptions.map((u) => (
+                        <option key={u.id} value={u.id}>{u.fullName}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Director</label>
+                    <select
+                      value={newUserForm.directorId}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, directorId: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    >
+                      <option value="">No Director</option>
+                      {userOptions.map((u) => (
+                        <option key={u.id} value={u.id}>{u.fullName}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Regional Manager</label>
+                    <select
+                      value={newUserForm.regionalManagerId}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, regionalManagerId: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    >
+                      <option value="">No Regional Manager</option>
+                      {userOptions.map((u) => (
+                        <option key={u.id} value={u.id}>{u.fullName}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Executive</label>
+                    <select
+                      value={newUserForm.executiveId}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, executiveId: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    >
+                      <option value="">No Executive</option>
+                      {userOptions.map((u) => (
+                        <option key={u.id} value={u.id}>{u.fullName}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
               </div>
+
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
-                <select
-                  value={newUserForm.roleId}
-                  onChange={(e) => setNewUserForm({ ...newUserForm, roleId: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
-                >
-                  <option value="">Select a role...</option>
-                  {(Array.isArray(roles) ? roles : []).map((role) => (
-                    <option key={role.id} value={role.id}>{role.name}</option>
-                  ))}
-                </select>
+                <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wide mb-3">Commission & Flags</h3>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Company Lead Rate %</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={newUserForm.companyLeadRate}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, companyLeadRate: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Self-Gen Rate %</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={newUserForm.selfGenRate}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, selfGenRate: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Pre-Commission Rate %</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={newUserForm.preCommissionRate}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, preCommissionRate: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Commission Rate %</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={newUserForm.commissionRate}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, commissionRate: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Override %</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={newUserForm.overridePercent}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, overridePercent: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary/20 focus:border-panda-primary"
+                    />
+                  </div>
+                  <label className="flex items-center gap-3 px-3 py-2 border border-gray-200 rounded-lg bg-gray-50">
+                    <input
+                      type="checkbox"
+                      checked={newUserForm.supplementsCommissionable}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, supplementsCommissionable: e.target.checked })}
+                      className="w-4 h-4 text-panda-primary border-gray-300 rounded focus:ring-panda-primary"
+                    />
+                    <span className="text-sm text-gray-700">Supplements Commissionable</span>
+                  </label>
+                  <label className="flex items-center gap-3 px-3 py-2 border border-gray-200 rounded-lg bg-gray-50">
+                    <input
+                      type="checkbox"
+                      checked={newUserForm.x5050CommissionSplit}
+                      onChange={(e) => setNewUserForm({ ...newUserForm, x5050CommissionSplit: e.target.checked })}
+                      className="w-4 h-4 text-panda-primary border-gray-300 rounded focus:ring-panda-primary"
+                    />
+                    <span className="text-sm text-gray-700">50/50 Commission Split</span>
+                  </label>
+                </div>
               </div>
             </div>
             <div className="p-6 border-t border-gray-100 flex justify-end gap-3">
               <button
-                onClick={() => {
-                  setShowAddUserModal(false);
-                  setNewUserForm({ email: '', firstName: '', lastName: '', password: '', roleId: '' });
-                  setActionError('');
-                }}
+                onClick={resetNewUserModal}
                 className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg"
               >
                 Cancel
@@ -1119,7 +1422,7 @@ export default function Users() {
                     setActionError('Password must be at least 8 characters');
                     return;
                   }
-                  createUserMutation.mutate(newUserForm);
+                  createUserMutation.mutate(sanitizeNewUserForm());
                 }}
                 disabled={createUserMutation.isPending}
                 className="px-4 py-2 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg font-medium hover:opacity-90 disabled:opacity-50"

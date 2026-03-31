@@ -3,6 +3,54 @@ import { PrismaClient } from '@prisma/client';
 import { logger } from '../middleware/logger.js';
 
 const prisma = new PrismaClient();
+const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || 'http://auth-service:3000';
+const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || '';
+
+function trimToNull(value) {
+  if (value === undefined || value === null) return null;
+  const trimmed = String(value).trim();
+  return trimmed ? trimmed : null;
+}
+
+function normalizeEmail(value) {
+  const trimmed = trimToNull(value);
+  return trimmed ? trimmed.toLowerCase() : null;
+}
+
+function numberOrNull(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function booleanOrDefault(value, fallback = false) {
+  if (value === undefined || value === null) return fallback;
+  if (typeof value === 'string') {
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+  }
+  return Boolean(value);
+}
+
+function dateOnlyOrNull(value) {
+  const trimmed = trimToNull(value);
+  if (!trimmed) return null;
+  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(trimmed)
+    ? new Date(`${trimmed}T12:00:00.000Z`)
+    : new Date(trimmed);
+  return Number.isNaN(normalized.getTime()) ? null : normalized;
+}
+
+function buildFullName(firstName, lastName) {
+  return [firstName, lastName].filter(Boolean).join(' ').trim() || null;
+}
+
+function buildServiceError(message, statusCode = 500, code = 'INTERNAL_ERROR') {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  error.code = code;
+  return error;
+}
 
 export const userService = {
   /**
@@ -194,6 +242,150 @@ export const userService = {
     }
 
     return user;
+  },
+
+  /**
+   * Create user in Cognito and local database
+   */
+  async createUser(data) {
+    const email = normalizeEmail(data.email);
+    const firstName = trimToNull(data.firstName);
+    const lastName = trimToNull(data.lastName);
+    const password = data.password;
+    const roleId = trimToNull(data.roleId);
+    const managerId = trimToNull(data.managerId);
+    const directorId = trimToNull(data.directorId);
+    const regionalManagerId = trimToNull(data.regionalManagerId);
+    const executiveId = trimToNull(data.executiveId);
+
+    if (!email || !firstName || !lastName || !password) {
+      throw buildServiceError('Email, first name, last name, and password are required', 400, 'VALIDATION_ERROR');
+    }
+
+    if (password.length < 8) {
+      throw buildServiceError('Password must be at least 8 characters', 400, 'VALIDATION_ERROR');
+    }
+
+    const [existingUser, role] = await Promise.all([
+      prisma.user.findUnique({ where: { email } }),
+      roleId
+        ? prisma.role.findUnique({
+            where: { id: roleId },
+            select: { id: true, name: true, roleType: true },
+          })
+        : Promise.resolve(null),
+    ]);
+
+    if (existingUser) {
+      throw buildServiceError('A user with this email already exists', 409, 'DUPLICATE_ENTRY');
+    }
+
+    if (roleId && !role) {
+      throw buildServiceError('Selected role was not found', 400, 'VALIDATION_ERROR');
+    }
+
+    const hierarchyIds = [managerId, directorId, regionalManagerId, executiveId].filter(Boolean);
+    if (hierarchyIds.length) {
+      const hierarchyUsers = await prisma.user.findMany({
+        where: { id: { in: hierarchyIds } },
+        select: { id: true },
+      });
+      const foundIds = new Set(hierarchyUsers.map((user) => user.id));
+      const missingIds = hierarchyIds.filter((id) => !foundIds.has(id));
+      if (missingIds.length) {
+        throw buildServiceError('One or more reporting hierarchy users could not be found', 400, 'VALIDATION_ERROR');
+      }
+    }
+
+    if (!INTERNAL_API_KEY) {
+      throw buildServiceError('INTERNAL_API_KEY is not configured for user creation', 500, 'CONFIGURATION_ERROR');
+    }
+
+    let authResponse;
+    try {
+      authResponse = await fetch(`${AUTH_SERVICE_URL}/api/auth/admin/users`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': INTERNAL_API_KEY,
+        },
+        body: JSON.stringify({
+          email,
+          firstName,
+          lastName,
+          password,
+          role: role?.roleType || role?.name || null,
+          department: trimToNull(data.department),
+          salesforceId: trimToNull(data.salesforceId),
+        }),
+      });
+    } catch (error) {
+      throw buildServiceError(`Failed to reach auth service: ${error.message}`, 502, 'AUTH_SERVICE_UNAVAILABLE');
+    }
+
+    const authPayload = await authResponse.json().catch(() => null);
+    if (!authResponse.ok) {
+      throw buildServiceError(
+        authPayload?.error?.message || 'Failed to create Cognito user',
+        authResponse.status,
+        authPayload?.error?.code || 'AUTH_SERVICE_ERROR'
+      );
+    }
+
+    const cognitoId = authPayload?.data?.user?.sub || authPayload?.data?.cognitoId || null;
+
+    const createdUser = await prisma.user.create({
+      data: {
+        email,
+        firstName,
+        lastName,
+        fullName: buildFullName(firstName, lastName),
+        cognitoId,
+        roleId,
+        phone: trimToNull(data.phone),
+        mobilePhone: trimToNull(data.mobilePhone),
+        isActive: booleanOrDefault(data.isActive, true),
+        status: trimToNull(data.status) || (booleanOrDefault(data.isActive, true) ? 'ACTIVE' : 'INACTIVE'),
+        department: trimToNull(data.department),
+        division: trimToNull(data.division),
+        title: trimToNull(data.title),
+        employeeNumber: trimToNull(data.employeeNumber),
+        officeAssignment: trimToNull(data.officeAssignment),
+        startDate: dateOnlyOrNull(data.startDate),
+        salesforceId: trimToNull(data.salesforceId),
+        managerId,
+        directorId,
+        regionalManagerId,
+        executiveId,
+        companyLeadRate: numberOrNull(data.companyLeadRate),
+        preCommissionRate: numberOrNull(data.preCommissionRate),
+        selfGenRate: numberOrNull(data.selfGenRate),
+        commissionRate: numberOrNull(data.commissionRate),
+        overridePercent: numberOrNull(data.overridePercent),
+        supplementsCommissionable: booleanOrDefault(data.supplementsCommissionable, false),
+        x5050CommissionSplit: booleanOrDefault(data.x5050CommissionSplit, false),
+      },
+      include: {
+        role: {
+          select: { id: true, name: true, roleType: true },
+        },
+        manager: {
+          select: { id: true, fullName: true, firstName: true, lastName: true },
+        },
+        director: {
+          select: { id: true, fullName: true, firstName: true, lastName: true },
+        },
+        regionalManager: {
+          select: { id: true, fullName: true, firstName: true, lastName: true },
+        },
+        executive: {
+          select: { id: true, fullName: true, firstName: true, lastName: true },
+        },
+      },
+    });
+
+    logger.info(`User created: ${createdUser.id}`);
+    return createdUser;
   },
 
   /**

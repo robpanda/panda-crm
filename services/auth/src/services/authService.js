@@ -304,6 +304,13 @@ export const authService = {
       { Name: 'name', Value: name },
     ];
 
+    if (attributes.firstName) {
+      userAttributes.push({ Name: 'given_name', Value: attributes.firstName });
+    }
+    if (attributes.lastName) {
+      userAttributes.push({ Name: 'family_name', Value: attributes.lastName });
+    }
+
     if (attributes.role) {
       userAttributes.push({ Name: 'custom:role', Value: attributes.role });
     }
@@ -314,17 +321,41 @@ export const authService = {
       userAttributes.push({ Name: 'custom:salesforce_id', Value: attributes.salesforceId });
     }
 
-    await cognitoClient.send(
-      new AdminCreateUserCommand({
-        UserPoolId: creds.userPoolId,
-        Username: email,
-        TemporaryPassword: temporaryPassword,
-        UserAttributes: userAttributes,
-        MessageAction: 'SUPPRESS', // Don't send welcome email
-      })
+    let response;
+    try {
+      response = await cognitoClient.send(
+        new AdminCreateUserCommand({
+          UserPoolId: creds.userPoolId,
+          Username: email,
+          TemporaryPassword: temporaryPassword,
+          UserAttributes: userAttributes,
+          MessageAction: 'SUPPRESS', // Don't send welcome email
+        })
+      );
+    } catch (error) {
+      if (error?.name === 'UsernameExistsException') {
+        const existingUser = await this.adminGetUser(email);
+        return {
+          message: 'User already exists in Cognito.',
+          username: existingUser.username || email,
+          cognitoId: existingUser.sub || null,
+          userStatus: existingUser.status || null,
+          existed: true,
+        };
+      }
+      throw error;
+    }
+
+    const returnedAttributes = Object.fromEntries(
+      (response.User?.Attributes || []).map((attribute) => [attribute.Name, attribute.Value])
     );
 
-    return { message: 'User created successfully.' };
+    return {
+      message: 'User created successfully.',
+      username: response.User?.Username || email,
+      cognitoId: returnedAttributes.sub || null,
+      userStatus: response.User?.UserStatus || null,
+    };
   },
 
   /**
@@ -388,8 +419,11 @@ export const authService = {
 
     return {
       username: response.Username,
+      sub: attributes.sub,
       email: attributes.email,
       name: attributes.name,
+      firstName: attributes.given_name,
+      lastName: attributes.family_name,
       role: attributes['custom:role'] || attributes['custom:custom:role'],
       department: attributes['custom:department'] || attributes['custom:custom:department'],
       salesforceId: attributes['custom:salesforce_id'] || attributes['custom:custom:salesforce_id'],

@@ -335,22 +335,43 @@ const requireApiKey = (req, res, next) => {
 // Admin: Create user
 router.post('/admin/users', requireApiKey, async (req, res, next) => {
   try {
-    const { email, name, temporaryPassword, role, department, salesforceId } = req.body;
-
-    if (!email || !name || !temporaryPassword) {
-      return res.status(400).json({
-        success: false,
-        error: { code: 'VALIDATION_ERROR', message: 'Email, name, and temporaryPassword are required' },
-      });
-    }
-
-    const result = await authService.adminCreateUser(email, name, temporaryPassword, {
+    const {
+      email,
+      name,
+      firstName,
+      lastName,
+      temporaryPassword,
+      password,
       role,
       department,
       salesforceId,
+    } = req.body;
+
+    const resolvedName = name || [firstName, lastName].filter(Boolean).join(' ').trim();
+    const resolvedPassword = temporaryPassword || password;
+
+    if (!email || !resolvedName || !resolvedPassword) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Email, name, and password are required' },
+      });
+    }
+
+    const result = await authService.adminCreateUser(email, resolvedName, resolvedPassword, {
+      role,
+      department,
+      salesforceId,
+      firstName,
+      lastName,
     });
+
+    if (password) {
+      await authService.adminSetPassword(email, password);
+    }
+
+    const user = await authService.adminGetUser(email);
     logger.info(`Admin created user: ${email}`);
-    res.json({ success: true, data: result });
+    res.json({ success: true, data: { ...result, user } });
   } catch (error) {
     next(error);
   }
@@ -380,7 +401,7 @@ router.patch('/admin/users/:email', requireApiKey, async (req, res, next) => {
 // Admin: Set user password
 router.post('/admin/users/:email/password', requireApiKey, async (req, res, next) => {
   try {
-    const { password } = req.body;
+    const password = req.body.password || req.body.newPassword;
 
     if (!password) {
       return res.status(400).json({
