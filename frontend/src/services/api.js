@@ -4588,30 +4588,6 @@ export const ringCentralApi = {
 // ==========================================
 // DOCUMENTS & PDF API
 // ==========================================
-const postFirstAvailable = async (paths, payload) => {
-  let lastNotFoundError = null;
-
-  for (const path of paths) {
-    try {
-      const response = await api.post(path, payload);
-      return response.data;
-    } catch (error) {
-      const status = error?.response?.status;
-      if (status === 404 || status === 405) {
-        lastNotFoundError = error;
-        continue;
-      }
-      throw error;
-    }
-  }
-
-  if (lastNotFoundError) {
-    throw lastNotFoundError;
-  }
-
-  throw new Error('No compatible PandaSign endpoint is currently available');
-};
-
 export const documentsApi = {
   // Generate Invoice PDF
   async generateInvoicePdf(invoiceId) {
@@ -4733,10 +4709,7 @@ export const documentsApiV2 = {
   },
 
   async verifyRequiredFields(payload = {}) {
-    const path = payload.agreementId
-      ? `/api/documents/agreements/${payload.agreementId}/verify-required-fields`
-      : '/api/documents/agreements/verify-required-fields';
-    const response = await api.post(path, payload);
+    const response = await api.post('/api/documents/agreements/verify-required-fields', payload);
     return response.data;
   },
 
@@ -4838,35 +4811,15 @@ export const agreementsApi = {
   },
 
   async getAdminResources() {
-    try {
-      const response = await api.get('/api/documents/agreements/admin/resources');
-      return response.data;
-    } catch (error) {
-      if (error?.response?.status !== 404) {
-        throw error;
-      }
-
-      const response = await api.get('/api/documents/agreements/templates/admin/resources');
-      return response.data;
-    }
+    const response = await api.get('/api/documents/agreements/admin/resources');
+    return response.data;
   },
 
   async updateTerritoryProfiles(territoryProfiles) {
-    try {
-      const response = await api.put('/api/documents/agreements/admin/territory-profiles', {
-        territoryProfiles,
-      });
-      return response.data;
-    } catch (error) {
-      if (error?.response?.status !== 404) {
-        throw error;
-      }
-
-      const response = await api.put('/api/documents/agreements/templates/admin/territory-profiles', {
-        territoryProfiles,
-      });
-      return response.data;
-    }
+    const response = await api.put('/api/documents/agreements/admin/territory-profiles', {
+      territoryProfiles,
+    });
+    return response.data;
   },
 
   async getBrandingItems(params = {}) {
