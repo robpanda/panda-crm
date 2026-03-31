@@ -4205,7 +4205,7 @@ Be factual and professional. Highlight anything that needs attention.`;
    */
   async createOpportunityNote(opportunityId, data, actor = null) {
     logger.info(`Creating note for opportunity: ${opportunityId}`);
-    const createdById = data.createdById || await this.resolveActorUserId(actor) || null;
+    const createdById = await this.resolveActorUserId(actor) || data.createdById || null;
 
     // If this note is pinned, unpin any existing pinned notes
     if (data.isPinned) {
@@ -4219,7 +4219,6 @@ Be factual and professional. Highlight anything that needs attention.`;
       data: {
         title: data.title,
         body: data.body,
-        mentions: data.mentions?.length ? data.mentions : Prisma.JsonNull,
         isPinned: data.isPinned || false,
         pinnedAt: data.isPinned ? new Date() : null,
         opportunityId,
@@ -4237,13 +4236,6 @@ Be factual and professional. Highlight anything that needs attention.`;
       mentions: data.mentions || [],
       content: noteContent,
     });
-
-    if (mentionPayload.length > 0 && !note.mentions) {
-      await prisma.note.update({
-        where: { id: note.id },
-        data: { mentions: mentionPayload },
-      });
-    }
 
     const mentionsNotified = await this.notifyOpportunityMentions({
       opportunityId,
@@ -4309,7 +4301,6 @@ Be factual and professional. Highlight anything that needs attention.`;
       mentions: data.mentions || [],
       content: noteContent,
     });
-    updateData.mentions = mentionPayload.length > 0 ? mentionPayload : Prisma.JsonNull;
 
     const note = await prisma.note.update({
       where: { id: noteId },
@@ -4416,7 +4407,6 @@ Be factual and professional. Highlight anything that needs attention.`;
         opportunityId,
         title: toInternalCommentTitle(departmentTag, isResolved),
         body: content,
-        mentions: payload.mentions?.length ? payload.mentions : Prisma.JsonNull,
         createdById: actorUserId,
       },
       include: {
@@ -4430,13 +4420,6 @@ Be factual and professional. Highlight anything that needs attention.`;
       mentions: payload.mentions || [],
       content,
     });
-
-    if (mentionPayload.length > 0 && !comment.mentions) {
-      await prisma.note.update({
-        where: { id: comment.id },
-        data: { mentions: mentionPayload },
-      });
-    }
 
     const mentionsNotified = await this.notifyOpportunityMentions({
       opportunityId,
@@ -4504,7 +4487,6 @@ Be factual and professional. Highlight anything that needs attention.`;
       data: {
         title: toInternalCommentTitle(nextDepartment, nextResolved),
         body: nextContent,
-        mentions: mentionPayload.length > 0 ? mentionPayload : Prisma.JsonNull,
       },
       include: {
         createdBy: {
