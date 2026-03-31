@@ -791,7 +791,10 @@ class OpportunityService {
           account: true,
           contact: true,
           owner: {
-            select: { id: true, firstName: true, lastName: true, email: true },
+            select: { id: true, firstName: true, lastName: true, email: true, phone: true, mobilePhone: true },
+          },
+          projectManager: {
+            select: { id: true, firstName: true, lastName: true, email: true, phone: true, mobilePhone: true },
           },
           lineItems: {
             orderBy: { sortOrder: 'asc' },
@@ -2652,6 +2655,7 @@ Be factual and professional. Highlight anything that needs attention.`;
         accountId: data.accountId,
         contactId: data.contactId,
         ownerId: data.ownerId,
+        projectManagerId: data.projectManagerId,
         // Invoice workflow fields
         invoiceStatus: data.invoiceStatus,
         invoiceReadyDate: data.invoiceReadyDate ? new Date(data.invoiceReadyDate) : undefined,
@@ -2661,7 +2665,8 @@ Be factual and professional. Highlight anything that needs attention.`;
       include: {
         account: { select: { id: true, name: true } },
         contact: { select: { id: true, firstName: true, lastName: true } },
-        owner: { select: { id: true, firstName: true, lastName: true } },
+        owner: { select: { id: true, firstName: true, lastName: true, email: true, phone: true, mobilePhone: true } },
+        projectManager: { select: { id: true, firstName: true, lastName: true, email: true, phone: true, mobilePhone: true } },
         lineItems: { include: { product: true } },
       },
     });
@@ -3021,6 +3026,7 @@ Be factual and professional. Highlight anything that needs attention.`;
       // Owner
       ownerId: opp.ownerId,
       ownerName: opp.owner ? `${opp.owner.firstName} ${opp.owner.lastName}` : 'Unassigned',
+      projectManagerId: opp.projectManagerId || null,
       // Timestamps
       createdAt: opp.createdAt,
       updatedAt: opp.updatedAt,
@@ -3052,6 +3058,18 @@ Be factual and professional. Highlight anything that needs attention.`;
     if (includeDetails) {
       wrapper.account = opp.account;
       wrapper.contact = opp.contact;
+      wrapper.owner = opp.owner
+        ? {
+            ...opp.owner,
+            fullName: [opp.owner.firstName, opp.owner.lastName].filter(Boolean).join(' ').trim() || opp.owner.email || 'Assigned',
+          }
+        : null;
+      wrapper.projectManager = opp.projectManager
+        ? {
+            ...opp.projectManager,
+            fullName: [opp.projectManager.firstName, opp.projectManager.lastName].filter(Boolean).join(' ').trim() || opp.projectManager.email || 'Assigned',
+          }
+        : null;
       wrapper.quotes = opp.quotes;
       wrapper.orders = opp.orders;
       wrapper.serviceContract = opp.serviceContract;
