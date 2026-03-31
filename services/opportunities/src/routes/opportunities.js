@@ -5,6 +5,20 @@ import { opportunityService } from '../services/opportunityService.js';
 
 const router = Router();
 
+const COMMENT_DEPARTMENTS = [
+  { value: 'general', label: 'General' },
+  { value: 'sales', label: 'Sales' },
+  { value: 'call-center', label: 'Call Center' },
+  { value: 'production', label: 'Production' },
+  { value: 'finance', label: 'Finance' },
+];
+
+const sendCommentDepartments = (res) =>
+  res.json({
+    success: true,
+    data: COMMENT_DEPARTMENTS,
+  });
+
 // Validation error handler
 const handleValidation = async (req, res, next) => {
   const { validationResult } = await import('express-validator');
@@ -100,6 +114,11 @@ router.get('/counts', async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+// Get internal comment departments for job comments UI
+router.get('/comment-departments', (req, res) => {
+  sendCommentDepartments(res);
 });
 
 // ============================================================================
@@ -1068,6 +1087,50 @@ router.post('/:id/notes/:noteId/pin', async (req, res, next) => {
   try {
     const note = await opportunityService.togglePinNote(req.params.id, req.params.noteId);
     res.json({ success: true, data: note });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get('/:id/internal-comments', async (req, res, next) => {
+  try {
+    const comments = await opportunityService.getOpportunityInternalComments(req.params.id);
+    res.json({ success: true, data: comments });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post('/:id/internal-comments', async (req, res, next) => {
+  try {
+    const comment = await opportunityService.createOpportunityInternalComment(req.params.id, req.body, req.user);
+    res.status(201).json({ success: true, data: comment });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.put('/:id/internal-comments/:commentId', async (req, res, next) => {
+  try {
+    const comment = await opportunityService.updateOpportunityInternalComment(
+      req.params.id,
+      req.params.commentId,
+      req.body,
+      req.user
+    );
+    res.json({ success: true, data: comment });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete('/:id/internal-comments/:commentId', async (req, res, next) => {
+  try {
+    const result = await opportunityService.deleteOpportunityInternalComment(
+      req.params.id,
+      req.params.commentId
+    );
+    res.json({ success: true, data: result });
   } catch (error) {
     next(error);
   }
