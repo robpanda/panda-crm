@@ -2,7 +2,6 @@
 import { PrismaClient } from '@prisma/client';
 import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
@@ -11,10 +10,13 @@ import { pdfService } from './pdfService.js';
 
 const prisma = new PrismaClient();
 const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-east-2' });
-const sesClient = new SESClient({ region: process.env.AWS_REGION || 'us-east-2' });
 
 const S3_BUCKET = process.env.DOCUMENTS_BUCKET || 'panda-crm-documents';
 const SIGNING_BASE_URL = process.env.SIGNING_BASE_URL || 'https://sign.pandaexteriors.com';
+const BAMBOOGLI_SERVICE_URL =
+  process.env.BAMBOOGLI_SERVICE_URL
+  || process.env.NOTIFICATION_SERVICE_URL
+  || 'https://bamboo.pandaadmin.com';
 const PANDASIGN_V2_SETTINGS_CATEGORY = 'pandasign_v2';
 const PANDASIGN_V2_SETTING_KEYS = {
   BRANDING_ITEMS: 'pandasign_v2.branding_items',
@@ -399,30 +401,30 @@ async function buildPandaSignEmailMessage(category, agreement, extra = {}) {
 async function sendPandaSignTemplateEmail({ to, category, agreement, extra = {} }) {
   if (!to) return;
 
-  const message = await buildPandaSignEmailMessage(category, agreement, extra);
+  const normalizedAgreement = normalizeAgreementRecord(agreement);
+  const message = await buildPandaSignEmailMessage(category, normalizedAgreement, extra);
 
-  await sesClient.send(new SendEmailCommand({
-    Source: DEFAULT_FROM_EMAIL,
-    Destination: {
-      ToAddresses: [to],
+  const response = await fetch(`${BAMBOOGLI_SERVICE_URL}/api/messages/send/email`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
     },
-    Message: {
-      Subject: {
-        Data: message.subject,
-        Charset: 'UTF-8',
-      },
-      Body: {
-        Html: {
-          Data: message.html,
-          Charset: 'UTF-8',
-        },
-        Text: {
-          Data: message.text,
-          Charset: 'UTF-8',
-        },
-      },
-    },
-  }));
+    body: JSON.stringify({
+      to,
+      subject: message.subject,
+      body: message.text,
+      bodyHtml: message.html,
+      accountId: normalizedAgreement?.accountId || undefined,
+      contactId: normalizedAgreement?.contactId || undefined,
+      opportunityId: normalizedAgreement?.opportunityId || undefined,
+      sentById: normalizedAgreement?.sentById || normalizedAgreement?.createdById || undefined,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => '');
+    throw new Error(`Bamboogli email returned ${response.status}${errorText ? `: ${errorText}` : ''}`);
+  }
 }
 
 function connectById(id) {
@@ -490,11 +492,14 @@ function normalizeSignatureRecord(signature) {
   };
 }
 
-function normalizeAgreementRecord(agreement) {
+export function normalizeAgreementRecord(agreement) {
   if (!agreement || typeof agreement !== 'object') return agreement;
 
   return {
     ...agreement,
+    opportunityId: agreement.opportunityId ?? agreement.opportunity_id ?? null,
+    accountId: agreement.accountId ?? agreement.account_id ?? null,
+    contactId: agreement.contactId ?? agreement.contact_id ?? null,
     recipientEmail: agreement.recipientEmail ?? agreement.recipient_email ?? null,
     recipientName: agreement.recipientName ?? agreement.recipient_name ?? null,
     hostSignerEmail: agreement.hostSignerEmail ?? agreement.host_signer_email ?? null,
@@ -508,6 +513,9 @@ function normalizeAgreementRecord(agreement) {
     voidReason: agreement.voidReason ?? agreement.void_reason ?? null,
     voidedAt: agreement.voidedAt ?? agreement.voided_at ?? null,
     voidedById: agreement.voidedById ?? agreement.voided_by_id ?? null,
+    opportunity: agreement.opportunity ?? agreement.opportunities ?? null,
+    account: agreement.account ?? agreement.accounts ?? null,
+    contact: agreement.contact ?? agreement.contacts ?? null,
     signatures: Array.isArray(agreement.signatures)
       ? agreement.signatures.map(normalizeSignatureRecord)
       : agreement.signatures,
@@ -1537,8 +1545,9 @@ export const pandaSignService = {
       where: { id: agreementId },
       include: {
         template: true,
-        opportunity: true,
-        account: true,
+        opportunities: true,
+        accounts: true,
+        contacts: true,
       },
     });
     const agreement = normalizeAgreementRecord(agreementRecord);
@@ -1582,7 +1591,7 @@ export const pandaSignService = {
   },
 
   /**
-   * Send signing email via SES
+   * Send signing email via Bamboogli / SendGrid
    */
   async sendSigningEmail(agreement) {
     agreement = normalizeAgreementRecord(agreement);
@@ -3189,7 +3198,7 @@ export const pandaSignService = {
     }, null);
 
     // Send completion emails to all parties, but do not fail a completed host-signature
-    // flow if SES rejects or email delivery is temporarily unavailable.
+    // flow if downstream email delivery is temporarily unavailable.
     await sendHostSigningCompletionEmailsSafely({
       sendHostSigningCompletionEmails: this.sendHostSigningCompletionEmails.bind(this),
       agreement: normalizedUpdated,
