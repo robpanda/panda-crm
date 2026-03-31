@@ -173,6 +173,11 @@ jobs:
             exit 0
           fi
 
+          TASK_ROLE_ARN=""
+          if [ "$SERVICE_NAME" = "opportunities" ]; then
+            TASK_ROLE_ARN="arn:aws:iam::679128292059:role/panda-crm-ecs-task-role"
+          fi
+
           CURRENT_TASK_DEF_ARN="$(aws ecs describe-services \
             --cluster "$ECS_CLUSTER" \
             --services "$ECS_SERVICE" \
@@ -204,6 +209,7 @@ jobs:
           jq \
             --arg CONTAINER_NAME "$CONTAINER_NAME" \
             --arg IMAGE_URI "$IMAGE_URI" \
+            --arg TASK_ROLE_ARN "$TASK_ROLE_ARN" \
             '
               del(
                 .taskDefinitionArn,
@@ -224,6 +230,11 @@ jobs:
                       end
                     )
                 )
+              | if (.taskRoleArn == null or .taskRoleArn == "") and ($TASK_ROLE_ARN | length) > 0 then
+                  .taskRoleArn = $TASK_ROLE_ARN
+                else
+                  .
+                end
             ' "$TASK_DEF_FILE" > "$RENDERED_TASK_DEF_FILE"
 
           NEW_TASK_DEF_ARN="$(aws ecs register-task-definition \

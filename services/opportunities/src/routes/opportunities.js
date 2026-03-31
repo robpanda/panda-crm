@@ -1029,7 +1029,7 @@ router.get('/:id/notes', async (req, res, next) => {
  */
 router.post('/:id/notes', async (req, res, next) => {
   try {
-    const { title, body, isPinned } = req.body;
+    const { title, body, isPinned, mentions } = req.body;
     if (!body || body.trim().length === 0) {
       return res.status(400).json({
         success: false,
@@ -1041,7 +1041,8 @@ router.post('/:id/notes', async (req, res, next) => {
       body,
       isPinned: isPinned || false,
       createdById: req.user?.id,
-    });
+      mentions: Array.isArray(mentions) ? mentions : [],
+    }, req.user);
     res.status(201).json({ success: true, data: note });
   } catch (error) {
     next(error);
@@ -1054,12 +1055,13 @@ router.post('/:id/notes', async (req, res, next) => {
  */
 router.put('/:id/notes/:noteId', async (req, res, next) => {
   try {
-    const { title, body, isPinned } = req.body;
+    const { title, body, isPinned, mentions } = req.body;
     const note = await opportunityService.updateOpportunityNote(req.params.noteId, {
       title,
       body,
       isPinned,
-    });
+      mentions: Array.isArray(mentions) ? mentions : [],
+    }, req.user);
     res.json({ success: true, data: note });
   } catch (error) {
     next(error);

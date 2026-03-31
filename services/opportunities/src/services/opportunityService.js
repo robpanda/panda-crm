@@ -1729,7 +1729,7 @@ Be factual and professional. Highlight anything that needs attention.`;
     }
   }
 
-  async notifyOpportunityCommentMentions({
+  async notifyOpportunityMentions({
     opportunityId,
     commentId = null,
     content = '',
@@ -4060,8 +4060,9 @@ Be factual and professional. Highlight anything that needs attention.`;
   /**
    * Create a new note for an opportunity
    */
-  async createOpportunityNote(opportunityId, data) {
+  async createOpportunityNote(opportunityId, data, actor = null) {
     logger.info(`Creating note for opportunity: ${opportunityId}`);
+    const createdById = data.createdById || await this.resolveActorUserId(actor) || null;
 
     // If this note is pinned, unpin any existing pinned notes
     if (data.isPinned) {
@@ -4078,13 +4079,21 @@ Be factual and professional. Highlight anything that needs attention.`;
         isPinned: data.isPinned || false,
         pinnedAt: data.isPinned ? new Date() : null,
         opportunityId,
-        createdById: data.createdById,
+        createdById,
       },
       include: {
         createdBy: {
           select: { id: true, firstName: true, lastName: true, email: true },
         },
       },
+    });
+
+    const mentionsNotified = await this.notifyOpportunityMentions({
+      opportunityId,
+      content: [data.title, data.body].filter(Boolean).join('\n\n'),
+      mentions: data.mentions || [],
+      actor,
+      actorUserId: createdById,
     });
 
     logger.info(`Note created: ${note.id}`);
@@ -4102,13 +4111,14 @@ Be factual and professional. Highlight anything that needs attention.`;
             email: note.createdBy.email,
           }
         : null,
+      mentionsNotified,
     };
   }
 
   /**
    * Update an existing note
    */
-  async updateOpportunityNote(noteId, data) {
+  async updateOpportunityNote(noteId, data, actor = null) {
     logger.info(`Updating note: ${noteId}`);
 
     const existingNote = await prisma.note.findUnique({ where: { id: noteId } });
@@ -4144,6 +4154,14 @@ Be factual and professional. Highlight anything that needs attention.`;
       },
     });
 
+    const mentionsNotified = await this.notifyOpportunityMentions({
+      opportunityId: existingNote.opportunityId,
+      content: [note.title, note.body].filter(Boolean).join('\n\n'),
+      mentions: data.mentions || [],
+      actor,
+      actorUserId: await this.resolveActorUserId(actor),
+    });
+
     return {
       id: note.id,
       title: note.title,
@@ -4159,6 +4177,7 @@ Be factual and professional. Highlight anything that needs attention.`;
             email: note.createdBy.email,
           }
         : null,
+      mentionsNotified,
     };
   }
 
@@ -4239,7 +4258,7 @@ Be factual and professional. Highlight anything that needs attention.`;
       },
     });
 
-    const mentionsNotified = await this.notifyOpportunityCommentMentions({
+    const mentionsNotified = await this.notifyOpportunityMentions({
       opportunityId,
       commentId: comment.id,
       content,
@@ -4308,7 +4327,7 @@ Be factual and professional. Highlight anything that needs attention.`;
       },
     });
 
-    const mentionsNotified = await this.notifyOpportunityCommentMentions({
+    const mentionsNotified = await this.notifyOpportunityMentions({
       opportunityId,
       commentId,
       content: nextContent,

@@ -19,6 +19,7 @@ import MentionTextarea from './MentionTextarea';
 
 export default function NotesSidebar({ opportunityId }) {
   const queryClient = useQueryClient();
+  const notesQueryKey = ['opportunityNotes', opportunityId];
   const [isAddingNote, setIsAddingNote] = useState(false);
   const [editingNoteId, setEditingNoteId] = useState(null);
   const [newNoteTitle, setNewNoteTitle] = useState('');
@@ -32,16 +33,40 @@ export default function NotesSidebar({ opportunityId }) {
 
   // Fetch notes for this opportunity
   const { data: notes = [], isLoading, error } = useQuery({
-    queryKey: ['opportunityNotes', opportunityId],
+    queryKey: notesQueryKey,
     queryFn: () => opportunitiesApi.getNotes(opportunityId),
     enabled: !!opportunityId,
   });
 
+  const sortNotes = (items = []) => [...items].sort((left, right) => {
+    if (left.isPinned !== right.isPinned) {
+      return left.isPinned ? -1 : 1;
+    }
+    return new Date(right.createdAt || 0) - new Date(left.createdAt || 0);
+  });
+
+  const upsertNoteInCache = (nextNote) => {
+    queryClient.setQueryData(notesQueryKey, (current = []) => (
+      sortNotes([
+        ...(current || []).filter((note) => note.id !== nextNote.id),
+        nextNote,
+      ])
+    ));
+    queryClient.invalidateQueries({ queryKey: notesQueryKey });
+  };
+
+  const removeNoteFromCache = (noteId) => {
+    queryClient.setQueryData(notesQueryKey, (current = []) => (
+      (current || []).filter((note) => note.id !== noteId)
+    ));
+    queryClient.invalidateQueries({ queryKey: notesQueryKey });
+  };
+
   // Create note mutation
   const createNoteMutation = useMutation({
     mutationFn: (data) => opportunitiesApi.createNote(opportunityId, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries(['opportunityNotes', opportunityId]);
+    onSuccess: (note) => {
+      upsertNoteInCache(note);
       setIsAddingNote(false);
       setNewNoteTitle('');
       setNewNoteBody('');
@@ -52,8 +77,8 @@ export default function NotesSidebar({ opportunityId }) {
   // Update note mutation
   const updateNoteMutation = useMutation({
     mutationFn: ({ noteId, data }) => opportunitiesApi.updateNote(opportunityId, noteId, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries(['opportunityNotes', opportunityId]);
+    onSuccess: (note) => {
+      upsertNoteInCache(note);
       setEditingNoteId(null);
       setEditTitle('');
       setEditBody('');
@@ -64,8 +89,8 @@ export default function NotesSidebar({ opportunityId }) {
   // Delete note mutation
   const deleteNoteMutation = useMutation({
     mutationFn: (noteId) => opportunitiesApi.deleteNote(opportunityId, noteId),
-    onSuccess: () => {
-      queryClient.invalidateQueries(['opportunityNotes', opportunityId]);
+    onSuccess: (_data, noteId) => {
+      removeNoteFromCache(noteId);
       setConfirmDelete(null);
     },
   });
@@ -73,8 +98,8 @@ export default function NotesSidebar({ opportunityId }) {
   // Toggle pin mutation
   const togglePinMutation = useMutation({
     mutationFn: (noteId) => opportunitiesApi.toggleNotePin(opportunityId, noteId),
-    onSuccess: () => {
-      queryClient.invalidateQueries(['opportunityNotes', opportunityId]);
+    onSuccess: (note) => {
+      upsertNoteInCache(note);
     },
   });
 
@@ -84,6 +109,7 @@ export default function NotesSidebar({ opportunityId }) {
       title: newNoteTitle.trim() || null,
       body: newNoteBody.trim(),
       isPinned: false,
+      mentions: newNoteMentions,
     });
   };
 
@@ -94,6 +120,7 @@ export default function NotesSidebar({ opportunityId }) {
       data: {
         title: editTitle.trim() || null,
         body: editBody.trim(),
+        mentions: editMentions,
       },
     });
   };
@@ -102,6 +129,7 @@ export default function NotesSidebar({ opportunityId }) {
     setEditingNoteId(note.id);
     setEditTitle(note.title || '');
     setEditBody(note.body || '');
+    setEditMentions([]);
   };
 
   const cancelEditing = () => {
