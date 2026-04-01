@@ -593,12 +593,19 @@ export default function LeadDetail() {
     enabled: !!id,
   });
 
+  const getStoredLeadSource = (leadData = lead) => leadData?.source || leadData?.leadSource || '';
   const isSalesRabbitLead = (source) =>
     String(source || '').replace(/\s+/g, '').toLowerCase().includes('salesrabbit');
+  const isBusinessDevelopmentLead = (source) =>
+    String(source || '').replace(/[^a-z]/gi, '').toLowerCase() === 'businessdevelopment';
+  const getLeadSubSource = (source, salesRabbitUser) =>
+    (isSalesRabbitLead(source) || (isBusinessDevelopmentLead(source) && salesRabbitUser)) ? 'SalesRabbit' : '';
+  const getLeadSourceDisplay = (source, salesRabbitUser) =>
+    getLeadSubSource(source, salesRabbitUser) ? 'Business Development' : (source || '');
 
   const readOnlyLeadSetById =
     lead?.leadSetById ||
-    ((isSalesRabbitLead(lead?.source || lead?.leadSource) && lead?.ownerId) ? lead.ownerId : null);
+    ((isSalesRabbitLead(getStoredLeadSource(lead)) && lead?.ownerId) ? lead.ownerId : null);
 
   const leadSetByIdForManager = (isEditing ? formData.leadSetById : readOnlyLeadSetById) || null;
   const { data: leadSetByUserData } = useQuery({
@@ -616,7 +623,7 @@ export default function LeadDetail() {
           : lead?.leadSetBy
             ? `${lead.leadSetBy.firstName || ''} ${lead.leadSetBy.lastName || ''}`.trim()
             : lead?.leadSetByName ||
-              (isSalesRabbitLead(lead?.source || lead?.leadSource) ? lead?.salesRabbitUser || lead?.ownerName || '' : '')
+              (isSalesRabbitLead(getStoredLeadSource(lead)) ? lead?.salesRabbitUser || lead?.ownerName || '' : '')
       );
 
   const leadSetByManagerId =
@@ -677,7 +684,7 @@ export default function LeadDetail() {
   const isLeadReadyForOwnerAction = Boolean(
     lead &&
     !lead.isConverted &&
-    (lead.source || lead.leadSource) &&
+    getStoredLeadSource(lead) &&
     (lead.tentativeAppointmentDate || lead.tentativeAppointmentTime || isSelfGenSource(lead.source))
   );
 
@@ -721,7 +728,8 @@ export default function LeadDetail() {
         state: lead.state || '',
         postalCode: lead.postalCode || '',
         status: lead.status || 'NEW',
-        leadSource: lead.source || lead.leadSource || '',
+        leadSource: getLeadSourceDisplay(getStoredLeadSource(lead), lead.salesRabbitUser),
+        leadSubSource: getLeadSubSource(getStoredLeadSource(lead), lead.salesRabbitUser),
         rating: lead.rating || '',
         description: lead.description || '',
         propertyType: lead.propertyType || '',
@@ -817,7 +825,7 @@ export default function LeadDetail() {
       const salesPath = preConversion?.salesPath || (lead?.workType?.toLowerCase().startsWith('retail') ? 'RETAIL' : lead?.workType?.toLowerCase().startsWith('insurance') ? 'INSURANCE' : null);
       const salesPathOnlyBlocked = blockers.length > 0 && blockers.every((message) => message.toLowerCase().includes('sales path'));
       const noInspectionBlocked = blockers.some((message) => message.toLowerCase().includes('no inspection'));
-      const sourceValue = `${lead?.source || lead?.leadSource || ''}`.toLowerCase().replace(/[^a-z]/g, '');
+      const sourceValue = `${getStoredLeadSource(lead)}`.toLowerCase().replace(/[^a-z]/g, '');
       const inferredSalesPath = salesPath || (lead?.isSelfGen || sourceValue === 'selfgen' ? 'RETAIL' : 'INSURANCE');
 
       if (!gatingResult?.success || (preConversion?.allowed === false && !salesPathOnlyBlocked)) {
@@ -885,6 +893,14 @@ export default function LeadDetail() {
         cleanedData[key] = null;
       }
     });
+    const currentSource = getStoredLeadSource(lead);
+    const currentSubSource = getLeadSubSource(currentSource, lead?.salesRabbitUser);
+    const selectedSubSource = cleanedData.leadSubSource || currentSubSource;
+    cleanedData.source = cleanedData.leadSource === 'Business Development' && selectedSubSource === 'SalesRabbit'
+      ? 'SalesRabbit'
+      : cleanedData.leadSource;
+    delete cleanedData.leadSource;
+    delete cleanedData.leadSubSource;
     updateMutation.mutate(cleanedData);
   };
 
@@ -901,7 +917,8 @@ export default function LeadDetail() {
       state: lead.state || '',
       postalCode: lead.postalCode || '',
       status: lead.status || 'NEW',
-      leadSource: lead.source || lead.leadSource || '',
+      leadSource: getLeadSourceDisplay(getStoredLeadSource(lead), lead.salesRabbitUser),
+      leadSubSource: getLeadSubSource(getStoredLeadSource(lead), lead.salesRabbitUser),
       rating: lead.rating || '',
       description: lead.description || '',
       propertyType: lead.propertyType || '',
@@ -933,7 +950,8 @@ export default function LeadDetail() {
       state: lead.state || '',
       postalCode: lead.postalCode || '',
       status: lead.status || 'NEW',
-      leadSource: lead.source || lead.leadSource || '',
+      leadSource: getLeadSourceDisplay(getStoredLeadSource(lead), lead.salesRabbitUser),
+      leadSubSource: getLeadSubSource(getStoredLeadSource(lead), lead.salesRabbitUser),
       rating: lead.rating || '',
       description: lead.description || '',
       propertyType: lead.propertyType || '',
@@ -1551,6 +1569,15 @@ export default function LeadDetail() {
                     ))}
                   </select>
                 </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Lead Sub-Source</label>
+                  <input
+                    type="text"
+                    value={formData.leadSubSource || ''}
+                    readOnly
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-700"
+                  />
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
@@ -1629,7 +1656,11 @@ export default function LeadDetail() {
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">Lead Source</span>
-                <span className="text-gray-900">{lead.source || lead.leadSource || '-'}</span>
+                <span className="text-gray-900">{getLeadSourceDisplay(getStoredLeadSource(lead), lead.salesRabbitUser) || '-'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Lead Sub-Source</span>
+                <span className="text-gray-900">{getLeadSubSource(getStoredLeadSource(lead), lead.salesRabbitUser) || '-'}</span>
               </div>
               {lead.isChampionReferral && (
                 <div className="mt-3 p-3 bg-amber-50 rounded-lg border border-amber-200">
