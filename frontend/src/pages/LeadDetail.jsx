@@ -438,11 +438,12 @@ function ActivityTab({ phone, email, leadName }) {
 
 // Constants from LeadWizard
 const LEAD_STATUSES = [
-  { value: 'NEW', label: 'New' },
-  { value: 'CONTACTED', label: 'Contacted' },
-  { value: 'QUALIFIED', label: 'Qualified' },
-  { value: 'UNQUALIFIED', label: 'Unqualified' },
-  { value: 'CONVERTED', label: 'Converted' },
+  { value: 'New', label: 'New' },
+  { value: 'Set', label: 'Set' },
+  { value: 'Not Set', label: 'Not Set' },
+  { value: 'Confirmed', label: 'Confirmed' },
+  { value: 'Canceled', label: 'Canceled' },
+  { value: 'Need Reset', label: 'Need Reset' },
 ];
 
 const LEAD_DISPOSITIONS = [
@@ -523,6 +524,40 @@ function buildLeadDispositionOptions(currentValue) {
       label: `${formatLeadDispositionLabel(rawValue)} (Legacy)`,
     },
   ];
+}
+
+function getSavedLeadStatus(value, disposition) {
+  const dispositionLabel = formatLeadDispositionLabel(disposition);
+  if (dispositionLabel === 'Confirmed') return 'Confirmed';
+  if (dispositionLabel === 'Canceled') return 'Canceled';
+  if (dispositionLabel === 'Need Reset') return 'Need Reset';
+
+  const normalizedStatus = String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_');
+
+  if (normalizedStatus === 'QUALIFIED' || normalizedStatus === 'CONVERTED') return 'Set';
+  if (normalizedStatus === 'CONTACTED') return 'Not Set';
+  return 'New';
+}
+
+function mapSavedLeadStatusToPayload(displayStatus) {
+  switch (displayStatus) {
+    case 'Set':
+      return { status: 'QUALIFIED', disposition: null };
+    case 'Not Set':
+      return { status: 'CONTACTED', disposition: null };
+    case 'Confirmed':
+      return { status: 'QUALIFIED', disposition: 'CONFIRMED' };
+    case 'Canceled':
+      return { status: 'QUALIFIED', disposition: 'CANCELED' };
+    case 'Need Reset':
+      return { status: 'QUALIFIED', disposition: 'NEED_RESET' };
+    case 'New':
+    default:
+      return { status: 'NEW', disposition: null };
+  }
 }
 
 const PROPERTY_TYPES = [
@@ -727,7 +762,7 @@ export default function LeadDetail() {
         city: lead.city || '',
         state: lead.state || '',
         postalCode: lead.postalCode || '',
-        status: lead.status || 'NEW',
+        status: getSavedLeadStatus(lead.status, lead.disposition),
         leadSource: getLeadSourceDisplay(getStoredLeadSource(lead), lead.salesRabbitUser),
         leadSubSource: getLeadSubSource(getStoredLeadSource(lead), lead.salesRabbitUser),
         rating: lead.rating || '',
@@ -877,6 +912,15 @@ export default function LeadDetail() {
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
+    if (name === 'status') {
+      const mapped = mapSavedLeadStatusToPayload(value);
+      setFormData(prev => ({
+        ...prev,
+        status: value,
+        disposition: mapped.disposition || '',
+      }));
+      return;
+    }
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
@@ -893,6 +937,9 @@ export default function LeadDetail() {
         cleanedData[key] = null;
       }
     });
+    const mappedStatus = mapSavedLeadStatusToPayload(cleanedData.status);
+    cleanedData.status = mappedStatus.status;
+    cleanedData.disposition = mappedStatus.disposition;
     const currentSource = getStoredLeadSource(lead);
     const currentSubSource = getLeadSubSource(currentSource, lead?.salesRabbitUser);
     const selectedSubSource = cleanedData.leadSubSource || currentSubSource;
@@ -916,7 +963,7 @@ export default function LeadDetail() {
       city: lead.city || '',
       state: lead.state || '',
       postalCode: lead.postalCode || '',
-      status: lead.status || 'NEW',
+      status: getSavedLeadStatus(lead.status, lead.disposition),
       leadSource: getLeadSourceDisplay(getStoredLeadSource(lead), lead.salesRabbitUser),
       leadSubSource: getLeadSubSource(getStoredLeadSource(lead), lead.salesRabbitUser),
       rating: lead.rating || '',
@@ -949,7 +996,7 @@ export default function LeadDetail() {
       city: lead.city || '',
       state: lead.state || '',
       postalCode: lead.postalCode || '',
-      status: lead.status || 'NEW',
+      status: getSavedLeadStatus(lead.status, lead.disposition),
       leadSource: getLeadSourceDisplay(getStoredLeadSource(lead), lead.salesRabbitUser),
       leadSubSource: getLeadSubSource(getStoredLeadSource(lead), lead.salesRabbitUser),
       rating: lead.rating || '',
@@ -1648,7 +1695,7 @@ export default function LeadDetail() {
             <div className="space-y-3">
               <div className="flex justify-between">
                 <span className="text-gray-500">Status</span>
-                <span className="text-gray-900">{lead.status || '-'}</span>
+                <span className="text-gray-900">{getSavedLeadStatus(lead.status, lead.disposition) || '-'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">Disposition</span>
