@@ -7,7 +7,7 @@ import crypto from 'crypto';
 import {
   getCallCenterDispositionCompatibleCodes,
   normalizeCallCenterDispositionCode,
-} from '../../../../shared/src/services/callCenterTaxonomy.js';
+} from '../../shared/src/services/callCenterTaxonomy.js';
 
 const prisma = new PrismaClient();
 const lambdaClient = new LambdaClient({ region: 'us-east-2' });

@@ -7,7 +7,7 @@ import {
   normalizeCallCenterDispositionCode,
   requiresCallbackAt,
   toSystemLeadStatusFromDisposition,
-} from '../../../../shared/src/services/callCenterTaxonomy.js';
+} from '../../shared/src/services/callCenterTaxonomy.js';
 
 const prisma = new PrismaClient();
 

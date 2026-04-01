@@ -27,6 +27,7 @@ RUN npm prune --omit=dev
 
 # Copy source code
 COPY services/leads/src ./src
+COPY shared ./shared
 
 # Create non-root user and change ownership
 RUN groupadd -g 1001 nodejs && useradd -u 1001 -g nodejs nodejs && chown -R nodejs:nodejs /app
