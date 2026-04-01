@@ -22,32 +22,82 @@ const apiByEntity = {
   opportunity: opportunitiesApi,
 };
 
+function normalizeNotesResponse(payload) {
+  if (Array.isArray(payload)) {
+    return payload;
+  }
+
+  if (Array.isArray(payload?.notes)) {
+    return payload.notes;
+  }
+
+  if (Array.isArray(payload?.data)) {
+    return payload.data;
+  }
+
+  if (Array.isArray(payload?.data?.notes)) {
+    return payload.data.notes;
+  }
+
+  return [];
+}
+
+function sortNotes(notes) {
+  return [...notes].sort((a, b) => {
+    if (a?.isPinned && !b?.isPinned) return -1;
+    if (!a?.isPinned && b?.isPinned) return 1;
+    return new Date(b?.createdAt || 0) - new Date(a?.createdAt || 0);
+  });
+}
+
 export default function InternalNotesTabs({ entityType = 'lead', entityId }) {
   const api = apiByEntity[entityType];
   const queryClient = useQueryClient();
+  const notesQueryKey = ['internalNotes', entityType, entityId];
   const [isAddingNote, setIsAddingNote] = useState(false);
   const [editingNoteId, setEditingNoteId] = useState(null);
-  const [newNoteTitle, setNewNoteTitle] = useState('');
   const [newNoteBody, setNewNoteBody] = useState('');
   const [newNoteMentions, setNewNoteMentions] = useState([]);
-  const [editTitle, setEditTitle] = useState('');
   const [editBody, setEditBody] = useState('');
   const [editMentions, setEditMentions] = useState([]);
   const [expandedNotes, setExpandedNotes] = useState(new Set());
   const [confirmDelete, setConfirmDelete] = useState(null);
 
   const { data: notes = [], isLoading, error } = useQuery({
-    queryKey: ['internalNotes', entityType, entityId],
+    queryKey: notesQueryKey,
     queryFn: () => api?.getNotes?.(entityId),
     enabled: !!entityId && !!api?.getNotes,
+    select: normalizeNotesResponse,
   });
+
+  const upsertNoteInCache = (nextNote) => {
+    if (!nextNote?.id) {
+      queryClient.invalidateQueries({ queryKey: notesQueryKey });
+      return;
+    }
+
+    queryClient.setQueryData(notesQueryKey, (current) => {
+      const normalizedCurrent = normalizeNotesResponse(current);
+      return sortNotes([
+        nextNote,
+        ...normalizedCurrent.filter((note) => note.id !== nextNote.id),
+      ]);
+    });
+    queryClient.invalidateQueries({ queryKey: notesQueryKey });
+  };
+
+  const removeNoteFromCache = (noteId) => {
+    queryClient.setQueryData(notesQueryKey, (current) => (
+      normalizeNotesResponse(current).filter((note) => note.id !== noteId)
+    ));
+    queryClient.invalidateQueries({ queryKey: notesQueryKey });
+  };
 
   const createNoteMutation = useMutation({
     mutationFn: (data) => api?.createNote?.(entityId, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries(['internalNotes', entityType, entityId]);
+    onSuccess: (createdNote) => {
+      upsertNoteInCache(createdNote);
       setIsAddingNote(false);
-      setNewNoteTitle('');
       setNewNoteBody('');
       setNewNoteMentions([]);
     },
@@ -55,10 +105,9 @@ export default function InternalNotesTabs({ entityType = 'lead', entityId }) {
 
   const updateNoteMutation = useMutation({
     mutationFn: ({ noteId, data }) => api?.updateNote?.(entityId, noteId, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries(['internalNotes', entityType, entityId]);
+    onSuccess: (updatedNote) => {
+      upsertNoteInCache(updatedNote);
       setEditingNoteId(null);
-      setEditTitle('');
       setEditBody('');
       setEditMentions([]);
     },
@@ -66,23 +115,22 @@ export default function InternalNotesTabs({ entityType = 'lead', entityId }) {
 
   const deleteNoteMutation = useMutation({
     mutationFn: (noteId) => api?.deleteNote?.(entityId, noteId),
-    onSuccess: () => {
-      queryClient.invalidateQueries(['internalNotes', entityType, entityId]);
+    onSuccess: (_data, noteId) => {
+      removeNoteFromCache(noteId);
       setConfirmDelete(null);
     },
   });
 
   const togglePinMutation = useMutation({
     mutationFn: (noteId) => api?.toggleNotePin?.(entityId, noteId),
-    onSuccess: () => {
-      queryClient.invalidateQueries(['internalNotes', entityType, entityId]);
+    onSuccess: (updatedNote) => {
+      upsertNoteInCache(updatedNote);
     },
   });
 
   const handleCreateNote = () => {
     if (!newNoteBody.trim()) return;
     createNoteMutation.mutate({
-      title: newNoteTitle.trim() || null,
       body: newNoteBody.trim(),
       isPinned: false,
       mentions: newNoteMentions,
@@ -94,7 +142,6 @@ export default function InternalNotesTabs({ entityType = 'lead', entityId }) {
     updateNoteMutation.mutate({
       noteId,
       data: {
-        title: editTitle.trim() || null,
         body: editBody.trim(),
         mentions: editMentions,
       },
@@ -103,14 +150,12 @@ export default function InternalNotesTabs({ entityType = 'lead', entityId }) {
 
   const startEditing = (note) => {
     setEditingNoteId(note.id);
-    setEditTitle(note.title || '');
-    setEditBody(note.body || '');
-    setEditMentions([]);
+    setEditBody(note.body || note.title || '');
+    setEditMentions(note.mentions || []);
   };
 
   const cancelEditing = () => {
     setEditingNoteId(null);
-    setEditTitle('');
     setEditBody('');
     setEditMentions([]);
   };
@@ -156,7 +201,7 @@ export default function InternalNotesTabs({ entityType = 'lead', entityId }) {
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
         <div className="flex items-center gap-2 mb-4">
           <StickyNote className="w-5 h-5 text-yellow-500" />
-          <h3 className="font-semibold text-gray-900">Notes</h3>
+          <h3 className="font-semibold text-gray-900">Internal Notes</h3>
         </div>
         <div className="animate-pulse space-y-3">
           <div className="h-16 bg-gray-100 rounded-lg"></div>
@@ -172,7 +217,7 @@ export default function InternalNotesTabs({ entityType = 'lead', entityId }) {
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
         <div className="flex items-center gap-2 mb-4">
           <StickyNote className="w-5 h-5 text-yellow-500" />
-          <h3 className="font-semibold text-gray-900">Notes</h3>
+          <h3 className="font-semibold text-gray-900">Internal Notes</h3>
         </div>
         <p className="text-sm text-red-500">Failed to load notes</p>
       </div>
@@ -184,7 +229,7 @@ export default function InternalNotesTabs({ entityType = 'lead', entityId }) {
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
           <StickyNote className="w-5 h-5 text-yellow-500" />
-          <h3 className="font-semibold text-gray-900">Notes</h3>
+          <h3 className="font-semibold text-gray-900">Internal Notes</h3>
           <span className="text-xs text-gray-400">({notes.length})</span>
         </div>
         {!isAddingNote && (
@@ -200,13 +245,6 @@ export default function InternalNotesTabs({ entityType = 'lead', entityId }) {
 
       {isAddingNote && (
         <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-          <input
-            type="text"
-            placeholder="Title (optional)"
-            value={newNoteTitle}
-            onChange={(e) => setNewNoteTitle(e.target.value)}
-            className="w-full text-sm font-medium text-gray-900 bg-transparent border-none focus:outline-none placeholder-gray-400 mb-2"
-          />
           <MentionTextarea
             placeholder="Write your note... (type @ to mention someone)"
             value={newNoteBody}
@@ -221,7 +259,6 @@ export default function InternalNotesTabs({ entityType = 'lead', entityId }) {
             <button
               onClick={() => {
                 setIsAddingNote(false);
-                setNewNoteTitle('');
                 setNewNoteBody('');
                 setNewNoteMentions([]);
               }}
@@ -241,12 +278,29 @@ export default function InternalNotesTabs({ entityType = 'lead', entityId }) {
 
       {pinnedNote && (
         <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2">
-              <Pin className="w-4 h-4 text-yellow-600" />
-              <span className="text-sm font-semibold text-gray-900">
-                {pinnedNote.title || 'Pinned Note'}
-              </span>
+          <div className="flex items-start justify-between gap-3 mb-2">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <Pin className="w-4 h-4 text-yellow-600" />
+                <span className="text-sm font-semibold text-gray-900">Pinned Note</span>
+              </div>
+              <div className="flex items-center gap-3 text-xs text-gray-500 mt-1">
+                {(() => {
+                  const author = pinnedNote.createdBy || pinnedNote.author || pinnedNote.user || {};
+                  const authorName = author.name
+                    || `${author.firstName || ''} ${author.lastName || ''}`.trim()
+                    || author.email?.split('@')[0]
+                    || (typeof pinnedNote.createdBy === 'string' ? pinnedNote.createdBy : '');
+                  return authorName ? (
+                    <span className="flex items-center gap-1">
+                      <User className="w-3 h-3" /> {authorName}
+                    </span>
+                  ) : null;
+                })()}
+                <span className="flex items-center gap-1">
+                  <Clock className="w-3 h-3" /> {formatDate(pinnedNote.createdAt)}
+                </span>
+              </div>
             </div>
             <button
               onClick={() => togglePinMutation.mutate(pinnedNote.id)}
@@ -256,7 +310,7 @@ export default function InternalNotesTabs({ entityType = 'lead', entityId }) {
               <PinOff className="w-4 h-4" />
             </button>
           </div>
-          <p className="text-sm text-gray-700">{pinnedNote.body}</p>
+          <div className="text-sm text-gray-700 whitespace-pre-wrap">{pinnedNote.body}</div>
         </div>
       )}
 
@@ -268,19 +322,15 @@ export default function InternalNotesTabs({ entityType = 'lead', entityId }) {
           const isExpanded = expandedNotes.has(note.id);
           const isEditing = editingNoteId === note.id;
           const author = note.createdBy || note.author || note.user || {};
-          const authorName = `${author.firstName || ''} ${author.lastName || ''}`.trim();
+          const authorName = author.name
+            || `${author.firstName || ''} ${author.lastName || ''}`.trim()
+            || author.email?.split('@')[0]
+            || (typeof note.createdBy === 'string' ? note.createdBy : '');
 
           return (
             <div key={note.id} className="border border-gray-200 rounded-lg p-3">
               {isEditing ? (
                 <div>
-                  <input
-                    type="text"
-                    value={editTitle}
-                    onChange={(e) => setEditTitle(e.target.value)}
-                    className="w-full text-sm font-medium text-gray-900 border border-gray-200 rounded-md px-2 py-1 mb-2"
-                    placeholder="Title (optional)"
-                  />
                   <MentionTextarea
                     value={editBody}
                     onChange={setEditBody}
@@ -308,12 +358,6 @@ export default function InternalNotesTabs({ entityType = 'lead', entityId }) {
                 <>
                   <div className="flex items-start justify-between">
                     <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-semibold text-gray-900">
-                          {note.title || 'Untitled'}
-                        </span>
-                        {note.isPinned && <Pin className="w-3 h-3 text-yellow-500" />}
-                      </div>
                       <div className="flex items-center gap-3 text-xs text-gray-500 mt-1">
                         {authorName && (
                           <span className="flex items-center gap-1">
@@ -350,7 +394,7 @@ export default function InternalNotesTabs({ entityType = 'lead', entityId }) {
                     </div>
                   </div>
 
-                  <div className="mt-2 text-sm text-gray-700">
+                  <div className="mt-2 text-sm text-gray-700 whitespace-pre-wrap">
                     {isExpanded ? note.body : truncateText(note.body)}
                   </div>
 

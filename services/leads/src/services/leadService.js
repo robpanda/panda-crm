@@ -2092,11 +2092,19 @@ class LeadService {
     }
 
     const notes = await prisma.note.findMany({
-      where: { leadId: leadId },
-      orderBy: { createdAt: 'desc' },
+      where: {
+        leadId,
+        NOT: {
+          title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+        },
+      },
+      orderBy: [
+        { isPinned: 'desc' },
+        { createdAt: 'desc' },
+      ],
       include: {
         createdBy: {
-          select: { id: true, firstName: true, lastName: true },
+          select: { id: true, firstName: true, lastName: true, email: true },
         },
       },
     });
@@ -2108,11 +2116,19 @@ class LeadService {
         id: n.id,
         title: n.title,
         body: n.body,
+        isPinned: n.isPinned || false,
+        pinnedAt: n.pinnedAt,
         createdAt: n.createdAt,
+        updatedAt: n.updatedAt,
         createdBy: n.createdBy
-          ? `${n.createdBy.firstName} ${n.createdBy.lastName}`
-          : 'System',
-        createdById: n.createdById,
+          ? {
+              id: n.createdBy.id,
+              firstName: n.createdBy.firstName,
+              lastName: n.createdBy.lastName,
+              name: `${n.createdBy.firstName || ''} ${n.createdBy.lastName || ''}`.trim() || n.createdBy.email,
+              email: n.createdBy.email,
+            }
+          : null,
       })),
       total: notes.length,
     };
@@ -2122,8 +2138,8 @@ class LeadService {
    * Add a note to a lead
    * Used by: Call Center to document calls and status updates
    */
-  async addLeadNote(leadId, data) {
-    const { note, title, createdBy, isPinned } = data;
+  async addLeadNote(leadId, data, actor = null) {
+    const { note, title, isPinned } = data;
 
     // Verify lead exists
     const lead = await prisma.lead.findUnique({
@@ -2137,10 +2153,21 @@ class LeadService {
       throw error;
     }
 
+    const createdById = await this.resolveActorUserId(actor)
+      || data.createdById
+      || data.createdBy
+      || null;
+
     // If this note will be pinned, unpin any existing pinned notes
     if (isPinned) {
       await prisma.note.updateMany({
-        where: { leadId: leadId, isPinned: true },
+        where: {
+          leadId,
+          isPinned: true,
+          NOT: {
+            title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+          },
+        },
         data: { isPinned: false, pinnedAt: null },
       });
     }
@@ -2150,8 +2177,8 @@ class LeadService {
       data: {
         title: title || null,
         body: note,
-        leadId: leadId,
-        createdById: createdBy,
+        leadId,
+        createdById,
         isPinned: isPinned || false,
         pinnedAt: isPinned ? new Date() : null,
       },
@@ -2162,6 +2189,20 @@ class LeadService {
       },
     });
 
+    const noteContent = [
+      this.normalizeOptionalText(title),
+      note,
+    ].filter(Boolean).join('\n\n');
+    const mentionsNotified = await this.notifyLeadMentions({
+      leadId,
+      content: noteContent,
+      mentions: data.mentions || [],
+      actor,
+      actorUserId: createdById,
+      leadName: `${lead.firstName || ''} ${lead.lastName || ''}`.trim(),
+      actionPath: `/leads/${leadId}?tab=internal`,
+    });
+
     logger.info(`Note added to lead ${leadId}`);
 
     return {
@@ -2169,9 +2210,19 @@ class LeadService {
       title: newNote.title,
       body: newNote.body,
       isPinned: newNote.isPinned || false,
+      pinnedAt: newNote.pinnedAt,
       createdAt: newNote.createdAt,
       updatedAt: newNote.updatedAt,
-      createdBy: newNote.createdBy,
+      createdBy: newNote.createdBy
+        ? {
+            id: newNote.createdBy.id,
+            firstName: newNote.createdBy.firstName,
+            lastName: newNote.createdBy.lastName,
+            name: `${newNote.createdBy.firstName || ''} ${newNote.createdBy.lastName || ''}`.trim() || newNote.createdBy.email,
+            email: newNote.createdBy.email,
+          }
+        : null,
+      mentionsNotified,
     };
   }
 
@@ -2181,11 +2232,11 @@ class LeadService {
    * @param {string} noteId - Note ID
    * @param {object} data - { title?, body?, isPinned? }
    */
-  async updateLeadNote(leadId, noteId, data) {
+  async updateLeadNote(leadId, noteId, data, actor = null) {
     // Verify lead exists
     const lead = await prisma.lead.findUnique({
       where: { id: leadId },
-      select: { id: true },
+      select: { id: true, firstName: true, lastName: true },
     });
 
     if (!lead) {
@@ -2196,7 +2247,13 @@ class LeadService {
 
     // Verify note exists and belongs to this lead
     const existingNote = await prisma.note.findFirst({
-      where: { id: noteId, leadId: leadId },
+      where: {
+        id: noteId,
+        leadId,
+        NOT: {
+          title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+        },
+      },
     });
 
     if (!existingNote) {
@@ -2205,8 +2262,21 @@ class LeadService {
       throw error;
     }
 
+    if (data.isPinned && !existingNote.isPinned) {
+      await prisma.note.updateMany({
+        where: {
+          leadId,
+          isPinned: true,
+          NOT: {
+            title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+          },
+        },
+        data: { isPinned: false, pinnedAt: null },
+      });
+    }
+
     const updateData = {};
-    if (data.title !== undefined) updateData.title = data.title;
+    if (data.title !== undefined) updateData.title = this.normalizeOptionalText(data.title);
     if (data.body !== undefined) updateData.body = data.body;
     if (data.isPinned !== undefined) {
       updateData.isPinned = data.isPinned;
@@ -2223,6 +2293,20 @@ class LeadService {
       },
     });
 
+    const noteContent = [
+      data.title !== undefined ? this.normalizeOptionalText(data.title) : existingNote.title,
+      data.body !== undefined ? data.body : existingNote.body,
+    ].filter(Boolean).join('\n\n');
+    const mentionsNotified = await this.notifyLeadMentions({
+      leadId,
+      content: noteContent,
+      mentions: data.mentions || [],
+      actor,
+      actorUserId: await this.resolveActorUserId(actor),
+      leadName: `${lead.firstName || ''} ${lead.lastName || ''}`.trim(),
+      actionPath: `/leads/${leadId}?tab=internal`,
+    });
+
     logger.info(`Note ${noteId} updated for lead ${leadId}`);
 
     return {
@@ -2233,7 +2317,16 @@ class LeadService {
       pinnedAt: updatedNote.pinnedAt,
       createdAt: updatedNote.createdAt,
       updatedAt: updatedNote.updatedAt,
-      createdBy: updatedNote.createdBy,
+      createdBy: updatedNote.createdBy
+        ? {
+            id: updatedNote.createdBy.id,
+            firstName: updatedNote.createdBy.firstName,
+            lastName: updatedNote.createdBy.lastName,
+            name: `${updatedNote.createdBy.firstName || ''} ${updatedNote.createdBy.lastName || ''}`.trim() || updatedNote.createdBy.email,
+            email: updatedNote.createdBy.email,
+          }
+        : null,
+      mentionsNotified,
     };
   }
 
@@ -2257,7 +2350,13 @@ class LeadService {
 
     // Verify note exists and belongs to this lead
     const existingNote = await prisma.note.findFirst({
-      where: { id: noteId, leadId: leadId },
+      where: {
+        id: noteId,
+        leadId,
+        NOT: {
+          title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+        },
+      },
     });
 
     if (!existingNote) {
@@ -2295,7 +2394,13 @@ class LeadService {
 
     // Verify note exists and belongs to this lead
     const existingNote = await prisma.note.findFirst({
-      where: { id: noteId, leadId: leadId },
+      where: {
+        id: noteId,
+        leadId,
+        NOT: {
+          title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+        },
+      },
     });
 
     if (!existingNote) {
@@ -2309,7 +2414,13 @@ class LeadService {
     // If pinning, unpin any other pinned notes for this lead
     if (newPinnedState) {
       await prisma.note.updateMany({
-        where: { leadId: leadId, isPinned: true },
+        where: {
+          leadId,
+          isPinned: true,
+          NOT: {
+            title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
+          },
+        },
         data: { isPinned: false, pinnedAt: null },
       });
     }
@@ -2338,7 +2449,15 @@ class LeadService {
       pinnedAt: updatedNote.pinnedAt,
       createdAt: updatedNote.createdAt,
       updatedAt: updatedNote.updatedAt,
-      createdBy: updatedNote.createdBy,
+      createdBy: updatedNote.createdBy
+        ? {
+            id: updatedNote.createdBy.id,
+            firstName: updatedNote.createdBy.firstName,
+            lastName: updatedNote.createdBy.lastName,
+            name: `${updatedNote.createdBy.firstName || ''} ${updatedNote.createdBy.lastName || ''}`.trim() || updatedNote.createdBy.email,
+            email: updatedNote.createdBy.email,
+          }
+        : null,
     };
   }
 

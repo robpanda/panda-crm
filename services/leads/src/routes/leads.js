@@ -726,8 +726,8 @@ router.post('/:id/notes', async (req, res, next) => {
       note: noteBody,
       title,
       isPinned,
-      createdBy: req.user?.id,
-    });
+      mentions: req.body.mentions || [],
+    }, req.user);
     res.json({ success: true, data: result });
   } catch (error) {
     next(error);
@@ -737,12 +737,13 @@ router.post('/:id/notes', async (req, res, next) => {
 // Update a note
 router.put('/:id/notes/:noteId', async (req, res, next) => {
   try {
-    const { title, body, isPinned } = req.body;
+    const { title, body, isPinned, mentions } = req.body;
     const result = await leadService.updateLeadNote(req.params.id, req.params.noteId, {
       title,
       body,
       isPinned,
-    });
+      mentions: mentions || [],
+    }, req.user);
     res.json({ success: true, data: result });
   } catch (error) {
     next(error);
