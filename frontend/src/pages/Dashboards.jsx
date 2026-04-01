@@ -2,9 +2,7 @@ import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
-  BarChart3,
   Copy,
-  ExternalLink,
   FolderOpen,
   Globe,
   LayoutGrid,
@@ -18,8 +16,7 @@ import {
   Trash2,
   Users,
 } from 'lucide-react';
-import { metabaseApi, reportsApi } from '../services/api';
-import MetabaseWidget from '../components/metabase/MetabaseWidget';
+import { reportsApi } from '../services/api';
 import DataSourceBadge from '../components/analytics/DataSourceBadge';
 import VerifiedBadge from '../components/analytics/VerifiedBadge';
 import { deriveDataSource } from '../utils/analyticsSource';
@@ -30,7 +27,6 @@ const DASHBOARD_TABS = [
   { id: 'all', label: 'All Dashboards', icon: LayoutGrid },
   { id: 'favorites', label: 'Favorites', icon: Star },
   { id: 'shared', label: 'Shared', icon: Users },
-  { id: 'external', label: 'External Dashboards', icon: ExternalLink },
 ];
 
 function DashboardCard({ dashboard, verification, onEdit, onDuplicate, onDelete }) {
@@ -159,116 +155,6 @@ function DashboardCard({ dashboard, verification, onEdit, onDuplicate, onDelete 
   );
 }
 
-function ExternalDashboardsPanel({ selectedDashboard, onSelectDashboard, searchQuery }) {
-  const { data: metabaseStatus } = useQuery({
-    queryKey: ['metabase-status', 'dashboards'],
-    queryFn: () => metabaseApi.getStatus(),
-    retry: false,
-  });
-
-  const isConnected = Boolean(metabaseStatus?.data?.connected);
-
-  const { data: metabaseDashboards, isLoading } = useQuery({
-    queryKey: ['metabase-dashboards', 'dashboards'],
-    queryFn: () => metabaseApi.getDashboards(),
-    enabled: isConnected,
-  });
-
-  const dashboards = Array.isArray(metabaseDashboards?.data) ? metabaseDashboards.data : [];
-  const filteredDashboards = dashboards.filter((dashboard) =>
-    !searchQuery
-    || (dashboard.name || dashboard.title || '').toLowerCase().includes(searchQuery.toLowerCase())
-    || (dashboard.description || '').toLowerCase().includes(searchQuery.toLowerCase())
-  );
-
-  if (!isConnected) {
-    return (
-      <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6">
-        <h3 className="text-lg font-semibold text-gray-900">Metabase is not connected</h3>
-        <p className="mt-2 text-sm text-gray-600">
-          Connect Metabase in Analytics Settings to surface external dashboards here.
-        </p>
-        <Link
-          to="/analytics/settings/metabase"
-          className="mt-4 inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100"
-        >
-          Open Metabase Settings
-        </Link>
-      </div>
-    );
-  }
-
-  if (isLoading) {
-    return <div className="text-sm text-gray-500">Loading external dashboards...</div>;
-  }
-
-  return (
-    <div className="space-y-6">
-      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
-        <h3 className="text-lg font-semibold text-gray-900">External dashboards are ready</h3>
-        <p className="mt-2 text-sm text-gray-600">
-          Metabase dashboards live here so teams can access native and external analytics from the same dashboard library.
-        </p>
-      </div>
-
-      {filteredDashboards.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-gray-300 bg-white px-6 py-14 text-center">
-          <BarChart3 className="mx-auto h-12 w-12 text-gray-300" />
-          <h3 className="mt-4 text-lg font-semibold text-gray-900">No external dashboards found</h3>
-          <p className="mt-2 text-sm text-gray-500">
-            {searchQuery
-              ? 'Try a different search term.'
-              : 'Metabase is connected, but no dashboards are currently available.'}
-          </p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-          {filteredDashboards.map((dashboard) => (
-            <button
-              key={dashboard.id}
-              type="button"
-              onClick={() => onSelectDashboard(dashboard.id)}
-              className={`rounded-2xl border p-5 text-left transition-colors ${
-                selectedDashboard === dashboard.id
-                  ? 'border-teal-400 bg-teal-50'
-                  : 'border-gray-200 bg-white hover:border-gray-300'
-              }`}
-            >
-              <div className="flex items-center gap-3">
-                <div className="rounded-xl bg-teal-100 p-3 text-teal-700">
-                  <BarChart3 className="h-5 w-5" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900">{dashboard.name || dashboard.title}</h3>
-                  {dashboard.description && (
-                    <p className="mt-1 text-sm text-gray-500">{dashboard.description}</p>
-                  )}
-                </div>
-              </div>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {selectedDashboard && (
-        <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
-          <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
-            <h3 className="text-lg font-semibold text-gray-900">External Dashboard</h3>
-            <button
-              type="button"
-              onClick={() => onSelectDashboard(null)}
-              className="text-sm font-medium text-gray-500 hover:text-gray-700"
-            >
-              Close
-            </button>
-          </div>
-          <MetabaseWidget type="dashboard" id={selectedDashboard} height={720} mode="interactive" />
-        </div>
-      )}
-    </div>
-  );
-}
-
 export default function Dashboards({ embedded = false }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -276,7 +162,6 @@ export default function Dashboards({ embedded = false }) {
   const verification = analyticsBadges?.verification || { status: 'unknown', reason: 'Verification unavailable.' };
   const [searchParams, setSearchParams] = useSearchParams();
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedExternalDashboard, setSelectedExternalDashboard] = useState(null);
   const requestedTab = searchParams.get('tab') || 'all';
   const activeTab = DASHBOARD_TABS.some((tab) => tab.id === requestedTab) ? requestedTab : 'all';
 
@@ -332,7 +217,7 @@ export default function Dashboards({ embedded = false }) {
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Dashboards</h1>
             <p className="text-gray-500">
-              Dashboards organize saved reports and external analytics in one place.
+              Dashboards organize saved reports and executive analytics in one place.
             </p>
           </div>
           {canManageDashboards && (
@@ -357,7 +242,7 @@ export default function Dashboards({ embedded = false }) {
         </div>
       )}
 
-      {!embedded && activeTab !== 'external' && (
+      {!embedded && (
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
           <Link
             to="/analytics/dashboards/executive"
@@ -421,20 +306,14 @@ export default function Dashboards({ embedded = false }) {
               type="text"
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder={activeTab === 'external' ? 'Search external dashboards...' : 'Search dashboards...'}
+              placeholder="Search dashboards..."
               className="w-full rounded-xl border border-gray-300 py-2.5 pl-10 pr-4 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100 lg:w-72"
             />
           </div>
         </div>
       </div>
 
-      {activeTab === 'external' ? (
-        <ExternalDashboardsPanel
-          selectedDashboard={selectedExternalDashboard}
-          onSelectDashboard={setSelectedExternalDashboard}
-          searchQuery={searchQuery}
-        />
-      ) : isLoading ? (
+      {isLoading ? (
         <div className="text-sm text-gray-500">Loading dashboards...</div>
       ) : filteredDashboards.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-gray-300 bg-white px-6 py-14 text-center">

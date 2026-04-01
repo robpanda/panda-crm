@@ -71,7 +71,7 @@ export default function AnalyticsRedirect() {
     }
 
     if (tab === 'metabase') {
-      navigate('/analytics/dashboards?tab=external', { replace: true });
+      navigate('/analytics/settings/metabase', { replace: true });
       return;
     }
 

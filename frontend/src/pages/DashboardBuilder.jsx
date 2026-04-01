@@ -8,7 +8,6 @@ import {
   AlertCircle,
   BarChart3,
   Database,
-  ExternalLink,
   Eye,
   GripVertical,
   LayoutGrid,
@@ -20,7 +19,7 @@ import {
   Table2,
   Trash2,
 } from 'lucide-react';
-import { metabaseApi, reportsApi } from '../services/api';
+import { reportsApi } from '../services/api';
 import DashboardReportWidget from '../components/reports/DashboardReportWidget';
 import VisualQueryBuilder from '../components/reports/VisualQueryBuilder';
 import {
@@ -68,15 +67,6 @@ const DASHBOARD_WIDGET_LIBRARY = [
     icon: Database,
   },
   {
-    id: 'metabase',
-    label: 'Metabase Widget',
-    description: 'Embed an external dashboard or question',
-    widgetKind: 'METABASE',
-    width: 2,
-    height: 3,
-    icon: ExternalLink,
-  },
-  {
     id: 'ai-summary',
     label: 'AI Summary',
     description: 'Narrative summary powered by the widget report',
@@ -92,7 +82,6 @@ const WIDGET_KIND_OPTIONS = [
   { value: 'CHART', label: 'Chart' },
   { value: 'TABLE', label: 'Table' },
   { value: 'SAVED_REPORT', label: 'Saved Report' },
-  { value: 'METABASE', label: 'Metabase Widget' },
   { value: 'AI_SUMMARY', label: 'AI Summary' },
 ];
 
@@ -311,23 +300,10 @@ export default function DashboardBuilder() {
     queryFn: () => reportsApi.getSavedReports({ limit: 200 }),
   });
 
-  const { data: metabaseStatus } = useQuery({
-    queryKey: ['metabase-status', 'dashboard-builder'],
-    queryFn: () => metabaseApi.getStatus(),
-    retry: false,
-  });
-
-  const { data: metabaseDashboardsResponse } = useQuery({
-    queryKey: ['metabase-dashboards', 'dashboard-builder'],
-    queryFn: () => metabaseApi.getDashboards(),
-    enabled: Boolean(metabaseStatus?.data?.connected),
-    retry: false,
-  });
-
   const savedReports = Array.isArray(savedReportsResponse)
     ? savedReportsResponse
     : savedReportsResponse?.data?.reports || savedReportsResponse?.data || [];
-  const metabaseDashboards = Array.isArray(metabaseDashboardsResponse?.data) ? metabaseDashboardsResponse.data : [];
+  const metabaseDashboards = [];
   const canManageDashboards = dashboardLibraryResponse?.meta?.canWrite !== false;
 
   useEffect(() => {

@@ -1,6 +1,7 @@
 // Saved Reports Routes
 import { Router } from 'express';
 import { PrismaClient } from '@prisma/client';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { logger } from '../middleware/logger.js';
 import { executeReport } from '../services/crossModuleQueryEngine.js';
 import { parseDateRange } from '../services/dateRangeService.js';
@@ -453,6 +454,270 @@ async function executeNormalizedReportSpec(reportSpec, {
   }
 }
 
+function getExportRenderableValue(value) {
+  if (value == null) {
+    return '';
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => getExportRenderableValue(entry))
+      .filter(Boolean)
+      .join(', ');
+  }
+
+  if (!isPlainObject(value)) {
+    return String(value);
+  }
+
+  if (typeof value.fullName === 'string' && value.fullName.trim()) {
+    return value.fullName.trim();
+  }
+
+  const firstName = typeof value.firstName === 'string' ? value.firstName.trim() : '';
+  const lastName = typeof value.lastName === 'string' ? value.lastName.trim() : '';
+  const combinedName = [firstName, lastName].filter(Boolean).join(' ').trim();
+
+  if (combinedName) {
+    return combinedName;
+  }
+
+  for (const key of ['name', 'label', 'title', 'email']) {
+    if (typeof value[key] === 'string' && value[key].trim()) {
+      return value[key].trim();
+    }
+  }
+
+  const primitiveValue = Object.values(value).find((entry) =>
+    entry != null && ['string', 'number', 'boolean'].includes(typeof entry)
+  );
+
+  return primitiveValue != null ? String(primitiveValue) : JSON.stringify(value);
+}
+
+function normalizeExportRows(result = {}) {
+  if (Array.isArray(result?.rows) && result.rows.length > 0) {
+    return result.rows;
+  }
+
+  if (Array.isArray(result?.data) && result.data.length > 0) {
+    return result.data;
+  }
+
+  const groupedRows =
+    result?.byStage ||
+    result?.byType ||
+    result?.byStatus ||
+    result?.bySource ||
+    [];
+
+  if (Array.isArray(groupedRows) && groupedRows.length > 0) {
+    return groupedRows.map((row) => ({
+      ...row,
+      name:
+        row.name ||
+        row.stage ||
+        row.type ||
+        row.status ||
+        row.source ||
+        row.label ||
+        'Unknown',
+      value:
+        row.value ??
+        row.amount ??
+        row.total ??
+        row.count ??
+        0,
+      count: row.count ?? row.value ?? 0,
+    }));
+  }
+
+  if (isPlainObject(result?.metrics)) {
+    return Object.entries(result.metrics).map(([metric, value]) => ({
+      metric,
+      value,
+    }));
+  }
+
+  return [];
+}
+
+function sanitizeExportRows(rows = []) {
+  if (!Array.isArray(rows)) {
+    return [];
+  }
+
+  return rows.map((row) => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      return { value: getExportRenderableValue(row) };
+    }
+
+    return Object.entries(row).reduce((sanitizedRow, [key, value]) => {
+      sanitizedRow[key] = getExportRenderableValue(value);
+      return sanitizedRow;
+    }, {});
+  });
+}
+
+function getExportColumns(rows = []) {
+  const columns = [];
+  const seen = new Set();
+
+  rows.forEach((row) => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) {
+      return;
+    }
+
+    Object.keys(row).forEach((key) => {
+      if (!seen.has(key)) {
+        seen.add(key);
+        columns.push(key);
+      }
+    });
+  });
+
+  return columns;
+}
+
+function escapeCsvValue(value) {
+  const normalized = value == null ? '' : String(value);
+  if (!/[",\r\n]/.test(normalized)) {
+    return normalized;
+  }
+
+  return `"${normalized.replace(/"/g, '""')}"`;
+}
+
+function buildCsvExportBuffer(rows = [], columns = []) {
+  const exportColumns = columns.length > 0 ? columns : ['value'];
+  const lines = [
+    exportColumns.map((column) => escapeCsvValue(column)).join(','),
+    ...rows.map((row) =>
+      exportColumns.map((column) => escapeCsvValue(row?.[column] ?? '')).join(',')
+    ),
+  ];
+
+  return Buffer.from(lines.join('\r\n'), 'utf8');
+}
+
+function wrapPdfLine(text, maxLength = 110) {
+  const normalized = String(text || '');
+
+  if (normalized.length <= maxLength) {
+    return [normalized];
+  }
+
+  const words = normalized.split(/\s+/).filter(Boolean);
+  const lines = [];
+  let currentLine = '';
+
+  words.forEach((originalWord) => {
+    let word = originalWord;
+    const nextLine = currentLine ? `${currentLine} ${word}` : word;
+    if (nextLine.length <= maxLength) {
+      currentLine = nextLine;
+      return;
+    }
+
+    if (currentLine) {
+      lines.push(currentLine);
+      currentLine = word;
+      return;
+    }
+
+    while (word.length > maxLength) {
+      lines.push(word.slice(0, maxLength));
+      word = word.slice(maxLength);
+    }
+
+    currentLine = word;
+  });
+
+  if (currentLine) {
+    lines.push(currentLine);
+  }
+
+  return lines.length > 0 ? lines : [''];
+}
+
+async function buildPdfExportBuffer({ reportName, rows, columns, periodLabel }) {
+  const pdfDoc = await PDFDocument.create();
+  const bodyFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const headingFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const pageWidth = 612;
+  const pageHeight = 792;
+  const margin = 48;
+  const lineHeight = 14;
+  const generatedAt = new Date().toLocaleString('en-US', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  });
+
+  let page = pdfDoc.addPage([pageWidth, pageHeight]);
+  let y = pageHeight - margin;
+
+  const ensureSpace = (required = lineHeight) => {
+    if (y - required < margin) {
+      page = pdfDoc.addPage([pageWidth, pageHeight]);
+      y = pageHeight - margin;
+    }
+  };
+
+  const drawLine = (text, { size = 10, font = bodyFont, color = rgb(0.1, 0.1, 0.1) } = {}) => {
+    ensureSpace(size + 6);
+    page.drawText(String(text || ''), {
+      x: margin,
+      y,
+      size,
+      font,
+      color,
+    });
+    y -= size + 4;
+  };
+
+  drawLine(reportName || 'Saved Report Export', { size: 16, font: headingFont });
+  drawLine(`Generated: ${generatedAt}`);
+  if (periodLabel) {
+    drawLine(`Period: ${periodLabel}`);
+  }
+  drawLine(`Rows: ${rows.length}`);
+  y -= 8;
+
+  if (rows.length === 0) {
+    drawLine('No rows returned for this report.', { size: 12, font: headingFont });
+    return Buffer.from(await pdfDoc.save());
+  }
+
+  rows.forEach((row, index) => {
+    ensureSpace(48);
+    drawLine(`Row ${index + 1}`, { size: 11, font: headingFont, color: rgb(0.17, 0.24, 0.39) });
+
+    const rowColumns = columns.length > 0 ? columns : Object.keys(row || {});
+    rowColumns.forEach((column) => {
+      const chunks = wrapPdfLine(`${column}: ${row?.[column] || '-'}`);
+      chunks.forEach((chunk) => drawLine(chunk, { size: 9 }));
+    });
+
+    y -= 6;
+  });
+
+  return Buffer.from(await pdfDoc.save());
+}
+
+function sanitizeExportFilename(name = 'saved-report') {
+  const normalized = String(name || 'saved-report')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+
+  return normalized || 'saved-report';
+}
+
 /**
  * GET /api/reports
  * List saved reports
@@ -787,6 +1052,84 @@ router.post('/preview', async (req, res, next) => {
         results,
       },
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/reports/:id/export
+ * Export a saved report to CSV or PDF
+ */
+router.get('/:id/export', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user?.id;
+    const format = String(req.query.format || 'csv').toLowerCase();
+
+    if (!['csv', 'pdf'].includes(format)) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Unsupported export format' },
+      });
+    }
+
+    const report = await prisma.savedReport.findUnique({
+      where: { id },
+    });
+
+    if (!report) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Report not found' },
+      });
+    }
+
+    const hasAccess = report.createdById === userId ||
+      report.isPublic ||
+      report.sharedWithRoles.some((role) => req.user?.groups?.includes(role));
+
+    if (!hasAccess) {
+      return res.status(403).json({
+        success: false,
+        error: { code: 'FORBIDDEN', message: 'Access denied' },
+      });
+    }
+
+    const dateRange = typeof req.query.dateRange === 'string' ? req.query.dateRange : undefined;
+    const dateRangeOptions = {
+      ...(typeof req.query.customStart === 'string' && { customStart: req.query.customStart }),
+      ...(typeof req.query.customEnd === 'string' && { customEnd: req.query.customEnd }),
+      ...(req.query.customRollingDays !== undefined && { customRollingDays: Number(req.query.customRollingDays) || undefined }),
+    };
+
+    const result = await executeNormalizedReportSpec(report, {
+      dateRange,
+      dateRangeOptions,
+      limit: 1000,
+    });
+
+    const rows = sanitizeExportRows(normalizeExportRows(result));
+    const columns = getExportColumns(rows);
+    const safeBaseName = sanitizeExportFilename(report.name);
+
+    if (format === 'csv') {
+      const csvBuffer = buildCsvExportBuffer(rows, columns);
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${safeBaseName}.csv"`);
+      return res.send(csvBuffer);
+    }
+
+    const pdfBuffer = await buildPdfExportBuffer({
+      reportName: report.name,
+      rows,
+      columns,
+      periodLabel: result?.period || null,
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeBaseName}.pdf"`);
+    return res.send(pdfBuffer);
   } catch (error) {
     next(error);
   }

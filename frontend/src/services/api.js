@@ -3153,11 +3153,10 @@ export const reportsApi = {
   },
 
   async exportReport(id, format = 'csv', params = {}) {
-    const response = await api.get(`/api/reports/${id}/export`, {
+    return api.get(`/api/reports/${id}/export`, {
       params: { format, ...params },
       responseType: 'blob',
     });
-    return response.data;
   },
 
   // Dashboards - use report-backed dashboards for create/edit and legacy dashboards for existing reads

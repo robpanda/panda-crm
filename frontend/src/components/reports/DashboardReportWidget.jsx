@@ -12,7 +12,6 @@ import {
   normalizeReportConfig,
   normalizeReportRunResult,
 } from '../../utils/reporting';
-import MetabaseWidget from '../metabase/MetabaseWidget';
 import ReportRenderer from './ReportRenderer';
 
 const WIDGET_KIND_BY_TYPE = {
@@ -279,12 +278,9 @@ export default function DashboardReportWidget({
           {subtitle && <p className="mt-1 text-sm text-gray-500">{subtitle}</p>}
         </div>
         <div className="p-4">
-          <MetabaseWidget
-            type={metabaseType}
-            id={metabaseId}
-            height={420}
-            filters={previewDateRangeOptions}
-          />
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            External dashboard widgets are temporarily hidden while the reports embed APIs are stabilized.
+          </div>
         </div>
       </div>
     );

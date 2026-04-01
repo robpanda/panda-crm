@@ -20,6 +20,47 @@ import {
   formatReportFieldLabel,
 } from '../utils/reporting';
 
+function extractExportFilename(headers, fallbackName) {
+  const contentDisposition = headers?.['content-disposition'] || headers?.['Content-Disposition'] || '';
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1]);
+  }
+
+  const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/i);
+  if (filenameMatch?.[1]) {
+    return filenameMatch[1];
+  }
+
+  return fallbackName;
+}
+
+function triggerBlobDownload(blob, fileName) {
+  if (!(blob instanceof Blob)) {
+    return;
+  }
+
+  const objectUrl = window.URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = objectUrl;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.URL.revokeObjectURL(objectUrl);
+}
+
+function buildFallbackExportName(reportName, format) {
+  const safeBaseName = String(reportName || 'saved-report')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'saved-report';
+
+  return `${safeBaseName}.${format}`;
+}
+
 export default function ReportDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -105,7 +146,10 @@ export default function ReportDetail() {
   const handleExport = async (format) => {
     try {
       const params = toAnalyticsDateParams(dateRange);
-      await reportsApi.exportReport(id, format, params);
+      const response = await reportsApi.exportReport(id, format, params);
+      const fallbackName = buildFallbackExportName(report?.name, format);
+      const fileName = extractExportFilename(response?.headers, fallbackName);
+      triggerBlobDownload(response?.data, fileName);
     } catch (error) {
       console.error('Failed to export report:', error);
     }
