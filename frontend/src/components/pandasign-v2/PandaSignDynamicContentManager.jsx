@@ -126,7 +126,7 @@ export default function PandaSignDynamicContentManager({
           />
         </label>
 
-        <div className="mt-4 grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+        <div className="mt-4 space-y-4">
           <PandaSignRichTextEditor
             ref={editorRef}
             value={form.content}

@@ -118,14 +118,15 @@ export default function PandaSignBrandingManager({
           />
         </label>
 
-        <div className="mt-4 grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
-          <div className="space-y-4">
-            <PandaSignRichTextEditor
-              ref={editorRef}
-              value={form.content}
-              onChange={(content) => setForm((current) => ({ ...current, content }))}
-              onInsertToken={() => {}}
-            />
+        <div className="mt-4 space-y-4">
+          <PandaSignRichTextEditor
+            ref={editorRef}
+            value={form.content}
+            onChange={(content) => setForm((current) => ({ ...current, content }))}
+            onInsertToken={() => {}}
+          />
+
+          <div className="grid gap-4 xl:grid-cols-[1.05fr_0.95fr]">
             <PandaSignBrandingPreview
               title={`${form.kind === 'FOOTER' ? 'Footer' : 'Header'} Preview`}
               content={form.content}
@@ -136,14 +137,14 @@ export default function PandaSignBrandingManager({
                 territoryProfiles: profilesDraft,
               }}
             />
-          </div>
 
-          <PandaSignTokenPicker
-            dynamicContentItems={dynamicContentItems}
-            onInsertToken={(token) => {
-              editorRef.current?.insertToken(token);
-            }}
-          />
+            <PandaSignTokenPicker
+              dynamicContentItems={dynamicContentItems}
+              onInsertToken={(token) => {
+                editorRef.current?.insertToken(token);
+              }}
+            />
+          </div>
         </div>
 
         <div className="mt-4 flex justify-end">
