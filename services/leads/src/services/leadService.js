@@ -2272,7 +2272,6 @@ class LeadService {
         },
       },
       orderBy: [
-        { isPinned: 'desc' },
         { createdAt: 'desc' },
       ],
       include: {
@@ -2289,8 +2288,8 @@ class LeadService {
         id: n.id,
         title: n.title,
         body: n.body,
-        isPinned: n.isPinned || false,
-        pinnedAt: n.pinnedAt,
+        isPinned: false,
+        pinnedAt: null,
         createdAt: n.createdAt,
         updatedAt: n.updatedAt,
         createdBy: n.createdBy
@@ -2331,20 +2330,6 @@ class LeadService {
       || data.createdBy
       || null;
 
-    // If this note will be pinned, unpin any existing pinned notes
-    if (isPinned) {
-      await prisma.note.updateMany({
-        where: {
-          leadId,
-          isPinned: true,
-          NOT: {
-            title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
-          },
-        },
-        data: { isPinned: false, pinnedAt: null },
-      });
-    }
-
     // Create the note
     const newNote = await prisma.note.create({
       data: {
@@ -2352,8 +2337,6 @@ class LeadService {
         body: note,
         leadId,
         createdById,
-        isPinned: isPinned || false,
-        pinnedAt: isPinned ? new Date() : null,
       },
       include: {
         createdBy: {
@@ -2382,8 +2365,8 @@ class LeadService {
       id: newNote.id,
       title: newNote.title,
       body: newNote.body,
-      isPinned: newNote.isPinned || false,
-      pinnedAt: newNote.pinnedAt,
+      isPinned: false,
+      pinnedAt: null,
       createdAt: newNote.createdAt,
       updatedAt: newNote.updatedAt,
       createdBy: newNote.createdBy
@@ -2435,26 +2418,9 @@ class LeadService {
       throw error;
     }
 
-    if (data.isPinned && !existingNote.isPinned) {
-      await prisma.note.updateMany({
-        where: {
-          leadId,
-          isPinned: true,
-          NOT: {
-            title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
-          },
-        },
-        data: { isPinned: false, pinnedAt: null },
-      });
-    }
-
     const updateData = {};
     if (data.title !== undefined) updateData.title = this.normalizeOptionalText(data.title);
     if (data.body !== undefined) updateData.body = data.body;
-    if (data.isPinned !== undefined) {
-      updateData.isPinned = data.isPinned;
-      updateData.pinnedAt = data.isPinned ? new Date() : null;
-    }
 
     const updatedNote = await prisma.note.update({
       where: { id: noteId },
@@ -2486,8 +2452,8 @@ class LeadService {
       id: updatedNote.id,
       title: updatedNote.title,
       body: updatedNote.body,
-      isPinned: updatedNote.isPinned || false,
-      pinnedAt: updatedNote.pinnedAt,
+      isPinned: false,
+      pinnedAt: null,
       createdAt: updatedNote.createdAt,
       updatedAt: updatedNote.updatedAt,
       createdBy: updatedNote.createdBy
@@ -2582,29 +2548,8 @@ class LeadService {
       throw error;
     }
 
-    const newPinnedState = !existingNote.isPinned;
-
-    // If pinning, unpin any other pinned notes for this lead
-    if (newPinnedState) {
-      await prisma.note.updateMany({
-        where: {
-          leadId,
-          isPinned: true,
-          NOT: {
-            title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
-          },
-        },
-        data: { isPinned: false, pinnedAt: null },
-      });
-    }
-
-    // Update the note
-    const updatedNote = await prisma.note.update({
+    const currentNote = await prisma.note.findUnique({
       where: { id: noteId },
-      data: {
-        isPinned: newPinnedState,
-        pinnedAt: newPinnedState ? new Date() : null,
-      },
       include: {
         createdBy: {
           select: { id: true, firstName: true, lastName: true, email: true },
@@ -2612,23 +2557,23 @@ class LeadService {
       },
     });
 
-    logger.info(`Note ${noteId} pin toggled to ${newPinnedState} for lead ${leadId}`);
+    logger.warn(`Lead note pin toggle requested for ${noteId}, but note pinning is not supported by the current Leads schema`);
 
     return {
-      id: updatedNote.id,
-      title: updatedNote.title,
-      body: updatedNote.body,
-      isPinned: updatedNote.isPinned || false,
-      pinnedAt: updatedNote.pinnedAt,
-      createdAt: updatedNote.createdAt,
-      updatedAt: updatedNote.updatedAt,
-      createdBy: updatedNote.createdBy
+      id: currentNote.id,
+      title: currentNote.title,
+      body: currentNote.body,
+      isPinned: false,
+      pinnedAt: null,
+      createdAt: currentNote.createdAt,
+      updatedAt: currentNote.updatedAt,
+      createdBy: currentNote.createdBy
         ? {
-            id: updatedNote.createdBy.id,
-            firstName: updatedNote.createdBy.firstName,
-            lastName: updatedNote.createdBy.lastName,
-            name: `${updatedNote.createdBy.firstName || ''} ${updatedNote.createdBy.lastName || ''}`.trim() || updatedNote.createdBy.email,
-            email: updatedNote.createdBy.email,
+            id: currentNote.createdBy.id,
+            firstName: currentNote.createdBy.firstName,
+            lastName: currentNote.createdBy.lastName,
+            name: `${currentNote.createdBy.firstName || ''} ${currentNote.createdBy.lastName || ''}`.trim() || currentNote.createdBy.email,
+            email: currentNote.createdBy.email,
           }
         : null,
     };
