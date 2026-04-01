@@ -50,6 +50,9 @@ const DEFAULT_FROM_EMAIL = process.env.FROM_EMAIL || 'documents@pandaexteriors.c
 const DEFAULT_COMPANY_NAME = process.env.COMPANY_NAME || 'Panda Exteriors';
 const DEFAULT_COMPANY_PHONE = process.env.COMPANY_PHONE || '(240) 801-6665';
 const DEFAULT_COMPANY_EMAIL = process.env.COMPANY_EMAIL || DEFAULT_FROM_EMAIL;
+const CRM_BASE_URL = String(process.env.CRM_BASE_URL || 'https://crm.pandaadmin.com').replace(/\/+$/, '');
+const DEFAULT_PANDASIGN_CONTACT_EMAIL = process.env.PANDASIGN_CONTACT_EMAIL || 'info@panda-exteriors.com';
+const DEFAULT_PANDASIGN_LOGO_URL = process.env.PANDASIGN_LOGO_URL || `${CRM_BASE_URL}/panda-logo.svg`;
 const DEFAULT_INTERNAL_NOTIFICATION_EMAIL = process.env.INTERNAL_NOTIFICATION_EMAIL || 'sales@pandaexteriors.com';
 const PANDASIGN_EMAIL_TEMPLATE_CATEGORIES = {
   SIGN_REQUEST: 'PANDASIGN_SIGN_REQUEST',
@@ -65,18 +68,25 @@ const DEFAULT_PANDASIGN_EMAIL_TEMPLATES = {
     body: `
 <!DOCTYPE html>
 <html>
-  <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #111827; line-height: 1.6;">
-    <div style="max-width: 640px; margin: 0 auto; padding: 24px;">
-      <h2 style="margin-bottom: 16px;">Hello {{recipient.name}},</h2>
-      <p>You have a document waiting for your signature:</p>
-      <p><strong>{{agreement.name}}</strong></p>
-      <p>Please click the button below to review and sign the document:</p>
-      <p style="margin: 24px 0;">
-        <a href="{{links.signingUrl}}" style="display: inline-block; background: #4f46e5; color: #ffffff; padding: 12px 20px; border-radius: 8px; text-decoration: none; font-weight: 600;">Review &amp; Sign Document</a>
-      </p>
-      <p>This link will expire in 30 days.</p>
-      <p>If you have any questions, please contact us at <a href="tel:{{company.phoneRaw}}">{{company.phone}}</a>.</p>
-      <p style="margin-top: 32px; color: #6b7280; font-size: 13px;">{{company.name}}<br/>{{company.email}}</p>
+  <body style="margin: 0; padding: 0; background: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #111827; line-height: 1.6;">
+    <div style="max-width: 640px; margin: 0 auto; padding: 32px 20px;">
+      <div style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 24px; overflow: hidden; box-shadow: 0 20px 45px -28px rgba(15, 23, 42, 0.35);">
+        <div style="padding: 32px 32px 12px; text-align: center;">
+          <img src="{{company.logoUrl}}" alt="{{company.name}}" style="max-width: 220px; width: 100%; height: auto;" />
+        </div>
+        <div style="padding: 12px 32px 32px;">
+          <h2 style="margin: 0 0 16px; font-size: 30px; line-height: 1.2; color: #111827;">Hello {{recipient.name}},</h2>
+          <p>You have a document waiting for your signature:</p>
+          <p style="margin: 0 0 8px;"><strong>{{agreement.name}}</strong></p>
+          <p>Please click the button below to review and sign the document:</p>
+          <p style="margin: 24px 0;">
+            <a href="{{links.signingUrl}}" style="display: inline-block; background: linear-gradient(135deg, #4f46e5, #7c3aed); color: #ffffff; padding: 14px 24px; border-radius: 999px; text-decoration: none; font-weight: 700;">Review &amp; Sign Document</a>
+          </p>
+          <p>This link will expire in 30 days.</p>
+          <p>If you have any questions, please contact us at <a href="tel:{{company.phoneRaw}}">{{company.phone}}</a>.</p>
+          <p style="margin-top: 32px; color: #6b7280; font-size: 13px;">{{company.name}}<br/><a href="mailto:{{company.email}}" style="color: #4f46e5; text-decoration: none;">{{company.email}}</a></p>
+        </div>
+      </div>
     </div>
   </body>
 </html>
@@ -532,12 +542,32 @@ function buildPandaSignEmailContext(agreement, extra = {}) {
   const hostSigner = extra.hostSigner || {};
   const signature = extra.signature || {};
 
-  const companyPhone = mergeData.organization?.phone || DEFAULT_COMPANY_PHONE;
-  const companyEmail = mergeData.organization?.email || DEFAULT_COMPANY_EMAIL;
-  const customerName = overview.customerName || mergeData.customerName || normalizedAgreement.recipientName || '';
+  const companyPhone = pickFirstText(
+    mergeData.organization?.phone,
+    mergeData.territoryProfile?.company_phone,
+    DEFAULT_COMPANY_PHONE
+  );
+  const companyEmail = DEFAULT_PANDASIGN_CONTACT_EMAIL;
+  const customerName = collapseRepeatedNameSegments(
+    pickFirstText(
+      overview.customerName,
+      mergeData.customerName,
+      normalizedAgreement.recipientName
+    )
+  );
   const customerEmail = overview.customerEmail || mergeData.customerEmail || normalizedAgreement.recipientEmail || '';
-  const salesRepName = overview.salesRepName || mergeData.salesRepName || normalizedAgreement.hostSignerName || hostSigner.name || '';
+  const salesRepName = collapseRepeatedNameSegments(
+    pickFirstText(
+      overview.salesRepName,
+      mergeData.salesRepName,
+      normalizedAgreement.hostSignerName,
+      hostSigner.name
+    )
+  );
   const salesRepEmail = overview.salesRepEmail || mergeData.salesRepEmail || normalizedAgreement.hostSignerEmail || hostSigner.email || '';
+  const recipientName = collapseRepeatedNameSegments(
+    pickFirstText(recipient.name, customerName, normalizedAgreement.recipientName, 'there')
+  ) || 'there';
 
   return {
     ...deepCloneJson(mergeData, {}),
@@ -550,11 +580,11 @@ function buildPandaSignEmailContext(agreement, extra = {}) {
       status: normalizedAgreement.status || '',
     },
     recipient: {
-      name: recipient.name || customerName || 'there',
+      name: recipientName,
       email: recipient.email || customerEmail || '',
     },
     hostSigner: {
-      name: hostSigner.name || salesRepName || '',
+      name: collapseRepeatedNameSegments(hostSigner.name || salesRepName || ''),
       email: hostSigner.email || salesRepEmail || '',
     },
     signature: {
@@ -567,6 +597,7 @@ function buildPandaSignEmailContext(agreement, extra = {}) {
       email: companyEmail,
       phone: companyPhone,
       phoneRaw: normalizePhoneHref(companyPhone),
+      logoUrl: mergeData.organization?.logoUrl || DEFAULT_PANDASIGN_LOGO_URL,
     },
     links: {
       signingUrl: normalizedAgreement.signingUrl || '',
@@ -1136,6 +1167,31 @@ function buildFullName(...values) {
     .filter(Boolean)
     .join(' ')
     .trim();
+}
+
+function collapseRepeatedNameSegments(value) {
+  const words = String(value || '').trim().split(/\s+/).filter(Boolean);
+  if (words.length < 2) return words.join(' ');
+
+  for (let segmentLength = 1; segmentLength <= Math.floor(words.length / 2); segmentLength += 1) {
+    if (words.length % segmentLength !== 0) continue;
+
+    const candidate = words.slice(0, segmentLength).join(' ');
+    let isRepeated = true;
+
+    for (let index = segmentLength; index < words.length; index += segmentLength) {
+      if (words.slice(index, index + segmentLength).join(' ') !== candidate) {
+        isRepeated = false;
+        break;
+      }
+    }
+
+    if (isRepeated) {
+      return candidate;
+    }
+  }
+
+  return words.join(' ');
 }
 
 function joinAddress(parts) {
@@ -1880,10 +1936,22 @@ export const pandaSignService = {
    */
   async sendSigningEmail(agreement) {
     agreement = normalizeAgreementRecord(agreement);
+    const runtimeMergeData = await this.buildRuntimeMergeData({
+      opportunityId: agreement.opportunityId || agreement.opportunity?.id,
+      accountId: agreement.accountId || agreement.account?.id,
+      contactId: agreement.contactId || agreement.contact?.id,
+      recipientEmail: agreement.recipientEmail,
+      recipientName: agreement.recipientName,
+      mergeData: agreement.mergeData || {},
+    });
+
     await sendPandaSignTemplateEmail({
       to: agreement.recipientEmail,
       category: PANDASIGN_EMAIL_TEMPLATE_CATEGORIES.SIGN_REQUEST,
-      agreement,
+      agreement: {
+        ...agreement,
+        mergeData: runtimeMergeData,
+      },
     });
   },
 
@@ -2354,8 +2422,13 @@ export const pandaSignService = {
       mergeData?.territory ||
       'DEFAULT'
     ).trim().toUpperCase();
+    const territoryProfiles = await this.getTerritoryProfiles();
+    const territoryProfile =
+      territoryProfiles.find((profile) => profile.territory === opportunityState) ||
+      territoryProfiles.find((profile) => profile.territory === 'DEFAULT') ||
+      {};
 
-    const baseCustomerName = buildFullName(
+    const baseCustomerName = pickFirstText(
       recipientName,
       mergeData?.job?.customer?.name_full,
       mergeData?.customerName,
@@ -2435,6 +2508,7 @@ export const pandaSignService = {
       opportunity?.jobId,
       mergeData?.job?.number
     );
+    const existingOrganization = deepCloneJson(mergeData?.organization, {}) || {};
 
     return {
       ...deepCloneJson(mergeData, {}),
@@ -2467,10 +2541,36 @@ export const pandaSignService = {
         orderContractRuntimeData.signers.agent?.phone
       ),
       organization: {
-        name: 'Panda Exteriors',
-        phone: account?.phone || '',
-        address: accountAddress || contactAddress || jobAddress || '',
-        ...(deepCloneJson(mergeData?.organization, {}) || {}),
+        ...existingOrganization,
+        name: pickFirstText(
+          territoryProfile.company_name,
+          existingOrganization.name,
+          DEFAULT_COMPANY_NAME
+        ),
+        phone: pickFirstText(
+          territoryProfile.company_phone,
+          existingOrganization.phone,
+          DEFAULT_COMPANY_PHONE
+        ),
+        address: pickFirstText(
+          territoryProfile.company_address,
+          existingOrganization.address,
+          accountAddress,
+          contactAddress,
+          jobAddress
+        ),
+        email: DEFAULT_PANDASIGN_CONTACT_EMAIL,
+        territoryEmail: pickFirstText(
+          territoryProfile.company_email,
+          existingOrganization.territoryEmail,
+          DEFAULT_PANDASIGN_CONTACT_EMAIL
+        ),
+        license: pickFirstText(
+          territoryProfile.company_license,
+          existingOrganization.license
+        ),
+        territory: opportunityState || 'DEFAULT',
+        logoUrl: existingOrganization.logoUrl || DEFAULT_PANDASIGN_LOGO_URL,
       },
       account: {
         id: account?.id || accountId || mergeData?.account?.id || null,
