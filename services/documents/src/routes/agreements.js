@@ -7,6 +7,45 @@ import { authMiddleware, requireRole } from '../middleware/auth.js';
 
 const router = Router();
 const prisma = new PrismaClient();
+const AGREEMENT_USER_SELECT = {
+  id: true,
+  fullName: true,
+  firstName: true,
+  lastName: true,
+  email: true,
+};
+
+function normalizeAgreementUserSummary(user) {
+  if (!user || typeof user !== 'object') return user;
+
+  const derivedName = user.name ||
+    user.fullName ||
+    [user.firstName, user.lastName].filter(Boolean).join(' ').trim() ||
+    user.email ||
+    null;
+
+  return {
+    ...user,
+    name: derivedName,
+  };
+}
+
+function normalizeAgreementResponseRecord(record) {
+  const agreement = normalizeAgreementRecord(record);
+  if (!agreement || typeof agreement !== 'object') return agreement;
+
+  return {
+    ...agreement,
+    createdBy: normalizeAgreementUserSummary(agreement.createdBy),
+    sentBy: normalizeAgreementUserSummary(agreement.sentBy),
+    users_agreements_created_by_idTousers: normalizeAgreementUserSummary(
+      agreement.users_agreements_created_by_idTousers
+    ),
+    users_agreements_sent_by_idTousers: normalizeAgreementUserSummary(
+      agreement.users_agreements_sent_by_idTousers
+    ),
+  };
+}
 
 function isAdminLikeRole(roleName, roleType) {
   const normalizedRoleName = String(roleName || '').toLowerCase();
@@ -85,7 +124,7 @@ router.get('/', authMiddleware, async (req, res, next) => {
           template: { select: { id: true, name: true, category: true } },
           opportunity: { select: { id: true, name: true } },
           account: { select: { id: true, name: true } },
-          createdBy: { select: { id: true, name: true } },
+          createdBy: { select: AGREEMENT_USER_SELECT },
           signatures: { select: { id: true, signerName: true, signedAt: true } },
         },
         orderBy: { createdAt: 'desc' },
@@ -97,7 +136,7 @@ router.get('/', authMiddleware, async (req, res, next) => {
 
     res.json({
       success: true,
-      data: agreements,
+      data: agreements.map(normalizeAgreementResponseRecord),
       pagination: { total, limit: parseInt(limit), offset: parseInt(offset) },
     });
   } catch (error) {
@@ -355,11 +394,11 @@ router.get('/:id', authMiddleware, async (req, res, next) => {
         accounts: true,
         contacts: true,
         signatures: true,
-        users_agreements_created_by_idTousers: { select: { id: true, name: true } },
-        users_agreements_sent_by_idTousers: { select: { id: true, name: true } },
+        users_agreements_created_by_idTousers: { select: AGREEMENT_USER_SELECT },
+        users_agreements_sent_by_idTousers: { select: AGREEMENT_USER_SELECT },
       },
     });
-    const agreement = normalizeAgreementRecord(agreementRecord);
+    const agreement = normalizeAgreementResponseRecord(agreementRecord);
 
     if (!agreement) {
       return res.status(404).json({
