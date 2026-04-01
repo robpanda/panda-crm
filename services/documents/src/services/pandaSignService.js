@@ -737,11 +737,16 @@ function normalizeSignatureRecord(signature) {
   };
 }
 
-function normalizeAgreementRecord(agreement) {
+export function normalizeAgreementRecord(agreement) {
   if (!agreement || typeof agreement !== 'object') return agreement;
 
   return {
     ...agreement,
+    opportunity: agreement.opportunity ?? agreement.opportunities ?? null,
+    account: agreement.account ?? agreement.accounts ?? null,
+    contact: agreement.contact ?? agreement.contacts ?? null,
+    createdBy: agreement.createdBy ?? agreement.users_agreements_created_by_idTousers ?? null,
+    sentBy: agreement.sentBy ?? agreement.users_agreements_sent_by_idTousers ?? null,
     recipientEmail: agreement.recipientEmail ?? agreement.recipient_email ?? null,
     recipientName: agreement.recipientName ?? agreement.recipient_name ?? null,
     hostSignerEmail: agreement.hostSignerEmail ?? agreement.host_signer_email ?? null,
@@ -1825,8 +1830,9 @@ export const pandaSignService = {
       where: { id: agreementId },
       include: {
         template: true,
-        opportunity: true,
-        account: true,
+        opportunities: true,
+        accounts: true,
+        contacts: true,
       },
     });
     const agreement = normalizeAgreementRecord(agreementRecord);

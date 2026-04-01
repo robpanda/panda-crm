@@ -1,7 +1,7 @@
 // Agreement Routes - PandaSign document management
 import { Router } from 'express';
 import { PrismaClient } from '@prisma/client';
-import { pandaSignService } from '../services/pandaSignService.js';
+import { pandaSignService, normalizeAgreementRecord } from '../services/pandaSignService.js';
 import { logger } from '../middleware/logger.js';
 import { authMiddleware, requireRole } from '../middleware/auth.js';
 
@@ -347,18 +347,19 @@ router.post('/preview', authMiddleware, async (req, res, next) => {
  */
 router.get('/:id', authMiddleware, async (req, res, next) => {
   try {
-    const agreement = await prisma.agreement.findUnique({
+    const agreementRecord = await prisma.agreement.findUnique({
       where: { id: req.params.id },
       include: {
         template: true,
-        opportunity: true,
-        account: true,
-        contact: true,
+        opportunities: true,
+        accounts: true,
+        contacts: true,
         signatures: true,
-        createdBy: { select: { id: true, name: true } },
-        sentBy: { select: { id: true, name: true } },
+        users_agreements_created_by_idTousers: { select: { id: true, name: true } },
+        users_agreements_sent_by_idTousers: { select: { id: true, name: true } },
       },
     });
+    const agreement = normalizeAgreementRecord(agreementRecord);
 
     if (!agreement) {
       return res.status(404).json({
