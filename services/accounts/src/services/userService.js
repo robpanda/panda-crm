@@ -6,24 +6,10 @@ const prisma = new PrismaClient();
 const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || 'http://auth-service:3000';
 const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || '';
 
-const USER_IDENTITY_INCLUDE = {
-  identityLink: {
-    select: {
-      id: true,
-      cognitoSub: true,
-      cognitoUsername: true,
-      emailNormalized: true,
-      authProvider: true,
-      linkState: true,
-      repairState: true,
-      repairReason: true,
-      lastVerifiedAt: true,
-      lastLoginAt: true,
-      lastReconciledAt: true,
-      updatedAt: true,
-    },
-  },
-};
+// The live accounts Prisma client does not expose a User.identityLink relation.
+// Build the admin Cognito view from the existing user record instead of querying
+// a relation that is absent in production.
+const USER_IDENTITY_INCLUDE = {};
 
 const USER_DELETE_BLOCKERS = [
   { key: 'accounts', label: 'accounts', model: 'account', where: (id) => ({ ownerId: id }) },
@@ -169,6 +155,44 @@ function buildMergedUserData(targetUser, sourceUser) {
   return mergedData;
 }
 
+function buildIdentityLinkView(user) {
+  if (!user?.cognitoId) {
+    return null;
+  }
+
+  const normalizedEmail = normalizeEmail(user.email);
+
+  return {
+    id: user.cognitoId,
+    cognitoSub: user.cognitoId,
+    cognitoUsername: normalizedEmail || user.email || null,
+    emailNormalized: normalizedEmail,
+    authProvider: 'cognito',
+    linkState: 'LINKED',
+    repairState: null,
+    repairReason: null,
+    lastVerifiedAt: null,
+    lastLoginAt: null,
+    lastReconciledAt: null,
+    updatedAt: user.updatedAt || null,
+  };
+}
+
+function hydrateUserIdentity(user) {
+  if (!user) {
+    return user;
+  }
+
+  return {
+    ...user,
+    identityLink: user.identityLink ?? buildIdentityLinkView(user),
+  };
+}
+
+function hydrateUserCollection(users) {
+  return Array.isArray(users) ? users.map(hydrateUserIdentity) : [];
+}
+
 export const userService = {
   /**
    * Get users with pagination and filtering
@@ -272,7 +296,7 @@ export const userService = {
     ]);
 
     return {
-      data: users,
+      data: hydrateUserCollection(users),
       pagination: {
         page,
         limit,
@@ -317,7 +341,7 @@ export const userService = {
       throw error;
     }
 
-    return user;
+    return hydrateUserIdentity(user);
   },
 
   /**
@@ -343,7 +367,7 @@ export const userService = {
       throw error;
     }
 
-    return user;
+    return hydrateUserIdentity(user);
   },
 
   /**
@@ -375,7 +399,7 @@ export const userService = {
       throw error;
     }
 
-    return user;
+    return hydrateUserIdentity(user);
   },
 
   /**
@@ -520,7 +544,7 @@ export const userService = {
     });
 
     logger.info(`User created: ${createdUser.id}`);
-    return createdUser;
+    return hydrateUserIdentity(createdUser);
   },
 
   /**
@@ -557,7 +581,7 @@ export const userService = {
     });
 
     logger.info(`User updated: ${id}`);
-    return updated;
+    return hydrateUserIdentity(updated);
   },
 
   /**
@@ -582,9 +606,6 @@ export const userService = {
 
     const user = await prisma.user.findUnique({
       where: { id },
-      include: {
-        identityLink: true,
-      },
     });
 
     if (!user) {
@@ -619,12 +640,6 @@ export const userService = {
 
     try {
       await prisma.$transaction(async (tx) => {
-        if (user.identityLink) {
-          await tx.identityLink.delete({
-            where: { id: user.identityLink.id },
-          });
-        }
-
         await tx.user.delete({
           where: { id },
         });
@@ -675,14 +690,10 @@ export const userService = {
       const [sourceUser, targetUser] = await Promise.all([
         tx.user.findUnique({
           where: { id: sourceUserId },
-          include: {
-            identityLink: true,
-          },
         }),
         tx.user.findUnique({
           where: { id: targetUserId },
           include: {
-            identityLink: true,
             role: {
               select: { id: true, name: true, roleType: true },
             },
@@ -709,9 +720,7 @@ export const userService = {
       }
 
       const mergedData = buildMergedUserData(targetUser, sourceUser);
-      const targetKeepsExistingIdentity = Boolean(
-        targetUser.identityLink || targetUser.cognitoId
-      );
+      const targetKeepsExistingIdentity = Boolean(targetUser.cognitoId);
 
       if (targetKeepsExistingIdentity && mergedData.cognitoId) {
         delete mergedData.cognitoId;
@@ -721,23 +730,6 @@ export const userService = {
         await tx.user.update({
           where: { id: targetUser.id },
           data: mergedData,
-        });
-      }
-
-      if (sourceUser.identityLink && targetKeepsExistingIdentity) {
-        await tx.identityLink.delete({
-          where: { id: sourceUser.identityLink.id },
-        });
-      } else if (sourceUser.identityLink && !targetUser.identityLink) {
-        await tx.identityLink.update({
-          where: { id: sourceUser.identityLink.id },
-          data: {
-            crmUserId: targetUser.id,
-            repairState: 'relinked',
-            repairReason: `merged_from:${sourceUser.id}`,
-            lastReconciledAt: new Date(),
-            lastVerifiedAt: new Date(),
-          },
         });
       }
 
@@ -787,7 +779,6 @@ export const userService = {
           executive: {
             select: { id: true, fullName: true, firstName: true, lastName: true },
           },
-          identityLink: true,
         },
       });
 
@@ -796,7 +787,7 @@ export const userService = {
       return {
         mergedUserId: sourceUser.id,
         parentUserId: targetUser.id,
-        user: updatedTarget,
+        user: hydrateUserIdentity(updatedTarget),
       };
     });
   },
@@ -965,7 +956,7 @@ export const userService = {
           regionalReports: regionalReportsTransferred.count,
           executiveReports: executiveReportsTransferred.count,
         },
-        user: updatedTarget,
+        user: hydrateUserIdentity(updatedTarget),
       };
     });
   },
