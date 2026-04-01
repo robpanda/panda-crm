@@ -53,6 +53,7 @@ import {
   hasLeadWizardRequiredFields,
   shouldDefaultLeadSourceToSelfGen,
 } from './leadWizardUtils';
+import { LEAD_SOURCES } from '../constants/leadSourceOptions';
 
 const US_STATES = [
   { value: 'AL', label: 'Alabama' }, { value: 'AK', label: 'Alaska' },
@@ -200,27 +201,6 @@ const RETAIL_DISPOSITIONS_BY_STATUS = {
     { value: 'Not Able to Schedule', label: 'Not Able to Schedule' },
   ],
 };
-
-const LEAD_SOURCES = [
-  { value: 'Bath Lead', label: 'Bath Lead' },
-  { value: 'Company Vehicle', label: 'Company Vehicle' },
-  { value: 'Customer Referral', label: 'Customer Referral' },
-  { value: 'Digital Marketing', label: 'Digital Marketing' },
-  { value: 'Employee Referral', label: 'Employee Referral' },
-  { value: 'Flyer', label: 'Flyer' },
-  { value: 'Insurance Marketing', label: 'Insurance Marketing' },
-  { value: 'Insurance Program', label: 'Insurance Program' },
-  { value: 'Lead Aggregator', label: 'Lead Aggregator' },
-  { value: 'Radio', label: 'Radio' },
-  { value: 'Retail Marketing', label: 'Retail Marketing' },
-  { value: 'Roof DRP', label: 'Roof DRP' },
-  { value: 'Self-Gen', label: 'Self-Gen' },
-  { value: 'Solar Marketing', label: 'Solar Marketing' },
-  { value: 'Telemarketing', label: 'Telemarketing' },
-  { value: 'Trade Show', label: 'Trade Show' },
-  { value: 'Vendor Referral', label: 'Vendor Referral' },
-  { value: 'Yard Sign', label: 'Yard Sign' },
-];
 
 const PROPERTY_TYPES = [
   { value: 'Commercial', label: 'Commercial' },

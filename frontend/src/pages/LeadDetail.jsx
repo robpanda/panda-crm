@@ -24,6 +24,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import MentionTextarea from '../components/MentionTextarea';
 import InternalNotesTabs from '../components/InternalNotesTabs';
 import InternalComments from '../components/InternalComments';
+import { LEAD_SOURCES } from '../constants/leadSourceOptions';
 import UserSearchDropdown from '../components/UserSearchDropdown';
 
 const CommunicationsTab = lazy(() => import('../components/CommunicationsTab'));
@@ -523,19 +524,6 @@ function buildLeadDispositionOptions(currentValue) {
     },
   ];
 }
-
-const LEAD_SOURCES = [
-  { value: 'Website', label: 'Website' },
-  { value: 'Referral', label: 'Referral' },
-  { value: 'Door Knock', label: 'Door Knock' },
-  { value: 'Canvassing', label: 'Canvassing' },
-  { value: 'Self-Gen', label: 'Self-Gen' },
-  { value: 'RingCentral', label: 'RingCentral' },
-  { value: 'Marketing', label: 'Marketing' },
-  { value: 'Trade Show', label: 'Trade Show' },
-  { value: 'Partner', label: 'Partner' },
-  { value: 'Other', label: 'Other' },
-];
 
 const PROPERTY_TYPES = [
   { value: 'Single Family', label: 'Single Family' },
