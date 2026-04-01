@@ -447,21 +447,16 @@ const LEAD_STATUSES = [
 ];
 
 const LEAD_DISPOSITIONS = [
-  { value: 'SCHEDULED', label: 'Scheduled' },
-  { value: 'CONFIRMED', label: 'Confirmed' },
   { value: 'CALL_BACK', label: 'Call Back' },
-  { value: 'CANCELED', label: 'Canceled' },
-  { value: 'NEED_RESET', label: 'Need Reset' },
-  { value: 'NOT_INTERESTED', label: 'Not Interested' },
+  { value: 'CANT_AFFORD', label: "Can't afford" },
+  { value: 'DO_NOT_CALL', label: 'Do not call' },
   { value: 'MISSING_PARTY', label: 'Missing Party' },
-  { value: 'CANT_AFFORD', label: "Can't Afford" },
   { value: 'NO_VALUE', label: 'No Value' },
-  { value: 'WEATHER_RELATED', label: 'Weather Related' },
-  { value: 'THINKING_ABOUT_IT', label: 'Thinking About It' },
-  { value: 'NO_ANSWER', label: 'No Answer' },
-  { value: 'VOICEMAIL', label: 'Left Voicemail' },
-  { value: 'WRONG_NUMBER', label: 'Wrong Number' },
-  { value: 'DO_NOT_CALL', label: 'Do Not Call' },
+  { value: 'NOT_INTERESTED', label: 'Not Interested' },
+  { value: 'SCHEDULED', label: 'Scheduled' },
+  { value: 'THINKING_ABOUT_IT', label: 'Thinking about it' },
+  { value: 'WEATHER_RELATED', label: 'Weather related' },
+  { value: 'WRONG_NUMBER', label: 'Wrong number' },
 ];
 
 const LEAD_DISPOSITION_LABELS = new Map(
