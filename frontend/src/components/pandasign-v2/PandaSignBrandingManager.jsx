@@ -19,6 +19,7 @@ export default function PandaSignBrandingManager({
   brandingItems,
   territoryProfiles,
   dynamicContentItems,
+  territories,
   onSaveBrandingItem,
   onSaveTerritoryProfiles,
   savingBranding,
@@ -32,6 +33,9 @@ export default function PandaSignBrandingManager({
     HEADER: brandingItems.filter((item) => item.kind === 'HEADER'),
     FOOTER: brandingItems.filter((item) => item.kind === 'FOOTER'),
   }), [brandingItems]);
+  const territoryOptions = Array.isArray(territories) && territories.length > 0
+    ? territories
+    : PANDASIGN_TERRITORIES;
 
   useEffect(() => {
     setProfilesDraft(territoryProfiles);
@@ -76,7 +80,7 @@ export default function PandaSignBrandingManager({
               onChange={(event) => setForm((current) => ({ ...current, territory: event.target.value }))}
               className="mt-1 w-full rounded-xl border border-gray-300 px-4 py-3 text-sm"
             >
-              {PANDASIGN_TERRITORIES.map((territory) => (
+              {territoryOptions.map((territory) => (
                 <option key={territory} value={territory}>
                   {territory}
                 </option>

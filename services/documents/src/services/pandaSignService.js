@@ -20,9 +20,11 @@ const PANDASIGN_V2_SETTING_KEYS = {
   BRANDING_ITEMS: 'pandasign_v2.branding_items',
   DYNAMIC_CONTENT_ITEMS: 'pandasign_v2.dynamic_content_items',
   TERRITORY_PROFILES: 'pandasign_v2.territory_profiles',
+  TERRITORIES: 'pandasign_v2.territories',
+  DOCUMENT_TYPES: 'pandasign_v2.document_types',
 };
-const PANDASIGN_V2_TERRITORIES = ['DE', 'MD', 'NJ', 'PA', 'NC', 'VA', 'FL', 'DEFAULT'];
-const PANDASIGN_V2_DOCUMENT_TYPES = ['CONTRACT', 'CHANGE_ORDER', 'WORK_ORDER', 'FINANCING', 'OTHER'];
+const DEFAULT_PANDASIGN_V2_TERRITORIES = ['DE', 'MD', 'NJ', 'PA', 'NC', 'VA', 'FL', 'DEFAULT'];
+const DEFAULT_PANDASIGN_V2_DOCUMENT_TYPES = ['CONTRACT', 'CHANGE_ORDER', 'WORK_ORDER', 'FINANCING', 'OTHER'];
 const DEFAULT_TEMPLATE_STATUS = 'DRAFT';
 const DEFAULT_SIGNER_ROLES = [
   { role: 'CUSTOMER', label: 'Customer', required: true, order: 1 },
@@ -126,7 +128,7 @@ function deepCloneJson(value, fallback) {
 
 function normalizeTerritory(value) {
   const normalized = String(value || 'DEFAULT').trim().toUpperCase();
-  return PANDASIGN_V2_TERRITORIES.includes(normalized) ? normalized : 'DEFAULT';
+  return normalized || 'DEFAULT';
 }
 
 function normalizeTemplateStatus(value) {
@@ -137,11 +139,33 @@ function normalizeTemplateStatus(value) {
 
 function normalizeDocumentType(value, fallback = 'CONTRACT') {
   const normalized = String(value || fallback || 'CONTRACT').trim().toUpperCase();
-  return PANDASIGN_V2_DOCUMENT_TYPES.includes(normalized) ? normalized : 'OTHER';
+  return normalized || 'CONTRACT';
 }
 
-function getDefaultTerritoryProfiles() {
-  return PANDASIGN_V2_TERRITORIES.map((territory) => ({
+function normalizeSettingsList(items, fallback, requiredValues = []) {
+  const source = Array.isArray(items) && items.length > 0 ? items : fallback;
+  const seen = new Set();
+  const normalizedItems = [];
+
+  source.forEach((item) => {
+    const normalized = String(item || '').trim().toUpperCase();
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    normalizedItems.push(normalized);
+  });
+
+  requiredValues.forEach((item) => {
+    const normalized = String(item || '').trim().toUpperCase();
+    if (!normalized || seen.has(normalized)) return;
+    seen.add(normalized);
+    normalizedItems.push(normalized);
+  });
+
+  return normalizedItems;
+}
+
+function getDefaultTerritoryProfiles(territories = DEFAULT_PANDASIGN_V2_TERRITORIES) {
+  return territories.map((territory) => ({
     id: `territory-${territory.toLowerCase()}`,
     territory,
     company_name: territory === 'DEFAULT' ? 'Panda Exteriors' : '',
@@ -848,9 +872,14 @@ function mapTerritoryProfileValues(profile) {
   };
 }
 
-function normalizeTerritoryProfiles(profiles) {
+function normalizeTerritoryProfiles(profiles, territories = DEFAULT_PANDASIGN_V2_TERRITORIES) {
+  const normalizedTerritories = normalizeSettingsList(
+    territories,
+    DEFAULT_PANDASIGN_V2_TERRITORIES,
+    ['DEFAULT']
+  );
   const byTerritory = new Map(
-    getDefaultTerritoryProfiles().map((profile) => [profile.territory, profile])
+    getDefaultTerritoryProfiles(normalizedTerritories).map((profile) => [profile.territory, profile])
   );
 
   if (Array.isArray(profiles)) {
@@ -863,7 +892,7 @@ function normalizeTerritoryProfiles(profiles) {
     });
   }
 
-  return PANDASIGN_V2_TERRITORIES.map((territory) => ({
+  return normalizedTerritories.map((territory) => ({
     id: byTerritory.get(territory)?.id || `territory-${territory.toLowerCase()}`,
     ...byTerritory.get(territory),
   }));
@@ -1985,11 +2014,28 @@ export const pandaSignService = {
   },
 
   async getTerritoryProfiles() {
+    const territories = await this.getTerritories();
     const profiles = await this.getJsonSetting(
       PANDASIGN_V2_SETTING_KEYS.TERRITORY_PROFILES,
-      getDefaultTerritoryProfiles()
+      getDefaultTerritoryProfiles(territories)
     );
-    return normalizeTerritoryProfiles(profiles);
+    return normalizeTerritoryProfiles(profiles, territories);
+  },
+
+  async getTerritories() {
+    const territories = await this.getJsonSetting(
+      PANDASIGN_V2_SETTING_KEYS.TERRITORIES,
+      DEFAULT_PANDASIGN_V2_TERRITORIES
+    );
+    return normalizeSettingsList(territories, DEFAULT_PANDASIGN_V2_TERRITORIES, ['DEFAULT']);
+  },
+
+  async getDocumentTypes() {
+    const documentTypes = await this.getJsonSetting(
+      PANDASIGN_V2_SETTING_KEYS.DOCUMENT_TYPES,
+      DEFAULT_PANDASIGN_V2_DOCUMENT_TYPES
+    );
+    return normalizeSettingsList(documentTypes, DEFAULT_PANDASIGN_V2_DOCUMENT_TYPES, ['CONTRACT']);
   },
 
   async buildRuntimeMergeData({
@@ -3393,23 +3439,26 @@ export const pandaSignService = {
   },
 
   async getAdminResources() {
-    const [brandingItems, dynamicContentItems, territoryProfiles] = await Promise.all([
+    const [brandingItems, dynamicContentItems, territoryProfiles, territories, documentTypes] = await Promise.all([
       this.getBrandingItems(),
       this.getDynamicContentItems(),
       this.getTerritoryProfiles(),
+      this.getTerritories(),
+      this.getDocumentTypes(),
     ]);
 
     return {
       brandingItems,
       dynamicContentItems,
       territoryProfiles,
-      territories: PANDASIGN_V2_TERRITORIES,
-      documentTypes: PANDASIGN_V2_DOCUMENT_TYPES,
+      territories,
+      documentTypes,
     };
   },
 
   async updateTerritoryProfiles(profiles, userId) {
-    const normalizedProfiles = normalizeTerritoryProfiles(profiles);
+    const territories = await this.getTerritories();
+    const normalizedProfiles = normalizeTerritoryProfiles(profiles, territories);
     await this.upsertJsonSetting(
       PANDASIGN_V2_SETTING_KEYS.TERRITORY_PROFILES,
       normalizedProfiles,
@@ -3417,6 +3466,53 @@ export const pandaSignService = {
       'PandaSign V2 territory merge values'
     );
     return normalizedProfiles;
+  },
+
+  async updateAdminSettings(settings = {}, userId) {
+    const [currentTerritories, currentDocumentTypes, currentProfiles] = await Promise.all([
+      this.getTerritories(),
+      this.getDocumentTypes(),
+      this.getTerritoryProfiles(),
+    ]);
+
+    const territories = normalizeSettingsList(
+      settings.territories,
+      currentTerritories,
+      ['DEFAULT']
+    );
+    const documentTypes = normalizeSettingsList(
+      settings.documentTypes,
+      currentDocumentTypes,
+      ['CONTRACT']
+    );
+    const territoryProfiles = normalizeTerritoryProfiles(currentProfiles, territories);
+
+    await Promise.all([
+      this.upsertJsonSetting(
+        PANDASIGN_V2_SETTING_KEYS.TERRITORIES,
+        territories,
+        userId,
+        'PandaSign V2 territories'
+      ),
+      this.upsertJsonSetting(
+        PANDASIGN_V2_SETTING_KEYS.DOCUMENT_TYPES,
+        documentTypes,
+        userId,
+        'PandaSign V2 document types'
+      ),
+      this.upsertJsonSetting(
+        PANDASIGN_V2_SETTING_KEYS.TERRITORY_PROFILES,
+        territoryProfiles,
+        userId,
+        'PandaSign V2 territory merge values'
+      ),
+    ]);
+
+    return {
+      territories,
+      documentTypes,
+      territoryProfiles,
+    };
   },
 
   async listBrandingItems(filters = {}) {

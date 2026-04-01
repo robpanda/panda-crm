@@ -4877,6 +4877,20 @@ export const agreementsApi = {
     }
   },
 
+  async updateAdminSettings(settings) {
+    try {
+      const response = await api.put('/api/documents/agreements/admin/settings', settings);
+      return response.data;
+    } catch (error) {
+      if (error?.response?.status !== 404) {
+        throw error;
+      }
+
+      const response = await api.put('/api/documents/agreements/templates/admin/settings', settings);
+      return response.data;
+    }
+  },
+
   async getBrandingItems(params = {}) {
     const response = await api.get('/api/documents/agreements/branding', { params });
     return response.data;

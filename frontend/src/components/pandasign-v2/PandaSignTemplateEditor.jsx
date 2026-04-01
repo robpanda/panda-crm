@@ -31,6 +31,12 @@ export default function PandaSignTemplateEditor({
 
   const brandingItems = resources.brandingItems || [];
   const dynamicContentItems = resources.dynamicContentItems || [];
+  const documentTypes = Array.isArray(resources.documentTypes) && resources.documentTypes.length > 0
+    ? resources.documentTypes
+    : PANDASIGN_DOCUMENT_TYPES;
+  const territories = Array.isArray(resources.territories) && resources.territories.length > 0
+    ? resources.territories
+    : PANDASIGN_TERRITORIES;
   const validation = useMemo(() => validateTemplateDraft(draft, resources), [draft, resources]);
   const previewHtml = useMemo(() => renderTemplatePreview(draft, resources), [draft, resources]);
 
@@ -111,7 +117,7 @@ export default function PandaSignTemplateEditor({
             onChange={(event) => setDraft((current) => ({ ...current, documentType: event.target.value }))}
             className="mt-1 w-full rounded-xl border border-gray-300 px-4 py-3 text-sm"
           >
-            {PANDASIGN_DOCUMENT_TYPES.map((type) => (
+            {documentTypes.map((type) => (
               <option key={type} value={type}>
                 {type}
               </option>
@@ -125,7 +131,7 @@ export default function PandaSignTemplateEditor({
             onChange={(event) => setDraft((current) => ({ ...current, territory: event.target.value }))}
             className="mt-1 w-full rounded-xl border border-gray-300 px-4 py-3 text-sm"
           >
-            {PANDASIGN_TERRITORIES.map((territory) => (
+            {territories.map((territory) => (
               <option key={territory} value={territory}>
                 {territory}
               </option>

@@ -127,10 +127,22 @@ async function handleUpdateTerritoryProfiles(req, res, next) {
   }
 }
 
+async function handleUpdateAdminSettings(req, res, next) {
+  try {
+    const settings = await pandaSignService.updateAdminSettings(req.body || {}, req.user.id);
+    res.json({ success: true, data: settings });
+  } catch (error) {
+    next(error);
+  }
+}
+
 // Keep the dedicated admin routes as the preferred surface and preserve the
 // nested /templates/admin/* paths as compatibility aliases for older clients.
 router.get('/admin/resources', authMiddleware, requirePandaSignAdmin, handleAdminResources);
 router.get('/templates/admin/resources', authMiddleware, requirePandaSignAdmin, handleAdminResources);
+
+router.put('/admin/settings', authMiddleware, requirePandaSignAdmin, handleUpdateAdminSettings);
+router.put('/templates/admin/settings', authMiddleware, requirePandaSignAdmin, handleUpdateAdminSettings);
 
 router.put('/admin/territory-profiles', authMiddleware, requirePandaSignAdmin, handleUpdateTerritoryProfiles);
 router.put('/templates/admin/territory-profiles', authMiddleware, requirePandaSignAdmin, handleUpdateTerritoryProfiles);

@@ -10,6 +10,8 @@ export default function PandaSignTemplateList({
   onDuplicate,
   onPublish,
   onArchive,
+  documentTypes = PANDASIGN_DOCUMENT_TYPES,
+  territories = PANDASIGN_TERRITORIES,
   isDuplicatingId,
   isPublishingId,
   isArchivingId,
@@ -49,7 +51,7 @@ export default function PandaSignTemplateList({
             className="rounded-xl border border-gray-300 px-4 py-3 text-sm"
           >
             <option value="">All document types</option>
-            {PANDASIGN_DOCUMENT_TYPES.map((type) => (
+            {documentTypes.map((type) => (
               <option key={type} value={type}>
                 {type}
               </option>
@@ -62,7 +64,7 @@ export default function PandaSignTemplateList({
             className="rounded-xl border border-gray-300 px-4 py-3 text-sm"
           >
             <option value="">All territories</option>
-            {PANDASIGN_TERRITORIES.map((territory) => (
+            {territories.map((territory) => (
               <option key={territory} value={territory}>
                 {territory}
               </option>

@@ -6,11 +6,15 @@ import { DEFAULT_DYNAMIC_CONTENT_ITEM, PANDASIGN_TERRITORIES } from './pandasign
 
 export default function PandaSignDynamicContentManager({
   dynamicContentItems,
+  territories,
   onSaveDynamicContentItem,
   savingDynamicContent,
 }) {
   const [form, setForm] = useState(DEFAULT_DYNAMIC_CONTENT_ITEM);
   const editorRef = useRef(null);
+  const territoryOptions = Array.isArray(territories) && territories.length > 0
+    ? territories
+    : PANDASIGN_TERRITORIES;
 
   useEffect(() => {
     if (form.id) {
@@ -95,7 +99,7 @@ export default function PandaSignDynamicContentManager({
               onChange={(event) => setForm((current) => ({ ...current, territory: event.target.value }))}
               className="mt-1 w-full rounded-xl border border-gray-300 px-4 py-3 text-sm"
             >
-              {PANDASIGN_TERRITORIES.map((territory) => (
+              {territoryOptions.map((territory) => (
                 <option key={territory} value={territory}>
                   {territory}
                 </option>

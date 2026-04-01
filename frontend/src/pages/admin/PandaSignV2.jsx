@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { FileSignature, LayoutTemplate, Palette, Scale, Sparkles } from 'lucide-react';
+import { FileSignature, LayoutTemplate, Palette, Scale, Settings2, Sparkles } from 'lucide-react';
 import AdminLayout from '../../components/AdminLayout';
 import { agreementsApi } from '../../services/api';
+import PandaSignAdminSettingsModal from '../../components/pandasign-v2/PandaSignAdminSettingsModal';
 import PandaSignTemplateList from '../../components/pandasign-v2/PandaSignTemplateList';
 import PandaSignTemplateEditor from '../../components/pandasign-v2/PandaSignTemplateEditor';
 import PandaSignBrandingManager from '../../components/pandasign-v2/PandaSignBrandingManager';
@@ -33,6 +34,7 @@ export default function PandaSignV2() {
   const [filters, setFilters] = useState(EMPTY_FILTERS);
   const [editingTemplate, setEditingTemplate] = useState(null);
   const [notice, setNotice] = useState(null);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [duplicatingTemplateId, setDuplicatingTemplateId] = useState(null);
   const [publishingTemplateId, setPublishingTemplateId] = useState(null);
   const [archivingTemplateId, setArchivingTemplateId] = useState(null);
@@ -126,6 +128,13 @@ export default function PandaSignV2() {
 
   const updateTerritoryProfilesMutation = useMutation({
     mutationFn: agreementsApi.updateTerritoryProfiles,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['pandasign-v2-admin-resources'] });
+    },
+  });
+
+  const updateAdminSettingsMutation = useMutation({
+    mutationFn: agreementsApi.updateAdminSettings,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pandasign-v2-admin-resources'] });
     },
@@ -241,6 +250,16 @@ export default function PandaSignV2() {
     }
   };
 
+  const handleSaveAdminSettings = async (settings) => {
+    try {
+      await updateAdminSettingsMutation.mutateAsync(settings);
+      setShowSettingsModal(false);
+      setSuccessNotice('PandaSign V2 settings saved.');
+    } catch (error) {
+      setErrorNotice(error, 'Failed to save PandaSign V2 settings.');
+    }
+  };
+
   const loading = loadingTemplates || loadingAdminResources;
   const pageError = templatesError || adminResourcesError;
 
@@ -254,6 +273,15 @@ export default function PandaSignV2() {
     <AdminLayout>
       <div className="p-6 lg:p-8">
         <div className="mx-auto max-w-7xl space-y-6">
+          <PandaSignAdminSettingsModal
+            open={showSettingsModal}
+            onClose={() => setShowSettingsModal(false)}
+            onSave={handleSaveAdminSettings}
+            saving={updateAdminSettingsMutation.isPending}
+            territories={normalizeApiList(resources.territories)}
+            documentTypes={normalizeApiList(resources.documentTypes)}
+          />
+
           <div className="rounded-3xl border border-gray-200 bg-white p-6 shadow-sm">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
               <div className="space-y-3">
@@ -268,14 +296,24 @@ export default function PandaSignV2() {
                   </p>
                 </div>
               </div>
-              <div className="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
-                <div className="flex items-center gap-2 font-medium text-gray-900">
-                  <Scale className="h-4 w-4 text-panda-primary" />
-                  Territory-aware publishing
+              <div className="flex flex-col gap-3">
+                <div className="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
+                  <div className="flex items-center gap-2 font-medium text-gray-900">
+                    <Scale className="h-4 w-4 text-panda-primary" />
+                    Territory-aware publishing
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Templates require valid branding, signer roles, required fields, and body content before publish.
+                  </p>
                 </div>
-                <p className="mt-1 text-xs text-gray-500">
-                  Templates require valid branding, signer roles, required fields, and body content before publish.
-                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowSettingsModal(true)}
+                  className="inline-flex items-center justify-center rounded-xl border border-gray-200 px-4 py-3 text-sm font-semibold text-gray-700 hover:border-panda-primary hover:text-panda-primary"
+                >
+                  <Settings2 className="mr-2 h-4 w-4" />
+                  Settings
+                </button>
               </div>
             </div>
 
@@ -346,6 +384,8 @@ export default function PandaSignV2() {
                 filters={filters}
                 onFiltersChange={setFilters}
                 templates={templates}
+                documentTypes={normalizeApiList(resources.documentTypes)}
+                territories={normalizeApiList(resources.territories)}
                 onCreate={() => setEditingTemplate({ ...DEFAULT_TEMPLATE_DRAFT })}
                 onEdit={setEditingTemplate}
                 onDuplicate={handleDuplicateTemplate}
@@ -363,6 +403,7 @@ export default function PandaSignV2() {
               brandingItems={normalizeApiList(resources.brandingItems)}
               territoryProfiles={normalizeApiList(resources.territoryProfiles)}
               dynamicContentItems={normalizeApiList(resources.dynamicContentItems)}
+              territories={normalizeApiList(resources.territories)}
               onSaveBrandingItem={handleSaveBrandingItem}
               onSaveTerritoryProfiles={handleSaveTerritoryProfiles}
               savingBranding={saveBrandingItemMutation.isPending}
@@ -373,6 +414,7 @@ export default function PandaSignV2() {
           {!loading && !pageError && activeTab === 'dynamic-content' && (
             <PandaSignDynamicContentManager
               dynamicContentItems={normalizeApiList(resources.dynamicContentItems)}
+              territories={normalizeApiList(resources.territories)}
               onSaveDynamicContentItem={handleSaveDynamicContentItem}
               savingDynamicContent={saveDynamicContentMutation.isPending}
             />
