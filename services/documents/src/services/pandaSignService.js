@@ -4,6 +4,7 @@ import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import sharp from 'sharp';
 import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../middleware/logger.js';
@@ -310,6 +311,148 @@ function renderHtmlToDocumentText(content) {
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+function stripHtmlImages(content) {
+  return String(content || '').replace(/<img[^>]*>/gi, '');
+}
+
+function extractBrandingImageDescriptor(content) {
+  const normalized = String(content || '');
+  const match = normalized.match(/<img[^>]*src=["']([^"']+)["'][^>]*>/i);
+
+  if (!match) {
+    return null;
+  }
+
+  const tag = match[0];
+  const style = tag.match(/style=["']([^"']+)["']/i)?.[1] || '';
+  const width = tag.match(/\bwidth=["']?([0-9.]+)/i)?.[1] || style.match(/width:\s*([0-9.]+)px/i)?.[1] || '';
+
+  return {
+    src: match[1],
+    widthPx: Number(width) || null,
+  };
+}
+
+function extractBrandingTextAlignment(content) {
+  const normalized = String(content || '');
+
+  if (/text-align\s*:\s*center/i.test(normalized) || /\balign=["']center["']/i.test(normalized)) {
+    return 'CENTER';
+  }
+
+  if (
+    /text-align\s*:\s*right/i.test(normalized)
+    || /\balign=["']right["']/i.test(normalized)
+    || (/<table/i.test(normalized) && /<img/i.test(normalized))
+  ) {
+    return 'RIGHT';
+  }
+
+  return 'LEFT';
+}
+
+function buildBrandingRenderModel(content) {
+  if (!content) return null;
+
+  const image = extractBrandingImageDescriptor(content);
+  const textLines = renderHtmlToDocumentText(stripHtmlImages(content))
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (!image && textLines.length === 0) {
+    return null;
+  }
+
+  return {
+    image,
+    textLines,
+    alignment: extractBrandingTextAlignment(content),
+  };
+}
+
+async function fetchBrandingImageBytes(src) {
+  if (!src) return null;
+
+  if (src.startsWith('data:')) {
+    const match = src.match(/^data:([^;,]+)?(?:;charset=[^;,]+)?(;base64)?,(.*)$/i);
+    if (!match) return null;
+
+    const mimeType = match[1] || '';
+    const payload = match[3] || '';
+    return {
+      mimeType,
+      bytes: match[2]
+        ? Buffer.from(payload, 'base64')
+        : Buffer.from(decodeURIComponent(payload), 'utf8'),
+    };
+  }
+
+  const response = await fetch(src);
+  if (!response.ok) {
+    return null;
+  }
+
+  return {
+    mimeType: response.headers.get('content-type') || '',
+    bytes: Buffer.from(await response.arrayBuffer()),
+  };
+}
+
+async function embedBrandingImage(pdfDoc, src) {
+  try {
+    const loaded = await fetchBrandingImageBytes(src);
+    if (!loaded?.bytes?.length) return null;
+
+    const looksLikeSvg = loaded.mimeType.includes('svg')
+      || /^data:image\/svg\+xml/i.test(src)
+      || loaded.bytes.toString('utf8', 0, Math.min(loaded.bytes.length, 256)).includes('<svg');
+
+    const normalizedBytes = looksLikeSvg
+      ? await sharp(loaded.bytes).png().toBuffer()
+      : loaded.bytes;
+
+    try {
+      return await pdfDoc.embedPng(normalizedBytes);
+    } catch {
+      return await pdfDoc.embedJpg(normalizedBytes);
+    }
+  } catch (error) {
+    logger.warn(`Unable to embed PandaSign branding image: ${error.message}`);
+    return null;
+  }
+}
+
+function drawAlignedText(page, text, {
+  x,
+  y,
+  width,
+  alignment = 'LEFT',
+  font,
+  size,
+  color,
+}) {
+  const content = String(text || '').trim();
+  if (!content) return;
+
+  const measuredWidth = font.widthOfTextAtSize(content, size);
+  let drawX = x;
+
+  if (alignment === 'RIGHT') {
+    drawX = x + Math.max(0, width - measuredWidth);
+  } else if (alignment === 'CENTER') {
+    drawX = x + Math.max(0, (width - measuredWidth) / 2);
+  }
+
+  page.drawText(content, {
+    x: drawX,
+    y,
+    size,
+    font,
+    color,
+  });
 }
 
 function hasHtmlMarkup(content) {
@@ -1482,10 +1625,27 @@ export const pandaSignService = {
         font: boldFont,
       });
 
-      // Add document content from template
-      const content = await this.buildTemplateDocumentText(template, mergeData);
-      const lines = this.wrapText(content, Math.max(32, Math.floor(layoutMetrics.contentWidth / 6.2)));
-      let y = contentTopY - 70;
+      const documentSections = await this.buildTemplateDocumentSections(template, mergeData);
+      const lines = this.wrapText(
+        documentSections.bodyText,
+        Math.max(32, Math.floor(layoutMetrics.contentWidth / 6.2))
+      );
+      let y = contentTopY - 54;
+
+      if (documentSections.headerHtml) {
+        y = await this.renderBrandingBlock({
+          pdfDoc,
+          page,
+          htmlContent: documentSections.headerHtml,
+          topY: y,
+          x: contentLeftX,
+          width: layoutMetrics.contentWidth,
+          font,
+          textColor: rgb(0.22, 0.22, 0.22),
+        });
+      } else {
+        y -= 16;
+      }
 
       for (const line of lines) {
         if (y < layoutMetrics.bottomY + 50) {
@@ -1503,6 +1663,27 @@ export const pandaSignService = {
           });
         }
         y -= 14;
+      }
+
+      if (documentSections.footerHtml) {
+        if (y < layoutMetrics.bottomY + 150) {
+          page = createConfiguredPage();
+          y = contentTopY - 10;
+          currentPageNumber += 1;
+        } else {
+          y -= 14;
+        }
+
+        y = await this.renderBrandingBlock({
+          pdfDoc,
+          page,
+          htmlContent: documentSections.footerHtml,
+          topY: y,
+          x: contentLeftX,
+          width: layoutMetrics.contentWidth,
+          font,
+          textColor: rgb(0.22, 0.22, 0.22),
+        });
       }
 
       const signerRoles = Array.isArray(metadata.signerRoles) && metadata.signerRoles.length > 0
@@ -2612,7 +2793,7 @@ export const pandaSignService = {
     };
   },
 
-  async buildTemplateDocumentText(template, mergeData = {}) {
+  async buildTemplateDocumentSections(template, mergeData = {}) {
     const metadata = extractTemplateMetadata(template.signatureFields);
     const templateContent = resolveTemplateBodyContent(template, mergeData);
     const [brandingItems, resolvedMergeData] = await Promise.all([
@@ -2628,10 +2809,112 @@ export const pandaSignService = {
       (item) => item.id === metadata.branding.footerId && item.kind === 'FOOTER'
     );
 
+    return {
+      resolvedMergeData,
+      headerHtml: header ? this.interpolateText(header.content, resolvedMergeData) : '',
+      bodyText: renderHtmlToDocumentText(this.interpolateText(templateContent, resolvedMergeData)),
+      footerHtml: footer ? this.interpolateText(footer.content, resolvedMergeData) : '',
+    };
+  },
+
+  async renderBrandingBlock({
+    pdfDoc,
+    page,
+    htmlContent,
+    topY,
+    x,
+    width,
+    font,
+    textColor = rgb(0.22, 0.22, 0.22),
+  }) {
+    const model = buildBrandingRenderModel(htmlContent);
+    if (!model) {
+      return topY;
+    }
+
+    const padding = 12;
+    const lineHeight = 12;
+    const textSize = 9;
+    const borderColor = rgb(0.82, 0.84, 0.88);
+    const dividerColor = rgb(0.88, 0.89, 0.92);
+    const boxFill = rgb(1, 1, 1);
+    const imageSlotWidth = model.image
+      ? Math.min(96, Math.max(56, model.image.widthPx ? model.image.widthPx * 0.45 : width * 0.18))
+      : 0;
+    const embeddedImage = model.image ? await embedBrandingImage(pdfDoc, model.image.src) : null;
+
+    let imageWidth = 0;
+    let imageHeight = 0;
+    if (embeddedImage) {
+      const scale = Math.min(
+        imageSlotWidth / embeddedImage.width,
+        64 / embeddedImage.height
+      );
+      imageWidth = embeddedImage.width * scale;
+      imageHeight = embeddedImage.height * scale;
+    }
+
+    const textBlockWidth = width - (imageSlotWidth ? imageSlotWidth + 18 : 0) - padding * 2;
+    const textHeight = Math.max(1, model.textLines.length) * lineHeight;
+    const boxHeight = Math.max(76, textHeight + padding * 2, imageHeight + padding * 2);
+    const bottomY = topY - boxHeight;
+    const textX = x + padding + (imageSlotWidth ? imageSlotWidth + 18 : 0);
+    const textYStart = topY - padding - textSize - Math.max(0, (boxHeight - padding * 2 - textHeight) / 2);
+
+    page.drawRectangle({
+      x,
+      y: bottomY,
+      width,
+      height: boxHeight,
+      borderWidth: 1,
+      borderColor,
+      color: boxFill,
+    });
+
+    if (embeddedImage) {
+      const imageX = x + padding + Math.max(0, (imageSlotWidth - imageWidth) / 2);
+      const imageY = bottomY + (boxHeight - imageHeight) / 2;
+
+      page.drawImage(embeddedImage, {
+        x: imageX,
+        y: imageY,
+        width: imageWidth,
+        height: imageHeight,
+      });
+    }
+
+    if (imageSlotWidth) {
+      const dividerX = x + padding + imageSlotWidth + 6;
+      page.drawLine({
+        start: { x: dividerX, y: bottomY + 8 },
+        end: { x: dividerX, y: topY - 8 },
+        thickness: 1,
+        color: dividerColor,
+      });
+    }
+
+    model.textLines.forEach((line, index) => {
+      drawAlignedText(page, line, {
+        x: textX,
+        y: textYStart - index * lineHeight,
+        width: textBlockWidth,
+        alignment: model.alignment,
+        font,
+        size: textSize,
+        color: textColor,
+      });
+    });
+
+    return bottomY - 14;
+  },
+
+  async buildTemplateDocumentText(template, mergeData = {}) {
+    const documentSections = await this.buildTemplateDocumentSections(template, mergeData);
+
     return [
-      header ? renderHtmlToDocumentText(this.interpolateText(header.content, resolvedMergeData)) : '',
-      renderHtmlToDocumentText(this.interpolateText(templateContent, resolvedMergeData)),
-      footer ? renderHtmlToDocumentText(this.interpolateText(footer.content, resolvedMergeData)) : '',
+      documentSections.headerHtml ? renderHtmlToDocumentText(documentSections.headerHtml) : '',
+      documentSections.bodyText,
+      documentSections.footerHtml ? renderHtmlToDocumentText(documentSections.footerHtml) : '',
     ]
       .filter(Boolean)
       .join('\n\n');
