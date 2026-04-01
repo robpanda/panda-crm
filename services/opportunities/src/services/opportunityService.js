@@ -627,6 +627,100 @@ async function getNotificationService() {
   return notificationService;
 }
 
+function normalizeLegacyMeasurementReportRow(row) {
+  if (!row) return null;
+
+  const toNumber = (value) => (value == null ? null : Number(value));
+
+  return {
+    id: row.id,
+    provider: row.provider || null,
+    reportType: row.reportType || null,
+    orderStatus: row.orderStatus || null,
+    orderNumber: row.orderNumber || null,
+    orderedAt: row.orderedAt || null,
+    reportPdfUrl: row.reportPdfUrl || null,
+    modelViewerUrl: row.modelViewerUrl || null,
+    designViewerUrl: row.designViewerUrl || null,
+    totalRoofArea: toNumber(row.totalRoofArea),
+    totalRoofSquares: toNumber(row.totalRoofSquares),
+    predominantPitch: row.predominantPitch || null,
+    suggestedWasteFactor: toNumber(row.suggestedWasteFactor),
+    ridgeLength: toNumber(row.ridgeLength),
+    hipLength: toNumber(row.hipLength),
+    valleyLength: toNumber(row.valleyLength),
+    rakeLength: toNumber(row.rakeLength),
+    eaveLength: toNumber(row.eaveLength),
+    flashingLength: toNumber(row.flashingLength),
+    stepFlashingLength: toNumber(row.stepFlashingLength),
+    dripEdgeLength: toNumber(row.dripEdgeLength),
+    facets: row.facets == null ? null : Number(row.facets),
+    deliveredAt: row.deliveredAt || null,
+    createdAt: row.createdAt || null,
+    orderedBy: row.orderedByFirstName || row.orderedByLastName
+      ? {
+          firstName: row.orderedByFirstName || '',
+          lastName: row.orderedByLastName || '',
+        }
+      : null,
+  };
+}
+
+async function getLegacySafeMeasurementReports(opportunityId, { limit = 5 } = {}) {
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 5, 25));
+
+  const rows = await prisma.$queryRaw(
+    Prisma.sql`
+      SELECT
+        mr.id,
+        mr.provider,
+        mr."reportType" AS "reportType",
+        mr.order_status AS "orderStatus",
+        mr.order_number AS "orderNumber",
+        mr.ordered_at AS "orderedAt",
+        mr.report_pdf_url AS "reportPdfUrl",
+        mr.model_viewer_url AS "modelViewerUrl",
+        mr.design_viewer_url AS "designViewerUrl",
+        mr.total_roof_area AS "totalRoofArea",
+        mr.total_roof_squares AS "totalRoofSquares",
+        mr.predominant_pitch AS "predominantPitch",
+        mr.suggested_waste_factor AS "suggestedWasteFactor",
+        mr.ridge_length AS "ridgeLength",
+        mr.hip_length AS "hipLength",
+        mr.valley_length AS "valleyLength",
+        mr.rake_length AS "rakeLength",
+        mr.eave_length AS "eaveLength",
+        mr.flashing_length AS "flashingLength",
+        mr.step_flashing_length AS "stepFlashingLength",
+        mr.drip_edge_length AS "dripEdgeLength",
+        mr.facets,
+        mr.delivered_at AS "deliveredAt",
+        mr.created_at AS "createdAt",
+        u.first_name AS "orderedByFirstName",
+        u.last_name AS "orderedByLastName"
+      FROM measurement_reports mr
+      LEFT JOIN users u ON u.id = mr.ordered_by_id
+      WHERE mr.opportunity_id = ${opportunityId}
+      ORDER BY mr.created_at DESC
+      LIMIT ${Prisma.raw(String(safeLimit))}
+    `
+  );
+
+  return rows.map(normalizeLegacyMeasurementReportRow);
+}
+
+async function getLegacySafeMeasurementReportCount(opportunityId) {
+  const rows = await prisma.$queryRaw(
+    Prisma.sql`
+      SELECT COUNT(*)::int AS count
+      FROM measurement_reports
+      WHERE opportunity_id = ${opportunityId}
+    `
+  );
+
+  return Number(rows?.[0]?.count || 0);
+}
+
 class OpportunityService {
   async resolveActorUserId(actor = null) {
     if (!actor) return null;
@@ -874,13 +968,6 @@ class OpportunityService {
               assignedTo: { select: { firstName: true, lastName: true } },
             },
           },
-          measurementReports: {
-            orderBy: { createdAt: 'desc' },
-            take: 5,
-            include: {
-              orderedBy: { select: { firstName: true, lastName: true } },
-            },
-          },
         },
       });
 
@@ -1089,40 +1176,6 @@ class OpportunityService {
             notes: true,
             tasks: true,
             lineItems: true,
-            measurementReports: true,
-          },
-        },
-        // Get the most recent measurement report for display (prioritize delivered, then by creation date)
-        measurementReports: {
-          orderBy: [
-            { orderStatus: 'asc' }, // DELIVERED comes before ORDERED/PENDING alphabetically
-            { createdAt: 'desc' },
-          ],
-          take: 1,
-          select: {
-            id: true,
-            provider: true,
-            reportType: true,
-            orderStatus: true,
-            orderNumber: true,
-            orderedAt: true,
-            reportPdfUrl: true,
-            modelViewerUrl: true,
-            designViewerUrl: true,
-            totalRoofArea: true,
-            totalRoofSquares: true,
-            predominantPitch: true,
-            suggestedWasteFactor: true,
-            ridgeLength: true,
-            hipLength: true,
-            valleyLength: true,
-            rakeLength: true,
-            eaveLength: true,
-            flashingLength: true,
-            stepFlashingLength: true,
-            dripEdgeLength: true,
-            facets: true,
-            deliveredAt: true,
           },
         },
       },
@@ -1135,7 +1188,7 @@ class OpportunityService {
     }
 
     // Get additional counts that require separate queries
-    const [appointmentCount, agreementCount] = await Promise.all([
+    const [appointmentCount, agreementCount, measurementReports, measurementReportCount] = await Promise.all([
       // Count ServiceAppointments via WorkOrders
       prisma.serviceAppointment.count({
         where: {
@@ -1146,6 +1199,8 @@ class OpportunityService {
       prisma.agreement.count({
         where: { opportunityId: id },
       }),
+      getLegacySafeMeasurementReports(id, { limit: 1 }),
+      getLegacySafeMeasurementReportCount(id),
     ]);
 
     // Get invoices - first by opportunityId, if none found then by accountId
@@ -1242,10 +1297,10 @@ class OpportunityService {
         notes: opportunity._count.notes,
         tasks: opportunity._count.tasks,
         lineItems: opportunity._count.lineItems,
-        measurementReports: opportunity._count.measurementReports,
+        measurementReports: measurementReportCount,
       },
       // Most recent delivered measurement report
-      measurementReport: opportunity.measurementReports?.[0] || null,
+      measurementReport: measurementReports[0] || null,
       // Insurance-specific fields
       isPandaClaims: opportunity.isPandaClaims,
       isApproved: opportunity.isApproved,
