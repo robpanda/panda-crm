@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Calendar, Copy, Pencil, Play, Star, Trash2 } from 'lucide-react';
-import { reportsApi } from '../services/api';
+import { modulesApi, reportsApi } from '../services/api';
 import { GlobalDateRangePicker } from '../components/reports';
 import TableWidget from '../components/reports/charts/TableWidget';
 import PresentationWidgets from '../components/reports/PresentationWidgets';
@@ -12,13 +12,50 @@ import { deriveDataSource } from '../utils/analyticsSource';
 import { toAnalyticsDateParams } from '../utils/analyticsDateRange';
 import {
   buildDuplicateReportPayload,
+  buildTimelineDisplay,
+  filterReportTableRows,
   formatReportTimestamp,
+  getReportOwnerDisplayValue,
+  getReportTableFilterDefinitions,
   getReportCreatedByLabel,
   normalizeReportConfig,
   normalizeReportRunResult,
   getReportTablesUsed,
   formatReportFieldLabel,
+  isReportNextStepField,
+  isReportOwnerField,
+  isReportStageField,
 } from '../utils/reporting';
+
+function getStageBadgeClasses(stageValue) {
+  const normalizedStage = String(stageValue || '').trim().toLowerCase();
+
+  if (!normalizedStage) {
+    return 'inline-flex items-center rounded-full bg-gray-100 px-3 py-1 text-xs font-semibold text-gray-600';
+  }
+
+  if (normalizedStage.includes('claim') || normalizedStage.includes('lost') || normalizedStage.includes('cancel')) {
+    return 'inline-flex items-center rounded-full bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700 ring-1 ring-inset ring-rose-200';
+  }
+
+  if (normalizedStage.includes('assigned') || normalizedStage.includes('appointment')) {
+    return 'inline-flex items-center rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700 ring-1 ring-inset ring-amber-200';
+  }
+
+  if (normalizedStage.includes('scheduled') || normalizedStage.includes('inspection')) {
+    return 'inline-flex items-center rounded-full bg-sky-50 px-3 py-1 text-xs font-semibold text-sky-700 ring-1 ring-inset ring-sky-200';
+  }
+
+  if (normalizedStage.includes('approved') || normalizedStage.includes('contract')) {
+    return 'inline-flex items-center rounded-full bg-indigo-50 px-3 py-1 text-xs font-semibold text-indigo-700 ring-1 ring-inset ring-indigo-200';
+  }
+
+  if (normalizedStage.includes('sold') || normalizedStage.includes('production') || normalizedStage.includes('complete') || normalizedStage.includes('won')) {
+    return 'inline-flex items-center rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200';
+  }
+
+  return 'inline-flex items-center rounded-full bg-gray-100 px-3 py-1 text-xs font-semibold text-gray-700 ring-1 ring-inset ring-gray-200';
+}
 
 function extractExportFilename(headers, fallbackName) {
   const contentDisposition = headers?.['content-disposition'] || headers?.['Content-Disposition'] || '';
@@ -73,6 +110,9 @@ export default function ReportDetail() {
   const [report, setReport] = useState(null);
   const [payload, setPayload] = useState(null);
   const [dateRange, setDateRange] = useState({ preset: 'THIS_MONTH' });
+  const [moduleFields, setModuleFields] = useState([]);
+  const [tableSearch, setTableSearch] = useState('');
+  const [tableFilters, setTableFilters] = useState({});
 
   const dateRangeLabel = useMemo(() => {
     const presets = {
@@ -97,6 +137,32 @@ export default function ReportDetail() {
   useEffect(() => {
     loadReport();
   }, [id]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!report?.baseModule) {
+      setModuleFields([]);
+      return undefined;
+    }
+
+    modulesApi.getModuleFields(report.baseModule)
+      .then((response) => {
+        if (!cancelled) {
+          setModuleFields(response?.data?.fields || []);
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to load report module fields:', error);
+        if (!cancelled) {
+          setModuleFields([]);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [report?.baseModule]);
 
   useEffect(() => {
     if (searchParams.get('run') !== '1' || !report) return;
@@ -205,6 +271,35 @@ export default function ReportDetail() {
     [payload, safeReport]
   );
 
+  const filterDefinitions = useMemo(
+    () => getReportTableFilterDefinitions(safeReport, moduleFields, normalizedResult.rows),
+    [safeReport, moduleFields, normalizedResult.rows]
+  );
+
+  useEffect(() => {
+    const activeFieldIds = new Set(filterDefinitions.map((definition) => definition.field));
+
+    setTableFilters((previous) => {
+      const next = Object.fromEntries(
+        Object.entries(previous).filter(([fieldId]) => activeFieldIds.has(fieldId))
+      );
+
+      if (
+        Object.keys(next).length === Object.keys(previous).length &&
+        Object.keys(next).every((key) => next[key] === previous[key])
+      ) {
+        return previous;
+      }
+
+      return next;
+    });
+  }, [filterDefinitions]);
+
+  const filteredRows = useMemo(
+    () => filterReportTableRows(normalizedResult.rows, filterDefinitions, tableFilters, tableSearch),
+    [normalizedResult.rows, filterDefinitions, tableFilters, tableSearch]
+  );
+
   const tableColumns = useMemo(() => {
     const sample = normalizedResult.rows?.[0] || {};
     const rowKeys = Object.keys(sample);
@@ -216,11 +311,56 @@ export default function ReportDetail() {
       (rowKeys.length === 0 || configuredFields.some((field) => rowKeys.includes(field)));
 
     const columnKeys = useConfiguredColumns ? configuredFields : rowKeys;
+    const columns = columnKeys.map((key) => {
+      const column = {
+        key,
+        label: formatReportFieldLabel(key),
+      };
 
-    return columnKeys.map((key) => ({
-      key,
-      label: formatReportFieldLabel(key),
-    }));
+      if (isReportStageField(key)) {
+        column.render = (value) => (
+          <span className={getStageBadgeClasses(value)}>
+            {value || '—'}
+          </span>
+        );
+      }
+
+      if (isReportOwnerField(key)) {
+        column.render = (_, row) => getReportOwnerDisplayValue(row, key) || '—';
+      }
+
+      if (isReportNextStepField(key)) {
+        column.render = (value) => (
+          <span className="font-medium text-blue-600 underline-offset-2 hover:underline">
+            {value || '—'}
+          </span>
+        );
+      }
+
+      return column;
+    });
+
+    const timelineColumn = {
+      key: 'timeline',
+      label: 'Timeline',
+      sortable: false,
+      render: (_, row) => (
+        <span className="text-sm text-gray-600">
+          {buildTimelineDisplay(row, normalizedResult.report)}
+        </span>
+      ),
+    };
+
+    if (!columns.some((column) => column.key === 'timeline')) {
+      const ownerColumnIndex = columns.findIndex((column) => isReportOwnerField(column.key));
+      if (ownerColumnIndex >= 0) {
+        columns.splice(ownerColumnIndex + 1, 0, timelineColumn);
+      } else {
+        columns.push(timelineColumn);
+      }
+    }
+
+    return columns;
   }, [normalizedResult.report, normalizedResult.rows]);
 
   if (loading) {
@@ -391,12 +531,23 @@ export default function ReportDetail() {
           <TableWidget
             title={report.name}
             subtitle={payload?.data?.results?.period || payload?.results?.period || null}
-            data={normalizedResult.rows}
+            data={filteredRows}
             columns={tableColumns}
             loading={running}
             pageSize={12}
             emptyStateContext={emptyStateContext}
             emptyMessage="No data found"
+            searchValue={tableSearch}
+            onSearchChange={setTableSearch}
+            searchPlaceholder="Search visible data..."
+            filterDefinitions={filterDefinitions}
+            filterValues={tableFilters}
+            onFilterChange={(field, value) => {
+              setTableFilters((previous) => ({
+                ...previous,
+                [field]: value,
+              }));
+            }}
           />
         </div>
       ) : (

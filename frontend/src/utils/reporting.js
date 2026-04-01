@@ -111,6 +111,17 @@ const DEFAULT_PRESENTATION = {
   widgets: [],
 };
 
+const REPORT_TIMELINE_FIELDS = [
+  { label: 'Created', keys: ['createdAt', 'created_at'] },
+  { label: 'Lead Assigned', keys: ['leadAssignedDate', 'lead_assigned_date'] },
+  { label: 'Appointment', keys: ['appointmentDate', 'appointment_date'] },
+  { label: 'Scheduled', keys: ['scheduledDate', 'scheduled_date'] },
+  { label: 'Inspected', keys: ['inspectedDate', 'inspected_date'] },
+  { label: 'Close', keys: ['closeDate', 'close_date'] },
+];
+
+const ISO_DATE_PREFIX_PATTERN = /^(\d{4})-(\d{2})-(\d{2})(?:[T\s].*)?$/;
+
 export const REPORT_TEMPLATES = [
   {
     id: 'pipeline-summary',
@@ -846,12 +857,20 @@ export function formatReportFieldLabel(key) {
     return '';
   }
 
-  if (normalizedKey === 'ownerName' || normalizedKey === 'owner.fullName') {
-    return 'Owner Name';
+  if (normalizedKey === 'ownerId' || normalizedKey === 'ownerName' || normalizedKey === 'owner.fullName') {
+    return 'Owner';
   }
 
   if (normalizedKey === 'leadSetByName' || normalizedKey === 'leadSetBy.fullName') {
     return 'Lead Setter Name';
+  }
+
+  if (normalizedKey === 'timeline') {
+    return 'Timeline';
+  }
+
+  if (normalizedKey === 'nextStep' || normalizedKey === 'next_step') {
+    return 'Next Step';
   }
 
   if (normalizedKey.includes('.')) {
@@ -973,6 +992,310 @@ export function getRenderableReportValue(value) {
   );
 
   return primitiveValue ?? null;
+}
+
+export function isReportStageField(fieldKey) {
+  const normalizedField = String(fieldKey || '').trim().toLowerCase();
+  return normalizedField === 'stage' || normalizedField.endsWith('.stage');
+}
+
+export function isReportOwnerField(fieldKey) {
+  const normalizedField = String(fieldKey || '').trim().toLowerCase();
+  return (
+    normalizedField === 'ownerid' ||
+    normalizedField === 'ownername' ||
+    normalizedField === 'owner' ||
+    normalizedField === 'owner.fullname'
+  );
+}
+
+export function isReportNextStepField(fieldKey) {
+  const normalizedField = String(fieldKey || '').trim().toLowerCase().replace(/[^a-z]/g, '');
+  return normalizedField.startsWith('nextstep');
+}
+
+export function getReportOwnerDisplayValue(row, fieldKey = 'ownerId') {
+  const candidateKeys = [fieldKey, 'ownerName', 'owner.fullName', 'owner'];
+
+  for (const candidateKey of candidateKeys) {
+    const value = getRenderableReportValue(row?.[candidateKey]);
+    if (value != null && value !== '') {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function formatCompactTimelineDate(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (typeof value === 'string') {
+    const isoMatch = value.match(ISO_DATE_PREFIX_PATTERN);
+    if (isoMatch) {
+      const [, year, month, day] = isoMatch;
+      return new Intl.DateTimeFormat('en-US', {
+        month: 'short',
+        day: 'numeric',
+      }).format(new Date(Number(year), Number(month) - 1, Number(day)));
+    }
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+  }).format(date);
+}
+
+function getTimelineSourceKeys(reportConfig, row = {}) {
+  const normalizedReport = normalizeReportConfig(reportConfig);
+  return new Set([
+    ...Object.keys(row || {}),
+    ...(normalizedReport.selectedFields || []),
+  ]);
+}
+
+// Timeline generation lives here so table UIs can add a compact milestone summary
+// without changing the raw report payload, exports, or sort fields.
+export function buildTimelineDisplay(row = {}, reportConfig = {}) {
+  const availableKeys = getTimelineSourceKeys(reportConfig, row);
+  const segments = REPORT_TIMELINE_FIELDS.reduce((items, milestone) => {
+    const matchingKey = milestone.keys.find((key) => {
+      const value = row?.[key];
+      return availableKeys.has(key) && value != null && value !== '';
+    });
+
+    if (!matchingKey) {
+      return items;
+    }
+
+    const formattedDate = formatCompactTimelineDate(row[matchingKey]);
+    if (!formattedDate) {
+      return items;
+    }
+
+    items.push(`${milestone.label} ${formattedDate}`);
+    return items;
+  }, []);
+
+  return segments.length > 0 ? segments.join(' • ') : '—';
+}
+
+function findModuleField(moduleFields = [], fieldId) {
+  return moduleFields.find((field) => field?.id === fieldId || field?.key === fieldId) || null;
+}
+
+function buildFilterOptions(fieldId, rows = []) {
+  const options = new Map();
+
+  for (const row of rows) {
+    const renderedValue = getRenderableReportValue(row?.[fieldId]);
+    if (renderedValue == null || renderedValue === '') {
+      continue;
+    }
+
+    const optionValue = String(renderedValue);
+    if (!options.has(optionValue)) {
+      options.set(optionValue, {
+        value: optionValue,
+        label: optionValue,
+      });
+    }
+  }
+
+  return Array.from(options.values()).sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function inferFilterControlType(filterConfig, moduleField, options) {
+  if (filterConfig?.type) {
+    return filterConfig.type;
+  }
+
+  if (filterConfig?.multiple) {
+    return 'multiSelect';
+  }
+
+  const normalizedType = String(moduleField?.type || '').toLowerCase();
+  const normalizedField = String(filterConfig?.field || '').toLowerCase();
+
+  if (
+    normalizedType.includes('date') ||
+    normalizedField.endsWith('date') ||
+    normalizedField.endsWith('_at')
+  ) {
+    return 'dateRange';
+  }
+
+  if (
+    normalizedType === 'enum' ||
+    normalizedType === 'boolean' ||
+    normalizedType === 'relation' ||
+    Array.isArray(moduleField?.enumValues)
+  ) {
+    return 'select';
+  }
+
+  if (options.length > 0 && options.length <= 12) {
+    return 'select';
+  }
+
+  return 'text';
+}
+
+function shouldIncludeDerivedFilter(moduleField, filterType) {
+  const normalizedType = String(moduleField?.type || '').toLowerCase();
+  return (
+    filterType === 'dateRange' ||
+    normalizedType === 'enum' ||
+    normalizedType === 'relation' ||
+    normalizedType === 'boolean' ||
+    Array.isArray(moduleField?.enumValues)
+  );
+}
+
+// Dynamic filter registration lives here. Reports can opt into explicit table
+// filters via visualization.table.filters / filterableFields, and older reports
+// safely fall back to schema-driven filters when selected fields are obviously filterable.
+export function getReportTableFilterDefinitions(reportConfig = {}, moduleFields = [], rows = []) {
+  const normalizedReport = normalizeReportConfig(reportConfig);
+  const tableConfig = normalizedReport.visualization?.table || {};
+  const explicitDefinitions = Array.isArray(tableConfig.filters)
+    ? tableConfig.filters
+    : Array.isArray(tableConfig.filterableFields)
+    ? tableConfig.filterableFields
+    : [];
+  const hasExplicitDefinitions = explicitDefinitions.length > 0;
+  const candidateDefinitions = hasExplicitDefinitions
+    ? explicitDefinitions
+    : normalizedReport.selectedFields;
+
+  return candidateDefinitions
+    .map((entry) => (typeof entry === 'string' ? { field: entry } : entry))
+    .filter((entry) => entry?.field)
+    .map((entry) => {
+      const moduleField = findModuleField(moduleFields, entry.field);
+      const options = buildFilterOptions(entry.field, rows);
+      const type = inferFilterControlType(entry, moduleField, options);
+
+      if (!hasExplicitDefinitions && !shouldIncludeDerivedFilter(moduleField, type)) {
+        return null;
+      }
+
+      return {
+        field: entry.field,
+        label: entry.label || moduleField?.label || formatReportFieldLabel(entry.field),
+        type,
+        multiple: Boolean(entry.multiple || type === 'multiSelect'),
+        options,
+        placeholder: entry.placeholder || `Filter ${entry.label || moduleField?.label || formatReportFieldLabel(entry.field)}`,
+      };
+    })
+    .filter(Boolean);
+}
+
+function getComparableDateToken(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (typeof value === 'string') {
+    const isoMatch = value.match(ISO_DATE_PREFIX_PATTERN);
+    if (isoMatch) {
+      return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+    }
+  }
+
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return [
+    String(date.getFullYear()),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-');
+}
+
+function isFilterValueActive(filterType, filterValue) {
+  if (filterType === 'dateRange') {
+    return Boolean(filterValue?.start || filterValue?.end);
+  }
+
+  if (filterType === 'multiSelect') {
+    return Array.isArray(filterValue) && filterValue.length > 0;
+  }
+
+  return filterValue != null && String(filterValue).trim() !== '';
+}
+
+function doesRowMatchFilter(row, filterDefinition, filterValue) {
+  if (!isFilterValueActive(filterDefinition.type, filterValue)) {
+    return true;
+  }
+
+  const renderedValue = getRenderableReportValue(row?.[filterDefinition.field]);
+
+  switch (filterDefinition.type) {
+    case 'dateRange': {
+      const comparableDate = getComparableDateToken(row?.[filterDefinition.field]);
+      if (!comparableDate) {
+        return false;
+      }
+
+      if (filterValue.start && comparableDate < filterValue.start) {
+        return false;
+      }
+
+      if (filterValue.end && comparableDate > filterValue.end) {
+        return false;
+      }
+
+      return true;
+    }
+    case 'multiSelect': {
+      const selectedValues = Array.isArray(filterValue) ? filterValue.map((value) => String(value).toLowerCase()) : [];
+      return selectedValues.includes(String(renderedValue ?? '').toLowerCase());
+    }
+    case 'select':
+      return String(renderedValue ?? '').toLowerCase() === String(filterValue).toLowerCase();
+    case 'text':
+    default:
+      return String(renderedValue ?? '').toLowerCase().includes(String(filterValue).trim().toLowerCase());
+  }
+}
+
+export function filterReportTableRows(rows = [], filterDefinitions = [], filterValues = {}, searchValue = '') {
+  const normalizedSearch = String(searchValue || '').trim().toLowerCase();
+
+  return rows.filter((row) => {
+    const matchesFilters = filterDefinitions.every((filterDefinition) =>
+      doesRowMatchFilter(row, filterDefinition, filterValues?.[filterDefinition.field])
+    );
+
+    if (!matchesFilters) {
+      return false;
+    }
+
+    if (!normalizedSearch) {
+      return true;
+    }
+
+    const searchableText = Object.values(row || {})
+      .map((value) => getRenderableReportValue(value))
+      .filter((value) => value != null && value !== '')
+      .join(' ')
+      .toLowerCase();
+
+    return searchableText.includes(normalizedSearch);
+  });
 }
 
 function sanitizeReportRowsForRender(rows, selectedFields = []) {

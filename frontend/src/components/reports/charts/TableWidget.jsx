@@ -1,5 +1,5 @@
-import { useState, useMemo } from 'react';
-import { ChevronUp, ChevronDown, ArrowUpDown, ExternalLink } from 'lucide-react';
+import { useEffect, useState, useMemo } from 'react';
+import { ChevronUp, ChevronDown, ArrowUpDown, ExternalLink, Search } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import EmptyStateDiagnosticsLink from '../../analytics/EmptyStateDiagnosticsLink';
 import { getRenderableReportValue } from '../../../utils/reporting';
@@ -49,18 +49,33 @@ export default function TableWidget({
   reportId,  // Optional report ID for "View All" link
   reportFilter, // Optional filter to apply when navigating
   emptyStateContext,
+  searchValue = '',
+  onSearchChange,
+  searchPlaceholder = 'Search visible data...',
+  filterDefinitions = [],
+  filterValues = {},
+  onFilterChange,
 }) {
   const navigate = useNavigate();
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
   const [currentPage, setCurrentPage] = useState(1);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [data, pageSize]);
 
   // Sort data
   const sortedData = useMemo(() => {
     if (!sortConfig.key || !sortable) return data || [];
 
     return [...(data || [])].sort((a, b) => {
-      const aValue = a[sortConfig.key];
-      const bValue = b[sortConfig.key];
+      const sortableColumn = columns.find((column) => column.key === sortConfig.key);
+      if (sortableColumn?.sortable === false) {
+        return 0;
+      }
+
+      const aValue = getRenderableReportValue(a[sortConfig.key]);
+      const bValue = getRenderableReportValue(b[sortConfig.key]);
 
       if (aValue == null) return 1;
       if (bValue == null) return -1;
@@ -77,7 +92,7 @@ export default function TableWidget({
       }
       return bStr.localeCompare(aStr);
     });
-  }, [data, sortConfig, sortable]);
+  }, [columns, data, sortConfig, sortable]);
 
   // Paginate data
   const paginatedData = useMemo(() => {
@@ -89,19 +104,20 @@ export default function TableWidget({
 
   const totalPages = Math.ceil((sortedData?.length || 0) / pageSize);
 
-  const handleSort = (key) => {
+  const handleSort = (column) => {
     if (!sortable) return;
+    if (column?.sortable === false) return;
 
     setSortConfig((prev) => ({
-      key,
-      direction: prev.key === key && prev.direction === 'asc' ? 'desc' : 'asc',
+      key: column.key,
+      direction: prev.key === column.key && prev.direction === 'asc' ? 'desc' : 'asc',
     }));
   };
 
-  const getSortIcon = (key) => {
-    if (!sortable) return null;
+  const getSortIcon = (column) => {
+    if (!sortable || column?.sortable === false) return null;
 
-    if (sortConfig.key !== key) {
+    if (sortConfig.key !== column.key) {
       return <ArrowUpDown className="w-3.5 h-3.5 text-gray-400" />;
     }
 
@@ -112,11 +128,13 @@ export default function TableWidget({
     );
   };
 
-  const formatCellValue = (value, column) => {
-    if (value == null) return '-';
-
+  const formatCellValue = (value, column, row) => {
     if (column.render) {
-      return column.render(value);
+      return column.render(getRenderableReportValue(value), row);
+    }
+
+    if (value == null) {
+      return '-';
     }
 
     const safeValue = getRenderableReportValue(value);
@@ -188,6 +206,85 @@ export default function TableWidget({
     navigate(`/analytics/reports/${reportId}${queryString ? `?${queryString}` : ''}`);
   };
 
+  const hasFilterBar = filterDefinitions.length > 0 || typeof onSearchChange === 'function';
+
+  const renderFilterControl = (filterDefinition) => {
+    const value = filterValues?.[filterDefinition.field];
+
+    if (filterDefinition.type === 'dateRange') {
+      return (
+        <div className="flex items-center gap-2">
+          <input
+            type="date"
+            value={value?.start || ''}
+            onChange={(event) => onFilterChange?.(filterDefinition.field, {
+              start: event.target.value,
+              end: value?.end || '',
+            })}
+            className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 focus:border-panda-primary focus:outline-none focus:ring-2 focus:ring-panda-primary/15"
+          />
+          <span className="text-sm text-gray-400">to</span>
+          <input
+            type="date"
+            value={value?.end || ''}
+            onChange={(event) => onFilterChange?.(filterDefinition.field, {
+              start: value?.start || '',
+              end: event.target.value,
+            })}
+            className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 focus:border-panda-primary focus:outline-none focus:ring-2 focus:ring-panda-primary/15"
+          />
+        </div>
+      );
+    }
+
+    if (filterDefinition.type === 'multiSelect') {
+      return (
+        <select
+          multiple
+          value={Array.isArray(value) ? value : []}
+          onChange={(event) => {
+            const nextValue = Array.from(event.target.selectedOptions).map((option) => option.value);
+            onFilterChange?.(filterDefinition.field, nextValue);
+          }}
+          className="min-h-24 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 focus:border-panda-primary focus:outline-none focus:ring-2 focus:ring-panda-primary/15"
+        >
+          {filterDefinition.options.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      );
+    }
+
+    if (filterDefinition.type === 'text') {
+      return (
+        <input
+          type="text"
+          value={value || ''}
+          onChange={(event) => onFilterChange?.(filterDefinition.field, event.target.value)}
+          placeholder={filterDefinition.placeholder}
+          className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 focus:border-panda-primary focus:outline-none focus:ring-2 focus:ring-panda-primary/15"
+        />
+      );
+    }
+
+    return (
+      <select
+        value={value || ''}
+        onChange={(event) => onFilterChange?.(filterDefinition.field, event.target.value)}
+        className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 focus:border-panda-primary focus:outline-none focus:ring-2 focus:ring-panda-primary/15"
+      >
+        <option value="">All</option>
+        {filterDefinition.options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    );
+  };
+
   return (
     <div className="bg-white rounded-xl shadow-sm border border-gray-100">
       {(title || subtitle || reportId) && (
@@ -208,6 +305,38 @@ export default function TableWidget({
         </div>
       )}
 
+      {hasFilterBar && (
+        <div className="border-b border-gray-100 px-5 py-4">
+          <div className="flex flex-col gap-4">
+            {filterDefinitions.length > 0 && (
+              <div className="flex flex-wrap gap-3">
+                {filterDefinitions.map((filterDefinition) => (
+                  <label key={filterDefinition.field} className="flex min-w-[180px] flex-col gap-1.5">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+                      {filterDefinition.label}
+                    </span>
+                    {renderFilterControl(filterDefinition)}
+                  </label>
+                ))}
+              </div>
+            )}
+
+            {typeof onSearchChange === 'function' && (
+              <label className="relative max-w-xl">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                <input
+                  type="text"
+                  value={searchValue}
+                  onChange={(event) => onSearchChange(event.target.value)}
+                  placeholder={searchPlaceholder}
+                  className="w-full rounded-xl border border-gray-200 py-2.5 pl-10 pr-4 text-sm text-gray-700 shadow-sm focus:border-panda-primary focus:outline-none focus:ring-2 focus:ring-panda-primary/15"
+                />
+              </label>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="overflow-x-auto">
         <table className="w-full">
           <thead>
@@ -216,14 +345,14 @@ export default function TableWidget({
                 <th
                   key={column.key}
                   className={`px-4 ${compact ? 'py-2' : 'py-3'} text-left text-xs font-semibold text-gray-500 uppercase tracking-wider ${
-                    sortable ? 'cursor-pointer hover:bg-gray-100' : ''
+                    sortable && column.sortable !== false ? 'cursor-pointer hover:bg-gray-100' : ''
                   }`}
                   style={{ width: column.width }}
-                  onClick={() => handleSort(column.key)}
+                  onClick={() => handleSort(column)}
                 >
                   <div className="flex items-center gap-1">
                     {column.label}
-                    {getSortIcon(column.key)}
+                    {getSortIcon(column)}
                   </div>
                 </th>
               ))}
@@ -260,7 +389,7 @@ export default function TableWidget({
                       key={column.key}
                       className={`px-4 ${compact ? 'py-2' : 'py-3'} text-sm text-gray-700`}
                     >
-                      {formatCellValue(row[column.key], column)}
+                      {formatCellValue(row[column.key], column, row)}
                     </td>
                   ))}
                 </tr>
