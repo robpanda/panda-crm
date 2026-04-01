@@ -24,6 +24,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import MentionTextarea from '../components/MentionTextarea';
 import InternalNotesTabs from '../components/InternalNotesTabs';
 import InternalComments from '../components/InternalComments';
+import { LEAD_SOURCES } from '../constants/leadSourceOptions';
 import UserSearchDropdown from '../components/UserSearchDropdown';
 
 const CommunicationsTab = lazy(() => import('../components/CommunicationsTab'));
@@ -437,29 +438,25 @@ function ActivityTab({ phone, email, leadName }) {
 
 // Constants from LeadWizard
 const LEAD_STATUSES = [
-  { value: 'NEW', label: 'New' },
-  { value: 'CONTACTED', label: 'Contacted' },
-  { value: 'QUALIFIED', label: 'Qualified' },
-  { value: 'UNQUALIFIED', label: 'Unqualified' },
-  { value: 'CONVERTED', label: 'Converted' },
+  { value: 'New', label: 'New' },
+  { value: 'Set', label: 'Set' },
+  { value: 'Not Set', label: 'Not Set' },
+  { value: 'Confirmed', label: 'Confirmed' },
+  { value: 'Canceled', label: 'Canceled' },
+  { value: 'Need Reset', label: 'Need Reset' },
 ];
 
 const LEAD_DISPOSITIONS = [
-  { value: 'SCHEDULED', label: 'Scheduled' },
-  { value: 'CONFIRMED', label: 'Confirmed' },
   { value: 'CALL_BACK', label: 'Call Back' },
-  { value: 'CANCELED', label: 'Canceled' },
-  { value: 'NEED_RESET', label: 'Need Reset' },
-  { value: 'NOT_INTERESTED', label: 'Not Interested' },
+  { value: 'CANT_AFFORD', label: "Can't afford" },
+  { value: 'DO_NOT_CALL', label: 'Do not call' },
   { value: 'MISSING_PARTY', label: 'Missing Party' },
-  { value: 'CANT_AFFORD', label: "Can't Afford" },
   { value: 'NO_VALUE', label: 'No Value' },
-  { value: 'WEATHER_RELATED', label: 'Weather Related' },
-  { value: 'THINKING_ABOUT_IT', label: 'Thinking About It' },
-  { value: 'NO_ANSWER', label: 'No Answer' },
-  { value: 'VOICEMAIL', label: 'Left Voicemail' },
-  { value: 'WRONG_NUMBER', label: 'Wrong Number' },
-  { value: 'DO_NOT_CALL', label: 'Do Not Call' },
+  { value: 'NOT_INTERESTED', label: 'Not Interested' },
+  { value: 'SCHEDULED', label: 'Scheduled' },
+  { value: 'THINKING_ABOUT_IT', label: 'Thinking about it' },
+  { value: 'WEATHER_RELATED', label: 'Weather related' },
+  { value: 'WRONG_NUMBER', label: 'Wrong number' },
 ];
 
 const LEAD_DISPOSITION_LABELS = new Map(
@@ -484,6 +481,38 @@ const LEGACY_LEAD_DISPOSITION_LABELS = {
   DNC: 'Do Not Call',
   LEFT_VOICEMAIL: 'Left Voicemail',
 };
+
+function isCallbackDispositionValue(value) {
+  return normalizeLeadDispositionKey(value) === 'CALL_BACK';
+}
+
+function toDateTimeLocalInput(value) {
+  if (!value) return '';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '';
+  const localDate = new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60000);
+  return localDate.toISOString().slice(0, 16);
+}
+
+function toIsoStringFromLocal(value) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString();
+}
+
+function formatCallbackDateTime(value) {
+  if (!value) return '-';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '-';
+  return parsed.toLocaleString('en-US', {
+    month: '2-digit',
+    day: '2-digit',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
 
 function normalizeLeadDispositionKey(value) {
   return String(value || '')
@@ -524,18 +553,44 @@ function buildLeadDispositionOptions(currentValue) {
   ];
 }
 
-const LEAD_SOURCES = [
-  { value: 'Website', label: 'Website' },
-  { value: 'Referral', label: 'Referral' },
-  { value: 'Door Knock', label: 'Door Knock' },
-  { value: 'Canvassing', label: 'Canvassing' },
-  { value: 'Self-Gen', label: 'Self-Gen' },
-  { value: 'RingCentral', label: 'RingCentral' },
-  { value: 'Marketing', label: 'Marketing' },
-  { value: 'Trade Show', label: 'Trade Show' },
-  { value: 'Partner', label: 'Partner' },
-  { value: 'Other', label: 'Other' },
-];
+function getSavedLeadStatus(value, disposition) {
+  const dispositionLabel = formatLeadDispositionLabel(disposition);
+  if (dispositionLabel === 'Confirmed') return 'Confirmed';
+  if (dispositionLabel === 'Canceled') return 'Canceled';
+  if (dispositionLabel === 'Need Reset') return 'Need Reset';
+
+  const normalizedStatus = String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_');
+
+  if (normalizedStatus === 'QUALIFIED' || normalizedStatus === 'CONVERTED') return 'Set';
+  if (normalizedStatus === 'CONTACTED') return 'Not Set';
+  return 'New';
+}
+
+function mapSavedLeadStatusToPayload(displayStatus, currentDisposition = null) {
+  const normalizedCurrentDisposition = normalizeLeadDispositionKey(currentDisposition);
+  const shouldPreserveDisposition = normalizedCurrentDisposition
+    && !['CONFIRMED', 'CANCELED', 'NEED_RESET'].includes(normalizedCurrentDisposition);
+  const preservedDisposition = shouldPreserveDisposition ? currentDisposition : null;
+
+  switch (displayStatus) {
+    case 'Set':
+      return { status: 'QUALIFIED', disposition: preservedDisposition };
+    case 'Not Set':
+      return { status: 'CONTACTED', disposition: preservedDisposition };
+    case 'Confirmed':
+      return { status: 'QUALIFIED', disposition: 'CONFIRMED' };
+    case 'Canceled':
+      return { status: 'QUALIFIED', disposition: 'CANCELED' };
+    case 'Need Reset':
+      return { status: 'QUALIFIED', disposition: 'NEED_RESET' };
+    case 'New':
+    default:
+      return { status: 'NEW', disposition: preservedDisposition };
+  }
+}
 
 const PROPERTY_TYPES = [
   { value: 'Single Family', label: 'Single Family' },
@@ -605,12 +660,19 @@ export default function LeadDetail() {
     enabled: !!id,
   });
 
+  const getStoredLeadSource = (leadData = lead) => leadData?.source || leadData?.leadSource || '';
   const isSalesRabbitLead = (source) =>
     String(source || '').replace(/\s+/g, '').toLowerCase().includes('salesrabbit');
+  const isBusinessDevelopmentLead = (source) =>
+    String(source || '').replace(/[^a-z]/gi, '').toLowerCase() === 'businessdevelopment';
+  const getLeadSubSource = (source, salesRabbitUser) =>
+    (isSalesRabbitLead(source) || (isBusinessDevelopmentLead(source) && salesRabbitUser)) ? 'SalesRabbit' : '';
+  const getLeadSourceDisplay = (source, salesRabbitUser) =>
+    getLeadSubSource(source, salesRabbitUser) ? 'Business Development' : (source || '');
 
   const readOnlyLeadSetById =
     lead?.leadSetById ||
-    ((isSalesRabbitLead(lead?.source || lead?.leadSource) && lead?.ownerId) ? lead.ownerId : null);
+    ((isSalesRabbitLead(getStoredLeadSource(lead)) && lead?.ownerId) ? lead.ownerId : null);
 
   const leadSetByIdForManager = (isEditing ? formData.leadSetById : readOnlyLeadSetById) || null;
   const { data: leadSetByUserData } = useQuery({
@@ -627,8 +689,8 @@ export default function LeadDetail() {
           ? `${leadSetByUserData.firstName || ''} ${leadSetByUserData.lastName || ''}`.trim()
           : lead?.leadSetBy
             ? `${lead.leadSetBy.firstName || ''} ${lead.leadSetBy.lastName || ''}`.trim()
-            : lead?.leadSetByName ||
-              (isSalesRabbitLead(lead?.source || lead?.leadSource) ? lead?.salesRabbitUser || lead?.ownerName || '' : '')
+          : lead?.leadSetByName ||
+              (isSalesRabbitLead(getStoredLeadSource(lead)) ? lead?.salesRabbitUser || lead?.ownerName || '' : '')
       );
 
   const leadSetByManagerId =
@@ -689,7 +751,7 @@ export default function LeadDetail() {
   const isLeadReadyForOwnerAction = Boolean(
     lead &&
     !lead.isConverted &&
-    (lead.source || lead.leadSource) &&
+    getStoredLeadSource(lead) &&
     (lead.tentativeAppointmentDate || lead.tentativeAppointmentTime || isSelfGenSource(lead.source))
   );
 
@@ -732,8 +794,9 @@ export default function LeadDetail() {
         city: lead.city || '',
         state: lead.state || '',
         postalCode: lead.postalCode || '',
-        status: lead.status || 'NEW',
-        leadSource: lead.source || lead.leadSource || '',
+        status: getSavedLeadStatus(lead.status, lead.disposition),
+        leadSource: getLeadSourceDisplay(getStoredLeadSource(lead), lead.salesRabbitUser),
+        leadSubSource: getLeadSubSource(getStoredLeadSource(lead), lead.salesRabbitUser),
         rating: lead.rating || '',
         description: lead.description || '',
         propertyType: lead.propertyType || '',
@@ -743,6 +806,7 @@ export default function LeadDetail() {
         salesRabbitUser: lead.salesRabbitUser || '',
         tentativeAppointmentDate: lead.tentativeAppointmentDate ? lead.tentativeAppointmentDate.split('T')[0] : '',
         tentativeAppointmentTime: lead.tentativeAppointmentTime || '',
+        callbackScheduledAt: toDateTimeLocalInput(lead.callbackScheduledAt),
         leadSetById: readOnlyLeadSetById || '',
         disposition: lead.disposition || '',
         ownerId: lead.ownerId || '',
@@ -881,6 +945,23 @@ export default function LeadDetail() {
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
+    if (name === 'status') {
+      const mapped = mapSavedLeadStatusToPayload(value, formData.disposition);
+      setFormData(prev => ({
+        ...prev,
+        status: value,
+        disposition: mapped.disposition || '',
+      }));
+      return;
+    }
+    if (name === 'disposition') {
+      setFormData(prev => ({
+        ...prev,
+        disposition: value,
+        callbackScheduledAt: isCallbackDispositionValue(value) ? prev.callbackScheduledAt : '',
+      }));
+      return;
+    }
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
@@ -892,11 +973,33 @@ export default function LeadDetail() {
   const handleSave = () => {
     // Clean up empty strings to null for optional fields
     const cleanedData = { ...formData };
+    const callbackSelected = isCallbackDispositionValue(cleanedData.disposition);
+
+    if (callbackSelected && !cleanedData.callbackScheduledAt) {
+      alert('Callback date and time are required when disposition is Call Back.');
+      return;
+    }
+
+    cleanedData.callbackScheduledAt = callbackSelected
+      ? toIsoStringFromLocal(cleanedData.callbackScheduledAt)
+      : null;
+
     Object.keys(cleanedData).forEach(key => {
       if (cleanedData[key] === '') {
         cleanedData[key] = null;
       }
     });
+    const mappedStatus = mapSavedLeadStatusToPayload(cleanedData.status, cleanedData.disposition);
+    cleanedData.status = mappedStatus.status;
+    cleanedData.disposition = mappedStatus.disposition;
+    const currentSource = getStoredLeadSource(lead);
+    const currentSubSource = getLeadSubSource(currentSource, lead?.salesRabbitUser);
+    const selectedSubSource = cleanedData.leadSubSource || currentSubSource;
+    cleanedData.source = cleanedData.leadSource === 'Business Development' && selectedSubSource === 'SalesRabbit'
+      ? 'SalesRabbit'
+      : cleanedData.leadSource;
+    delete cleanedData.leadSource;
+    delete cleanedData.leadSubSource;
     updateMutation.mutate(cleanedData);
   };
 
@@ -912,8 +1015,9 @@ export default function LeadDetail() {
       city: lead.city || '',
       state: lead.state || '',
       postalCode: lead.postalCode || '',
-      status: lead.status || 'NEW',
-      leadSource: lead.source || lead.leadSource || '',
+      status: getSavedLeadStatus(lead.status, lead.disposition),
+      leadSource: getLeadSourceDisplay(getStoredLeadSource(lead), lead.salesRabbitUser),
+      leadSubSource: getLeadSubSource(getStoredLeadSource(lead), lead.salesRabbitUser),
       rating: lead.rating || '',
       description: lead.description || '',
       propertyType: lead.propertyType || '',
@@ -923,6 +1027,7 @@ export default function LeadDetail() {
       salesRabbitUser: lead.salesRabbitUser || '',
       tentativeAppointmentDate: lead.tentativeAppointmentDate ? lead.tentativeAppointmentDate.split('T')[0] : '',
       tentativeAppointmentTime: lead.tentativeAppointmentTime || '',
+      callbackScheduledAt: toDateTimeLocalInput(lead.callbackScheduledAt),
       leadSetById: readOnlyLeadSetById || '',
       leadSetByName: leadSetByDisplayName || '',
       disposition: lead.disposition || '',
@@ -944,8 +1049,9 @@ export default function LeadDetail() {
       city: lead.city || '',
       state: lead.state || '',
       postalCode: lead.postalCode || '',
-      status: lead.status || 'NEW',
-      leadSource: lead.source || lead.leadSource || '',
+      status: getSavedLeadStatus(lead.status, lead.disposition),
+      leadSource: getLeadSourceDisplay(getStoredLeadSource(lead), lead.salesRabbitUser),
+      leadSubSource: getLeadSubSource(getStoredLeadSource(lead), lead.salesRabbitUser),
       rating: lead.rating || '',
       description: lead.description || '',
       propertyType: lead.propertyType || '',
@@ -955,6 +1061,7 @@ export default function LeadDetail() {
       salesRabbitUser: lead.salesRabbitUser || '',
       tentativeAppointmentDate: lead.tentativeAppointmentDate ? lead.tentativeAppointmentDate.split('T')[0] : '',
       tentativeAppointmentTime: lead.tentativeAppointmentTime || '',
+      callbackScheduledAt: toDateTimeLocalInput(lead.callbackScheduledAt),
       leadSetById: readOnlyLeadSetById || '',
       leadSetByName: leadSetByDisplayName || '',
       disposition: lead.disposition || '',
@@ -1548,6 +1655,20 @@ export default function LeadDetail() {
                 </div>
               </div>
 
+              {isCallbackDispositionValue(formData.disposition) && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Callback Date & Time</label>
+                  <input
+                    type="datetime-local"
+                    name="callbackScheduledAt"
+                    value={formData.callbackScheduledAt || ''}
+                    onChange={handleInputChange}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">Uses the exact local date and time entered.</p>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Lead Source</label>
@@ -1562,6 +1683,15 @@ export default function LeadDetail() {
                       <option key={s.value} value={s.value}>{s.label}</option>
                     ))}
                   </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Lead Sub-Source</label>
+                  <input
+                    type="text"
+                    value={formData.leadSubSource || ''}
+                    readOnly
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-700"
+                  />
                 </div>
               </div>
 
@@ -1633,15 +1763,23 @@ export default function LeadDetail() {
             <div className="space-y-3">
               <div className="flex justify-between">
                 <span className="text-gray-500">Status</span>
-                <span className="text-gray-900">{lead.status || '-'}</span>
+                <span className="text-gray-900">{getSavedLeadStatus(lead.status, lead.disposition) || '-'}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">Disposition</span>
                 <span className="text-gray-900">{formatLeadDispositionLabel(lead.disposition) || '-'}</span>
               </div>
               <div className="flex justify-between">
+                <span className="text-gray-500">Callback Date & Time</span>
+                <span className="text-gray-900">{formatCallbackDateTime(lead.callbackScheduledAt)}</span>
+              </div>
+              <div className="flex justify-between">
                 <span className="text-gray-500">Lead Source</span>
-                <span className="text-gray-900">{lead.source || lead.leadSource || '-'}</span>
+                <span className="text-gray-900">{getLeadSourceDisplay(getStoredLeadSource(lead), lead.salesRabbitUser) || '-'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Lead Sub-Source</span>
+                <span className="text-gray-900">{getLeadSubSource(getStoredLeadSource(lead), lead.salesRabbitUser) || '-'}</span>
               </div>
               {lead.isChampionReferral && (
                 <div className="mt-3 p-3 bg-amber-50 rounded-lg border border-amber-200">
