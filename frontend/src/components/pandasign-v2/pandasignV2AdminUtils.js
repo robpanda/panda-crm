@@ -14,6 +14,25 @@ export const DEFAULT_DYNAMIC_CONTENT_ITEM = {
   description: '',
   isActive: true,
 };
+export const PANDASIGN_PAGE_SIZES = [
+  { value: 'LETTER', label: 'Letter (8.5 x 11 in)' },
+  { value: 'LEGAL', label: 'Legal (8.5 x 14 in)' },
+  { value: 'A4', label: 'A4 (210 x 297 mm)' },
+];
+export const PANDASIGN_PAGE_ORIENTATIONS = [
+  { value: 'PORTRAIT', label: 'Portrait' },
+  { value: 'LANDSCAPE', label: 'Landscape' },
+];
+export const DEFAULT_TEMPLATE_PAGE_LAYOUT = {
+  pageSize: 'LETTER',
+  orientation: 'PORTRAIT',
+  margins: {
+    top: 0.75,
+    right: 0.75,
+    bottom: 0.75,
+    left: 0.75,
+  },
+};
 export const DEFAULT_TEMPLATE_DRAFT = {
   name: '',
   description: '',
@@ -21,6 +40,7 @@ export const DEFAULT_TEMPLATE_DRAFT = {
   territory: 'DEFAULT',
   status: 'DRAFT',
   content: '',
+  pageLayout: DEFAULT_TEMPLATE_PAGE_LAYOUT,
   signerRoles: DEFAULT_SIGNER_ROLES,
   requiredFieldsConfig: [],
   branding: { headerId: '', footerId: '' },
@@ -154,6 +174,33 @@ export function extractMergeFields(content = '') {
   return [...new Set(matches.map((match) => match.slice(2, -2).trim()).filter(Boolean))];
 }
 
+function normalizeMarginValue(value, fallback) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return fallback;
+  return Math.min(2.5, Math.max(0, Math.round(numericValue * 100) / 100));
+}
+
+export function normalizeTemplatePageLayout(pageLayout = {}) {
+  const margins = pageLayout?.margins || {};
+  const pageSize = String(pageLayout?.pageSize || DEFAULT_TEMPLATE_PAGE_LAYOUT.pageSize).trim().toUpperCase();
+  const orientation = String(pageLayout?.orientation || DEFAULT_TEMPLATE_PAGE_LAYOUT.orientation).trim().toUpperCase();
+
+  return {
+    pageSize: PANDASIGN_PAGE_SIZES.some((item) => item.value === pageSize)
+      ? pageSize
+      : DEFAULT_TEMPLATE_PAGE_LAYOUT.pageSize,
+    orientation: PANDASIGN_PAGE_ORIENTATIONS.some((item) => item.value === orientation)
+      ? orientation
+      : DEFAULT_TEMPLATE_PAGE_LAYOUT.orientation,
+    margins: {
+      top: normalizeMarginValue(margins.top, DEFAULT_TEMPLATE_PAGE_LAYOUT.margins.top),
+      right: normalizeMarginValue(margins.right, DEFAULT_TEMPLATE_PAGE_LAYOUT.margins.right),
+      bottom: normalizeMarginValue(margins.bottom, DEFAULT_TEMPLATE_PAGE_LAYOUT.margins.bottom),
+      left: normalizeMarginValue(margins.left, DEFAULT_TEMPLATE_PAGE_LAYOUT.margins.left),
+    },
+  };
+}
+
 export function normalizeTemplateDraft(template = {}) {
   return {
     ...DEFAULT_TEMPLATE_DRAFT,
@@ -162,6 +209,7 @@ export function normalizeTemplateDraft(template = {}) {
     territory: template.territory || DEFAULT_TEMPLATE_DRAFT.territory,
     status: template.status || DEFAULT_TEMPLATE_DRAFT.status,
     content: template.content || '',
+    pageLayout: normalizeTemplatePageLayout(template.pageLayout),
     signerRoles: normalizeSignerRoles(template.signerRoles),
     requiredFieldsConfig: normalizeRequiredFieldsConfig(template.requiredFieldsConfig),
     branding: {
@@ -217,6 +265,18 @@ export function validateTemplateDraft(template, resources = {}) {
   if (!draft.branding.headerId) errors.push('A header must be selected.');
   if (!draft.branding.footerId) errors.push('A footer must be selected.');
   if (!draft.signerRoles.length) errors.push('At least one signer role is required.');
+  if (!PANDASIGN_PAGE_SIZES.some((item) => item.value === draft.pageLayout.pageSize)) {
+    errors.push('A valid page size is required.');
+  }
+  if (!PANDASIGN_PAGE_ORIENTATIONS.some((item) => item.value === draft.pageLayout.orientation)) {
+    errors.push('A valid page orientation is required.');
+  }
+
+  Object.entries(draft.pageLayout.margins || {}).forEach(([side, value]) => {
+    if (!Number.isFinite(Number(value)) || Number(value) < 0 || Number(value) > 2.5) {
+      errors.push(`${side.charAt(0).toUpperCase()}${side.slice(1)} margin must be between 0 and 2.5 inches.`);
+    }
+  });
 
   const header = brandingItems.find((item) => item.id === draft.branding.headerId && item.kind === 'HEADER' && item.isActive !== false);
   const footer = brandingItems.find((item) => item.id === draft.branding.footerId && item.kind === 'FOOTER' && item.isActive !== false);
@@ -248,6 +308,7 @@ export function getTokenLabel(token) {
 
 export function renderTemplatePreview(template, resources = {}, sampleMergeData = {}) {
   const draft = normalizeTemplateDraft(template);
+  const previewLayout = normalizeTemplatePageLayout(draft.pageLayout);
   const brandingItems = normalizeApiList(resources.brandingItems || []);
   const dynamicContentItems = normalizeApiList(resources.dynamicContentItems || []);
   const territoryProfiles = normalizeApiList(resources.territoryProfiles || []);
@@ -338,11 +399,47 @@ export function renderTemplatePreview(template, resources = {}, sampleMergeData 
 
   const headerHtml = brandingItems.find((item) => item.id === draft.branding.headerId)?.content || '';
   const footerHtml = brandingItems.find((item) => item.id === draft.branding.footerId)?.content || '';
-
-  return [headerHtml, draft.content, footerHtml]
+  const documentHtml = [headerHtml, draft.content, footerHtml]
     .filter(Boolean)
     .map((segment) => interpolateHtml(segment, replacements))
     .join('<hr class="my-4 border-gray-200" />');
+  const { maxWidth, minHeight } = getPreviewPageDimensions(previewLayout);
+  const previewPadding = {
+    top: Math.round(previewLayout.margins.top * 44),
+    right: Math.round(previewLayout.margins.right * 44),
+    bottom: Math.round(previewLayout.margins.bottom * 44),
+    left: Math.round(previewLayout.margins.left * 44),
+  };
+
+  return `
+    <div style="display:flex; justify-content:center;">
+      <div style="width:100%; max-width:${maxWidth}px;">
+        <div style="margin-bottom:12px; display:flex; justify-content:space-between; gap:12px; font-size:12px; color:#6b7280;">
+          <span>${previewLayout.pageSize} · ${previewLayout.orientation === 'LANDSCAPE' ? 'Landscape' : 'Portrait'}</span>
+          <span>Margins ${previewLayout.margins.top}" / ${previewLayout.margins.right}" / ${previewLayout.margins.bottom}" / ${previewLayout.margins.left}"</span>
+        </div>
+        <div style="min-height:${minHeight}px; background:#ffffff; border:1px solid #d1d5db; border-radius:18px; box-shadow:0 18px 48px rgba(15,23,42,0.08); padding:${previewPadding.top}px ${previewPadding.right}px ${previewPadding.bottom}px ${previewPadding.left}px; box-sizing:border-box;">
+          ${documentHtml}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function getPreviewPageDimensions(pageLayout) {
+  const baseDimensions = {
+    LETTER: { width: 612, height: 792 },
+    LEGAL: { width: 612, height: 1008 },
+    A4: { width: 595, height: 842 },
+  };
+  const base = baseDimensions[pageLayout.pageSize] || baseDimensions.LETTER;
+  const pageWidth = pageLayout.orientation === 'LANDSCAPE' ? base.height : base.width;
+  const pageHeight = pageLayout.orientation === 'LANDSCAPE' ? base.width : base.height;
+
+  return {
+    maxWidth: Math.round(pageWidth * 0.78),
+    minHeight: Math.round(pageHeight * 0.5),
+  };
 }
 
 function buildDynamicReplacementMap(items, territory) {

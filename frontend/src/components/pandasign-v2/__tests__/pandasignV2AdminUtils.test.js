@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildTemplatePayload,
   extractMergeFields,
+  normalizeTemplateDraft,
   renderTemplatePreview,
   validateTemplateDraft,
 } from '../pandasignV2AdminUtils';
@@ -35,6 +36,16 @@ describe('pandasignV2AdminUtils', () => {
       name: 'NJ Contract',
       documentType: 'CONTRACT',
       territory: 'NJ',
+      pageLayout: {
+        pageSize: 'LEGAL',
+        orientation: 'LANDSCAPE',
+        margins: {
+          top: 1,
+          right: 0.5,
+          bottom: 0.75,
+          left: 1.25,
+        },
+      },
       branding: { headerId: 'hdr-1', footerId: 'ftr-1' },
       signerRoles: [{ role: 'CUSTOMER', label: 'Customer', required: true, order: 1 }],
       content: '<p>{{job.customer.name_full}} {{territory.company_phone}}</p>',
@@ -45,6 +56,16 @@ describe('pandasignV2AdminUtils', () => {
       'job.customer.name_full',
       'territory.company_phone',
     ]);
+    expect(payload.pageLayout).toEqual({
+      pageSize: 'LEGAL',
+      orientation: 'LANDSCAPE',
+      margins: {
+        top: 1,
+        right: 0.5,
+        bottom: 0.75,
+        left: 1.25,
+      },
+    });
   });
 
   it('renders preview using territory and dynamic content replacements', () => {
@@ -103,5 +124,32 @@ describe('pandasignV2AdminUtils', () => {
     expect(html).toContain('$15,250.00');
     expect(html).toContain('Premium Roofing Package');
     expect(html).toContain('alex@pandaexteriors.com');
+  });
+
+  it('normalizes page layout defaults for template drafts', () => {
+    const draft = normalizeTemplateDraft({
+      name: 'Layout Test',
+      pageLayout: {
+        pageSize: 'legal',
+        orientation: 'landscape',
+        margins: {
+          top: 1,
+          right: '0.5',
+          bottom: 0.25,
+          left: 3,
+        },
+      },
+    });
+
+    expect(draft.pageLayout).toEqual({
+      pageSize: 'LEGAL',
+      orientation: 'LANDSCAPE',
+      margins: {
+        top: 1,
+        right: 0.5,
+        bottom: 0.25,
+        left: 2.5,
+      },
+    });
   });
 });

@@ -30,6 +30,21 @@ const DEFAULT_SIGNER_ROLES = [
   { role: 'CUSTOMER', label: 'Customer', required: true, order: 1 },
   { role: 'AGENT', label: 'Agent', required: true, order: 2 },
 ];
+const DEFAULT_TEMPLATE_PAGE_LAYOUT = {
+  pageSize: 'LETTER',
+  orientation: 'PORTRAIT',
+  margins: {
+    top: 0.75,
+    right: 0.75,
+    bottom: 0.75,
+    left: 0.75,
+  },
+};
+const PANDASIGN_PAGE_DIMENSIONS = {
+  LETTER: [612, 792],
+  LEGAL: [612, 1008],
+  A4: [595.28, 841.89],
+};
 const DEFAULT_FROM_EMAIL = process.env.FROM_EMAIL || 'documents@pandaexteriors.com';
 const DEFAULT_COMPANY_NAME = process.env.COMPANY_NAME || 'Panda Exteriors';
 const DEFAULT_COMPANY_PHONE = process.env.COMPANY_PHONE || '(240) 801-6665';
@@ -140,6 +155,71 @@ function normalizeTemplateStatus(value) {
 function normalizeDocumentType(value, fallback = 'CONTRACT') {
   const normalized = String(value || fallback || 'CONTRACT').trim().toUpperCase();
   return normalized || 'CONTRACT';
+}
+
+function normalizePageSize(value) {
+  const normalized = String(value || DEFAULT_TEMPLATE_PAGE_LAYOUT.pageSize).trim().toUpperCase();
+  return Object.prototype.hasOwnProperty.call(PANDASIGN_PAGE_DIMENSIONS, normalized)
+    ? normalized
+    : DEFAULT_TEMPLATE_PAGE_LAYOUT.pageSize;
+}
+
+function normalizePageOrientation(value) {
+  const normalized = String(value || DEFAULT_TEMPLATE_PAGE_LAYOUT.orientation).trim().toUpperCase();
+  return normalized === 'LANDSCAPE' ? 'LANDSCAPE' : 'PORTRAIT';
+}
+
+function normalizePageMargin(value, fallback) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) return fallback;
+  return Math.min(2.5, Math.max(0, Math.round(numericValue * 100) / 100));
+}
+
+function normalizePageLayout(pageLayout) {
+  const margins = pageLayout?.margins || {};
+
+  return {
+    pageSize: normalizePageSize(pageLayout?.pageSize),
+    orientation: normalizePageOrientation(pageLayout?.orientation),
+    margins: {
+      top: normalizePageMargin(margins.top, DEFAULT_TEMPLATE_PAGE_LAYOUT.margins.top),
+      right: normalizePageMargin(margins.right, DEFAULT_TEMPLATE_PAGE_LAYOUT.margins.right),
+      bottom: normalizePageMargin(margins.bottom, DEFAULT_TEMPLATE_PAGE_LAYOUT.margins.bottom),
+      left: normalizePageMargin(margins.left, DEFAULT_TEMPLATE_PAGE_LAYOUT.margins.left),
+    },
+  };
+}
+
+function getPdfPageDimensions(pageLayout) {
+  const normalizedLayout = normalizePageLayout(pageLayout);
+  const [baseWidth, baseHeight] = PANDASIGN_PAGE_DIMENSIONS[normalizedLayout.pageSize];
+
+  if (normalizedLayout.orientation === 'LANDSCAPE') {
+    return { width: baseHeight, height: baseWidth };
+  }
+
+  return { width: baseWidth, height: baseHeight };
+}
+
+function getPdfLayoutMetrics(pageLayout) {
+  const normalizedLayout = normalizePageLayout(pageLayout);
+  const { width, height } = getPdfPageDimensions(normalizedLayout);
+  const margins = {
+    top: normalizedLayout.margins.top * 72,
+    right: normalizedLayout.margins.right * 72,
+    bottom: normalizedLayout.margins.bottom * 72,
+    left: normalizedLayout.margins.left * 72,
+  };
+
+  return {
+    pageLayout: normalizedLayout,
+    width,
+    height,
+    margins,
+    contentWidth: Math.max(240, width - margins.left - margins.right),
+    topY: height - margins.top,
+    bottomY: margins.bottom,
+  };
 }
 
 function normalizeSettingsList(items, fallback, requiredValues = []) {
@@ -639,6 +719,7 @@ function extractTemplateMetadata(signatureFields) {
       status: 'PUBLISHED',
       territory: 'DEFAULT',
       documentType: 'CONTRACT',
+      pageLayout: deepCloneJson(DEFAULT_TEMPLATE_PAGE_LAYOUT, DEFAULT_TEMPLATE_PAGE_LAYOUT),
       signerRoles: deepCloneJson(DEFAULT_SIGNER_ROLES, []),
       requiredFieldsConfig: [],
       branding: { headerId: '', footerId: '' },
@@ -660,6 +741,7 @@ function extractTemplateMetadata(signatureFields) {
       status: normalizeTemplateStatus(signatureFields.status),
       territory: normalizeTerritory(signatureFields.territory),
       documentType: normalizeDocumentType(signatureFields.documentType || signatureFields.category),
+      pageLayout: normalizePageLayout(signatureFields.pageLayout),
       signerRoles: normalizeSignerRoles(signatureFields.signerRoles),
       requiredFieldsConfig: normalizeRequiredFieldsConfig(signatureFields.requiredFieldsConfig),
       branding: normalizeBrandingSelection(signatureFields.branding),
@@ -674,6 +756,7 @@ function extractTemplateMetadata(signatureFields) {
     status: DEFAULT_TEMPLATE_STATUS,
     territory: 'DEFAULT',
     documentType: 'CONTRACT',
+    pageLayout: deepCloneJson(DEFAULT_TEMPLATE_PAGE_LAYOUT, DEFAULT_TEMPLATE_PAGE_LAYOUT),
     signerRoles: deepCloneJson(DEFAULT_SIGNER_ROLES, []),
     requiredFieldsConfig: [],
     branding: { headerId: '', footerId: '' },
@@ -1227,6 +1310,7 @@ function serializeTemplate(template) {
     documentType: metadata.documentType || template.category || 'CONTRACT',
     territory: metadata.territory,
     status: metadata.status,
+    pageLayout: metadata.pageLayout,
     signerRoles: metadata.signerRoles,
     requiredFieldsConfig: metadata.requiredFieldsConfig,
     branding: metadata.branding,
@@ -1348,6 +1432,7 @@ export const pandaSignService = {
     let pdfDoc;
     const templateDocumentUrl = template.documentUrl;
     const metadata = extractTemplateMetadata(template.signatureFields);
+    const layoutMetrics = getPdfLayoutMetrics(metadata.pageLayout);
     let renderedSignatureFields = [];
 
     if (templateDocumentUrl) {
@@ -1366,14 +1451,24 @@ export const pandaSignService = {
 
     // If no template, create basic document
     if (!templateDocumentUrl) {
-      let page = pdfDoc.addPage([612, 792]); // Letter size
-      const { height } = page.getSize();
+      const createConfiguredPage = () => pdfDoc.addPage([layoutMetrics.width, layoutMetrics.height]);
+      let page = createConfiguredPage();
       let currentPageNumber = 1;
+      const contentLeftX = layoutMetrics.margins.left;
+      const contentTopY = layoutMetrics.topY;
+      const signatureFieldX = contentLeftX + 68;
+      const signatureFieldWidth = Math.min(200, Math.max(140, layoutMetrics.contentWidth * 0.42));
+      const initialsFieldX = contentLeftX + 54;
+      const initialsFieldWidth = Math.min(72, Math.max(48, layoutMetrics.contentWidth * 0.16));
+      const dateX = Math.min(
+        layoutMetrics.width - layoutMetrics.margins.right - 120,
+        signatureFieldX + signatureFieldWidth + 36
+      );
 
       // Header
       page.drawText('PANDA EXTERIORS', {
-        x: 50,
-        y: height - 50,
+        x: contentLeftX,
+        y: contentTopY,
         size: 20,
         font: boldFont,
         color: rgb(0.25, 0.31, 0.71),
@@ -1381,27 +1476,27 @@ export const pandaSignService = {
 
       // Document title
       page.drawText(agreement.name, {
-        x: 50,
-        y: height - 80,
+        x: contentLeftX,
+        y: contentTopY - 30,
         size: 16,
         font: boldFont,
       });
 
       // Add document content from template
       const content = await this.buildTemplateDocumentText(template, mergeData);
-      const lines = this.wrapText(content, 80);
-      let y = height - 120;
+      const lines = this.wrapText(content, Math.max(32, Math.floor(layoutMetrics.contentWidth / 6.2)));
+      let y = contentTopY - 70;
 
       for (const line of lines) {
-        if (y < 100) {
+        if (y < layoutMetrics.bottomY + 50) {
           // Add new page if needed
-          page = pdfDoc.addPage([612, 792]);
-          y = page.getSize().height - 50;
+          page = createConfiguredPage();
+          y = contentTopY;
           currentPageNumber += 1;
         }
         if (line) {
           page.drawText(line, {
-            x: 50,
+            x: contentLeftX,
             y,
             size: 10,
             font,
@@ -1417,9 +1512,9 @@ export const pandaSignService = {
         ? metadata.fields
         : buildDefaultSignatureFieldLayout(signerRoles);
 
-      if (y < 230) {
-        page = pdfDoc.addPage([612, 792]);
-        y = page.getSize().height - 60;
+      if (y < layoutMetrics.bottomY + 180) {
+        page = createConfiguredPage();
+        y = contentTopY - 10;
         currentPageNumber += 1;
       } else {
         y -= 28;
@@ -1437,9 +1532,9 @@ export const pandaSignService = {
       renderedSignatureFields = [];
 
       for (const signer of signerRoles) {
-        if (y < 170) {
-          page = pdfDoc.addPage([612, 792]);
-          y = page.getSize().height - 60;
+        if (y < layoutMetrics.bottomY + 120) {
+          page = createConfiguredPage();
+          y = contentTopY - 10;
           currentPageNumber += 1;
         }
 
@@ -1452,7 +1547,7 @@ export const pandaSignService = {
           : (mergeData?.customerName || agreement?.recipientName || '');
 
         page.drawText(`${roleLabel} Signature`, {
-          x: 50,
+          x: contentLeftX,
           y,
           size: 11,
           font: boldFont,
@@ -1462,14 +1557,14 @@ export const pandaSignService = {
 
         const signatureLineY = y;
         page.drawText('Signature:', {
-          x: 50,
+          x: contentLeftX,
           y: signatureLineY,
           size: 11,
           font,
         });
-        drawLine(112, 292, signatureLineY + 2);
+        drawLine(signatureFieldX - 6, signatureFieldX + signatureFieldWidth, signatureLineY + 2);
         page.drawText(`Date: ${new Date().toLocaleDateString()}`, {
-          x: 370,
+          x: dateX,
           y: signatureLineY,
           size: 11,
           font,
@@ -1480,9 +1575,9 @@ export const pandaSignService = {
           role,
           type: 'SIGNATURE',
           page: currentPageNumber,
-          x: 118,
+          x: signatureFieldX,
           y: signatureLineY - 10,
-          width: 165,
+          width: signatureFieldWidth,
           height: 32,
         });
 
@@ -1491,21 +1586,21 @@ export const pandaSignService = {
         if (initialField) {
           const initialLineY = y;
           page.drawText('Initials:', {
-            x: 50,
+            x: contentLeftX,
             y: initialLineY,
             size: 10,
             font,
           });
-          drawLine(100, 165, initialLineY + 2);
+          drawLine(initialsFieldX - 4, initialsFieldX + initialsFieldWidth, initialLineY + 2);
 
           renderedSignatureFields.push({
             name: initialField.name,
             role,
             type: 'INITIAL',
             page: currentPageNumber,
-            x: 104,
+            x: initialsFieldX,
             y: initialLineY - 7,
-            width: 56,
+            width: initialsFieldWidth,
             height: 20,
           });
 
@@ -1514,7 +1609,7 @@ export const pandaSignService = {
 
         if (displayName) {
           page.drawText(`Name: ${displayName}`, {
-            x: 50,
+            x: contentLeftX,
             y,
             size: 10,
             font,
@@ -3643,6 +3738,7 @@ export const pandaSignService = {
       status: normalizeTemplateStatus(data.status || existingMetadata.status || DEFAULT_TEMPLATE_STATUS),
       territory: normalizeTerritory(data.territory || existingMetadata.territory),
       documentType: normalizeDocumentType(data.documentType || data.category || existingMetadata.documentType),
+      pageLayout: normalizePageLayout(data.pageLayout || existingMetadata.pageLayout),
       signerRoles,
       requiredFieldsConfig: normalizeRequiredFieldsConfig(
         data.requiredFieldsConfig !== undefined ? data.requiredFieldsConfig : existingMetadata.requiredFieldsConfig

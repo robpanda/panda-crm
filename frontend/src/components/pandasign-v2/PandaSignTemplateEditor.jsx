@@ -5,6 +5,8 @@ import PandaSignSignerConfigPanel from './PandaSignSignerConfigPanel';
 import PandaSignTokenPicker from './PandaSignTokenPicker';
 import {
   PANDASIGN_DOCUMENT_TYPES,
+  PANDASIGN_PAGE_ORIENTATIONS,
+  PANDASIGN_PAGE_SIZES,
   PANDASIGN_TERRITORIES,
   buildTemplatePayload,
   normalizeTemplateDraft,
@@ -45,6 +47,17 @@ export default function PandaSignTemplateEditor({
 
   const saveDraft = () => onSave(buildTemplatePayload(draft));
   const publishDraft = () => onPublish(buildTemplatePayload(draft));
+  const updatePageLayout = (updates) => setDraft((current) => ({
+    ...current,
+    pageLayout: {
+      ...current.pageLayout,
+      ...updates,
+      margins: {
+        ...current.pageLayout.margins,
+        ...(updates.margins || {}),
+      },
+    },
+  }));
 
   return (
     <div className="space-y-6 rounded-3xl border border-gray-200 bg-white p-6 shadow-sm">
@@ -177,6 +190,75 @@ export default function PandaSignTemplateEditor({
             ))}
           </select>
         </label>
+      </div>
+
+      <div className="rounded-3xl border border-gray-200 bg-gray-50/70 p-5">
+        <div className="mb-4">
+          <h3 className="text-sm font-semibold text-gray-900">Page Layout</h3>
+          <p className="mt-1 text-sm text-gray-500">
+            Define the paper size, orientation, and margins used when PandaSign V2 renders the PDF.
+          </p>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-2">
+          <label className="block text-sm font-medium text-gray-700">
+            Paper Size
+            <select
+              value={draft.pageLayout.pageSize}
+              onChange={(event) => updatePageLayout({ pageSize: event.target.value })}
+              className="mt-1 w-full rounded-xl border border-gray-300 px-4 py-3 text-sm"
+            >
+              {PANDASIGN_PAGE_SIZES.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block text-sm font-medium text-gray-700">
+            Orientation
+            <select
+              value={draft.pageLayout.orientation}
+              onChange={(event) => updatePageLayout({ orientation: event.target.value })}
+              className="mt-1 w-full rounded-xl border border-gray-300 px-4 py-3 text-sm"
+            >
+              {PANDASIGN_PAGE_ORIENTATIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <div className="mt-4 grid gap-4 xl:grid-cols-4">
+          {[
+            ['top', 'Top Margin'],
+            ['right', 'Right Margin'],
+            ['bottom', 'Bottom Margin'],
+            ['left', 'Left Margin'],
+          ].map(([side, label]) => (
+            <label key={side} className="block text-sm font-medium text-gray-700">
+              {label}
+              <div className="mt-1 flex items-center rounded-xl border border-gray-300 bg-white px-3">
+                <input
+                  type="number"
+                  min="0"
+                  max="2.5"
+                  step="0.25"
+                  value={draft.pageLayout.margins[side]}
+                  onChange={(event) => updatePageLayout({
+                    margins: {
+                      [side]: event.target.value,
+                    },
+                  })}
+                  className="w-full border-0 bg-transparent px-0 py-3 text-sm focus:outline-none focus:ring-0"
+                />
+                <span className="ml-3 text-xs font-semibold uppercase tracking-wide text-gray-400">in</span>
+              </div>
+            </label>
+          ))}
+        </div>
       </div>
 
       <label className="block text-sm font-medium text-gray-700">
