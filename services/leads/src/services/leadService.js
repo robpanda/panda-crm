@@ -2267,9 +2267,10 @@ class LeadService {
     const notes = await prisma.note.findMany({
       where: {
         leadId,
-        NOT: {
-          title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
-        },
+        OR: [
+          { title: null },
+          { title: { not: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } } },
+        ],
       },
       orderBy: [
         { createdAt: 'desc' },
@@ -2406,9 +2407,10 @@ class LeadService {
       where: {
         id: noteId,
         leadId,
-        NOT: {
-          title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
-        },
+        OR: [
+          { title: null },
+          { title: { not: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } } },
+        ],
       },
     });
 
@@ -2492,9 +2494,10 @@ class LeadService {
       where: {
         id: noteId,
         leadId,
-        NOT: {
-          title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
-        },
+        OR: [
+          { title: null },
+          { title: { not: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } } },
+        ],
       },
     });
 
@@ -2536,9 +2539,10 @@ class LeadService {
       where: {
         id: noteId,
         leadId,
-        NOT: {
-          title: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX },
-        },
+        OR: [
+          { title: null },
+          { title: { not: { startsWith: INTERNAL_COMMENT_TITLE_PREFIX } } },
+        ],
       },
     });
 
