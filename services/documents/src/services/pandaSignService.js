@@ -1594,11 +1594,49 @@ export const pandaSignService = {
 
     // If no template, create basic document
     if (!templateDocumentUrl) {
-      const createConfiguredPage = () => pdfDoc.addPage([layoutMetrics.width, layoutMetrics.height]);
-      let page = createConfiguredPage();
+      const documentSections = await this.buildTemplateDocumentSections(template, mergeData);
+      const renderPageChrome = async (targetPage) => {
+        let contentTopY = layoutMetrics.topY;
+        let contentBottomY = layoutMetrics.bottomY;
+
+        if (documentSections.headerHtml) {
+          contentTopY = await this.renderBrandingBlock({
+            pdfDoc,
+            page: targetPage,
+            htmlContent: documentSections.headerHtml,
+            topY: layoutMetrics.topY,
+            x: layoutMetrics.margins.left,
+            width: layoutMetrics.contentWidth,
+            font,
+            textColor: rgb(0.22, 0.22, 0.22),
+            anchor: 'top',
+          });
+        }
+
+        if (documentSections.footerHtml) {
+          contentBottomY = await this.renderBrandingBlock({
+            pdfDoc,
+            page: targetPage,
+            htmlContent: documentSections.footerHtml,
+            bottomY: layoutMetrics.bottomY,
+            x: layoutMetrics.margins.left,
+            width: layoutMetrics.contentWidth,
+            font,
+            textColor: rgb(0.22, 0.22, 0.22),
+            anchor: 'bottom',
+          });
+        }
+
+        return { contentTopY, contentBottomY };
+      };
+      const createConfiguredPage = async () => {
+        const nextPage = pdfDoc.addPage([layoutMetrics.width, layoutMetrics.height]);
+        const frame = await renderPageChrome(nextPage);
+        return { page: nextPage, frame };
+      };
+      let { page, frame: pageFrame } = await createConfiguredPage();
       let currentPageNumber = 1;
       const contentLeftX = layoutMetrics.margins.left;
-      const contentTopY = layoutMetrics.topY;
       const signatureFieldX = contentLeftX + 68;
       const signatureFieldWidth = Math.min(200, Math.max(140, layoutMetrics.contentWidth * 0.42));
       const initialsFieldX = contentLeftX + 54;
@@ -1607,51 +1645,17 @@ export const pandaSignService = {
         layoutMetrics.width - layoutMetrics.margins.right - 120,
         signatureFieldX + signatureFieldWidth + 36
       );
-
-      // Header
-      page.drawText('PANDA EXTERIORS', {
-        x: contentLeftX,
-        y: contentTopY,
-        size: 20,
-        font: boldFont,
-        color: rgb(0.25, 0.31, 0.71),
-      });
-
-      // Document title
-      page.drawText(agreement.name, {
-        x: contentLeftX,
-        y: contentTopY - 30,
-        size: 16,
-        font: boldFont,
-      });
-
-      const documentSections = await this.buildTemplateDocumentSections(template, mergeData);
       const lines = this.wrapText(
         documentSections.bodyText,
         Math.max(32, Math.floor(layoutMetrics.contentWidth / 6.2))
       );
-      let y = contentTopY - 54;
-
-      if (documentSections.headerHtml) {
-        y = await this.renderBrandingBlock({
-          pdfDoc,
-          page,
-          htmlContent: documentSections.headerHtml,
-          topY: y,
-          x: contentLeftX,
-          width: layoutMetrics.contentWidth,
-          font,
-          textColor: rgb(0.22, 0.22, 0.22),
-        });
-      } else {
-        y -= 16;
-      }
+      let y = pageFrame.contentTopY;
 
       for (const line of lines) {
-        if (y < layoutMetrics.bottomY + 50) {
+        if (y < pageFrame.contentBottomY + 18) {
           // Add new page if needed
-          page = createConfiguredPage();
-          y = contentTopY;
+          ({ page, frame: pageFrame } = await createConfiguredPage());
+          y = pageFrame.contentTopY;
           currentPageNumber += 1;
         }
         if (line) {
@@ -1665,27 +1669,6 @@ export const pandaSignService = {
         y -= 14;
       }
 
-      if (documentSections.footerHtml) {
-        if (y < layoutMetrics.bottomY + 150) {
-          page = createConfiguredPage();
-          y = contentTopY - 10;
-          currentPageNumber += 1;
-        } else {
-          y -= 14;
-        }
-
-        y = await this.renderBrandingBlock({
-          pdfDoc,
-          page,
-          htmlContent: documentSections.footerHtml,
-          topY: y,
-          x: contentLeftX,
-          width: layoutMetrics.contentWidth,
-          font,
-          textColor: rgb(0.22, 0.22, 0.22),
-        });
-      }
-
       const signerRoles = Array.isArray(metadata.signerRoles) && metadata.signerRoles.length > 0
         ? metadata.signerRoles
         : normalizeSignerRoles(DEFAULT_SIGNER_ROLES);
@@ -1693,9 +1676,9 @@ export const pandaSignService = {
         ? metadata.fields
         : buildDefaultSignatureFieldLayout(signerRoles);
 
-      if (y < layoutMetrics.bottomY + 180) {
-        page = createConfiguredPage();
-        y = contentTopY - 10;
+      if (y < pageFrame.contentBottomY + 180) {
+        ({ page, frame: pageFrame } = await createConfiguredPage());
+        y = pageFrame.contentTopY;
         currentPageNumber += 1;
       } else {
         y -= 28;
@@ -1713,9 +1696,9 @@ export const pandaSignService = {
       renderedSignatureFields = [];
 
       for (const signer of signerRoles) {
-        if (y < layoutMetrics.bottomY + 120) {
-          page = createConfiguredPage();
-          y = contentTopY - 10;
+        if (y < pageFrame.contentBottomY + 120) {
+          ({ page, frame: pageFrame } = await createConfiguredPage());
+          y = pageFrame.contentTopY;
           currentPageNumber += 1;
         }
 
@@ -2822,14 +2805,16 @@ export const pandaSignService = {
     page,
     htmlContent,
     topY,
+    bottomY,
     x,
     width,
     font,
     textColor = rgb(0.22, 0.22, 0.22),
+    anchor = 'top',
   }) {
     const model = buildBrandingRenderModel(htmlContent);
     if (!model) {
-      return topY;
+      return anchor === 'bottom' ? bottomY : topY;
     }
 
     const padding = 12;
@@ -2857,13 +2842,16 @@ export const pandaSignService = {
     const textBlockWidth = width - (imageSlotWidth ? imageSlotWidth + 18 : 0) - padding * 2;
     const textHeight = Math.max(1, model.textLines.length) * lineHeight;
     const boxHeight = Math.max(76, textHeight + padding * 2, imageHeight + padding * 2);
-    const bottomY = topY - boxHeight;
+    const resolvedTopY = anchor === 'bottom'
+      ? (Number.isFinite(bottomY) ? bottomY + boxHeight : topY)
+      : topY;
+    const resolvedBottomY = resolvedTopY - boxHeight;
     const textX = x + padding + (imageSlotWidth ? imageSlotWidth + 18 : 0);
-    const textYStart = topY - padding - textSize - Math.max(0, (boxHeight - padding * 2 - textHeight) / 2);
+    const textYStart = resolvedTopY - padding - textSize - Math.max(0, (boxHeight - padding * 2 - textHeight) / 2);
 
     page.drawRectangle({
       x,
-      y: bottomY,
+      y: resolvedBottomY,
       width,
       height: boxHeight,
       borderWidth: 1,
@@ -2873,7 +2861,7 @@ export const pandaSignService = {
 
     if (embeddedImage) {
       const imageX = x + padding + Math.max(0, (imageSlotWidth - imageWidth) / 2);
-      const imageY = bottomY + (boxHeight - imageHeight) / 2;
+      const imageY = resolvedBottomY + (boxHeight - imageHeight) / 2;
 
       page.drawImage(embeddedImage, {
         x: imageX,
@@ -2886,8 +2874,8 @@ export const pandaSignService = {
     if (imageSlotWidth) {
       const dividerX = x + padding + imageSlotWidth + 6;
       page.drawLine({
-        start: { x: dividerX, y: bottomY + 8 },
-        end: { x: dividerX, y: topY - 8 },
+        start: { x: dividerX, y: resolvedBottomY + 8 },
+        end: { x: dividerX, y: resolvedTopY - 8 },
         thickness: 1,
         color: dividerColor,
       });
@@ -2905,7 +2893,9 @@ export const pandaSignService = {
       });
     });
 
-    return bottomY - 14;
+    return anchor === 'bottom'
+      ? resolvedTopY + 14
+      : resolvedBottomY - 14;
   },
 
   async buildTemplateDocumentText(template, mergeData = {}) {
