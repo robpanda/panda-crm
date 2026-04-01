@@ -3584,6 +3584,32 @@ export const pandaSignService = {
     return serializeTemplate(created);
   },
 
+  async duplicateTemplate(id) {
+    const existing = await prisma.agreementTemplate.findUnique({ where: { id } });
+    if (!existing) {
+      throw new Error('Template not found');
+    }
+
+    const metadata = extractTemplateMetadata(existing.signatureFields);
+    const duplicate = await prisma.agreementTemplate.create({
+      data: {
+        name: `${existing.name} (Copy)`,
+        description: existing.description || '',
+        category: metadata.documentType || existing.category,
+        documentUrl: existing.documentUrl || null,
+        content: existing.content || '',
+        signatureFields: {
+          ...deepCloneJson(metadata, {}),
+          status: DEFAULT_TEMPLATE_STATUS,
+        },
+        mergeFields: deepCloneJson(existing.mergeFields, []),
+        isActive: false,
+      },
+    });
+
+    return serializeTemplate(duplicate);
+  },
+
   async publishTemplate(id) {
     const existing = await prisma.agreementTemplate.findUnique({ where: { id } });
     if (!existing) {

@@ -272,6 +272,22 @@ router.post('/templates/:id/archive', authMiddleware, requirePandaSignAdmin, asy
   }
 });
 
+router.post('/templates/:id/duplicate', authMiddleware, requirePandaSignAdmin, async (req, res, next) => {
+  try {
+    const template = await pandaSignService.duplicateTemplate(req.params.id);
+    logger.info(`Agreement template duplicated: ${req.params.id} -> ${template.id} by ${req.user.email}`);
+    res.status(201).json({ success: true, data: template });
+  } catch (error) {
+    if (error.message === 'Template not found') {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: error.message },
+      });
+    }
+    next(error);
+  }
+});
+
 router.post('/verify-required-fields', authMiddleware, async (req, res, next) => {
   try {
     const verification = await pandaSignService.verifyRequiredFields(req.body || {});

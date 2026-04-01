@@ -33,6 +33,7 @@ export default function PandaSignV2() {
   const [filters, setFilters] = useState(EMPTY_FILTERS);
   const [editingTemplate, setEditingTemplate] = useState(null);
   const [notice, setNotice] = useState(null);
+  const [duplicatingTemplateId, setDuplicatingTemplateId] = useState(null);
   const [publishingTemplateId, setPublishingTemplateId] = useState(null);
   const [archivingTemplateId, setArchivingTemplateId] = useState(null);
 
@@ -89,6 +90,13 @@ export default function PandaSignV2() {
 
   const archiveTemplateMutation = useMutation({
     mutationFn: agreementsApi.archiveTemplate,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['pandasign-v2-templates'] });
+    },
+  });
+
+  const duplicateTemplateMutation = useMutation({
+    mutationFn: agreementsApi.duplicateTemplate,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pandasign-v2-templates'] });
     },
@@ -186,6 +194,23 @@ export default function PandaSignV2() {
       setErrorNotice(error, 'Failed to archive template.');
     } finally {
       setArchivingTemplateId(null);
+    }
+  };
+
+  const handleDuplicateTemplate = async (template) => {
+    try {
+      setDuplicatingTemplateId(template.id);
+      const response = await duplicateTemplateMutation.mutateAsync(template.id);
+      const duplicatedTemplate = normalizeApiObject(response);
+      if (duplicatedTemplate) {
+        setEditingTemplate(duplicatedTemplate);
+        setActiveTab('templates');
+      }
+      setSuccessNotice('Template duplicated.');
+    } catch (error) {
+      setErrorNotice(error, 'Failed to duplicate template.');
+    } finally {
+      setDuplicatingTemplateId(null);
     }
   };
 
@@ -323,8 +348,10 @@ export default function PandaSignV2() {
                 templates={templates}
                 onCreate={() => setEditingTemplate({ ...DEFAULT_TEMPLATE_DRAFT })}
                 onEdit={setEditingTemplate}
+                onDuplicate={handleDuplicateTemplate}
                 onPublish={handlePublishTemplate}
                 onArchive={handleArchiveTemplate}
+                isDuplicatingId={duplicatingTemplateId}
                 isPublishingId={publishingTemplateId}
                 isArchivingId={archivingTemplateId}
               />

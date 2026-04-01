@@ -1,4 +1,4 @@
-import { Edit, FileSignature, Search, Send, Archive } from 'lucide-react';
+import { Edit, FileSignature, Search, Send, Archive, Copy } from 'lucide-react';
 import { PANDASIGN_DOCUMENT_TYPES, PANDASIGN_TEMPLATE_STATUSES, PANDASIGN_TERRITORIES } from './pandasignV2AdminUtils';
 
 export default function PandaSignTemplateList({
@@ -7,8 +7,10 @@ export default function PandaSignTemplateList({
   templates,
   onCreate,
   onEdit,
+  onDuplicate,
   onPublish,
   onArchive,
+  isDuplicatingId,
   isPublishingId,
   isArchivingId,
 }) {
@@ -125,6 +127,15 @@ export default function PandaSignTemplateList({
                     >
                       <Edit className="mr-1 h-4 w-4" />
                       Edit
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isDuplicatingId === template.id}
+                      onClick={() => onDuplicate(template)}
+                      className="inline-flex items-center rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      <Copy className="mr-1 h-4 w-4" />
+                      {isDuplicatingId === template.id ? 'Duplicating...' : 'Duplicate'}
                     </button>
                     {template.status !== 'PUBLISHED' && (
                       <button

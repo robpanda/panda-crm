@@ -4834,6 +4834,11 @@ export const agreementsApi = {
     return response.data;
   },
 
+  async duplicateTemplate(id) {
+    const response = await api.post(`/api/documents/agreements/templates/${id}/duplicate`);
+    return response.data;
+  },
+
   // Delete template (admin)
   async deleteTemplate(id) {
     const response = await api.delete(`/api/documents/agreements/templates/${id}`);
