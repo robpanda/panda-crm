@@ -155,6 +155,10 @@ function formatLeadCallbackNotificationDate(value) {
   });
 }
 
+function getLeadCallbackScheduledAt(lead) {
+  return lead?.callback_scheduled_at ?? lead?.callbackScheduledAt ?? null;
+}
+
 function extractMentionUserId(mention) {
   if (!mention) return null;
   if (typeof mention === 'string') return mention;
@@ -935,7 +939,10 @@ class LeadService {
     if (data.rating !== undefined) updateData.rating = this.normalizeRating(data.rating);
     if (data.industry !== undefined) updateData.industry = data.industry || null;
     if (data.ownerId !== undefined) {
-      updateData.ownerId = data.ownerId ? (await this.resolveUserId(data.ownerId)) || null : null;
+      const resolvedOwnerId = data.ownerId ? (await this.resolveUserId(data.ownerId)) || null : null;
+      updateData.owner = resolvedOwnerId
+        ? { connect: { id: resolvedOwnerId } }
+        : { disconnect: true };
     }
     if (data.score !== undefined) updateData.score = data.score;
     if (data.workType !== undefined) updateData.workType = data.workType || null;
@@ -957,7 +964,7 @@ class LeadService {
     if (data.disposition !== undefined) updateData.disposition = data.disposition || null;
     if (data.callbackScheduledAt !== undefined) {
       if (!data.callbackScheduledAt) {
-        updateData.callbackScheduledAt = null;
+        updateData.callback_scheduled_at = null;
       } else {
         const parsedCallbackDate = new Date(data.callbackScheduledAt);
         if (Number.isNaN(parsedCallbackDate.getTime())) {
@@ -965,19 +972,19 @@ class LeadService {
           error.name = 'ValidationError';
           throw error;
         }
-        updateData.callbackScheduledAt = parsedCallbackDate;
+        updateData.callback_scheduled_at = parsedCallbackDate;
       }
     }
 
     const nextDisposition = Object.prototype.hasOwnProperty.call(updateData, 'disposition')
       ? updateData.disposition
       : oldLead.disposition;
-    const nextCallbackScheduledAt = Object.prototype.hasOwnProperty.call(updateData, 'callbackScheduledAt')
-      ? updateData.callbackScheduledAt
-      : oldLead.callbackScheduledAt;
+    const nextCallbackScheduledAt = Object.prototype.hasOwnProperty.call(updateData, 'callback_scheduled_at')
+      ? updateData.callback_scheduled_at
+      : getLeadCallbackScheduledAt(oldLead);
 
     if (data.disposition !== undefined && !isLeadCallbackDisposition(nextDisposition) && data.callbackScheduledAt === undefined) {
-      updateData.callbackScheduledAt = null;
+      updateData.callback_scheduled_at = null;
     }
 
     if (isLeadCallbackDisposition(nextDisposition) && !nextCallbackScheduledAt) {
@@ -1029,7 +1036,7 @@ class LeadService {
         phone: lead.phone,
         status: lead.status,
         disposition: lead.disposition,
-        callbackScheduledAt: lead.callbackScheduledAt,
+        callbackScheduledAt: getLeadCallbackScheduledAt(lead),
         source: lead.source,
         ownerId: lead.ownerId,
       },
@@ -1048,7 +1055,8 @@ class LeadService {
   }
 
   async syncLeadCallbackTask(tx, { lead, previousLead, currentUserId }) {
-    const callbackIsActive = isLeadCallbackDisposition(lead.disposition) && lead.callbackScheduledAt;
+    const callbackScheduledAt = getLeadCallbackScheduledAt(lead);
+    const callbackIsActive = isLeadCallbackDisposition(lead.disposition) && callbackScheduledAt;
     const existingCallbackTask = await tx.task.findFirst({
       where: {
         leadId: lead.id,
@@ -1073,7 +1081,7 @@ class LeadService {
 
     const assignedToId = currentUserId || lead.ownerId || previousLead?.ownerId || lead.leadSetById || previousLead?.leadSetById || null;
     const description = this.buildLeadCallbackTaskDescription(lead);
-    const dueTime = new Date(lead.callbackScheduledAt).getTime();
+    const dueTime = new Date(callbackScheduledAt).getTime();
     let task = existingCallbackTask;
     let shouldNotify = false;
 
@@ -1091,7 +1099,7 @@ class LeadService {
           data: {
             assignedToId: assignedToId || null,
             description,
-            dueDate: lead.callbackScheduledAt,
+            dueDate: callbackScheduledAt,
             priority: 'HIGH',
             status: 'NOT_STARTED',
             completedDate: null,
@@ -1107,7 +1115,7 @@ class LeadService {
           description,
           status: 'NOT_STARTED',
           priority: 'HIGH',
-          dueDate: lead.callbackScheduledAt,
+          dueDate: callbackScheduledAt,
           assignedToId: assignedToId || null,
           leadId: lead.id,
         },
@@ -1122,7 +1130,7 @@ class LeadService {
           userId: assignedToId,
           type: 'TASK_ASSIGNED',
           title: 'Lead callback scheduled',
-          message: `Call back ${leadName} on ${formatLeadCallbackNotificationDate(lead.callbackScheduledAt)}.`,
+          message: `Call back ${leadName} on ${formatLeadCallbackNotificationDate(callbackScheduledAt)}.`,
           priority: 'HIGH',
           leadId: lead.id,
           actionUrl: `/leads/${lead.id}`,
@@ -1654,7 +1662,7 @@ class LeadService {
       tentativeAppointmentDate: lead.tentativeAppointmentDate,
       tentativeAppointmentTime: lead.tentativeAppointmentTime,
       disposition: lead.disposition,
-      callbackScheduledAt: lead.callbackScheduledAt,
+      callbackScheduledAt: getLeadCallbackScheduledAt(lead),
       leadSetById: lead.leadSetById,
       leadSetByName: lead.leadSetBy ? `${lead.leadSetBy.firstName} ${lead.leadSetBy.lastName}` : null,
       // Lead Intelligence / Scoring fields (snake_case in DB)
