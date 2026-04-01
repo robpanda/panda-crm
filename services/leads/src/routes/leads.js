@@ -644,6 +644,7 @@ router.put('/:id', async (req, res, next) => {
   try {
     const lead = await leadService.updateLead(req.params.id, {
       ...req.body,
+      currentUserId: req.user?.id,
       _auditContext: getAuditContext(req),
     });
     res.json({ success: true, data: lead });
@@ -656,6 +657,7 @@ router.patch('/:id', async (req, res, next) => {
   try {
     const lead = await leadService.updateLead(req.params.id, {
       ...req.body,
+      currentUserId: req.user?.id,
       _auditContext: getAuditContext(req),
     });
     res.json({ success: true, data: lead });

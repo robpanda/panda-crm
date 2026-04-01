@@ -482,6 +482,38 @@ const LEGACY_LEAD_DISPOSITION_LABELS = {
   LEFT_VOICEMAIL: 'Left Voicemail',
 };
 
+function isCallbackDispositionValue(value) {
+  return normalizeLeadDispositionKey(value) === 'CALL_BACK';
+}
+
+function toDateTimeLocalInput(value) {
+  if (!value) return '';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '';
+  const localDate = new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60000);
+  return localDate.toISOString().slice(0, 16);
+}
+
+function toIsoStringFromLocal(value) {
+  if (!value) return null;
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toISOString();
+}
+
+function formatCallbackDateTime(value) {
+  if (!value) return '-';
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return '-';
+  return parsed.toLocaleString('en-US', {
+    month: '2-digit',
+    day: '2-digit',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
 function normalizeLeadDispositionKey(value) {
   return String(value || '')
     .trim()
@@ -537,12 +569,17 @@ function getSavedLeadStatus(value, disposition) {
   return 'New';
 }
 
-function mapSavedLeadStatusToPayload(displayStatus) {
+function mapSavedLeadStatusToPayload(displayStatus, currentDisposition = null) {
+  const normalizedCurrentDisposition = normalizeLeadDispositionKey(currentDisposition);
+  const shouldPreserveDisposition = normalizedCurrentDisposition
+    && !['CONFIRMED', 'CANCELED', 'NEED_RESET'].includes(normalizedCurrentDisposition);
+  const preservedDisposition = shouldPreserveDisposition ? currentDisposition : null;
+
   switch (displayStatus) {
     case 'Set':
-      return { status: 'QUALIFIED', disposition: null };
+      return { status: 'QUALIFIED', disposition: preservedDisposition };
     case 'Not Set':
-      return { status: 'CONTACTED', disposition: null };
+      return { status: 'CONTACTED', disposition: preservedDisposition };
     case 'Confirmed':
       return { status: 'QUALIFIED', disposition: 'CONFIRMED' };
     case 'Canceled':
@@ -551,7 +588,7 @@ function mapSavedLeadStatusToPayload(displayStatus) {
       return { status: 'QUALIFIED', disposition: 'NEED_RESET' };
     case 'New':
     default:
-      return { status: 'NEW', disposition: null };
+      return { status: 'NEW', disposition: preservedDisposition };
   }
 }
 
@@ -769,6 +806,7 @@ export default function LeadDetail() {
         salesRabbitUser: lead.salesRabbitUser || '',
         tentativeAppointmentDate: lead.tentativeAppointmentDate ? lead.tentativeAppointmentDate.split('T')[0] : '',
         tentativeAppointmentTime: lead.tentativeAppointmentTime || '',
+        callbackScheduledAt: toDateTimeLocalInput(lead.callbackScheduledAt),
         leadSetById: readOnlyLeadSetById || '',
         disposition: lead.disposition || '',
         ownerId: lead.ownerId || '',
@@ -908,11 +946,19 @@ export default function LeadDetail() {
   const handleInputChange = (e) => {
     const { name, value } = e.target;
     if (name === 'status') {
-      const mapped = mapSavedLeadStatusToPayload(value);
+      const mapped = mapSavedLeadStatusToPayload(value, formData.disposition);
       setFormData(prev => ({
         ...prev,
         status: value,
         disposition: mapped.disposition || '',
+      }));
+      return;
+    }
+    if (name === 'disposition') {
+      setFormData(prev => ({
+        ...prev,
+        disposition: value,
+        callbackScheduledAt: isCallbackDispositionValue(value) ? prev.callbackScheduledAt : '',
       }));
       return;
     }
@@ -927,12 +973,23 @@ export default function LeadDetail() {
   const handleSave = () => {
     // Clean up empty strings to null for optional fields
     const cleanedData = { ...formData };
+    const callbackSelected = isCallbackDispositionValue(cleanedData.disposition);
+
+    if (callbackSelected && !cleanedData.callbackScheduledAt) {
+      alert('Callback date and time are required when disposition is Call Back.');
+      return;
+    }
+
+    cleanedData.callbackScheduledAt = callbackSelected
+      ? toIsoStringFromLocal(cleanedData.callbackScheduledAt)
+      : null;
+
     Object.keys(cleanedData).forEach(key => {
       if (cleanedData[key] === '') {
         cleanedData[key] = null;
       }
     });
-    const mappedStatus = mapSavedLeadStatusToPayload(cleanedData.status);
+    const mappedStatus = mapSavedLeadStatusToPayload(cleanedData.status, cleanedData.disposition);
     cleanedData.status = mappedStatus.status;
     cleanedData.disposition = mappedStatus.disposition;
     const currentSource = getStoredLeadSource(lead);
@@ -970,6 +1027,7 @@ export default function LeadDetail() {
       salesRabbitUser: lead.salesRabbitUser || '',
       tentativeAppointmentDate: lead.tentativeAppointmentDate ? lead.tentativeAppointmentDate.split('T')[0] : '',
       tentativeAppointmentTime: lead.tentativeAppointmentTime || '',
+      callbackScheduledAt: toDateTimeLocalInput(lead.callbackScheduledAt),
       leadSetById: readOnlyLeadSetById || '',
       leadSetByName: leadSetByDisplayName || '',
       disposition: lead.disposition || '',
@@ -1003,6 +1061,7 @@ export default function LeadDetail() {
       salesRabbitUser: lead.salesRabbitUser || '',
       tentativeAppointmentDate: lead.tentativeAppointmentDate ? lead.tentativeAppointmentDate.split('T')[0] : '',
       tentativeAppointmentTime: lead.tentativeAppointmentTime || '',
+      callbackScheduledAt: toDateTimeLocalInput(lead.callbackScheduledAt),
       leadSetById: readOnlyLeadSetById || '',
       leadSetByName: leadSetByDisplayName || '',
       disposition: lead.disposition || '',
@@ -1596,6 +1655,20 @@ export default function LeadDetail() {
                 </div>
               </div>
 
+              {isCallbackDispositionValue(formData.disposition) && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Callback Date & Time</label>
+                  <input
+                    type="datetime-local"
+                    name="callbackScheduledAt"
+                    value={formData.callbackScheduledAt || ''}
+                    onChange={handleInputChange}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-panda-primary focus:border-transparent"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">Uses the exact local date and time entered.</p>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Lead Source</label>
@@ -1695,6 +1768,10 @@ export default function LeadDetail() {
               <div className="flex justify-between">
                 <span className="text-gray-500">Disposition</span>
                 <span className="text-gray-900">{formatLeadDispositionLabel(lead.disposition) || '-'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Callback Date & Time</span>
+                <span className="text-gray-900">{formatCallbackDateTime(lead.callbackScheduledAt)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-500">Lead Source</span>

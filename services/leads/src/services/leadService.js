@@ -20,6 +20,7 @@ const BAMBOOGLI_REQUEST_TIMEOUT_MS = Number(process.env.BAMBOOGLI_REQUEST_TIMEOU
 // Job ID starting number (first job ID will be YYYY-1000)
 const JOB_ID_STARTING_NUMBER = 999;
 const INTERNAL_COMMENT_TITLE_PREFIX = 'INTERNAL_COMMENT|';
+const LEAD_CALLBACK_TASK_SUBJECT = 'Lead Callback';
 
 function tokenizeSearch(search) {
   return [...new Set(String(search || '')
@@ -136,6 +137,22 @@ function parseInternalCommentTitle(title) {
     departmentTag: normalizeDepartmentTag(departmentTagRaw),
     isResolved: resolvedRaw === '1' || String(resolvedRaw).toLowerCase() === 'true',
   };
+}
+
+function isLeadCallbackDisposition(value) {
+  return normalizeCallCenterDispositionCode(value) === 'CALL_BACK';
+}
+
+function formatLeadCallbackNotificationDate(value) {
+  const parsed = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(parsed.getTime())) return 'the scheduled time';
+  return parsed.toLocaleString('en-US', {
+    month: '2-digit',
+    day: '2-digit',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
 }
 
 function extractMentionUserId(mention) {
@@ -892,6 +909,13 @@ class LeadService {
   async updateLead(id, data) {
     // Get old values for audit logging
     const oldLead = await prisma.lead.findUnique({ where: { id } });
+    if (!oldLead) {
+      const error = new Error(`Lead not found: ${id}`);
+      error.name = 'NotFoundError';
+      throw error;
+    }
+
+    const currentUserId = await this.resolveUserId(data.currentUserId || null);
 
     // Build update data, filtering out undefined values
     const updateData = {};
@@ -910,7 +934,9 @@ class LeadService {
     if (data.source !== undefined) updateData.source = data.source || null;
     if (data.rating !== undefined) updateData.rating = this.normalizeRating(data.rating);
     if (data.industry !== undefined) updateData.industry = data.industry || null;
-    if (data.ownerId !== undefined) updateData.ownerId = data.ownerId || null;
+    if (data.ownerId !== undefined) {
+      updateData.ownerId = data.ownerId ? (await this.resolveUserId(data.ownerId)) || null : null;
+    }
     if (data.score !== undefined) updateData.score = data.score;
     if (data.workType !== undefined) updateData.workType = data.workType || null;
     if (data.propertyType !== undefined) updateData.propertyType = data.propertyType || null;
@@ -929,14 +955,54 @@ class LeadService {
       updateData.tentativeAppointmentTime = this.normalizeOptionalText(data.tentativeAppointmentTime);
     }
     if (data.disposition !== undefined) updateData.disposition = data.disposition || null;
+    if (data.callbackScheduledAt !== undefined) {
+      if (!data.callbackScheduledAt) {
+        updateData.callbackScheduledAt = null;
+      } else {
+        const parsedCallbackDate = new Date(data.callbackScheduledAt);
+        if (Number.isNaN(parsedCallbackDate.getTime())) {
+          const error = new Error('Callback date and time are invalid');
+          error.name = 'ValidationError';
+          throw error;
+        }
+        updateData.callbackScheduledAt = parsedCallbackDate;
+      }
+    }
 
-    const lead = await prisma.lead.update({
-      where: { id },
-      data: updateData,
-      include: {
-        owner: { select: { id: true, firstName: true, lastName: true } },
-        leadSetBy: { select: { id: true, firstName: true, lastName: true } },
-      },
+    const nextDisposition = Object.prototype.hasOwnProperty.call(updateData, 'disposition')
+      ? updateData.disposition
+      : oldLead.disposition;
+    const nextCallbackScheduledAt = Object.prototype.hasOwnProperty.call(updateData, 'callbackScheduledAt')
+      ? updateData.callbackScheduledAt
+      : oldLead.callbackScheduledAt;
+
+    if (data.disposition !== undefined && !isLeadCallbackDisposition(nextDisposition) && data.callbackScheduledAt === undefined) {
+      updateData.callbackScheduledAt = null;
+    }
+
+    if (isLeadCallbackDisposition(nextDisposition) && !nextCallbackScheduledAt) {
+      const error = new Error('Callback date and time are required for Call Back dispositions');
+      error.name = 'ValidationError';
+      throw error;
+    }
+
+    const lead = await prisma.$transaction(async (tx) => {
+      const updatedLead = await tx.lead.update({
+        where: { id },
+        data: updateData,
+        include: {
+          owner: { select: { id: true, firstName: true, lastName: true } },
+          leadSetBy: { select: { id: true, firstName: true, lastName: true } },
+        },
+      });
+
+      await this.syncLeadCallbackTask(tx, {
+        lead: updatedLead,
+        previousLead: oldLead,
+        currentUserId,
+      });
+
+      return updatedLead;
     });
 
     logger.info(`Lead updated: ${id}`);
@@ -962,6 +1028,8 @@ class LeadService {
         email: lead.email,
         phone: lead.phone,
         status: lead.status,
+        disposition: lead.disposition,
+        callbackScheduledAt: lead.callbackScheduledAt,
         source: lead.source,
         ownerId: lead.ownerId,
       },
@@ -971,6 +1039,102 @@ class LeadService {
     });
 
     return this.createLeadWrapper(lead);
+  }
+
+  buildLeadCallbackTaskDescription(lead) {
+    const leadName = `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || 'Lead';
+    const bestPhone = lead.mobilePhone || lead.phone || 'No phone on file';
+    return `Call back ${leadName}. Phone: ${bestPhone}.`;
+  }
+
+  async syncLeadCallbackTask(tx, { lead, previousLead, currentUserId }) {
+    const callbackIsActive = isLeadCallbackDisposition(lead.disposition) && lead.callbackScheduledAt;
+    const existingCallbackTask = await tx.task.findFirst({
+      where: {
+        leadId: lead.id,
+        subject: LEAD_CALLBACK_TASK_SUBJECT,
+        status: { not: 'COMPLETED' },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (!callbackIsActive) {
+      if (existingCallbackTask) {
+        await tx.task.update({
+          where: { id: existingCallbackTask.id },
+          data: {
+            status: 'COMPLETED',
+            completedDate: new Date(),
+          },
+        });
+      }
+      return null;
+    }
+
+    const assignedToId = currentUserId || lead.ownerId || previousLead?.ownerId || lead.leadSetById || previousLead?.leadSetById || null;
+    const description = this.buildLeadCallbackTaskDescription(lead);
+    const dueTime = new Date(lead.callbackScheduledAt).getTime();
+    let task = existingCallbackTask;
+    let shouldNotify = false;
+
+    if (existingCallbackTask) {
+      const existingDueTime = existingCallbackTask.dueDate ? new Date(existingCallbackTask.dueDate).getTime() : null;
+      const assigneeChanged = (existingCallbackTask.assignedToId || null) !== (assignedToId || null);
+      const dueDateChanged = existingDueTime !== dueTime;
+      const descriptionChanged = (existingCallbackTask.description || '') !== description;
+      const statusChanged = existingCallbackTask.status !== 'NOT_STARTED';
+      const priorityChanged = existingCallbackTask.priority !== 'HIGH';
+
+      if (assigneeChanged || dueDateChanged || descriptionChanged || statusChanged || priorityChanged) {
+        task = await tx.task.update({
+          where: { id: existingCallbackTask.id },
+          data: {
+            assignedToId: assignedToId || null,
+            description,
+            dueDate: lead.callbackScheduledAt,
+            priority: 'HIGH',
+            status: 'NOT_STARTED',
+            completedDate: null,
+          },
+        });
+      }
+
+      shouldNotify = Boolean(assignedToId && (assigneeChanged || dueDateChanged));
+    } else {
+      task = await tx.task.create({
+        data: {
+          subject: LEAD_CALLBACK_TASK_SUBJECT,
+          description,
+          status: 'NOT_STARTED',
+          priority: 'HIGH',
+          dueDate: lead.callbackScheduledAt,
+          assignedToId: assignedToId || null,
+          leadId: lead.id,
+        },
+      });
+      shouldNotify = Boolean(assignedToId);
+    }
+
+    if (shouldNotify) {
+      const leadName = `${lead.firstName || ''} ${lead.lastName || ''}`.trim() || 'lead';
+      await tx.notification.create({
+        data: {
+          userId: assignedToId,
+          type: 'TASK_ASSIGNED',
+          title: 'Lead callback scheduled',
+          message: `Call back ${leadName} on ${formatLeadCallbackNotificationDate(lead.callbackScheduledAt)}.`,
+          priority: 'HIGH',
+          leadId: lead.id,
+          actionUrl: `/leads/${lead.id}`,
+          actionLabel: 'View Lead',
+          sourceType: 'LEAD_CALLBACK',
+          sourceId: task.id,
+          status: 'UNREAD',
+        },
+      });
+    }
+
+    return task;
   }
 
   /**
@@ -1490,6 +1654,7 @@ class LeadService {
       tentativeAppointmentDate: lead.tentativeAppointmentDate,
       tentativeAppointmentTime: lead.tentativeAppointmentTime,
       disposition: lead.disposition,
+      callbackScheduledAt: lead.callbackScheduledAt,
       leadSetById: lead.leadSetById,
       leadSetByName: lead.leadSetBy ? `${lead.leadSetBy.firstName} ${lead.leadSetBy.lastName}` : null,
       // Lead Intelligence / Scoring fields (snake_case in DB)
