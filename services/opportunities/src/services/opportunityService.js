@@ -24,7 +24,10 @@ const prisma = new PrismaClient();
 
 // S3 client for pre-signed URLs
 const s3Client = new S3Client({ region: process.env.AWS_REGION || 'us-east-2' });
-const S3_BUCKET = process.env.S3_BUCKET || 'pandasign-documents';
+const DEFAULT_DOCUMENTS_BUCKET =
+  process.env.DOCUMENTS_BUCKET
+  || process.env.S3_BUCKET
+  || 'panda-crm-documents';
 
 const APP_BASE_URL = process.env.APP_BASE_URL || 'https://crm.pandaadmin.com';
 const BAMBOOGLI_SERVICE_URL =
@@ -431,22 +434,32 @@ async function getPresignedUrl(s3Url, expiresIn = 3600) {
   if (!s3Url) return null;
 
   try {
-    // Extract the key from the S3 URL
-    // URL format: https://bucket.s3.region.amazonaws.com/key or s3://bucket/key
+    // Extract bucket/key from mixed legacy/current S3 URL formats.
+    let bucket = DEFAULT_DOCUMENTS_BUCKET;
     let key;
     if (s3Url.startsWith('s3://')) {
-      key = s3Url.replace(`s3://${S3_BUCKET}/`, '');
-    } else if (s3Url.includes('.s3.')) {
-      // https://bucket.s3.region.amazonaws.com/encoded-key
+      const withoutProtocol = s3Url.slice('s3://'.length);
+      const slashIndex = withoutProtocol.indexOf('/');
+      if (slashIndex > -1) {
+        bucket = withoutProtocol.slice(0, slashIndex) || bucket;
+        key = withoutProtocol.slice(slashIndex + 1);
+      } else {
+        key = withoutProtocol;
+      }
+    } else if (s3Url.startsWith('http://') || s3Url.startsWith('https://')) {
       const url = new URL(s3Url);
       key = decodeURIComponent(url.pathname.slice(1));
+      const hostParts = url.hostname.split('.');
+      if (hostParts.length >= 3 && hostParts[1] === 's3') {
+        bucket = hostParts[0] || bucket;
+      }
     } else {
       // Already just a key
       key = s3Url;
     }
 
     const command = new GetObjectCommand({
-      Bucket: S3_BUCKET,
+      Bucket: bucket,
       Key: key,
     });
 
