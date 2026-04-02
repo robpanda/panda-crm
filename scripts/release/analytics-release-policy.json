@@ -18,15 +18,22 @@
     "frontend/src/utils/analytics*.js",
     "frontend/src/utils/report*.js",
     "frontend/src/hooks/useAnalyticsVerification.js",
+    "frontend/src/platform/PlatformProviders.jsx",
+    "frontend/src/platform/RequireAuthenticatedRoute.jsx",
+    "frontend/src/platform/platformQueryClient.js",
     "frontend/vite.analytics.config.js",
     "frontend/package.json",
     "frontend/src/analytics-main.jsx",
     "scripts/release/analytics-*.json",
     "scripts/release/*analytics*.mjs",
+    "scripts/release/__tests__/*analytics*.mjs",
     "scripts/deploy/analytics-*.sh",
+    "scripts/deploy/frontend-prod.sh",
     "scripts/deploy/cloudfront/analytics-spa-rewrite.js",
+    "scripts/deploy/cloudfront/build-analytics-distribution-config.mjs",
     "scripts/deploy/configure-analytics-routing.sh",
-    ".github/workflows/deploy-analytics.yml"
+    ".github/workflows/deploy-analytics.yml",
+    ".github/workflows/deploy-frontend.yml"
   ],
   "allowedOutputGlobs": [
     "analytics/index.html",
