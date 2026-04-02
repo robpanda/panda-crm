@@ -18,6 +18,7 @@ function parseArgs(argv) {
     skipCurrentBuild: false,
     keepTemp: false,
     policyPath: null,
+    skipSourcePolicy: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -48,6 +49,11 @@ function parseArgs(argv) {
     if (value === '--policy') {
       args.policyPath = argv[index + 1];
       index += 1;
+      continue;
+    }
+
+    if (value === '--skip-source-policy') {
+      args.skipSourcePolicy = true;
     }
   }
 
@@ -174,14 +180,14 @@ function main() {
       }
     }
 
-    if (sourceSummary.forbidden.length > 0) {
+    if (!args.skipSourcePolicy && sourceSummary.forbidden.length > 0) {
       console.error('[analytics-blast-radius] non-analytics source changes detected:');
       for (const relativePath of sourceSummary.forbidden) {
         console.error(`  ${relativePath}`);
       }
     }
 
-    if (!artifactSummary.ok || sourceSummary.forbidden.length > 0) {
+    if (!artifactSummary.ok || (!args.skipSourcePolicy && sourceSummary.forbidden.length > 0)) {
       process.exitCode = 1;
       return;
     }

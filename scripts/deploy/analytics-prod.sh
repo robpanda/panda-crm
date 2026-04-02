@@ -26,12 +26,20 @@ export AWS_REGION
 export VITE_API_BASE=${VITE_API_BASE:-https://bamboo.pandaadmin.com}
 export VITE_BUILD_SHA="$BUILD_SHA"
 export VITE_BUILD_TIME="$BUILD_TIME"
+if [ -n "${ALLOW_DIRTY_DEPLOY:-}" ] && [ -z "${ALLOW_DIRTY_RELEASE:-}" ]; then
+  export ALLOW_DIRTY_RELEASE=1
+fi
 
 cd frontend
 npm ci
 npm run build:analytics
 npm run smoke:analytics:dist
-npm run check:blast-radius:analytics -- --skip-current-build --current-dist dist
+BLAST_RADIUS_ARGS=(--skip-current-build --current-dist dist)
+if [ "${ALLOW_NON_ANALYTICS_SOURCE_CHANGES:-}" = "1" ]; then
+  echo "[analytics-prod] WARN: allowing non-analytics source changes for a coordinated release; enforcing artifact policy only." >&2
+  BLAST_RADIUS_ARGS+=(--skip-source-policy)
+fi
+npm run check:blast-radius:analytics -- "${BLAST_RADIUS_ARGS[@]}"
 cd "$ROOT_DIR"
 
 ANALYTICS_OBJECT_COUNT=$(
