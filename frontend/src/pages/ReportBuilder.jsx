@@ -1,16 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { reportsApi, modulesApi } from '../services/api';
-import VisualQueryBuilder from '../components/reports/VisualQueryBuilder';
-import {
-  buildSqlPreview,
-  buildPreviewReportSpec,
-  getLegacyBaseObject,
-  getModuleMetadata,
-  getTemplateById,
-  normalizeReportConfig,
-} from '../utils/reporting';
+import { formatReportFieldLabel } from '../utils/reporting';
+import { moveOrderedValue } from '../utils/reportColumnOrder';
 import {
   Users,
   Building2,
@@ -48,10 +41,8 @@ import {
   AlertCircle,
   Eye,
   EyeOff,
+  GripVertical,
   Sparkles,
-  Database,
-  Code2,
-  SlidersHorizontal,
 } from 'lucide-react';
 
 const REPORT_CATEGORIES = [
@@ -165,14 +156,31 @@ const MODULE_ICONS = {
   users: UserCircle,
 };
 
+const toArray = (value) => (Array.isArray(value) ? value : []);
+
+const fetchFilterOperators = async () => {
+  if (typeof modulesApi.getFilterOperators === 'function') {
+    return modulesApi.getFilterOperators();
+  }
+
+  const response = await fetch('/api/modules/filter/operators', {
+    credentials: 'include',
+    headers: {
+      Accept: 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch filter operators (${response.status})`);
+  }
+
+  return response.json();
+};
+
 export default function ReportBuilder() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
   const isEditing = Boolean(id);
-  const requestedMode = searchParams.get('mode');
-  const editorMode = ['advanced', 'sql'].includes(requestedMode) ? requestedMode : 'basic';
-  const templateId = searchParams.get('template');
 
   const [saving, setSaving] = useState(false);
   const [step, setStep] = useState(1);
@@ -181,7 +189,6 @@ export default function ReportBuilder() {
   const [showSystemFields, setShowSystemFields] = useState(false);
   const [expandedCategories, setExpandedCategories] = useState(['core', 'dates', 'financial', 'status']);
   const [validationErrors, setValidationErrors] = useState({});
-  const [appliedTemplateId, setAppliedTemplateId] = useState(null);
 
   const [report, setReport] = useState({
     name: '',
@@ -198,9 +205,6 @@ export default function ReportBuilder() {
     isPublic: false,
     sharedWithRoles: [],
     includeRelations: [],
-    sort: [],
-    presentation: { widgets: [] },
-    visualization: {},
   });
 
   // Fetch available modules
@@ -209,14 +213,8 @@ export default function ReportBuilder() {
     queryFn: () => modulesApi.getModules(),
   });
 
-  const { data: moduleData } = useQuery({
-    queryKey: ['module', report.baseModule],
-    queryFn: () => modulesApi.getModule(report.baseModule),
-    enabled: Boolean(report.baseModule),
-  });
-
   // Fetch fields for selected module
-  const { data: fieldsData, isLoading: fieldsLoading, error: fieldsError } = useQuery({
+  const { data: fieldsData, isLoading: fieldsLoading } = useQuery({
     queryKey: ['moduleFields', report.baseModule],
     queryFn: () => modulesApi.getModuleFields(report.baseModule),
     enabled: !!report.baseModule,
@@ -229,16 +227,53 @@ export default function ReportBuilder() {
     enabled: !!report.baseModule,
   });
 
+  const modules = toArray(modulesData?.data?.modules ?? modulesData?.modules ?? modulesData?.data ?? modulesData);
+  const allFields = toArray(fieldsData?.data?.fields ?? fieldsData?.fields ?? fieldsData?.data ?? fieldsData);
+  const relationships = toArray(
+    relationsData?.data?.relationships ?? relationsData?.relationships ?? relationsData?.data ?? relationsData,
+  );
+  const fieldLookup = useMemo(
+    () => new Map(allFields.map((field) => [field.id, field])),
+    [allFields],
+  );
+  const hiddenSelectedFields = useMemo(() => {
+    const referencedFieldIds = new Set([
+      ...report.selectedFields,
+      ...report.groupByFields,
+      ...report.filters.map((filter) => filter?.field).filter(Boolean),
+      report.dateRangeField,
+    ].filter(Boolean));
+
+    return [...referencedFieldIds]
+      .map((fieldId) => fieldLookup.get(fieldId))
+      .filter((field) => field?.hidden);
+  }, [fieldLookup, report.dateRangeField, report.filters, report.groupByFields, report.selectedFields]);
+  const fields = useMemo(
+    () => allFields.filter((field) => !field.hidden),
+    [allFields],
+  );
+  const selectedModule = modules.find((module) => module.id === report.baseModule) || null;
+
+  const mergeFieldOptions = (baseFields, predicate = () => true) => {
+    const seen = new Set();
+    return [...baseFields, ...hiddenSelectedFields.filter(predicate)].filter((field) => {
+      if (!field || seen.has(field.id)) {
+        return false;
+      }
+      seen.add(field.id);
+      return true;
+    });
+  };
+
   // Fetch filter operators on mount
   useEffect(() => {
     const fetchOperators = async () => {
       try {
-        const response = await modulesApi.getFilterOperators();
-        if (response.success) {
-          setFilterOperators(response.data.operators);
-        }
+        const response = await fetchFilterOperators();
+        setFilterOperators(toArray(response?.data?.operators ?? response?.operators));
       } catch (error) {
         console.error('Failed to fetch operators:', error);
+        setFilterOperators([]);
       }
     };
     fetchOperators();
@@ -252,25 +287,86 @@ export default function ReportBuilder() {
   }, [id]);
 
   useEffect(() => {
-    if (isEditing || !templateId || appliedTemplateId === templateId) return;
+    if (!modules.length) {
+      return;
+    }
 
-    const template = getTemplateById(templateId);
-    if (!template) return;
+    if (!modules.some((module) => module.id === report.baseModule)) {
+      const fallbackModule = modules.some((module) => module.id === 'jobs')
+        ? 'jobs'
+        : modules[0]?.id || '';
 
-    setReport((prev) => normalizeReportConfig({
-      ...prev,
-      ...template.report,
-      name: prev.name || template.name,
-      description: prev.description || template.description,
-    }));
-    setAppliedTemplateId(templateId);
-  }, [appliedTemplateId, isEditing, templateId]);
+      if (fallbackModule && fallbackModule !== report.baseModule) {
+        setReport((current) => ({
+          ...current,
+          baseModule: fallbackModule,
+        }));
+      }
+    }
+  }, [modules, report.baseModule]);
+
+  useEffect(() => {
+    if (allFields.length === 0) {
+      return;
+    }
+
+    const normalizeFieldId = (fieldId) => fieldLookup.get(fieldId)?.canonicalId || fieldId;
+
+    setReport((prev) => {
+      const nextSelectedFields = [...new Set((prev.selectedFields || []).map(normalizeFieldId).filter(Boolean))];
+      const nextGroupByFields = [...new Set((prev.groupByFields || []).map(normalizeFieldId).filter(Boolean))];
+      const nextFilters = Array.isArray(prev.filters)
+        ? prev.filters.map((filter) => (
+          filter?.field
+            ? { ...filter, field: normalizeFieldId(filter.field) }
+            : filter
+        ))
+        : [];
+      const nextDateRangeField = prev.dateRangeField ? normalizeFieldId(prev.dateRangeField) : prev.dateRangeField;
+
+      const filtersChanged = JSON.stringify(nextFilters) !== JSON.stringify(prev.filters || []);
+      const selectedFieldsChanged = JSON.stringify(nextSelectedFields) !== JSON.stringify(prev.selectedFields || []);
+      const groupByChanged = JSON.stringify(nextGroupByFields) !== JSON.stringify(prev.groupByFields || []);
+      const dateFieldChanged = nextDateRangeField !== prev.dateRangeField;
+
+      if (!filtersChanged && !selectedFieldsChanged && !groupByChanged && !dateFieldChanged) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        selectedFields: nextSelectedFields,
+        groupByFields: nextGroupByFields,
+        filters: nextFilters,
+        dateRangeField: nextDateRangeField,
+      };
+    });
+  }, [allFields, fieldLookup]);
 
   const loadReport = async () => {
     try {
       const response = await reportsApi.getSavedReport(id);
-      if (response) {
-        setReport(normalizeReportConfig(response));
+      const reportData = response?.data ?? response;
+
+      if (reportData) {
+        // Map old baseObject to new baseModule
+        const moduleMapping = {
+          Opportunity: 'jobs',
+          Account: 'accounts',
+          Lead: 'leads',
+          Contact: 'contacts',
+          WorkOrder: 'workOrders',
+        };
+        setReport((current) => ({
+          ...current,
+          ...reportData,
+          selectedFields: toArray(reportData.selectedFields),
+          groupByFields: toArray(reportData.groupByFields),
+          filters: toArray(reportData.filters),
+          sharedWithRoles: toArray(reportData.sharedWithRoles),
+          includeRelations: toArray(reportData.includeRelations),
+          baseModule: moduleMapping[reportData.baseObject] || reportData.baseModule || current.baseModule || 'jobs',
+        }));
       }
     } catch (error) {
       console.error('Failed to load report:', error);
@@ -281,10 +377,17 @@ export default function ReportBuilder() {
     try {
       setSaving(true);
       // Map baseModule back to baseObject for compatibility
-      const normalizedReport = normalizeReportConfig(report);
+      const moduleToObject = {
+        jobs: 'Opportunity',
+        accounts: 'Account',
+        leads: 'Lead',
+        contacts: 'Contact',
+        workOrders: 'WorkOrder',
+      };
+
       const saveData = {
-        ...buildPreviewReportSpec(normalizedReport),
-        baseObject: getLegacyBaseObject(normalizedReport.baseModule),
+        ...report,
+        baseObject: moduleToObject[report.baseModule] || report.baseModule,
       };
 
       let response;
@@ -304,39 +407,19 @@ export default function ReportBuilder() {
     }
   };
 
-  const modules = modulesData?.data?.modules || [];
-  const fields = fieldsData?.data?.fields || [];
-  const relationships = relationsData?.data?.relationships || [];
-
-  const selectedModule = modules.find(m => m.id === report.baseModule);
-  const selectedModuleDetails = moduleData?.data || null;
-  const selectedModuleMetadata = getModuleMetadata(report.baseModule);
-  const sqlPreview = useMemo(() => buildSqlPreview(report), [report]);
-  const moduleFieldCount = fieldsData?.data?.count || fields.length || selectedModule?.fieldCount || 0;
-  const moduleConnectionLabel = fieldsError
-    ? 'Unable to load CRM database fields'
-    : report.baseModule
-    ? 'Connected to CRM Database'
-    : 'Select a module to connect';
-
-  const setMode = (mode) => {
-    const nextParams = new URLSearchParams(searchParams);
-
-    if (mode === 'basic') {
-      nextParams.delete('mode');
-    } else {
-      nextParams.set('mode', mode);
-    }
-
-    setSearchParams(nextParams, { replace: true });
-  };
-
   const toggleField = (fieldId) => {
     setReport(prev => ({
       ...prev,
       selectedFields: prev.selectedFields.includes(fieldId)
         ? prev.selectedFields.filter(f => f !== fieldId)
         : [...prev.selectedFields, fieldId],
+    }));
+  };
+
+  const moveSelectedField = (fieldId, direction) => {
+    setReport((prev) => ({
+      ...prev,
+      selectedFields: moveOrderedValue(prev.selectedFields, fieldId, direction),
     }));
   };
 
@@ -359,11 +442,16 @@ export default function ReportBuilder() {
   };
 
   const addFilter = () => {
+    const filterableField = mergeFieldOptions(
+      fields.filter((field) => field.filterable),
+      (field) => field.filterable,
+    )[0];
+
     setReport(prev => ({
       ...prev,
       filters: [
         ...prev.filters,
-        { field: fields[0]?.id || '', operator: 'equals', value: '' },
+        { field: filterableField?.id || '', operator: 'equals', value: '' },
       ],
     }));
   };
@@ -383,16 +471,36 @@ export default function ReportBuilder() {
   };
 
   // Get groupable fields
-  const groupableFields = fields.filter(f => f.groupable);
+  const groupableFields = useMemo(
+    () => mergeFieldOptions(
+      fields.filter((field) => field.groupable),
+      (field) => field.groupable,
+    ),
+    [fields, hiddenSelectedFields],
+  );
 
   // Get date fields for date range
-  const dateFields = fields.filter(f => f.type === 'date' || f.type === 'datetime');
+  const dateFields = useMemo(
+    () => mergeFieldOptions(
+      fields.filter((field) => field.type === 'date' || field.type === 'datetime'),
+      (field) => field.type === 'date' || field.type === 'datetime',
+    ),
+    [fields, hiddenSelectedFields],
+  );
+
+  const filterableFields = useMemo(
+    () => mergeFieldOptions(
+      fields.filter((field) => field.filterable),
+      (field) => field.filterable,
+    ),
+    [fields, hiddenSelectedFields],
+  );
 
   // Get operators for a field type
   const getOperatorsForField = (fieldId) => {
-    const field = fields.find(f => f.id === fieldId);
+    const field = fieldLookup.get(fieldId);
     if (!field) return filterOperators;
-    return filterOperators.filter(op => op.types.includes(field.type));
+    return filterOperators.filter((op) => toArray(op.types).includes(field.type));
   };
 
   // Group and filter fields with search
@@ -497,6 +605,18 @@ export default function ReportBuilder() {
     return FIELD_TYPE_ICONS[field.type] || FileText;
   };
 
+  const orderedSelectedFieldDetails = useMemo(
+    () => report.selectedFields.map((fieldId) => {
+      const field = fieldLookup.get(fieldId);
+      return {
+        id: fieldId,
+        label: field?.label || formatReportFieldLabel(fieldId),
+        type: field?.type || 'field',
+      };
+    }),
+    [fieldLookup, report.selectedFields],
+  );
+
   if (modulesLoading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -508,48 +628,12 @@ export default function ReportBuilder() {
   return (
     <div className="p-6 max-w-4xl mx-auto">
       {/* Header */}
-      <div className="flex flex-col gap-4 mb-6 lg:flex-row lg:items-start lg:justify-between">
-        <div className="space-y-3">
+      <div className="flex items-center justify-between mb-6">
+        <div>
           <h1 className="text-2xl font-bold text-gray-900">
             {isEditing ? 'Edit Report' : 'Create New Report'}
           </h1>
-          <p className="text-gray-500 mt-1">
-            {editorMode === 'basic' && `Step ${step} of 4`}
-            {editorMode === 'advanced' && 'Advanced mode edits the same ReportSpec used by the basic wizard.'}
-            {editorMode === 'sql' && 'SQL mode previews the query generated from the same ReportSpec.'}
-          </p>
-          <div className="inline-flex flex-wrap gap-2 rounded-xl bg-gray-100 p-1">
-            <button
-              type="button"
-              onClick={() => setMode('basic')}
-              className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
-                editorMode === 'basic' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
-              }`}
-            >
-              <Sparkles className="w-4 h-4" />
-              Basic Mode
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode('advanced')}
-              className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
-                editorMode === 'advanced' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
-              }`}
-            >
-              <SlidersHorizontal className="w-4 h-4" />
-              Advanced Mode
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode('sql')}
-              className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
-                editorMode === 'sql' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-600 hover:text-gray-900'
-              }`}
-            >
-              <Code2 className="w-4 h-4" />
-              SQL Mode
-            </button>
-          </div>
+          <p className="text-gray-500 mt-1">Step {step} of 4</p>
         </div>
         <button
           onClick={() => navigate('/analytics/reports')}
@@ -560,125 +644,43 @@ export default function ReportBuilder() {
       </div>
 
       {/* Progress Bar - Enhanced */}
-      {editorMode === 'basic' && (
-        <div className="flex items-center justify-between mb-8 bg-white rounded-xl shadow-sm border border-gray-200 p-4">
-          {STEP_LABELS.map((stepInfo, index) => (
-            <div key={stepInfo.step} className="flex items-center flex-1">
-              <button
-                onClick={() => stepInfo.step < step && setStep(stepInfo.step)}
-                disabled={stepInfo.step > step}
-                className={`flex items-center gap-3 ${stepInfo.step < step ? 'cursor-pointer' : stepInfo.step === step ? 'cursor-default' : 'cursor-not-allowed'}`}
+      <div className="flex items-center justify-between mb-8 bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+        {STEP_LABELS.map((stepInfo, index) => (
+          <div key={stepInfo.step} className="flex items-center flex-1">
+            <button
+              onClick={() => stepInfo.step < step && setStep(stepInfo.step)}
+              disabled={stepInfo.step > step}
+              className={`flex items-center gap-3 ${stepInfo.step < step ? 'cursor-pointer' : stepInfo.step === step ? 'cursor-default' : 'cursor-not-allowed'}`}
+            >
+              <div
+                className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-medium transition-all ${
+                  stepInfo.step < step
+                    ? 'bg-green-500 text-white'
+                    : stepInfo.step === step
+                    ? 'bg-panda-primary text-white ring-4 ring-panda-primary/20'
+                    : 'bg-gray-100 text-gray-400'
+                }`}
               >
-                <div
-                  className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-medium transition-all ${
-                    stepInfo.step < step
-                      ? 'bg-green-500 text-white'
-                      : stepInfo.step === step
-                      ? 'bg-panda-primary text-white ring-4 ring-panda-primary/20'
-                      : 'bg-gray-100 text-gray-400'
-                  }`}
-                >
-                  {stepInfo.step < step ? <Check className="w-5 h-5" /> : stepInfo.step}
+                {stepInfo.step < step ? <Check className="w-5 h-5" /> : stepInfo.step}
+              </div>
+              <div className="hidden sm:block">
+                <div className={`text-sm font-medium ${stepInfo.step === step ? 'text-panda-primary' : stepInfo.step < step ? 'text-gray-700' : 'text-gray-400'}`}>
+                  {stepInfo.label}
                 </div>
-                <div className="hidden sm:block">
-                  <div className={`text-sm font-medium ${stepInfo.step === step ? 'text-panda-primary' : stepInfo.step < step ? 'text-gray-700' : 'text-gray-400'}`}>
-                    {stepInfo.label}
-                  </div>
-                  <div className="text-xs text-gray-500">{stepInfo.description}</div>
-                </div>
-              </button>
-              {index < STEP_LABELS.length - 1 && (
-                <div className="flex-1 mx-4">
-                  <div className={`h-1 rounded transition-all ${stepInfo.step < step ? 'bg-green-500' : 'bg-gray-200'}`} />
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-
-      <div className={`mb-8 rounded-xl border p-5 ${fieldsError ? 'border-rose-200 bg-rose-50' : 'border-emerald-200 bg-emerald-50'}`}>
-        <div className="flex items-start gap-3">
-          <Database className={`mt-0.5 h-5 w-5 ${fieldsError ? 'text-rose-600' : 'text-emerald-600'}`} />
-          <div className="flex-1">
-            <p className={`font-semibold ${fieldsError ? 'text-rose-900' : 'text-emerald-900'}`}>
-              {moduleConnectionLabel}
-            </p>
-            <div className="mt-3 grid grid-cols-1 gap-3 text-sm md:grid-cols-4">
-              <div>
-                <div className="text-xs uppercase tracking-wide text-gray-500">Module</div>
-                <div className="mt-1 font-medium text-gray-900">{selectedModuleDetails?.name || selectedModuleMetadata.label}</div>
+                <div className="text-xs text-gray-500">{stepInfo.description}</div>
               </div>
-              <div>
-                <div className="text-xs uppercase tracking-wide text-gray-500">Table</div>
-                <div className="mt-1 font-medium text-gray-900">{selectedModuleDetails?.tableName || selectedModuleMetadata.table}</div>
+            </button>
+            {index < STEP_LABELS.length - 1 && (
+              <div className="flex-1 mx-4">
+                <div className={`h-1 rounded transition-all ${stepInfo.step < step ? 'bg-green-500' : 'bg-gray-200'}`} />
               </div>
-              <div>
-                <div className="text-xs uppercase tracking-wide text-gray-500">Fields</div>
-                <div className="mt-1 font-medium text-gray-900">{moduleFieldCount}</div>
-              </div>
-              <div>
-                <div className="text-xs uppercase tracking-wide text-gray-500">Database</div>
-                <div className="mt-1 font-medium text-gray-900">{selectedModuleDetails?.database || selectedModuleMetadata.database}</div>
-              </div>
-            </div>
-            {fieldsError && (
-              <p className="mt-3 text-sm text-rose-700">
-                {fieldsError?.response?.data?.error?.message || 'Field metadata failed to load for this module.'}
-              </p>
             )}
           </div>
-        </div>
+        ))}
       </div>
 
-      {editorMode === 'advanced' && (
-        <VisualQueryBuilder
-          report={report}
-          onChange={(nextReport) => setReport(normalizeReportConfig(nextReport))}
-        />
-      )}
-
-      {editorMode === 'sql' && (
-        <div className="space-y-6">
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="p-2 bg-panda-primary/10 rounded-lg">
-                <Code2 className="w-6 h-6 text-panda-primary" />
-              </div>
-              <div>
-                <h2 className="text-lg font-semibold">SQL Preview</h2>
-                <p className="text-sm text-gray-500">
-                  This preview is generated from the same ReportSpec used in basic and advanced mode.
-                </p>
-              </div>
-            </div>
-            <pre className="overflow-x-auto rounded-xl bg-gray-950 p-4 text-sm text-gray-100">
-              <code>{sqlPreview}</code>
-            </pre>
-          </div>
-
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-            <h3 className="text-lg font-semibold text-gray-900">ReportSpec Summary</h3>
-            <div className="mt-4 grid grid-cols-1 gap-4 text-sm text-gray-600 md:grid-cols-3">
-              <div className="rounded-xl bg-gray-50 p-4">
-                <div className="text-xs uppercase tracking-wide text-gray-400">Selected fields</div>
-                <div className="mt-2 text-2xl font-semibold text-gray-900">{report.selectedFields.length}</div>
-              </div>
-              <div className="rounded-xl bg-gray-50 p-4">
-                <div className="text-xs uppercase tracking-wide text-gray-400">Filters</div>
-                <div className="mt-2 text-2xl font-semibold text-gray-900">{report.filters.length}</div>
-              </div>
-              <div className="rounded-xl bg-gray-50 p-4">
-                <div className="text-xs uppercase tracking-wide text-gray-400">Grouping</div>
-                <div className="mt-2 text-2xl font-semibold text-gray-900">{report.groupByFields.length}</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Step 1: Basic Info & Module Selection */}
-      {editorMode === 'basic' && step === 1 && (
+      {step === 1 && (
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
           <div className="flex items-center gap-3 mb-6">
             <div className="p-2 bg-panda-primary/10 rounded-lg">
@@ -814,19 +816,13 @@ export default function ReportBuilder() {
               {selectedModule && (
                 <p className="text-sm text-gray-500 mt-2">{selectedModule.description}</p>
               )}
-              {validationErrors.baseModule && (
-                <p className="mt-2 flex items-center gap-1 text-sm text-red-500">
-                  <AlertCircle className="w-4 h-4" />
-                  {validationErrors.baseModule}
-                </p>
-              )}
             </div>
           </div>
         </div>
       )}
 
       {/* Step 2: Fields Selection - Enhanced */}
-      {editorMode === 'basic' && step === 2 && (
+      {step === 2 && (
         <div className="space-y-6">
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
             {/* Header with search and controls */}
@@ -1002,6 +998,57 @@ export default function ReportBuilder() {
                 </button>
               </div>
             )}
+
+            {report.selectedFields.length > 0 && (
+              <div className="mt-6 pt-6 border-t border-gray-100">
+                <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-900">Arrange Field Order</h3>
+                    <p className="text-sm text-gray-500">
+                      This saved order controls how columns appear in the report and export output.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="mt-4 space-y-2">
+                  {orderedSelectedFieldDetails.map((field, index) => (
+                    <div
+                      key={field.id}
+                      className="flex items-center gap-3 rounded-lg border border-gray-200 bg-white px-3 py-2"
+                    >
+                      <div className="flex items-center gap-2 text-sm text-gray-400">
+                        <GripVertical className="h-4 w-4" />
+                        <span className="w-5 text-center text-xs font-semibold text-gray-500">
+                          {index + 1}
+                        </span>
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium text-gray-800">{field.label}</div>
+                        <div className="text-xs text-gray-500">{field.type}</div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => moveSelectedField(field.id, 'up')}
+                          disabled={index === 0}
+                          className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Move Up
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => moveSelectedField(field.id, 'down')}
+                          disabled={index === orderedSelectedFieldDetails.length - 1}
+                          className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          Move Down
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Cross-Module Relationships */}
@@ -1077,7 +1124,7 @@ export default function ReportBuilder() {
       )}
 
       {/* Step 3: Filters & Date Range */}
-      {editorMode === 'basic' && step === 3 && (
+      {step === 3 && (
         <div className="space-y-6">
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
             <div className="flex items-center justify-between mb-4">
@@ -1107,7 +1154,7 @@ export default function ReportBuilder() {
                       onChange={(e) => updateFilter(index, 'field', e.target.value)}
                       className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm"
                     >
-                      {fields.filter(f => f.filterable).map(field => (
+                      {filterableFields.map(field => (
                         <option key={field.id} value={field.id}>{field.label}</option>
                       ))}
                     </select>
@@ -1177,7 +1224,7 @@ export default function ReportBuilder() {
       )}
 
       {/* Step 4: Review & Save - Enhanced */}
-      {editorMode === 'basic' && step === 4 && (
+      {step === 4 && (
         <div className="space-y-6">
           {/* Report Preview Card */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
@@ -1236,10 +1283,10 @@ export default function ReportBuilder() {
                   <h3 className="text-sm font-medium text-gray-700 mb-2">Selected Fields</h3>
                   <div className="flex flex-wrap gap-2">
                     {report.selectedFields.slice(0, 10).map(fieldId => {
-                      const field = fields.find(f => f.id === fieldId);
+                      const field = fieldLookup.get(fieldId);
                       return (
                         <span key={fieldId} className="px-3 py-1 bg-panda-primary/10 text-panda-primary text-sm rounded-full">
-                          {field?.label || fieldId}
+                          {field?.label || formatReportFieldLabel(fieldId)}
                         </span>
                       );
                     })}
@@ -1258,7 +1305,7 @@ export default function ReportBuilder() {
                 <span>Default date range: <strong>{DATE_RANGE_OPTIONS.find(d => d.value === report.defaultDateRange)?.label}</strong></span>
                 {report.dateRangeField && (
                   <span className="text-gray-400">
-                    (based on {fields.find(f => f.id === report.dateRangeField)?.label || report.dateRangeField})
+                    (based on {fieldLookup.get(report.dateRangeField)?.label || formatReportFieldLabel(report.dateRangeField)})
                   </span>
                 )}
               </div>
@@ -1292,92 +1339,63 @@ export default function ReportBuilder() {
       )}
 
       {/* Navigation Buttons - Enhanced */}
-      {editorMode === 'basic' ? (
-        <div className="flex items-center justify-between mt-6 bg-white rounded-xl shadow-sm border border-gray-200 p-4">
-          <button
-            onClick={() => {
-              setValidationErrors({});
-              setStep(Math.max(1, step - 1));
-            }}
-            disabled={step === 1}
-            className="flex items-center gap-2 px-6 py-2.5 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <ChevronLeft className="w-4 h-4" />
-            Back
-          </button>
+      <div className="flex items-center justify-between mt-6 bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+        <button
+          onClick={() => {
+            setValidationErrors({});
+            setStep(Math.max(1, step - 1));
+          }}
+          disabled={step === 1}
+          className="flex items-center gap-2 px-6 py-2.5 text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          <ChevronLeft className="w-4 h-4" />
+          Back
+        </button>
 
-          <div className="flex items-center gap-3">
-            {step < 4 && step > 1 && (
-              <button
-                onClick={() => {
-                  if (validateStep(step)) {
-                    setStep(4);
-                  }
-                }}
-                className="text-sm text-gray-500 hover:text-panda-primary"
-              >
-                Skip to Review
-              </button>
-            )}
+        <div className="flex items-center gap-3">
+          {/* Skip to step buttons */}
+          {step < 4 && step > 1 && (
+            <button
+              onClick={() => {
+                if (validateStep(step)) {
+                  setStep(4);
+                }
+              }}
+              className="text-sm text-gray-500 hover:text-panda-primary"
+            >
+              Skip to Review
+            </button>
+          )}
 
-            {step < 4 ? (
-              <button
-                onClick={handleNextStep}
-                className="flex items-center gap-2 px-6 py-2.5 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90 transition-colors shadow-sm"
-              >
-                {step === 3 ? 'Review Report' : 'Continue'}
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            ) : (
-              <button
-                onClick={handleSave}
-                disabled={saving || !report.name || report.selectedFields.length === 0}
-                className="flex items-center gap-2 px-8 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {saving ? (
-                  <>
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
-                    Saving...
-                  </>
-                ) : (
-                  <>
-                    <Check className="w-4 h-4" />
-                    {isEditing ? 'Update Report' : 'Create Report'}
-                  </>
-                )}
-              </button>
-            )}
-          </div>
+          {step < 4 ? (
+            <button
+              onClick={handleNextStep}
+              className="flex items-center gap-2 px-6 py-2.5 bg-panda-primary text-white rounded-lg hover:bg-panda-primary/90 transition-colors shadow-sm"
+            >
+              {step === 3 ? 'Review Report' : 'Continue'}
+              <ChevronRight className="w-4 h-4" />
+            </button>
+          ) : (
+            <button
+              onClick={handleSave}
+              disabled={saving || !report.name || report.selectedFields.length === 0}
+              className="flex items-center gap-2 px-8 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {saving ? (
+                <>
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <Check className="w-4 h-4" />
+                  {isEditing ? 'Update Report' : 'Create Report'}
+                </>
+              )}
+            </button>
+          )}
         </div>
-      ) : (
-        <div className="mt-6 flex items-center justify-end gap-3 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-          <button
-            type="button"
-            onClick={() => navigate('/analytics/reports')}
-            className="rounded-lg px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-800"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={saving || !report.name || report.selectedFields.length === 0 || Boolean(fieldsError)}
-            className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-6 py-2.5 text-sm font-medium text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {saving ? (
-              <>
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white" />
-                Saving...
-              </>
-            ) : (
-              <>
-                <Check className="w-4 h-4" />
-                {isEditing ? 'Update Report' : 'Create Report'}
-              </>
-            )}
-          </button>
-        </div>
-      )}
+      </div>
     </div>
   );
 }
