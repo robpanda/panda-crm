@@ -16,7 +16,6 @@ if [ -z "$BACKUP_PREFIX" ]; then
 fi
 
 TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/panda-crm-root-shell-rollback-XXXXXX")
-RESTORE_DIR="$TMP_DIR/root-shell"
 
 cleanup() {
   rm -rf "$TMP_DIR"
@@ -35,18 +34,12 @@ if aws s3 cp "$BACKUP_PREFIX/rollback-state.json" "$ROLLBACK_STATE_PATH" --regio
   fi
 fi
 
-mkdir -p "$RESTORE_DIR"
-aws s3 sync "$BACKUP_PREFIX/" "$RESTORE_DIR/" \
-  --region "$AWS_REGION" \
-  --exclude "rollback-state.json" \
-  >/dev/null
-
-if [ ! -f "$RESTORE_DIR/index.html" ]; then
+if ! aws s3 ls "$BACKUP_PREFIX/index.html" --region "$AWS_REGION" >/dev/null 2>&1; then
   echo "Root shell backup at $BACKUP_PREFIX does not contain index.html" >&2
   exit 1
 fi
 
-aws s3 sync "$RESTORE_DIR/" "s3://$S3_BUCKET/" \
+aws s3 sync "$BACKUP_PREFIX/" "s3://$S3_BUCKET/" \
   --region "$AWS_REGION" \
   --delete \
   --exclude "analytics/*" \

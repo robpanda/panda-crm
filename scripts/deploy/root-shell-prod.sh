@@ -12,6 +12,7 @@ CLOUDFRONT_DISTRIBUTION_ID=${CLOUDFRONT_DISTRIBUTION_ID:-EDKIMD3LRK2M8}
 RUN_NPM_CI=${RUN_NPM_CI:-1}
 BUILD_ROOT=${BUILD_ROOT:-1}
 INVALIDATION_PATHS=${INVALIDATION_PATHS:-/*}
+ROOT_SHELL_PRESERVED_PREFIXES=${ROOT_SHELL_PRESERVED_PREFIXES:-prep-specs-preview-*}
 
 BUILD_SHA=$(git rev-parse HEAD)
 BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -23,6 +24,12 @@ cleanup() {
   rm -rf "$TMP_DIR"
 }
 trap cleanup EXIT
+
+PRESERVED_EXCLUDES=()
+for prefix in $ROOT_SHELL_PRESERVED_PREFIXES; do
+  [ -z "$prefix" ] && continue
+  PRESERVED_EXCLUDES+=(--exclude "$prefix" --exclude "$prefix/*")
+done
 
 export AWS_REGION
 export VITE_API_BASE=${VITE_API_BASE:-https://bamboo.pandaadmin.com}
@@ -62,7 +69,8 @@ aws s3 sync frontend/dist "s3://$S3_BUCKET/" \
   --delete \
   --exclude "analytics/*" \
   --exclude "analytics-assets/*" \
-  --exclude "asset-backups/*"
+  --exclude "asset-backups/*" \
+  "${PRESERVED_EXCLUDES[@]}"
 
 if [ -n "$CLOUDFRONT_DISTRIBUTION_ID" ]; then
   read -r -a INVALIDATION_PATH_ARRAY <<< "$INVALIDATION_PATHS"
