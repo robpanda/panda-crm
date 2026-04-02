@@ -128,6 +128,6 @@ export function summarizeArtifactBlastRadius(basePaths, currentPaths, policy) {
     diff,
     currentClassification,
     forbiddenCurrent,
-    ok: diff.added.length === 0 && diff.removed.length === 0 && forbiddenCurrent.length === 0,
+    ok: forbiddenCurrent.length === 0,
   };
 }

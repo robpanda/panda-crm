@@ -6,6 +6,7 @@ import {
   diffNormalizedArtifacts,
   globToRegExp,
   normalizeHashedPath,
+  summarizeArtifactBlastRadius,
 } from '../analytics-release-lib.mjs';
 
 const policy = {
@@ -84,4 +85,19 @@ test('classifySourceChanges blocks non-reporting files', () => {
     'frontend/src/components/reports/charts/TableWidget.jsx',
   ]);
   assert.deepEqual(result.forbidden, ['frontend/src/pages/LeadDetail.jsx']);
+});
+
+test('summarizeArtifactBlastRadius allows first analytics cutover with empty baseline', () => {
+  const result = summarizeArtifactBlastRadius(
+    [],
+    ['analytics/index.html', 'analytics-assets/index-AAAA1111.js'],
+    policy,
+  );
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.forbiddenCurrent, []);
+  assert.deepEqual(result.diff.added, [
+    'analytics-assets/index-[hash].js',
+    'analytics/index.html',
+  ]);
 });

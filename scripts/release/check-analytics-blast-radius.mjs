@@ -81,9 +81,22 @@ function createBaseCheckout(repoRoot, baseRef) {
 }
 
 function buildAnalyticsApp(repoRoot, checkoutDir) {
-  run('npm', ['ci'], { cwd: path.join(checkoutDir, 'frontend'), stdio: 'inherit' });
-  run('npm', ['run', 'build:analytics'], { cwd: path.join(checkoutDir, 'frontend'), stdio: 'inherit' });
-  return path.join(checkoutDir, 'frontend', 'dist');
+  const frontendDir = path.join(checkoutDir, 'frontend');
+  const packageJsonPath = path.join(frontendDir, 'package.json');
+  const analyticsConfigPath = path.join(frontendDir, 'vite.analytics.config.js');
+
+  if (!fs.existsSync(packageJsonPath) || !fs.existsSync(analyticsConfigPath)) {
+    return null;
+  }
+
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+  if (!packageJson?.scripts?.['build:analytics']) {
+    return null;
+  }
+
+  run('npm', ['ci'], { cwd: frontendDir, stdio: 'inherit' });
+  run('npm', ['run', 'build:analytics'], { cwd: frontendDir, stdio: 'inherit' });
+  return path.join(frontendDir, 'dist');
 }
 
 function ensureCleanWorkingTree(repoRoot) {
@@ -132,7 +145,7 @@ function main() {
 
   try {
     const baseDist = buildAnalyticsApp(repoRoot, checkoutDir);
-    const basePaths = relativeDistFiles(baseDist);
+    const basePaths = baseDist ? relativeDistFiles(baseDist) : [];
     const artifactSummary = summarizeArtifactBlastRadius(basePaths, currentPaths, policy);
     const changedFiles = getChangedFiles(repoRoot, args.baseRef);
     const sourceSummary = classifySourceChanges(changedFiles, policy);
@@ -140,6 +153,9 @@ function main() {
     console.log('[analytics-blast-radius] base ref:', args.baseRef);
     console.log('[analytics-blast-radius] current artifacts:', currentPaths.length);
     console.log('[analytics-blast-radius] base artifacts:', basePaths.length);
+    if (!baseDist) {
+      console.log('[analytics-blast-radius] base ref has no analytics build; treating as empty baseline');
+    }
 
     if (artifactSummary.diff.added.length > 0 || artifactSummary.diff.removed.length > 0) {
       console.error('[analytics-blast-radius] normalized artifact diff detected:');
