@@ -8,13 +8,13 @@ import { PermissionRoute } from './components/PermissionRoute';
 // Champion Public Pages
 import { renderAccountRoutes } from './features/accounts/routes';
 import { AdminCommissionsPage, renderAdminRoutes } from './features/admin/routes';
-import { renderAnalyticsRoutes } from './features/analytics/routes';
 import { renderContactRoutes } from './features/contacts/routes';
 import { renderJobsRoutes } from './features/jobs/routes';
 import { renderLeadRoutes } from './features/leads/routes';
 import { renderPublicPortalRoutes, renderProtectedPortalRoutes } from './features/portals/routes';
 import { renderSearchRoutes } from './features/search/routes';
 import { renderSupportRoutes } from './features/support/routes';
+import AnalyticsLegacyHandoffRoute from './platform/AnalyticsLegacyHandoffRoute';
 import { ProtectedRoute, renderLazyRoute } from './routes/shared';
 
 const Login = lazy(() => import('./pages/Login'));
@@ -70,7 +70,8 @@ export default function App() {
         {renderLeadRoutes()}
         {renderJobsRoutes()}
         <Route path="attention" element={renderLazyRoute(AttentionQueue, 'Loading attention queue...')} />
-        {renderAnalyticsRoutes()}
+        <Route path="reports/*" element={<AnalyticsLegacyHandoffRoute />} />
+        <Route path="dashboards/*" element={<AnalyticsLegacyHandoffRoute />} />
         <Route path="pricebooks" element={renderLazyRoute(PriceBooks, 'Loading price books...')} />
         <Route path="pricebooks/:id" element={renderLazyRoute(PriceBookDetail, 'Loading price book...')} />
         <Route path="products" element={renderLazyRoute(Products, 'Loading products...')} />

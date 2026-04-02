@@ -6,6 +6,7 @@ import { useRingCentral } from '../context/RingCentralContext';
 import { getRecentItems } from '../utils/recentItems';
 import { attentionApi, notificationsApi } from '../services/api';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { isAnalyticsHandoffPath, resolveAnalyticsHandoffPath } from '../platform/moduleNavigation';
 import LazyBoundary from './LazyBoundary';
 import {
   Bell,
@@ -93,7 +94,7 @@ const moreNavItems = [
   { path: '/accounts', icon: Building2, label: 'Accounts', hasSubmenu: true, submenu: accountsNavItems },
   { path: '/campaigns', icon: Mail, label: 'Campaigns' },
   { path: '/contacts', icon: Users, label: 'Contacts', hasSubmenu: true, submenu: contactsNavItems },
-  { path: '/dashboards', icon: LayoutDashboard, label: 'Dashboards' },
+  { path: '/analytics/dashboards', icon: LayoutDashboard, label: 'Dashboards' },
   { path: '/documents', icon: FileText, label: 'Documents' },
   { path: '/help', icon: HelpCircle, label: 'Help & Support' },
   { path: '/pricebooks', icon: BookOpen, label: 'Price Books' },
@@ -393,6 +394,7 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
                   {leadsNavItems.map((item) => {
                     const Icon = item.icon;
                     const active = location.pathname === item.path;
+
                     return (
                       <NavLink
                         key={item.path}
@@ -608,18 +610,33 @@ export default function Navbar({ onMenuClick, showMenuButton }) {
                     }
 
                     return (
-                      <NavLink
-                        key={item.path}
-                        to={item.path}
-                        className={`flex items-center space-x-3 px-4 py-2.5 text-sm transition-colors ${
-                          active
-                            ? 'bg-panda-primary/10 text-panda-primary'
-                            : 'text-gray-700 hover:bg-gray-100'
-                        }`}
-                      >
-                        <Icon className="w-4 h-4" />
-                        <span>{item.label}</span>
-                      </NavLink>
+                      isAnalyticsHandoffPath(item.path) ? (
+                        <a
+                          key={item.path}
+                          href={resolveAnalyticsHandoffPath(item.path)}
+                          className={`flex items-center space-x-3 px-4 py-2.5 text-sm transition-colors ${
+                            active
+                              ? 'bg-panda-primary/10 text-panda-primary'
+                              : 'text-gray-700 hover:bg-gray-100'
+                          }`}
+                        >
+                          <Icon className="w-4 h-4" />
+                          <span>{item.label}</span>
+                        </a>
+                      ) : (
+                        <NavLink
+                          key={item.path}
+                          to={item.path}
+                          className={`flex items-center space-x-3 px-4 py-2.5 text-sm transition-colors ${
+                            active
+                              ? 'bg-panda-primary/10 text-panda-primary'
+                              : 'text-gray-700 hover:bg-gray-100'
+                          }`}
+                        >
+                          <Icon className="w-4 h-4" />
+                          <span>{item.label}</span>
+                        </NavLink>
+                      )
                     );
                   })}
 

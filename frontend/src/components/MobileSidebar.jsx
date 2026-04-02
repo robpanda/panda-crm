@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { isAnalyticsHandoffPath, resolveAnalyticsHandoffPath } from '../platform/moduleNavigation';
 import {
   X,
   LayoutDashboard,
@@ -53,7 +54,7 @@ const moreNavItems = [
   { path: '/accounts', icon: Building2, label: 'Accounts' },
   { path: '/campaigns', icon: Mail, label: 'Campaigns' },
   { path: '/contacts', icon: Users, label: 'Contacts' },
-  { path: '/dashboards', icon: LayoutDashboard, label: 'Dashboards' },
+  { path: '/analytics/dashboards', icon: LayoutDashboard, label: 'Dashboards' },
   { path: '/documents', icon: FileText, label: 'Documents' },
   { path: '/help', icon: HelpCircle, label: 'Help & Support' },
   { path: '/pricebooks', icon: BookOpen, label: 'Price Books' },
@@ -102,6 +103,19 @@ const adminNavItems = [
 ];
 
 function NavItem({ path, icon: Icon, label, onClose }) {
+  if (isAnalyticsHandoffPath(path)) {
+    return (
+      <a
+        href={resolveAnalyticsHandoffPath(path)}
+        onClick={onClose}
+        className="flex items-center gap-3 px-4 py-3 text-sm font-medium transition-colors text-gray-700 hover:bg-gray-100 border-l-4 border-transparent"
+      >
+        <Icon className="w-5 h-5" />
+        <span>{label}</span>
+      </a>
+    );
+  }
+
   return (
     <NavLink
       to={path}

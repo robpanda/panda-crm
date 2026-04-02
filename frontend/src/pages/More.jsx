@@ -1,5 +1,6 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { isAnalyticsHandoffPath, resolveAnalyticsHandoffPath } from '../platform/moduleNavigation';
 import {
   FileText,
   Settings,
@@ -156,21 +157,39 @@ export default function More() {
             </h3>
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
               {visibleItems.map((item, index) => (
-                <Link
-                  key={item.path}
-                  to={item.path}
-                  className={`flex items-center justify-between px-4 py-3.5 hover:bg-gray-50 transition-colors ${
-                    index > 0 ? 'border-t border-gray-100' : ''
-                  }`}
-                >
-                  <div className="flex items-center space-x-3">
-                    <div className="p-2 rounded-lg bg-gray-100">
-                      <item.icon className="w-5 h-5 text-gray-600" />
+                isAnalyticsHandoffPath(item.path) ? (
+                  <a
+                    key={item.path}
+                    href={resolveAnalyticsHandoffPath(item.path)}
+                    className={`flex items-center justify-between px-4 py-3.5 hover:bg-gray-50 transition-colors ${
+                      index > 0 ? 'border-t border-gray-100' : ''
+                    }`}
+                  >
+                    <div className="flex items-center space-x-3">
+                      <div className="p-2 rounded-lg bg-gray-100">
+                        <item.icon className="w-5 h-5 text-gray-600" />
+                      </div>
+                      <span className="font-medium text-gray-900">{item.label}</span>
                     </div>
-                    <span className="font-medium text-gray-900">{item.label}</span>
-                  </div>
-                  <ChevronRight className="w-5 h-5 text-gray-400" />
-                </Link>
+                    <ChevronRight className="w-5 h-5 text-gray-400" />
+                  </a>
+                ) : (
+                  <Link
+                    key={item.path}
+                    to={item.path}
+                    className={`flex items-center justify-between px-4 py-3.5 hover:bg-gray-50 transition-colors ${
+                      index > 0 ? 'border-t border-gray-100' : ''
+                    }`}
+                  >
+                    <div className="flex items-center space-x-3">
+                      <div className="p-2 rounded-lg bg-gray-100">
+                        <item.icon className="w-5 h-5 text-gray-600" />
+                      </div>
+                      <span className="font-medium text-gray-900">{item.label}</span>
+                    </div>
+                    <ChevronRight className="w-5 h-5 text-gray-400" />
+                  </Link>
+                )
               ))}
             </div>
           </div>
