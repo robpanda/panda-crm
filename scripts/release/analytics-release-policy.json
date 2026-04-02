@@ -1,0 +1,76 @@
+{
+  "allowedSourceGlobs": [
+    "frontend/analytics/**",
+    "frontend/src/analytics/**",
+    "frontend/src/pages/analytics/**",
+    "frontend/src/pages/Reports.jsx",
+    "frontend/src/pages/ReportBuilder.jsx",
+    "frontend/src/pages/ReportDetail.jsx",
+    "frontend/src/pages/AdvancedReportEditor.jsx",
+    "frontend/src/pages/Dashboards.jsx",
+    "frontend/src/pages/DashboardView.jsx",
+    "frontend/src/pages/DashboardBuilder.jsx",
+    "frontend/src/pages/ExecutiveDashboards.jsx",
+    "frontend/src/pages/ClaimsOnboarding.jsx",
+    "frontend/src/pages/AIInsightsFeed.jsx",
+    "frontend/src/components/reports/**",
+    "frontend/src/components/analytics/**",
+    "frontend/src/utils/analytics*.js",
+    "frontend/src/utils/report*.js",
+    "frontend/src/hooks/useAnalyticsVerification.js",
+    "frontend/src/platform/PlatformProviders.jsx",
+    "frontend/src/platform/RequireAuthenticatedRoute.jsx",
+    "frontend/src/platform/platformQueryClient.js",
+    "frontend/vite.analytics.config.js",
+    "frontend/package.json",
+    "frontend/src/analytics-main.jsx",
+    "scripts/release/analytics-*.json",
+    "scripts/release/*analytics*.mjs",
+    "scripts/release/__tests__/*analytics*.mjs",
+    "scripts/deploy/analytics-*.sh",
+    "scripts/deploy/frontend-prod.sh",
+    "scripts/deploy/cloudfront/analytics-spa-rewrite.js",
+    "scripts/deploy/cloudfront/build-analytics-distribution-config.mjs",
+    "scripts/deploy/configure-analytics-routing.sh",
+    ".github/workflows/deploy-analytics.yml",
+    ".github/workflows/deploy-frontend.yml"
+  ],
+  "allowedOutputGlobs": [
+    "analytics/index.html",
+    "analytics/manifest.json",
+    "analytics/release-manifest.json",
+    "analytics-assets/**"
+  ],
+  "forbiddenOutputFamilies": [
+    {
+      "label": "root-html",
+      "globs": [
+        "index.html",
+        "*.html"
+      ]
+    },
+    {
+      "label": "root-assets",
+      "globs": [
+        "assets/**"
+      ]
+    },
+    {
+      "label": "shared-shell",
+      "globs": [
+        "vendor-core*",
+        "routes-operational-*",
+        "routes-*"
+      ]
+    },
+    {
+      "label": "jobs-or-leads",
+      "globs": [
+        "*Jobs*",
+        "*Leads*",
+        "*Lead*",
+        "*Opportunity*"
+      ]
+    }
+  ]
+}

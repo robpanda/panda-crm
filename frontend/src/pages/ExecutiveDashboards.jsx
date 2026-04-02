@@ -1857,14 +1857,14 @@ export default function ExecutiveDashboards() {
           </div>
           <div className="flex items-center gap-3">
             <Link
-              to="/dashboards/custom"
+              to="/analytics/dashboards"
               className="flex items-center space-x-2 px-4 py-2.5 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors text-sm font-medium text-gray-700"
             >
               <Settings className="w-4 h-4" />
               <span>Custom Dashboards</span>
             </Link>
             <Link
-              to="/dashboards/builder"
+              to="/analytics/dashboards/new"
               className="flex items-center space-x-2 px-4 py-2.5 bg-gradient-to-r from-panda-primary to-panda-secondary text-white rounded-lg hover:opacity-90 transition-opacity shadow-md"
             >
               <Plus className="w-4 h-4" />

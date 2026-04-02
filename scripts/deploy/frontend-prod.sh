@@ -4,6 +4,13 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$ROOT_DIR"
 
+if [ "${ALLOW_FULL_FRONTEND_DEPLOY:-}" != "1" ]; then
+  echo "[frontend-prod] ERROR: full frontend deploys now require ALLOW_FULL_FRONTEND_DEPLOY=1." >&2
+  echo "[frontend-prod] Use scripts/deploy/analytics-prod.sh for reporting/analytics releases." >&2
+  echo "[frontend-prod] Use scripts/deploy/root-and-analytics-prod.sh for coordinated root-shell plus analytics releases." >&2
+  exit 1
+fi
+
 ./scripts/deploy/preflight.sh
 
 if [ -z "${AWS_REGION:-}" ]; then

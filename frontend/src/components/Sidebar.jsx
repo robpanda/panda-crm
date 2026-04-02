@@ -1,5 +1,6 @@
 import { NavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { isAnalyticsHandoffPath, resolveAnalyticsHandoffPath } from '../platform/moduleNavigation';
 import {
   LayoutDashboard,
   Building2,
@@ -97,6 +98,31 @@ export default function Sidebar({ isOpen, onClose, isMobile }) {
   const NavItem = ({ item }) => {
     const Icon = item.icon;
     const active = isActive(item.path);
+    const href = resolveAnalyticsHandoffPath(item.path);
+
+    if (isAnalyticsHandoffPath(item.path)) {
+      return (
+        <a
+          href={href}
+          className={`flex items-center space-x-3 px-3 py-2.5 rounded-lg transition-colors ${
+            active
+              ? 'bg-gradient-to-r from-panda-primary/10 to-panda-secondary/10 text-panda-primary'
+              : 'text-gray-600 hover:bg-gray-100 active:bg-gray-200'
+          }`}
+          onClick={isMobile ? onClose : undefined}
+        >
+          <Icon className={`w-5 h-5 flex-shrink-0 ${active ? 'text-panda-primary' : ''}`} />
+          <span className={`font-medium truncate ${active ? 'text-panda-primary' : ''}`}>
+            {item.label}
+          </span>
+          {item.badge && (
+            <span className="ml-auto bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">
+              3
+            </span>
+          )}
+        </a>
+      );
+    }
 
     return (
       <NavLink
