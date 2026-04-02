@@ -1,12 +1,7 @@
-name: Build and Deploy Frontend (Full)
+name: Build and Deploy Analytics Frontend
 
 on:
   workflow_dispatch:
-    inputs:
-      confirm_full_frontend_deploy:
-        description: 'Type FULL_FRONTEND_DEPLOY to confirm a whole-site frontend release'
-        required: true
-        type: string
 
 env:
   AWS_REGION: us-east-2
@@ -15,8 +10,7 @@ env:
 
 jobs:
   build-and-deploy:
-    name: Build and Deploy Frontend (Full)
-    if: github.event.inputs.confirm_full_frontend_deploy == 'FULL_FRONTEND_DEPLOY'
+    name: Build and Deploy Analytics Frontend
     runs-on: ubuntu-latest
 
     steps:
@@ -38,22 +32,18 @@ jobs:
       - name: Fetch secrets from AWS Secrets Manager
         id: secrets
         run: |
-          # Fetch Google Maps API key
           GOOGLE_MAPS_SECRET=$(aws secretsmanager get-secret-value --secret-id panda-crm/google-maps --query SecretString --output text)
           GOOGLE_MAPS_API_KEY=$(echo $GOOGLE_MAPS_SECRET | jq -r '.apiKey')
           echo "VITE_GOOGLE_MAPS_API_KEY=$GOOGLE_MAPS_API_KEY" >> $GITHUB_ENV
-
-          # Mask the secret in logs
           echo "::add-mask::$GOOGLE_MAPS_API_KEY"
 
-      - name: Full frontend deploy
+      - name: Deploy analytics frontend
         env:
-          ALLOW_FULL_FRONTEND_DEPLOY: '1'
           VITE_API_BASE: https://bamboo.pandaadmin.com
           VITE_GOOGLE_MAPS_API_KEY: ${{ env.VITE_GOOGLE_MAPS_API_KEY }}
           VITE_BUILD_SHA: ${{ github.sha }}
           VITE_BUILD_TIME: ${{ github.run_started_at }}
-        run: ./scripts/deploy/frontend-prod.sh
+        run: ./scripts/deploy/analytics-prod.sh
 
       - name: Deployment complete
-        run: echo "✅ Full frontend deployed successfully!"
+        run: echo "✅ Analytics frontend deployed successfully!"
